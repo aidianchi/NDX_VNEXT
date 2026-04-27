@@ -1,0 +1,237 @@
+{
+  "version": "1.1",
+  "last_updated": "",
+  "services": {
+    "fred": {
+      "category": "data_source",
+      "transport": "fred_http",
+      "name": "FRED",
+      "enabled": true,
+      "key": "",
+      "base_url": "https://api.stlouisfed.org/fred/series/observations",
+      "env_key": "FRED_API_KEY",
+      "env_key_aliases": [],
+      "base_url_env_key": "",
+      "required": true,
+      "docs_url": "https://fred.stlouisfed.org/docs/api/api_key.html",
+      "models": []
+    },
+    "alphavantage": {
+      "category": "data_source",
+      "transport": "alphavantage_http",
+      "name": "Alpha Vantage",
+      "enabled": false,
+      "key": "",
+      "base_url": "https://www.alphavantage.co/query",
+      "env_key": "ALPHA_VANTAGE_API_KEY",
+      "env_key_aliases": [
+        "ALPHAVANTAGE_API_KEY"
+      ],
+      "base_url_env_key": "",
+      "required": false,
+      "docs_url": "https://www.alphavantage.co/support/#api-key",
+      "models": []
+    },
+    "chatai": {
+      "category": "ai_service",
+      "transport": "openai_compatible",
+      "name": "ChatAI",
+      "enabled": true,
+      "key": "",
+      "base_url": "https://www.chataiapi.com/v1",
+      "env_key": "CHATAI_API_KEY",
+      "env_key_aliases": [],
+      "base_url_env_key": "CHATAI_BASE_URL",
+      "required": false,
+      "docs_url": "",
+      "models": [
+        {
+          "key": "c-gemini-3",
+          "name": "Gemini 3 Pro (ChatAI)",
+          "model": "gemini-3-pro-preview",
+          "max_tokens": 65536
+        },
+        {
+          "key": "c-flash",
+          "name": "Gemini 2.5 Flash (ChatAI)",
+          "model": "gemini-2.5-flash",
+          "max_tokens": 65536
+        },
+        {
+          "key": "c-pro",
+          "name": "Gemini 2.5 Pro (ChatAI)",
+          "model": "gemini-2.5-pro",
+          "max_tokens": 65536
+        }
+      ]
+    },
+    "gemini": {
+      "category": "ai_service",
+      "transport": "gemini_sdk",
+      "name": "Gemini Official",
+      "enabled": false,
+      "key": "",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "env_key": "GOOGLE_API_KEY",
+      "env_key_aliases": [
+        "GEMINI_API_KEY"
+      ],
+      "base_url_env_key": "GEMINI_BASE_URL",
+      "required": false,
+      "docs_url": "https://ai.google.dev/gemini-api/docs/quickstart",
+      "models": [
+        {
+          "key": "gemini-3-pro",
+          "name": "Gemini 3 Pro (Official)",
+          "model": "gemini-3-pro-preview",
+          "max_tokens": 65536
+        },
+        {
+          "key": "gemini-2.5-flash",
+          "name": "Gemini 2.5 Flash",
+          "model": "gemini-2.5-flash",
+          "max_tokens": 65536
+        },
+        {
+          "key": "gemini-2.5-pro",
+          "name": "Gemini 2.5 Pro",
+          "model": "gemini-2.5-pro",
+          "max_tokens": 65536
+        }
+      ]
+    },
+    "deepseek": {
+      "category": "ai_service",
+      "transport": "openai_compatible",
+      "name": "DeepSeek",
+      "enabled": false,
+      "key": "",
+      "base_url": "https://api.deepseek.com",
+      "env_key": "DEEPSEEK_API_KEY",
+      "env_key_aliases": [],
+      "base_url_env_key": "DEEPSEEK_BASE_URL",
+      "required": false,
+      "docs_url": "https://api-docs.deepseek.com/zh-cn/",
+      "models": [
+        {
+          "key": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash",
+          "model": "deepseek-v4-flash",
+          "max_tokens": 65536
+        },
+        {
+          "key": "deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro",
+          "model": "deepseek-v4-pro",
+          "max_tokens": 64000
+        }
+      ]
+    },
+    "kimi": {
+      "category": "ai_service",
+      "transport": "openai_compatible",
+      "name": "Kimi (Moonshot AI)",
+      "enabled": true,
+      "key": "",
+      "base_url": "https://api.kimi.com/coding/v1",
+      "env_key": "KIMI_API_KEY",
+      "env_key_aliases": [],
+      "base_url_env_key": "KIMI_BASE_URL",
+      "required": false,
+      "docs_url": "https://www.kimi.com/code/docs/",
+      "models": [
+        {
+          "key": "kimi-for-coding",
+          "name": "Kimi for Coding (K2.5)",
+          "model": "kimi-for-coding",
+          "max_tokens": 32768
+        }
+      ]
+    },
+    "finnhub": {
+      "category": "data_source",
+      "transport": "finnhub_http",
+      "name": "Finnhub",
+      "enabled": false,
+      "key": "",
+      "base_url": "https://finnhub.io/api/v1",
+      "env_key": "FINNHUB_API_KEY",
+      "env_key_aliases": [],
+      "base_url_env_key": "FINNHUB_BASE_URL",
+      "required": false,
+      "docs_url": "https://finnhub.io/docs/api",
+      "models": []
+    },
+    "simfin": {
+      "category": "data_source",
+      "transport": "simfin_http",
+      "name": "Simfin",
+      "enabled": false,
+      "key": "",
+      "base_url": "https://backend.simfin.com/api/v3",
+      "env_key": "SIMFIN_API_KEY",
+      "env_key_aliases": [],
+      "base_url_env_key": "SIMFIN_BASE_URL",
+      "required": false,
+      "docs_url": "https://www.simfin.com/en/fundamental-data-download/",
+      "models": []
+    }
+  },
+  "proxy": {
+    "enabled": false,
+    "http": "",
+    "https": ""
+  },
+  "validation": {
+    "services": {
+      "fred": {
+        "last_tested": null,
+        "result": null,
+        "response_time_ms": null,
+        "error_message": null
+      },
+      "alphavantage": {
+        "last_tested": null,
+        "result": null,
+        "response_time_ms": null,
+        "error_message": null
+      },
+      "chatai": {
+        "last_tested": null,
+        "result": null,
+        "response_time_ms": null,
+        "error_message": null
+      },
+      "gemini": {
+        "last_tested": null,
+        "result": null,
+        "response_time_ms": null,
+        "error_message": null
+      },
+      "deepseek": {
+        "last_tested": null,
+        "result": null,
+        "response_time_ms": null,
+        "error_message": null
+      },
+      "kimi": {
+        "last_tested": null,
+        "result": null,
+        "response_time_ms": null,
+        "error_message": null
+      },
+      "finnhub": {
+        "last_tested": null,
+        "result": null,
+        "response_time_ms": null,
+        "error_message": null
+      },
+      "simfin": {
+        "last_tested": null,
+        "result": null,
+        "response_time_ms": null,
+        "error_message": null
+      }
+    }
+  }
+}

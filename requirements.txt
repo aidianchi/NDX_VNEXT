@@ -1,0 +1,22 @@
+﻿# ndx_vnext bootstrap dependencies
+# Phase 1 target: data collection + vNext main cognitive chain + legacy report bridge
+
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.11.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+cachetools>=5.3.0
+
+yfinance>=0.2.28
+akshare>=1.12.0
+pandas-ta>=0.3.14b
+
+openai>=1.0.0
+google-genai>=1.0.0
+
+plotly>=5.18.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+pytest>=8.0.0

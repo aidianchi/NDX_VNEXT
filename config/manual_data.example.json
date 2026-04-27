@@ -1,0 +1,46 @@
+{
+  "active": false,
+  "date": "",
+  "metrics": {
+    "get_ndx_pe_and_earnings_yield": {
+      "name": "NDX Valuation (Manual)",
+      "series_id": "NDX_MANUAL",
+      "value": {
+        "PE_TTM": null,
+        "PB": null,
+        "PS_TTM": null,
+        "PCF_TTM": null,
+        "PE_TTM_percentile_5y": null,
+        "PB_percentile_5y": null,
+        "ERP_Wind": null,
+        "ERP_Wind_percentile_5y": null
+      },
+      "unit": "ratio/percent",
+      "source_name": "Manual Input",
+      "notes": "Fill this file locally or copy into manual_data.local.json."
+    },
+    "get_equity_risk_premium": {
+      "name": "Equity Risk Premium (Manual)",
+      "series_id": "ERP_MANUAL",
+      "value": {
+        "erp_value": null,
+        "erp_percentile_5y": null
+      },
+      "unit": "percent",
+      "source_name": "Manual Input",
+      "notes": "Manual ERP override."
+    },
+    "get_crowdedness_dashboard": {
+      "name": "Crowdedness Dashboard (Manual)",
+      "series_id": "CROWDEDNESS_MANUAL",
+      "value": {
+        "positioning_z_score": null,
+        "sentiment_index": null,
+        "flow_data_mm": null
+      },
+      "unit": "various",
+      "source_name": "Manual Input",
+      "notes": "Optional manual crowdedness override."
+    }
+  }
+}
