@@ -1,76 +1,66 @@
-# ============================================
-# NDX-AGENT 项目 .gitignore 配置
-# 策略：仅保留核心源代码，忽略所有可重建内容
-# ============================================
+# NDX_VNEXT .gitignore
+#
+# Rule of thumb:
+# - Keep source code, tests, docs, prompts, example configs, and plans.
+# - Ignore secrets, virtual environments, caches, logs, and generated outputs.
 
-# 1. Python 运行时产物
+# --- Secrets and local configuration ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.secret
+secrets/
+
+# Local config files that may contain private keys or machine-specific paths.
+config/*.local.json
+config/*local*.json
+launcher_prefs.json
+CLAUDE.local.md
+
+# Keep safe example configuration.
+!config/*.example.json
+
+# --- Python runtime artifacts ---
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
 .Python
+*.so
 
-# 2. 虚拟环境（可通过 requirements.txt 重建）
+# --- Virtual environments ---
 .venv/
 venv/
 ENV/
 env/
 
-# 3. 数据缓存（可重新获取）
+# --- Test and tool caches ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Data caches and generated market artifacts ---
 data_cache/
-*.csv
-
-# 4. 输出文件（可重新生成）
 output/
-*.html
-*.json
-*.log
-!config/manual_data.example.json
-!config/api_config.example.json
 
-# 5. 临时文件和编辑器配置
-.DS_Store
+# --- Logs and temporary files ---
+*.log
+*.tmp
+*.temp
+tmp/
+temp/
+
+# --- Editor and OS files ---
 .vscode/
 .idea/
+.DS_Store
+Thumbs.db
 *.swp
 *.swo
 *~
 
-# 6. 文档和归档（可选保留）
-docs/
-archive/
-
-# 7. 测试和脚本（可选保留）
-tests/
-scripts/
-
-# 8. 用户偏好文件（本地配置）
-launcher_prefs.json
-config/manual_data.local.json
-config/api_config.local.json
-
-# 9. 环境变量（包含API密钥，绝对不能上传！）
-.env
-*.env
-
-# 10. 本地 Claude 文档（私有配置）
-CLAUDE.local.md
-
-# ============================================
-# 核心文件白名单（必须上传到GitHub）
-# ============================================
-
-# 项目根目录必备文件
-!.gitignore
-!PROJECT_ARCHITECTURE.md
-!requirements.txt
-!README.md
-
-# src/ 文件夹（9大核心文件）
-!src/
-!src/*.py
-!src/*.txt
-
-# 可选：如果需要保留示例配置
-!.env.example
-/.worktrees/
+# --- Local worktrees ---
+.worktrees/
