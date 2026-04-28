@@ -15,9 +15,16 @@
 
 ## 输入
 
-1. **Thesis Draft** (thesis_draft.json)
-2. **Layer Cards** (5个)
-3. **Bridge Memos** (2-3个)
+你只会收到一个压缩后的 `governance_input` JSON 对象，关键字段如下：
+
+- **thesis_main / thesis_environment / thesis_valuation / thesis_timing**: Thesis 核心段落
+- **thesis_dependencies**: 论点的依赖前提（每条依赖如果失效，就是风险触发器）
+- **thesis_key_support_chains**: Thesis 主论点的关键支撑链，用于识别哪些支撑前提一旦失效会变成风险
+- **high_severity_typed_conflicts**: 必须在最终报告中保留的高严重度跨层冲突
+- **key_evidence_refs**: 与高严重度冲突和 Thesis 支撑链相关的证据索引
+- **known_data_gaps**: 已知数据缺口（哪一层少了什么数据）
+- **objective_firewall_summary**: 客观性防火墙摘要
+- **unresolved_questions**: Bridge 未解决的跨层问题
 
 ## 输出格式
 

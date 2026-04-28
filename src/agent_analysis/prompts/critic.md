@@ -11,9 +11,16 @@
 
 ## 输入
 
-1. **Thesis Draft** (thesis_draft.json)
-2. **Layer Cards** (5个)
-3. **Bridge Memos** (2-3个)
+你只会收到一个压缩后的 `governance_input` JSON 对象，关键字段如下：
+
+- **thesis_main / thesis_environment / thesis_valuation / thesis_timing**: Thesis 核心段落
+- **thesis_dependencies**: 论点的依赖前提
+- **thesis_key_support_chains**: Thesis 主论点的关键支撑链，包含每条链的 evidence_refs 和权重
+- **high_severity_typed_conflicts**: 必须在最终报告中保留的高严重度跨层冲突
+- **key_evidence_refs**: 与高严重度冲突和 Thesis 支撑链相关的证据索引（按 function_id 组织）
+- **known_data_gaps**: 已知数据缺口（尤其是 L3 广度数据）
+- **synthesis_guidance**: 给下游的约束指令
+- **objective_firewall_summary**: 客观性防火墙摘要（投资对象、发言权、反证）
 
 ## 输出格式
 
@@ -51,8 +58,9 @@
 - L5 趋势好 → 应该买：未考虑环境约束
 
 ### 2. 证据引用问题
-- 引用的证据是否存在于 Layer Cards 中？
-- 证据的解读是否与 Layer Card 一致？
+- thesis_key_support_chains 中的每条 evidence_refs 是否都能在 key_evidence_refs 中找到？
+- 引用的证据是否存在于 key_evidence_refs 中？
+- 证据的解读是否与 key_evidence_refs 中的记录一致？
 - 是否选择性引用（只引用支持自己的证据）？
 
 ### 3. 冲突处理不当
@@ -89,9 +97,10 @@
 ## 攻击策略
 
 ### 策略 1: 数据一致性检查
-逐条检查 key_support_chains 中的 evidence_refs：
-- 该证据是否存在于对应的 Layer Card 中？
-- 该证据的解读是否与 Layer Card 一致？
+逐条检查 thesis_key_support_chains：
+- 每条支撑链的 evidence_refs 是否存在于 key_evidence_refs 中？
+- 每条支撑链对证据的解读是否与 key_evidence_refs 中的记录一致？
+- 如果 thesis_main 声称了额外证据，但该证据不在 thesis_key_support_chains 或 key_evidence_refs 中，必须指出证据缺口。
 
 ### 策略 2: 因果链完整性检查
 对于每个跨层结论，检查：
@@ -131,7 +140,7 @@ Critic 回应：
 ```json
 {
   "target": "main_thesis",
-  "issue": "'盈利增长强劲'与 Layer Card L4 不一致。L4 中 earnings_growth trend='decelerating'，且 forward_pe/trailing_pe 比率 < 1 暗示增速预期下调",
+  "issue": "'盈利增长强劲'与 key_evidence_refs 中的 L4.earnings_growth 记录不一致，其 normalized_state 提示增速放缓",
   "severity": "major",
   "suggestion": "核实 L4 数据：若增速确实在放缓，需大幅调整论证；若数据引用错误，修正引用"
 }

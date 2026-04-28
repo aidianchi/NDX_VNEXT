@@ -11,10 +11,18 @@
 
 ## 输入
 
-1. **Thesis Draft** (原始版本)
-2. **Critique** (批评意见)
-3. **Risk Boundary Report** (风险边界报告)
-4. **Schema Guard Report** (结构校验报告)
+你只会收到一个压缩后的 `governance_input` JSON 对象，关键字段如下：
+
+- **thesis_main / thesis_environment / thesis_valuation / thesis_timing / thesis_confidence / thesis_dependencies**: 原始 Thesis 核心
+- **thesis_key_support_chains**: 原始 Thesis 的关键支撑链；修订时可调整，但不能丢失其可追溯 evidence_refs
+- **high_severity_typed_conflicts**: 必须在最终报告中保留的高严重度跨层冲突
+- **objective_firewall_summary**: 客观性防火墙摘要（对象、发言权、反证）
+- **critique_overall / critique_cross_layer_issues**: Critic 的核心批评与跨层逻辑问题
+- **must_preserve_risks**: Risk Sentinel 列出的必须保留的风险警示
+- **schema_passed / schema_structural_issues / schema_consistency_issues / schema_missing_fields**: Schema Guard 的结构问题
+- **key_evidence_refs**: 与高严重度冲突和 Thesis 支撑链相关的关键证据引用（修正数据引用错误时对照用）
+- **known_data_gaps**: 已知数据缺口（修订时需明确标注，不要假装数据充足）
+- **synthesis_guidance**: 给下游的约束指令
 
 ## 输出格式
 

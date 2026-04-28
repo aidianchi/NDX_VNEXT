@@ -815,6 +815,77 @@ class SchemaGuardReport(BaseModel):
 
 
 # ============================================================================
+# Governance Input Packet - 治理阶段窄输入
+# ============================================================================
+
+class GovernanceInputPacket(BaseModel):
+    """
+    治理阶段窄输入 — 压缩 Critic / Risk / Reviser / Final 的输入，降低 token 膨胀。
+
+    只包含治理阶段需要的关键信号：高严重度冲突、客观性防火墙、必须保留的风险、
+    Schema Guard 摘要、关键证据引用和已知数据缺口。
+
+    不会包含完整 layer_cards 或 bridge_memos。
+    """
+    model_config = {"extra": "allow"}
+
+    # ── Thesis 核心 ──
+    thesis_main: str = Field("", description="主论点")
+    thesis_environment: str = Field("", description="环境评估")
+    thesis_valuation: str = Field("", description="估值评估")
+    thesis_timing: str = Field("", description="时机评估")
+    thesis_confidence: str = Field("medium", description="整体置信度")
+    thesis_dependencies: List[str] = Field(default_factory=list, description="依赖前提")
+    thesis_key_support_chains: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Thesis 主论点的关键支撑链，保留 evidence_refs 以供治理阶段核验"
+    )
+    retained_conflict_types: List[str] = Field(default_factory=list, description="已保留的冲突类型名")
+
+    # ── 必须不丢失的高严重度冲突 ──
+    high_severity_typed_conflicts: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Bridge v2 高严重度 typed conflicts（必须保留）"
+    )
+
+    # ── 客观性防火墙 ──
+    objective_firewall_summary: Optional[Dict[str, Any]] = Field(
+        None, description="客观性防火墙摘要"
+    )
+
+    # ── Schema Guard 摘要 ──
+    schema_passed: bool = Field(True, description="Schema Guard 是否通过")
+    schema_structural_issues: List[str] = Field(default_factory=list, description="结构问题")
+    schema_consistency_issues: List[str] = Field(default_factory=list, description="一致性问题")
+    schema_missing_fields: List[str] = Field(default_factory=list, description="缺失字段")
+
+    # ── Risk Sentinel 必须保留的风险（reviser / final） ──
+    must_preserve_risks: List[str] = Field(default_factory=list, description="必须保留的风险警示")
+
+    # ── 关键证据引用 ──
+    key_evidence_refs: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="与高严重度冲突和 Thesis 支撑链相关的 evidence_index 子集"
+    )
+
+    # ── 已知数据缺口（尤其是 L3 广度缺失） ──
+    known_data_gaps: List[str] = Field(default_factory=list, description="已知数据缺口")
+
+    # ── Bridge 未解决问题 ──
+    unresolved_questions: List[str] = Field(default_factory=list, description="Bridge v2 未解决问题")
+
+    # ── Synthesis 指导 ──
+    synthesis_guidance: List[str] = Field(default_factory=list, description="给下游的约束指令")
+
+    # ── Critique 摘要（reviser / final） ──
+    critique_overall: Optional[str] = Field(None, description="Critic 整体评估")
+    critique_cross_layer_issues: List[str] = Field(default_factory=list, description="Critic 跨层逻辑问题")
+
+    # ── 修订摘要（final） ──
+    revision_summary: Optional[str] = Field(None, description="Reviser 修订说明")
+
+
+# ============================================================================
 # 修订与裁决
 # ============================================================================
 
