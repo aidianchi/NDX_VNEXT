@@ -1,8 +1,8 @@
 # vNext 目标 Agent 架构与实施路线图
 
 日期：2026-04-24  
-最近更新：2026-04-27  
-状态：根目录主架构计划；以 `deep-research-report.md` 的研究结论为新的路线图基准。
+最近更新：2026-04-28
+状态：主架构文件；以 `RESEARCH_CANON.md` 的研究结论为路线图基准。
 
 ---
 
@@ -10,9 +10,10 @@
 
 本文是 `ndx_vnext` 的主架构文件。后续 agent 如果只读一个路线图，应优先读本文，再读：
 
+- `NEXT_STEPS.md`：当前下一步，按核心系统、数据基础、输出体验三类组织。
 - `AGENTS.md`：开发规则、验证命令、上下文隔离要求。
-- `2026-04-26_DEEP_RESEARCH_CANON_INTEGRATION_PLAN.md`：Deep Research 法典集成的细化计划。
-- `VNEXT_PROGRESS_PLAN.md`：更短期的执行状态。
+- `RESEARCH_CANON.md`：指标判读与跨层级推理的权威研究语料。
+- `RUN_REVIEW_CHECKLIST.md`：真实运行后的复盘标准。
 
 如果本文与更早的计划冲突，以本文为准。
 
@@ -32,7 +33,7 @@
 
 ## 2. 新结论：Deep Research 是研究法典，不是普通范例
 
-`deep-research-report.md` 现在被确定为 vNext 的权威研究语料，作用包括：
+`RESEARCH_CANON.md` 现在被确定为 vNext 的权威研究语料，作用包括：
 
 - 指标判读标准。
 - 市场状态诊断模板。
@@ -452,7 +453,7 @@ UI 需要展示：
 
 不要：
 
-- 把整个 `deep-research-report.md` 硬塞进每个 prompt。
+- 把整个 `RESEARCH_CANON.md` 硬塞进每个 prompt。
 - 让 L1-L5 看到其他层运行时结论。
 - 用技术指标证明估值便宜。
 - 用情绪指标覆盖信用恶化。

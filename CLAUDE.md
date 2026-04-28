@@ -5,9 +5,10 @@
 ## 必读顺序
 
 1. `AGENTS.md`
-2. `2026-04-24_VNEXT_TARGET_AGENT_ARCHITECTURE_PLAN.md`
-3. `VNEXT_PROGRESS_PLAN.md`
-4. `2026-04-27_VNEXT_REAL_RUN_OBSERVATION_CHECKLIST.md`
+2. `NEXT_STEPS.md`
+3. `ARCHITECTURE.md`
+4. `RUN_REVIEW_CHECKLIST.md`
+5. `WORK_LOG.md`
 
 ## 分支规则
 
@@ -44,8 +45,9 @@
 
 ## 文档规则
 
-- 架构变化更新主架构或推进计划。
-- 面向普通读者的解释另写通俗报告，不替代架构文档。
+- 架构变化更新 `ARCHITECTURE.md` 或 `NEXT_STEPS.md`。
+- 完成事项写入 `WORK_LOG.md`，最新在上。
+- 面向普通读者的解释写入通俗报告，不替代架构文档。
 - 中文优先，少黑话，少中英夹杂。
 
 ## 交付规则
