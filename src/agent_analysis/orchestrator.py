@@ -15,6 +15,7 @@ try:
         ContextBrief,
         Critique,
         FinalAdjudication,
+        GovernanceInputPacket,
         LayerCard,
         ObjectiveFirewallSummary,
         SynthesisPacket,
@@ -35,6 +36,7 @@ except ImportError:
         ContextBrief,
         Critique,
         FinalAdjudication,
+        GovernanceInputPacket,
         LayerCard,
         ObjectiveFirewallSummary,
         SynthesisPacket,
@@ -129,16 +131,18 @@ class VNextOrchestrator:
         synthesis_packet = self._build_synthesis_packet(packet_model, context_brief, layer_cards, bridge_memos)
         self._save_json("synthesis_packet.json", synthesis_packet)
         thesis = self._run_thesis(synthesis_packet)
+
+        gov_input_critic = self._build_governance_input_packet(
+            synthesis_packet=synthesis_packet,
+            thesis=thesis,
+            layer_cards=layer_cards,
+        )
         critique = self._run_stage(
             stage_key="critic",
             stage_name="critic",
             model_cls=Critique,
             payload={
-                "context_brief": _model_dump(context_brief),
-                "synthesis_packet": _model_dump(synthesis_packet),
-                "thesis_draft": _model_dump(thesis),
-                "layer_cards": [_model_dump(card) for card in layer_cards],
-                "bridge_memos": [_model_dump(memo) for memo in bridge_memos],
+                "governance_input": _model_dump(gov_input_critic),
             },
         )
         self._save_json("critique.json", critique)
@@ -148,11 +152,7 @@ class VNextOrchestrator:
             stage_name="risk",
             model_cls=RiskBoundaryReport,
             payload={
-                "context_brief": _model_dump(context_brief),
-                "synthesis_packet": _model_dump(synthesis_packet),
-                "thesis_draft": _model_dump(thesis),
-                "layer_cards": [_model_dump(card) for card in layer_cards],
-                "bridge_memos": [_model_dump(memo) for memo in bridge_memos],
+                "governance_input": _model_dump(gov_input_critic),
             },
         )
         self._save_json("risk_boundary_report.json", risk_report)
@@ -160,35 +160,39 @@ class VNextOrchestrator:
         schema_report = self._run_schema_guard(packet_model, layer_cards, bridge_memos, thesis, critique, risk_report)
         self._save_json("schema_guard_report.json", schema_report)
 
+        gov_input_reviser = self._build_governance_input_packet(
+            synthesis_packet=synthesis_packet,
+            thesis=thesis,
+            critique=critique,
+            risk_report=risk_report,
+            schema_report=schema_report,
+            layer_cards=layer_cards,
+        )
         analysis_revised = self._run_stage(
             stage_key="reviser",
             stage_name="reviser",
             model_cls=AnalysisRevised,
             payload={
-                "context_brief": _model_dump(context_brief),
-                "synthesis_packet": _model_dump(synthesis_packet),
-                "thesis_draft": _model_dump(thesis),
-                "critique": _model_dump(critique),
-                "risk_boundary_report": _model_dump(risk_report),
-                "schema_guard_report": _model_dump(schema_report),
-                "bridge_memos": [_model_dump(memo) for memo in bridge_memos],
+                "governance_input": _model_dump(gov_input_reviser),
             },
         )
         self._save_json("analysis_revised.json", analysis_revised)
 
+        gov_input_final = self._build_governance_input_packet(
+            synthesis_packet=synthesis_packet,
+            thesis=analysis_revised.revised_thesis,
+            critique=critique,
+            risk_report=risk_report,
+            schema_report=schema_report,
+            analysis_revised=analysis_revised,
+            layer_cards=layer_cards,
+        )
         final_adjudication = self._run_stage(
             stage_key="final",
             stage_name="final_adjudicator",
             model_cls=FinalAdjudication,
             payload={
-                "context_brief": _model_dump(context_brief),
-                "synthesis_packet": _model_dump(synthesis_packet),
-                "analysis_revised": _model_dump(analysis_revised),
-                "bridge_memos": [_model_dump(memo) for memo in bridge_memos],
-                "critique": _model_dump(critique),
-                "risk_boundary_report": _model_dump(risk_report),
-                "schema_guard_report": _model_dump(schema_report),
-                "layer_cards": [_model_dump(card) for card in layer_cards],
+                "governance_input": _model_dump(gov_input_final),
             },
         )
         token_report = self.llm_engine.get_token_report() if hasattr(self.llm_engine, "get_token_report") else {}
@@ -461,6 +465,126 @@ class VNextOrchestrator:
             strongest_falsifier=falsifiers[0] if falsifiers else "",
             unresolved_tensions=unresolved_tensions,
             warnings=warnings,
+        )
+
+    def _build_governance_input_packet(
+        self,
+        synthesis_packet: SynthesisPacket,
+        thesis: ThesisDraft,
+        critique: Optional[Critique] = None,
+        risk_report: Optional[RiskBoundaryReport] = None,
+        schema_report: Optional[SchemaGuardReport] = None,
+        analysis_revised: Optional[AnalysisRevised] = None,
+        layer_cards: Optional[List[LayerCard]] = None,
+    ) -> GovernanceInputPacket:
+        """Build a compressed governance input packet for Critic / Risk / Reviser / Final.
+
+        Reduces token bloat by only including what governance stages need:
+        - Thesis essentials (not full artifact)
+        - High severity typed conflicts (must not be lost)
+        - Objective firewall summary
+        - Schema guard essentials
+        - Must-preserve risks
+        - Thesis support chains and their evidence refs
+        - Key evidence refs (subset related to high-severity conflicts and thesis support chains)
+        - Known data gaps (especially L3 breadth)
+        """
+        # ── Thesis summary ──
+        thesis_confidence = getattr(thesis.overall_confidence, "value", str(thesis.overall_confidence)) if thesis.overall_confidence else "medium"
+        retained_conflict_types = [
+            getattr(conflict, "conflict_type", str(conflict))
+            for conflict in thesis.retained_conflicts
+        ]
+
+        # ── Key evidence refs: high-severity conflicts plus Thesis support chains ──
+        all_evidence_refs: set = set()
+        for conflict in synthesis_packet.high_severity_typed_conflicts:
+            refs = getattr(conflict, "evidence_refs", []) if hasattr(conflict, "evidence_refs") else conflict.get("evidence_refs", [])
+            all_evidence_refs.update(refs)
+
+        thesis_key_support_chains = [_model_dump(chain) for chain in thesis.key_support_chains]
+        for chain in thesis.key_support_chains:
+            all_evidence_refs.update(chain.evidence_refs)
+
+        key_evidence_refs: Dict[str, Dict[str, Any]] = {}
+        for ref in sorted(all_evidence_refs):
+            if ref in synthesis_packet.evidence_index:
+                key_evidence_refs[ref] = synthesis_packet.evidence_index[ref]
+
+        # ── Known data gaps: collect from layer cards, schema, and bridge ──
+        known_data_gaps: List[str] = []
+        if layer_cards:
+            for card in layer_cards:
+                if card.quality_self_check:
+                    missing = getattr(card.quality_self_check, "missing_or_weak_indicators", [])
+                    known_data_gaps.extend(missing)
+
+        if schema_report is not None:
+            if schema_report.structural_issues:
+                known_data_gaps.extend(f"[schema] {issue}" for issue in schema_report.structural_issues)
+            if schema_report.missing_fields:
+                known_data_gaps.extend(f"[schema] {field}" for field in schema_report.missing_fields)
+
+        # L3 广度缺失（特别重要）
+        if layer_cards:
+            for card in layer_cards:
+                layer_label = getattr(card.layer, "value", str(card.layer))
+                if layer_label == "L3":
+                    l3_warnings = [f"[L3] {flag}" for flag in card.risk_flags if "breadth" in flag.lower() or "结构" in flag]
+                    if l3_warnings:
+                        known_data_gaps.extend(l3_warnings)
+
+        # Bridge 未解决问题
+        unresolved_questions: List[str] = []
+        for bridge_summary in synthesis_packet.bridge_summaries:
+            unresolved = bridge_summary.unresolved_questions if bridge_summary.unresolved_questions else []
+            unresolved_questions.extend(unresolved)
+
+        # ── Schema guard summary ──
+        schema_passed = schema_report.passed if schema_report is not None else True
+        schema_structural = schema_report.structural_issues if schema_report is not None else []
+        schema_consistency = schema_report.consistency_issues if schema_report is not None else []
+        schema_missing = schema_report.missing_fields if schema_report is not None else []
+
+        # ── Must-preserve risks (from Risk Sentinel, if available) ──
+        must_preserve_risks = list(risk_report.must_preserve_risks) if risk_report is not None else []
+
+        # ── Critique summary (for reviser / final) ──
+        critique_overall = critique.overall_assessment if critique is not None else None
+        critique_cross_layer = critique.cross_layer_issues if critique is not None else []
+
+        # ── Revision summary (for final) ──
+        revision_summary = analysis_revised.revision_summary if analysis_revised is not None else None
+
+        # ── Objective firewall ──
+        obj_firewall = _model_dump(synthesis_packet.objective_firewall_summary) if synthesis_packet.objective_firewall_summary is not None else None
+
+        # ── Typed conflicts as dicts ──
+        high_severity_typed = [_model_dump(conflict) for conflict in synthesis_packet.high_severity_typed_conflicts]
+
+        return GovernanceInputPacket(
+            thesis_main=thesis.main_thesis or "",
+            thesis_environment=thesis.environment_assessment or "",
+            thesis_valuation=thesis.valuation_assessment or "",
+            thesis_timing=thesis.timing_assessment or "",
+            thesis_confidence=thesis_confidence,
+            thesis_dependencies=list(thesis.dependencies) if thesis.dependencies else [],
+            thesis_key_support_chains=thesis_key_support_chains,
+            retained_conflict_types=retained_conflict_types,
+            high_severity_typed_conflicts=high_severity_typed,
+            objective_firewall_summary=obj_firewall,
+            schema_passed=schema_passed,
+            schema_structural_issues=list(schema_structural),
+            schema_consistency_issues=list(schema_consistency),
+            schema_missing_fields=list(schema_missing),
+            must_preserve_risks=must_preserve_risks,
+            key_evidence_refs=key_evidence_refs,
+            known_data_gaps=list(dict.fromkeys(known_data_gaps)),  # 去重
+            unresolved_questions=list(dict.fromkeys(unresolved_questions)),  # 去重
+            synthesis_guidance=list(synthesis_packet.synthesis_guidance) if synthesis_packet.synthesis_guidance else [],
+            critique_overall=critique_overall,
+            critique_cross_layer_issues=list(critique_cross_layer),
+            revision_summary=revision_summary,
         )
 
     def _build_context_brief(self, packet: AnalysisPacket) -> ContextBrief:
