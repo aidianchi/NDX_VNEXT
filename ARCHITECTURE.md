@@ -1,7 +1,7 @@
 # vNext 目标 Agent 架构与实施路线图
 
 日期：2026-04-24  
-最近更新：2026-04-28
+最近更新：2026-04-29
 状态：主架构文件；以 `RESEARCH_CANON.md` 的研究结论为路线图基准。
 
 ---
@@ -339,6 +339,35 @@ L1-L5 必须输出：
 3. L3 保持“强提示、非硬失败”。
 4. `brief` 继续等待真实读者反馈后再做信息架构调整。
 
+### 7.3 2026-04-29 DeepSeek-only 基准
+
+2026-04-29 已将默认运行基准收敛到 DeepSeek：
+
+- 首选模型：`deepseek-v4-flash`
+- 备用模型：`deepseek-v4-pro`
+- 其他模型不再作为常规验证路径。
+
+本轮真实 run：
+
+- run 目录：`output/analysis/vnext/20260429_001955`
+- 实际使用模型：`deepseek-v4-flash`
+- final stance：`中性偏谨慎`
+- final approval：`approved_with_reservations`
+- 全量测试：`39 passed, 133 warnings`
+
+关键观察：
+
+- Governance input 压缩后，Final 的支撑证据仍能追到 evidence index。
+- Risk / Final 的新增护栏阻止了无证据点位、跌幅、估值倍数和盈利阈值表述继续扩散。
+- Bridge typed conflicts 已较稳，但 resonance chain 还需要更硬的证据字段要求。
+- L3 数据仍是最大薄弱点：原始采集成功不代表语义质量足够，广度与内部扩散指标需要补数据源或 fallback。
+
+因此下一阶段优先级调整为：
+
+1. 补 Bridge resonance chain 的证据字段约束。
+2. 补 L3 广度数据源和 fallback。
+3. 评审 2026-04-29 run 生成的 `brief` 输出体验。
+
 ### P0：保留安全门
 
 已实施，后续必须持续保证：
@@ -467,6 +496,14 @@ UI 需要展示：
 ## 9. 验证命令
 
 单元测试：
+
+macOS / Linux：
+
+```bash
+python -m pytest -q
+```
+
+Windows PowerShell：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q

@@ -38,9 +38,10 @@
 
 - 小步提交，避免混入无关重构。
 - 改代码必须加或更新测试。
+- 当前默认只测试和运行 DeepSeek：先 `deepseek-v4-flash`，失败再 `deepseek-v4-pro`；不要新增其他模型验证路径。
 - 改 prompt 必须考虑是否会诱导无证据推断。
 - 不得编造历史胜率、回测收益、样本区间或概率数字，除非 evidence refs 明确提供。
-- 重要改动后运行：`.\.venv\Scripts\python.exe -m pytest -q`。
+- 重要改动后运行测试。macOS / Linux 用 `python -m pytest -q`；Windows 用 `.\.venv\Scripts\python.exe -m pytest -q`。
 - UI 相关改动后，用最新 run 生成 native UI。
 
 ## 文档规则

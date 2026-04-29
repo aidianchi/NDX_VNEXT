@@ -4,6 +4,44 @@
 
 ---
 
+## 2026-04-29
+
+### 合并 DeepSeek-only 运行基准
+
+提交：
+
+- `412f8fa Default to DeepSeek v4 runtime`
+
+完成内容：
+
+- 默认启用 DeepSeek，默认关闭 ChatAI、Kimi 和 Gemini。
+- 默认模型顺序保持为 `deepseek-v4-flash` -> `deepseek-v4-pro`。
+- DeepSeek V4 调用对齐官方 OpenAI-compatible 参数：`stream=False`、`reasoning_effort="high"`、`thinking` enabled。
+- Risk Sentinel 和 Final Adjudicator 新增护栏：不得编造无证据支持的点位、跌幅、估值倍数、盈利阈值或其他定量影响幅度。
+- 新增 DeepSeek 运行配置测试和 prompt 护栏测试。
+
+验证结果：
+
+- worktree 分支：`39 passed, 133 warnings`
+- 合并后的 `main`：`39 passed, 133 warnings`
+- 已推送到 `https://github.com/aidianchi/NDX_VNEXT`
+
+### 完成 2026-04-29 真实运行与数据覆盖复盘
+
+基线 run：
+
+- `output/analysis/vnext/20260429_001955`
+
+完成内容：
+
+- 使用 `deepseek-v4-flash` 完成全链路真实运行，`deepseek-v4-pro` 未触发。
+- 复盘治理输入压缩后的 Critic / Risk / Reviser / Final，确认高严重度冲突和最终证据链仍可追溯。
+- 发现 L3 广度数据仍是当前最薄弱环节，新增 `DATA_COVERAGE_REVIEW.md` 记录数据稳定项、弱项和下一步。
+- 用 2026-04-29 run 生成默认 `brief`：`output/reports/vnext_research_ui_brief_20260423.html`。
+- 清理 `.env.example` 的编码损坏，并补充 macOS / Linux 启动路径。
+
+---
+
 ## 2026-04-28
 
 ### 重整根目录文档

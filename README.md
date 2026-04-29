@@ -11,8 +11,9 @@
 1. `NEXT_STEPS.md`：现在下一步做什么，按最新在上排列。
 2. `ARCHITECTURE.md`：系统为什么这样设计，哪些原则不能破坏。
 3. `RESEARCH_CANON.md`：指标怎么读、市场状态怎么诊断的权威研究语料。
-4. `RUN_REVIEW_CHECKLIST.md`：每次真实运行后如何复盘。
-5. `WORK_LOG.md`：已经完成了什么，按最新在上排列。
+4. `DATA_COVERAGE_REVIEW.md`：哪些数据已经稳定，哪些数据仍然薄弱。
+5. `RUN_REVIEW_CHECKLIST.md`：每次真实运行后如何复盘。
+6. `WORK_LOG.md`：已经完成了什么，按最新在上排列。
 
 如果你是代码 agent，还必须读：
 
@@ -29,6 +30,50 @@
 
 ## 常用命令
 
+当前默认只使用 DeepSeek：
+
+- 首选：`deepseek-v4-flash`
+- 备用：`deepseek-v4-pro`
+
+### macOS / Linux
+
+首次安装：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip setuptools wheel
+python -m pip install -r requirements.txt
+cp .env.example .env
+```
+
+在 `.env` 中填写：
+
+```bash
+DEEPSEEK_API_KEY=your_deepseek_api_key_here
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+```
+
+运行测试：
+
+```bash
+python -m pytest -q
+```
+
+真实运行：
+
+```bash
+python src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts
+```
+
+生成默认 `brief` 报告：
+
+```bash
+python src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/<run_id> --template brief
+```
+
+### Windows PowerShell
+
 运行测试：
 
 ```powershell
@@ -38,5 +83,5 @@
 生成默认 `brief` 报告：
 
 ```powershell
-.\.venv\Scripts\python.exe src\agent_analysis\vnext_reporter.py --run-dir output\analysis\vnext\20260427_190347 --template brief
+.\.venv\Scripts\python.exe src\agent_analysis\vnext_reporter.py --run-dir output\analysis\vnext\<run_id> --template brief
 ```

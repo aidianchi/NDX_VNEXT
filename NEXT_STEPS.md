@@ -1,6 +1,6 @@
 # vNext 下一步
 
-最近更新：2026-04-28  
+最近更新：2026-04-29
 阅读方式：最新事项放在最上面。完成后把结果写入 `WORK_LOG.md`，同样按时间倒序。
 
 ---
@@ -9,12 +9,11 @@
 
 | 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
-| 1 | 核心系统 | 用最新代码跑一次真实模型，重点复盘 governance input 压缩后 Critic / Risk / Reviser / Final 是否仍能保留支撑证据和高严重度冲突 | 刚完成治理输入压缩，必须确认 token 下降没有换来证据丢失 | 新 run 通过 `RUN_REVIEW_CHECKLIST.md`；Final 的立场、风险和证据链可追溯 |
-| 2 | 核心系统 | 继续观察 Bridge typed conflict / resonance / transmission map 的稳定性 | vNext 的价值在于显式跨层关系，不是泛泛总结 | 每个高严重度冲突都有层级、指标、机制、证据引用和反证 |
-| 3 | 数据基础 | 做一份数据覆盖复盘：哪些指标已实现、哪些未审核、哪些需要扩增或替换数据源 | 数据准确是前提，尤其 L3 广度和成分股结构不能长期靠代理指标硬撑 | 形成清单：已稳定、可用但弱、缺失、需要 fallback |
-| 4 | 数据基础 | 审慎推进 L3 数据补齐，不直接升级为 hard fail | L3 很重要，但过早一票否决会让系统脆弱 | L3 能稳定说明 breadth、concentration、leadership、momentum diffusion；缺失时能明示置信度边界 |
-| 5 | 输出体验 | 用真实 `brief` 页面做一次完整阅读评审 | 原生 UI 不能只“信息齐全”，还要让普通读者顺着读下去 | 明确 `brief` 是否继续作为默认模板；记录阅读卡点和改版建议 |
-| 6 | 输出体验 | 判断下一阶段是继续强化 self-contained HTML，还是启动正式前端 viewer | 前端框架化只有在信息架构稳定后才值得做 | 有明确选择标准：读者体验、证据跳转、run 切换、图表接入、维护成本 |
+| 1 | 核心系统 | 加强 Bridge `resonance_chains` 的证据要求 | 2026-04-29 run 中 typed conflicts 已较稳，但 resonance chain 仍可能缺少 evidence refs、confirming indicators 或机制说明 | Bridge prompt 和测试要求 resonance chain 必须能追到证据和确认指标 |
+| 2 | 数据基础 | 优先补 L3 广度数据源和 fallback | 数据覆盖复盘显示 L3 是当前最薄弱层，尤其广度和内部扩散指标 | `DATA_COVERAGE_REVIEW.md` 中列出的 4 个 L3 弱项有稳定来源、fallback 或明确降级说明 |
+| 3 | 输出体验 | 评审 2026-04-29 run 的默认 `brief` 页面 | 核心 artifacts 已有新 run，页面也已生成，但普通读者的连续阅读体验还没有跟着复盘 | 记录阅读卡点、证据跳转问题和版式修改建议 |
+| 4 | 核心系统 | 继续观察治理输入压缩后的多轮稳定性 | 单轮 DeepSeek run 已通过，但还不足以证明长期稳定 | 至少再跑 2 轮真实数据，确认 Critic / Risk / Reviser / Final 不丢高严重度冲突 |
+| 5 | 输出体验 | 判断下一阶段是继续强化 self-contained HTML，还是启动正式前端 viewer | 前端框架化只有在信息架构稳定后才值得做 | 有明确选择标准：读者体验、证据跳转、run 切换、图表接入、维护成本 |
 
 ---
 
@@ -108,6 +107,14 @@
 
 全量测试：
 
+macOS / Linux：
+
+```bash
+python -m pytest -q
+```
+
+Windows PowerShell：
+
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
@@ -115,11 +122,11 @@
 生成四个 UI 模板：
 
 ```powershell
-.\.venv\Scripts\python.exe src\agent_analysis\vnext_reporter.py --run-dir output\analysis\vnext\20260427_190347 --template all --output output\reports\vnext_ui_20260427_190347.html
+.\.venv\Scripts\python.exe src\agent_analysis\vnext_reporter.py --run-dir output\analysis\vnext\<run_id> --template all --output output\reports\vnext_ui_template.html
 ```
 
 真实 smoke：
 
 ```powershell
-.\.venv\Scripts\python.exe src\main.py --data-json output\data\data_collected_v9_live.json --skip-report --disable-charts
+.\.venv\Scripts\python.exe src\main.py --models deepseek-v4-flash,deepseek-v4-pro --data-json output\data\data_collected_v9_live.json --skip-report --disable-charts
 ```
