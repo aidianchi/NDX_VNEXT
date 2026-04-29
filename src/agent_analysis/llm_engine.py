@@ -107,16 +107,14 @@ class LLMEngine:
                     "model": model_name,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.2,
-                    "max_tokens": config['max_tokens']
+                    "max_tokens": config["max_tokens"],
+                    "stream": False,
                 }
                 if service_name == "deepseek":
                     kwargs["response_format"] = {"type": "json_object"}
                     if model_name.startswith("deepseek-v4-"):
-                        # DeepSeek V4 defaults to thinking mode. The vNext pipeline expects
-                        # compact, directly parseable JSON, so we disable thinking for both
-                        # flash and pro variants to avoid spending the completion budget on
-                        # hidden reasoning tokens.
-                        kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+                        kwargs["reasoning_effort"] = "high"
+                        kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
                 response = self.clients[service_name].chat.completions.create(**kwargs)
 
                 usage = {}
