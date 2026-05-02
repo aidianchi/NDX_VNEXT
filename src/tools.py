@@ -111,6 +111,7 @@ TOOLS_REGISTRY = {
     # Layer 4
     "get_ndx_pe_and_earnings_yield": get_ndx_pe_and_earnings_yield,
     "get_equity_risk_premium": get_equity_risk_premium,
+    "get_damodaran_us_implied_erp": get_damodaran_us_implied_erp,
     "get_crowdedness_dashboard": get_crowdedness_dashboard,
 
     # Layer 5
@@ -121,6 +122,7 @@ TOOLS_REGISTRY = {
     "get_macd_qqq": get_macd_qqq,
     "get_obv_qqq": get_obv_qqq,
     "get_volume_analysis_qqq": get_volume_analysis_qqq,
+    "get_price_volume_quality_qqq": get_price_volume_quality_qqq,
     "get_donchian_channels_qqq": get_donchian_channels_qqq,
     "get_multi_scale_ma_position": get_multi_scale_ma_position,
 

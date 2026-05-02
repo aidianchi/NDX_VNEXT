@@ -54,7 +54,7 @@ class DataCollector:
             
             # 第四层：指数基本面估值 (Index Fundamental Valuation)
             # 核心问题：当前价格相对于其内在价值和无风险资产，是否具有吸引力？
-            4: ["get_ndx_pe_and_earnings_yield", "get_equity_risk_premium"],
+            4: ["get_ndx_pe_and_earnings_yield", "get_equity_risk_premium", "get_damodaran_us_implied_erp"],
             
             # 第五层：价格趋势与波动率 (Price Trend & Volatility) - V6.0完整版
             # 核心问题：价格的路径、动能和波动状态如何？
@@ -68,6 +68,7 @@ class DataCollector:
                 "get_macd_qqq",                  # V6.0新增：MACD动量确认
                 "get_obv_qqq",                   # V6.0新增：OBV能量潮
                 "get_volume_analysis_qqq",       # V6.0新增：成交量分析与量价关系
+                "get_price_volume_quality_qqq",  # V7.1新增：VWAP/MFI/CMF量价质量验证
                 "get_donchian_channels_qqq",     # V6.0新增：唐奇安通道突破识别
                 "get_multi_scale_ma_position"    # V7.0新增：多尺度MA分析
             ]

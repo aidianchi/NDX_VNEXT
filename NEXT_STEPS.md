@@ -1,19 +1,31 @@
 # vNext 下一步
 
-最近更新：2026-04-29
+最近更新：2026-05-02
 阅读方式：最新事项放在最上面。完成后把结果写入 `WORK_LOG.md`，同样按时间倒序。
 
 ---
 
 ## 最新下一步
 
+### P1：L5 公式层和轻量数据 fallback
+
+- L5 公式层优先用 `ta` 做标准化计算，同时保留内部 fallback；新增指标必须回答明确问题，不能为了显得全面而堆指标。
+- VWAP / MFI / CMF 可作为高价值量价质量验证：它们帮助判断价格上涨是否得到成交量和资金流支持，但不能单独给买卖结论。
+- pandas-datareader 先只承担 FRED 公开 CSV fallback：在 FRED API key 缺失或 JSON API 失败时，补强 L1/L2/L4 的宏观、利率、信用和流动性数据。
+- pandas-datareader 的 Fama-French、Nasdaq symbols、Stooq 暂不进主流程；当前 pandas 3 环境和部分上游接口不够稳，先记录观察，不硬接。
+
+### L4 估值锚口径确认
+
+- 人工/Wind 是最高信任、可选输入的主锚：当前重点支持 `PE`、`PB`、`PS`、`ERP` 及其 5/10 年分位。
+- Trendonify 是有价值的自动分位来源；若普通采集遇到 403，本轮只记录不可用和后续待解决，不硬绕、不静默退回 yfinance。
+- WorldPERatio 不只是 PE 校验源；它的 Nasdaq 100 PE、均值、标准差、估值区间和滚动口径可与人工数据互参，用来辅助描述相对位置。但如果页面没有明确 percentile/rank，不能写成历史百分位。
+- Damodaran implied ERP 是美国市场风险补偿背景锚，不替代 NDX 自身 PE / PB / PS / Forward PE 分位。
+- yfinance component model 保留为当前值、覆盖率和口径校验，不承担历史估值 regime 主判断。
+
 | 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
-| 1 | 核心系统 | 加强 Bridge `resonance_chains` 的证据要求 | 2026-04-29 run 中 typed conflicts 已较稳，但 resonance chain 仍可能缺少 evidence refs、confirming indicators 或机制说明 | Bridge prompt 和测试要求 resonance chain 必须能追到证据和确认指标 |
-| 2 | 数据基础 | 优先补 L3 广度数据源和 fallback | 数据覆盖复盘显示 L3 是当前最薄弱层，尤其广度和内部扩散指标 | `DATA_COVERAGE_REVIEW.md` 中列出的 4 个 L3 弱项有稳定来源、fallback 或明确降级说明 |
-| 3 | 输出体验 | 评审 2026-04-29 run 的默认 `brief` 页面 | 核心 artifacts 已有新 run，页面也已生成，但普通读者的连续阅读体验还没有跟着复盘 | 记录阅读卡点、证据跳转问题和版式修改建议 |
-| 4 | 核心系统 | 继续观察治理输入压缩后的多轮稳定性 | 单轮 DeepSeek run 已通过，但还不足以证明长期稳定 | 至少再跑 2 轮真实数据，确认 Critic / Risk / Reviser / Final 不丢高严重度冲突 |
-| 5 | 输出体验 | 判断下一阶段是继续强化 self-contained HTML，还是启动正式前端 viewer | 前端框架化只有在信息架构稳定后才值得做 | 有明确选择标准：读者体验、证据跳转、run 切换、图表接入、维护成本 |
+| 1 | 数据基础 | 继续观察 Trendonify 的可用路径 | 当前普通 HTTP 访问仍 403；系统已能正确承认不可用，但 Trendonify 的历史分位价值很高 | 决定是否做浏览器采集、缓存、或人工录入路径；不得静默 fallback 成 yfinance |
+| 2 | 输出体验 | 暂缓 brief 大改，只记录阅读卡点 | 审美和交互应等证据链稳定后升级 | 只记录来源、覆盖率、更新时间、简式收益差距标签和百分位展示的阅读问题 |
 
 ---
 
@@ -92,6 +104,11 @@
 - 不继续美化 legacy HTML。
 - 不在 `brief` 信息架构确认前急着上正式前端框架。
 - 不用未经证据支持的历史概率、回测收益、样本期包装判断。
+
+## 靠后观察：外部库启示
+
+- OpenBB 的启示是“数据源要有 provider、口径和可发现工具”，短期先学它的数据治理方式，不急着把整个平台接进来。
+- vectorbt 的角色是离线实验室：以后用来检验策略假设和冲突场景，不让回测结果直接污染 L1-L5 的本次运行判断。
 
 ---
 
