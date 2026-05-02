@@ -62,6 +62,35 @@ except ImportError:
     PANDAS_TA_AVAILABLE = False
     print("[WARN] pandas_ta未安装，ADX等高级技术指标将不可用")
 
+# 尝试导入 pandas-datareader：作为轻量 fallback，不替代主数据源口径
+try:
+    # pandas-datareader 0.10.0 仍使用 pandas 旧版 deprecate_kwarg 调用形式；
+    # 在 pandas 3.x 环境下做窄兼容，避免仅因装饰器签名变化导致整个数据层导入失败。
+    try:
+        import inspect
+        import pandas.util._decorators as _pd_decorators
+
+        _deprecate_kwarg_signature = inspect.signature(_pd_decorators.deprecate_kwarg)
+        _deprecate_kwarg_params = list(_deprecate_kwarg_signature.parameters)
+        if _deprecate_kwarg_params and _deprecate_kwarg_params[0] == "klass":
+            _original_deprecate_kwarg = _pd_decorators.deprecate_kwarg
+
+            def _compat_deprecate_kwarg(*args, **kwargs):
+                if args and isinstance(args[0], str):
+                    return _original_deprecate_kwarg(FutureWarning, *args, **kwargs)
+                return _original_deprecate_kwarg(*args, **kwargs)
+
+            _pd_decorators.deprecate_kwarg = _compat_deprecate_kwarg
+    except Exception:
+        pass
+
+    from pandas_datareader import data as pdr_data
+    PANDAS_DATAREADER_AVAILABLE = True
+except Exception as exc:
+    pdr_data = None
+    PANDAS_DATAREADER_AVAILABLE = False
+    print(f"[WARN] pandas-datareader不可用，FRED/Stooq轻量备用源将不可用: {str(exc)[:80]}")
+
 # =====================================================
 # 配置与常量
 # =====================================================
@@ -311,6 +340,35 @@ def _normalize_start_date(start_date: Optional[Any]) -> Optional[str]:
         return None
 
 
+def _fetch_fred_series_pdr(
+    series_id: str,
+    start_date: Optional[Any] = None,
+    end_date: Optional[Any] = None,
+) -> pd.DataFrame:
+    """
+    使用 pandas-datareader 读取 FRED 公开 CSV。
+    价值：当 FRED API key 缺失或官方 JSON API 短暂失败时，仍保留同一 FRED 序列的轻量 fallback。
+    """
+    if not PANDAS_DATAREADER_AVAILABLE or pdr_data is None:
+        return pd.DataFrame(columns=["date", "value"])
+
+    try:
+        start_dt = pd.to_datetime(start_date) if start_date is not None else datetime.now() - timedelta(days=365 * 15)
+        end_dt = pd.to_datetime(end_date) if end_date is not None else datetime.now()
+        df = pdr_data.DataReader(series_id, "fred", start_dt, end_dt)
+        if df is None or df.empty or series_id not in df.columns:
+            return pd.DataFrame(columns=["date", "value"])
+
+        out = df[[series_id]].rename(columns={series_id: "value"}).reset_index()
+        date_col = "DATE" if "DATE" in out.columns else "date" if "date" in out.columns else out.columns[0]
+        out = out.rename(columns={date_col: "date"})
+        out["date"] = pd.to_datetime(out["date"])
+        out["value"] = pd.to_numeric(out["value"], errors="coerce")
+        return out.dropna(subset=["value"])[["date", "value"]]
+    except Exception as exc:
+        logging.warning(f"pandas-datareader FRED fallback failed for {series_id}: {exc}")
+        return pd.DataFrame(columns=["date", "value"])
+
 
 def _fetch_fred_series(series_id: str, start_date: Optional[Any] = None) -> pd.DataFrame:
     """
@@ -318,10 +376,10 @@ def _fetch_fred_series(series_id: str, start_date: Optional[Any] = None) -> pd.D
     返回包含 ['date', 'value'] 的 DataFrame。
     """
     fred_api_key = get_fred_api_key()
-    if not fred_api_key:
-        return pd.DataFrame(columns=["date", "value"])
-
     start_date_str = _normalize_start_date(start_date)
+    if not fred_api_key:
+        return _fetch_fred_series_pdr(series_id, start_date=start_date_str)
+
     params = {
         "series_id": series_id,
         "api_key": fred_api_key,
@@ -333,11 +391,11 @@ def _fetch_fred_series(series_id: str, start_date: Optional[Any] = None) -> pd.D
 
     data = safe_request(get_fred_base_url(), params)
     if not data or "observations" not in data:
-        return pd.DataFrame(columns=["date", "value"])
+        return _fetch_fred_series_pdr(series_id, start_date=start_date_str)
 
     df = pd.DataFrame(data["observations"])
     if df.empty:
-        return pd.DataFrame(columns=["date", "value"])
+        return _fetch_fred_series_pdr(series_id, start_date=start_date_str)
 
     df = df[df["value"] != "."]
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
@@ -426,16 +484,17 @@ def get_fred_series(series_id: str, days: int = 5475, end_date: str = None) -> O
     从FRED获取指定长度的时间序列数据（V5.1核心函数）
     默认获取15年（5475天）历史数据，确保有足够样本计算10年百分位。
     """
-    fred_api_key = get_fred_api_key()
-    if not fred_api_key:
-        return None
-
     if end_date:
         effective_date = datetime.strptime(end_date, "%Y-%m-%d")
     else:
         effective_date = datetime.now()
     
     start_date_obj = effective_date - timedelta(days=days)
+
+    fred_api_key = get_fred_api_key()
+    if not fred_api_key:
+        df = _fetch_fred_series_pdr(series_id, start_date=start_date_obj, end_date=effective_date)
+        return df if not df.empty else None
 
     params = {
         "series_id": series_id, "api_key": fred_api_key, "file_type": "json",
@@ -451,7 +510,8 @@ def get_fred_series(series_id: str, days: int = 5475, end_date: str = None) -> O
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
         df["date"] = pd.to_datetime(df["date"])
         return df.dropna(subset=["value"])
-    return None
+    df = _fetch_fred_series_pdr(series_id, start_date=start_date_obj, end_date=effective_date)
+    return df if not df.empty else None
 
 
 def analyze_series_momentum_relativity(series: pd.DataFrame) -> Dict[str, Any]:
@@ -621,14 +681,18 @@ def analyze_series_ratio_vs_ma(series: pd.DataFrame, ma_period: int) -> Dict[str
 
 def get_latest_fred_value(series_id: str, end_date: str = None) -> Tuple[Optional[float], Optional[str]]:
     """从FRED获取指定日期或之前的最新数据点"""
-    fred_api_key = get_fred_api_key()
-    if not fred_api_key:
-        return None, None
-
     if end_date:
         effective_date = datetime.strptime(end_date, "%Y-%m-%d")
     else:
         effective_date = datetime.now()
+
+    fred_api_key = get_fred_api_key()
+    if not fred_api_key:
+        series = _fetch_fred_series_pdr(series_id, end_date=effective_date)
+        if series.empty:
+            return None, None
+        row = series.iloc[-1]
+        return float(row["value"]), row["date"].strftime("%Y-%m-%d")
 
     params = {
         "series_id": series_id,
@@ -653,10 +717,6 @@ def get_latest_fred_value(series_id: str, end_date: str = None) -> Tuple[Optiona
 
 def calculate_yoy_change(series_id: str, lookback_days: int = 800, end_date: str = None) -> Tuple[Optional[float], Optional[str]]:
     """计算FRED序列的年同比变化"""
-    fred_api_key = get_fred_api_key()
-    if not fred_api_key:
-        return None, None
-
     if end_date:
         effective_date = datetime.strptime(end_date, "%Y-%m-%d")
     else:
@@ -664,29 +724,9 @@ def calculate_yoy_change(series_id: str, lookback_days: int = 800, end_date: str
 
     try:
         start_date_obj = effective_date - timedelta(days=lookback_days)
-
-        params = {
-            "series_id": series_id,
-            "api_key": fred_api_key,
-            "file_type": "json",
-            "observation_start": start_date_obj.strftime("%Y-%m-%d"),
-            "observation_end": effective_date.strftime("%Y-%m-%d"),
-            "sort_order": "asc"
-        }
-
-        data = safe_request(get_fred_base_url(), params)
-        if not data or "observations" not in data:
+        df = get_fred_series(series_id, days=lookback_days, end_date=effective_date.strftime("%Y-%m-%d"))
+        if df is None or df.empty:
             return None, None
-
-        obs = data["observations"]
-        if not obs:
-            return None, None
-
-        df = pd.DataFrame(obs)
-        df["date"] = pd.to_datetime(df["date"])
-        df = df[df["value"] != "."]
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        df = df.dropna(subset=["value"])
 
         if len(df) < 24:
             return None, None
