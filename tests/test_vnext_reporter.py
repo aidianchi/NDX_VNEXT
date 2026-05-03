@@ -5,7 +5,11 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from agent_analysis.vnext_reporter import VNextReportGenerator
+from agent_analysis.vnext_reporter import (
+    VNextReportGenerator,
+    _label,
+    _slug,
+)
 
 
 def _write_json(path: Path, payload):
@@ -298,6 +302,7 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     report_path = reporter.run(run_dir)
     html = Path(report_path).read_text(encoding="utf-8")
 
+    # Structural assertions (present in every template)
     assert "NDX vNext Native Artifact UI" in html
     assert "brief · 投研长文" in html
     assert "主论点证据链" in html
@@ -328,7 +333,127 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert 'data-transmission-path="rates_to_valuation"' in html
     assert 'data-resonance-chain="risk_off_resonance"' in html
 
+    # Redesign assertions — accordion, Slate Editorial, vocabulary translation
+    assert "aria-expanded" in html
+    assert "data-layer-panel" not in html
+    assert 'class="layer-tab"' not in html
+    assert "showLayer" not in html
+    assert "有保留通过" in html
+    assert "toggleLayerCard" in html
+    assert "layer-card" in html
+    assert "layer-card__head" in html
+    assert "layer-card__body" in html
+    assert "layer-summary-tile" in html
+    assert "grid-template-rows" in html
+    assert "prefers-reduced-motion" in html
+    assert ":focus-visible" in html
+    assert "skip-link" in html
+    assert "Source Serif Pro" in html
+    assert "JetBrains Mono" in html
+    assert "Inter" in html
+
     atlas_path = reporter.run(run_dir, template="atlas")
     atlas_html = Path(atlas_path).read_text(encoding="utf-8")
     assert "atlas · 证据地图" in atlas_html
     assert "template-atlas" in atlas_html
+
+
+def test_vnext_reporter_slug_stable_with_colon_ref():
+    assert _slug("L1.get_10y_real_rate") == _slug("L1.get_10y_real_rate: 1.94% 高分位") == "L1-get_10y_real_rate"
+
+
+def test_vnext_reporter_handles_missing_data_quality(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    _write_json(
+        run_dir / "final_adjudication.json",
+        {
+            "approval_status": "approved_with_reservations",
+            "final_stance": "中性偏谨慎",
+            "confidence": "medium",
+            "key_support_chains": [],
+            "must_preserve_risks": [],
+            "adjudicator_notes": "",
+            "evidence_refs": [],
+        },
+    )
+    _write_json(
+        run_dir / "synthesis_packet.json",
+        {
+            "packet_meta": {
+                "data_date": "2026-04-23",
+                "indicator_total": 1,
+                "indicator_successful": 1,
+            },
+            "objective_firewall_summary": {
+                "object_clear": True,
+                "authority_clear": True,
+                "timing_clear": True,
+                "cross_layer_verified": True,
+                "strongest_falsifier": "",
+                "unresolved_tensions": [],
+                "warnings": [],
+            },
+        },
+    )
+    _write_json(
+        run_dir / "layer_cards" / "L1.json",
+        {
+            "layer": "L1",
+            "local_conclusion": "宏观偏紧。",
+            "confidence": "medium",
+            "risk_flags": [],
+            "layer_synthesis": "",
+            "internal_conflict_analysis": "",
+            "indicator_analyses": [
+                {
+                    "function_id": "get_10y_real_rate",
+                    "metric": "10Y Real Rate",
+                    "current_reading": "1.92%",
+                    "normalized_state": "restrictive",
+                    "narrative": "实际利率压制成长股估值。",
+                    "reasoning_process": "",
+                    "first_principles_chain": [],
+                    "cross_layer_implications": [],
+                    "risk_flags": [],
+                }
+            ],
+        },
+    )
+    for layer in ["L2", "L3", "L4", "L5"]:
+        _write_json(
+            run_dir / "layer_cards" / f"{layer}.json",
+            {
+                "layer": layer,
+                "local_conclusion": f"{layer} placeholder",
+                "confidence": "medium",
+                "layer_synthesis": "",
+                "internal_conflict_analysis": "",
+                "indicator_analyses": [],
+            },
+        )
+    # No analysis_packet.raw_data → no data_quality enrichment
+    _write_json(run_dir / "analysis_packet.json", {})
+    _write_json(run_dir / "bridge_memos" / "bridge_0.json", {"bridge_type": "test", "cross_layer_claims": [], "conflicts": []})
+    _write_json(run_dir / "critique.json", {"overall_assessment": "", "cross_layer_issues": []})
+    _write_json(run_dir / "risk_boundary_report.json", {"failure_conditions": [], "must_preserve_risks": []})
+    _write_json(run_dir / "schema_guard_report.json", {"passed": True})
+
+    reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
+    report_path = reporter.run(run_dir)
+    html = Path(report_path).read_text(encoding="utf-8")
+
+    # Should NOT contain data quality headers when data_quality is absent
+    assert "来源等级" not in html
+    # CSS always contains the class definition; assert no rendered element
+    assert '<div class="data-quality-box">' not in html
+    # But layer cards should still render
+    assert "layer-card" in html
+    assert "evidence-L1-get_10y_real_rate" in html
+
+
+def test_vnext_reporter_label_mapping():
+    assert _label("approved_with_reservations", "approval") == "有保留通过"
+    assert _label("medium", "confidence") == "中"
+    assert _label("high", "severity") == "高"
+    assert _label("valuation_compression", "risk_flag") == "估值压缩"
+    assert _label("unknown_key", "approval") == "unknown_key"
