@@ -66,3 +66,52 @@ def test_risk_and_final_prompts_explicitly_ban_unsupported_numeric_impacts():
     for name in ["risk_sentinel.md", "final_adjudicator.md"]:
         text = (PROMPT_DIR / name).read_text(encoding="utf-8")
         assert required in text
+
+
+def test_l4_prompt_requires_data_authority_metadata_for_valuation():
+    text = (PROMPT_DIR / "l4_analyst.md").read_text(encoding="utf-8")
+    required_fragments = [
+        "source_tier",
+        "data_date",
+        "collected_at_utc",
+        "update_frequency",
+        "coverage",
+        "fallback_chain",
+        "source_disagreement",
+        "Wind 是可选高信任输入",
+    ]
+
+    for fragment in required_fragments:
+        assert fragment in text
+
+
+def test_prompts_do_not_call_ndx_simple_yield_gap_low_erp():
+    prompt_files = [
+        "l1_analyst.md",
+        "l2_analyst.md",
+        "l3_analyst.md",
+        "l4_analyst.md",
+        "l5_analyst.md",
+        "cross_layer_bridge.md",
+        "thesis_builder.md",
+        "critic.md",
+        "risk_sentinel.md",
+        "reviser.md",
+        "final_adjudicator.md",
+    ]
+    banned_fragments = [
+        "低 ERP",
+        "NDX ERP",
+        "ERP 为负",
+        "负ERP",
+        "负 ERP",
+    ]
+
+    offenders = []
+    for name in prompt_files:
+        text = (PROMPT_DIR / name).read_text(encoding="utf-8")
+        for fragment in banned_fragments:
+            if fragment in text:
+                offenders.append(f"{name}: {fragment}")
+
+    assert not offenders

@@ -150,6 +150,7 @@ class VNextReportGenerator:
             if path.is_file()
         ]
         return {
+            "analysis_packet": _load_json(run_path / "analysis_packet.json", {}),
             "final_adjudication": _load_json(run_path / "final_adjudication.json", {}),
             "synthesis_packet": _load_json(run_path / "synthesis_packet.json", {}),
             "thesis_draft": _load_json(run_path / "thesis_draft.json", {}),
@@ -164,6 +165,7 @@ class VNextReportGenerator:
         }
 
     def _render(self, run_path: Path, artifacts: Dict[str, Any], template: str) -> str:
+        self._enrich_indicator_data_quality(artifacts)
         final = artifacts["final_adjudication"]
         synthesis = artifacts["synthesis_packet"]
         meta = synthesis.get("packet_meta", {})
@@ -173,6 +175,7 @@ class VNextReportGenerator:
             {
                 "run_dir": str(run_path),
                 "final_adjudication": final,
+                "analysis_packet": artifacts["analysis_packet"],
                 "synthesis_packet": synthesis,
                 "layers": artifacts["layers"],
                 "bridges": artifacts["bridges"],
@@ -205,6 +208,25 @@ class VNextReportGenerator:
 </body>
 </html>
 """
+
+    def _enrich_indicator_data_quality(self, artifacts: Dict[str, Any]) -> None:
+        raw_by_layer = (artifacts.get("analysis_packet") or {}).get("raw_data") or {}
+        layers = artifacts.get("layers") or {}
+        for layer, card in layers.items():
+            raw_layer = raw_by_layer.get(layer, {}) if isinstance(raw_by_layer, dict) else {}
+            if not isinstance(card, dict) or not isinstance(raw_layer, dict):
+                continue
+            for item in _as_list(card.get("indicator_analyses")):
+                if not isinstance(item, dict):
+                    continue
+                function_id = str(item.get("function_id") or "")
+                raw = raw_layer.get(function_id, {})
+                if not isinstance(raw, dict):
+                    continue
+                if raw.get("data_quality") and not item.get("data_quality"):
+                    item["data_quality"] = raw.get("data_quality")
+                if raw.get("value") and not item.get("_raw_value"):
+                    item["_raw_value"] = raw.get("value")
 
     def _main_sections(
         self,
@@ -420,6 +442,8 @@ class VNextReportGenerator:
         for chain in _as_list(chains):
             chain_id = str(chain.get("chain_id") or "resonance_chain")
             layers = " -> ".join(str(layer) for layer in _as_list(chain.get("layers")))
+            confirming = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(chain.get("confirming_indicators")))
+            falsifiers = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(chain.get("falsifiers")))
             cards.append(
                 f"""
 <article class="typed-map-card" data-resonance-chain="{_escape(chain_id)}">
@@ -429,7 +453,16 @@ class VNextReportGenerator:
   </div>
   <small>{_escape(layers)}</small>
   <p>{_escape(chain.get('description', ''))}</p>
+  <p><b>Mechanism:</b> {_escape(chain.get('mechanism', ''))}</p>
   <p><b>Implication:</b> {_escape(chain.get('implication', ''))}</p>
+  <details open>
+    <summary>Confirming Indicators</summary>
+    <ul>{confirming or '<li>None</li>'}</ul>
+  </details>
+  <details>
+    <summary>Falsifiers</summary>
+    <ul>{falsifiers or '<li>None</li>'}</ul>
+  </details>
   <div class="ref-row">{self._ref_chips(chain.get('evidence_refs', []))}</div>
 </article>
 """
@@ -547,6 +580,7 @@ class VNextReportGenerator:
     <ul>{falsifiers or '<li>None</li>'}</ul>
   </div>
 """
+        data_quality = self._data_quality_box(item)
         return f"""
 <article class="indicator-card" id="evidence-{_slug(ref)}" data-evidence-ref="{_escape(ref)}">
   <div class="indicator-top">
@@ -558,6 +592,7 @@ class VNextReportGenerator:
   </div>
   <p class="reading">{_escape(item.get('current_reading', ''))}</p>
   <p>{_escape(item.get('narrative', ''))}</p>
+  {data_quality}
   {canon_detail}
   <details>
     <summary>展开推理过程</summary>
@@ -567,6 +602,62 @@ class VNextReportGenerator:
     <div class="risk-chip-row">{risks}</div>
   </details>
 </article>
+"""
+
+    def _data_quality_box(self, item: Dict[str, Any]) -> str:
+        quality = item.get("data_quality") if isinstance(item.get("data_quality"), dict) else {}
+        raw_value = item.get("_raw_value") if isinstance(item.get("_raw_value"), dict) else {}
+        if not quality and not raw_value.get("ThirdPartyChecks"):
+            return ""
+        coverage = quality.get("coverage", {})
+        anomalies = "".join(f"<li>{_escape(value)}</li>" for value in _as_list(quality.get("anomalies")))
+        fallback = " -> ".join(str(value) for value in _as_list(quality.get("fallback_chain")))
+        disagreement = quality.get("source_disagreement", {})
+        source_rows = []
+        for source in _as_list(raw_value.get("ThirdPartyChecks")):
+            if not isinstance(source, dict):
+                continue
+            percentile = source.get("historical_percentile", source.get("percentile_10y"))
+            percentile_text = "No Historical Percentile" if percentile is None else _escape(percentile)
+            source_rows.append(
+                f"""
+<tr>
+  <td>{_escape(source.get('source_name', source.get('source', '')))}</td>
+  <td>{_escape(source.get('metric', ''))}</td>
+  <td>{_escape(source.get('value', ''))}</td>
+  <td>{percentile_text}</td>
+  <td>{_escape(source.get('availability', ''))}</td>
+  <td>{_escape(source.get('unavailable_reason', ''))}</td>
+</tr>
+"""
+            )
+        source_table = ""
+        if source_rows:
+            source_table = f"""
+    <h5>Valuation Sources</h5>
+    <table class="source-table">
+      <thead><tr><th>Source</th><th>Metric</th><th>Value</th><th>Historical Percentile</th><th>Availability</th><th>Reason</th></tr></thead>
+      <tbody>{''.join(source_rows)}</tbody>
+    </table>
+"""
+        return f"""
+  <div class="data-quality-box">
+    <h5>Source Tier</h5>
+    <p>{_escape(quality.get('source_tier', item.get('source_tier', '')))}</p>
+    <h5>Data Date</h5>
+    <p>{_escape(quality.get('data_date', ''))}</p>
+    <h5>Formula</h5>
+    <p>{_escape(quality.get('formula', ''))}</p>
+    <h5>Coverage</h5>
+    <p>{_escape(coverage)}</p>
+    <h5>Fallback Chain</h5>
+    <p>{_escape(fallback)}</p>
+    <h5>Source Disagreement</h5>
+    <p>{_escape(disagreement)}</p>
+    <h5>Anomalies</h5>
+    <ul>{anomalies or '<li>None</li>'}</ul>
+    {source_table}
+  </div>
 """
 
     def _governance_section(self, artifacts: Dict[str, Any]) -> str:

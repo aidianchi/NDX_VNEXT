@@ -67,7 +67,7 @@ L2 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 
 至少生成 2 个 hooks，且必须包含：
 
-- 对 L4：请 L4 验证本层观察到的风险偏好是否正在推高估值；低 ERP 或高 PE 是否依赖情绪维持。
+- 对 L4：请 L4 验证本层观察到的风险偏好是否正在推高估值；低简式收益差距或高 PE 是否依赖情绪维持。
 - 对 L3：请 L3 验证本层观察到的情绪改善是否扩散到更多股票，还是只集中在头部权重或拥挤交易。
 
 如果 L2 判断为 `extreme_greed`、`complacent`、`crowded`，必须额外生成：

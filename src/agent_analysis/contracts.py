@@ -466,8 +466,10 @@ class ResonanceChain(BaseModel):
     description: str = Field(..., description="共振描述")
     involved_layers: List[Layer] = Field(default_factory=list, description="涉及层级")
     evidence_refs: List[str] = Field(default_factory=list, description="证据引用")
+    confirming_indicators: List[str] = Field(default_factory=list, description="确认该共振链的指标或观察点")
     mechanism: str = Field("", description="共振成立的机制")
     implication: str = Field("", description="对 NDX 的含义")
+    falsifiers: List[str] = Field(default_factory=list, description="会削弱或推翻该共振链的反证条件")
     confidence: Confidence = Field(Confidence.MEDIUM, description="置信度")
 
 

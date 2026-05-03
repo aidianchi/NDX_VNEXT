@@ -65,6 +65,7 @@ LAYER_FUNCTIONS = {
     "L4": {
         "get_ndx_pe_and_earnings_yield",
         "get_equity_risk_premium",
+        "get_damodaran_us_implied_erp",
     },
     "L5": {
         "get_qqq_technical_indicators",
@@ -99,6 +100,8 @@ def _round_if_float(value: Any) -> Any:
 def _find_first_number(data: Any, keywords: Iterable[str] = ()) -> Optional[float]:
     lowered_keywords = tuple(keyword.lower() for keyword in keywords)
     if isinstance(data, (int, float)) and not isinstance(data, bool):
+        if lowered_keywords:
+            return None
         return float(data)
     if isinstance(data, dict):
         if lowered_keywords:
@@ -343,6 +346,8 @@ class AnalysisPacketBuilder:
             summary_bits.append(f"状态={status}")
         if payload.get("manual_override_used"):
             summary_bits.append("人工覆盖")
+        if function_id == "get_ndx_pe_and_earnings_yield" and percentile is None and compact_value is not None:
+            summary_bits.append("历史分位缺失")
         if payload.get("error"):
             summary_bits.append(f"异常={payload['error']}")
         return {
@@ -447,8 +452,17 @@ class AnalysisPacketBuilder:
         if layer == "L3":
             breadth_ratio_pct = self._metric_level(metrics, "get_qqq_qqew_ratio", "percentile_10y", "percentile_1y", "percentile")
             ad_line_trend = self._metric_text(metrics, "get_advance_decline_line", "trend", "direction")
-            pct_above = self._metric_level(metrics, "get_percent_above_ma", "percent_50ma", "percent_above_50ma", "percent_200ma")
-            if ad_line_trend == "falling" or (breadth_ratio_pct is not None and breadth_ratio_pct >= 80):
+            pct_above = self._metric_level(
+                metrics,
+                "get_percent_above_ma",
+                "percent_50ma",
+                "percent_above_50ma",
+                "percent_above_50d",
+                "percent_above_200ma",
+                "percent_above_200d",
+                "percent_200ma",
+            )
+            if ad_line_trend in {"falling", "declining", "deteriorating"} or (breadth_ratio_pct is not None and breadth_ratio_pct >= 80):
                 return "deteriorating"
             if pct_above is not None and pct_above >= 60:
                 return "healthy"
@@ -457,10 +471,10 @@ class AnalysisPacketBuilder:
         if layer == "L4":
             pe = self._metric_level(metrics, "get_ndx_pe_and_earnings_yield", "pe_ttm", "weighted_forward_pe", "forward_pe")
             pe_pct = self._metric_level(metrics, "get_ndx_pe_and_earnings_yield", "pe_ttm_percentile_5y", "percentile_5y", "percentile_10y")
-            erp = self._metric_level(metrics, "get_equity_risk_premium", "erp_value", "level")
-            if (pe_pct is not None and pe_pct >= 70) or (pe is not None and pe >= 28) or (erp is not None and erp <= 1.5):
+            simple_gap = self._metric_level(metrics, "get_equity_risk_premium", "simple_yield_gap", "erp_value", "level")
+            if (pe_pct is not None and pe_pct >= 70) or (simple_gap is not None and simple_gap <= 1.5):
                 return "expensive"
-            if (pe_pct is not None and pe_pct <= 30) or (pe is not None and pe <= 20) or (erp is not None and erp >= 3.5):
+            if (pe_pct is not None and pe_pct <= 30) or (simple_gap is not None and simple_gap >= 3.5):
                 return "cheap"
             return "neutral"
 

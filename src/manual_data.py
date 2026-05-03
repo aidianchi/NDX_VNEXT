@@ -34,28 +34,89 @@ DEFAULT_MANUAL_DATA: ManualData = {
             "series_id": "NDX_MANUAL",
             "value": {
                 "PE_TTM": None,
+                "ForwardPE": None,
+                "EarningsYield": None,
+                "ForwardEarningsYield": None,
+                "FCFYield": None,
                 "PB": None,
                 "PS_TTM": None,
                 "PCF_TTM": None,
                 "PE_TTM_percentile_5y": None,
+                "ForwardPE_percentile_5y": None,
+                "FCFYield_percentile_5y": None,
                 "PB_percentile_5y": None,
-                "ERP_Wind": None,
-                "ERP_Wind_percentile_5y": None,
             },
             "unit": "ratio/percent",
-            "source_name": "Manual Input",
-            "notes": "Manual valuation override.",
+            "source_tier": "licensed_manual/Wind",
+            "source_name": "Manual Input (optional high-trust source)",
+            "data_quality": {
+                "source_tier": "licensed_manual/Wind",
+                "data_date": "",
+                "collected_at_utc": "",
+                "update_frequency": "user supplied",
+                "formula": "Optional Wind/manual valuation fields; PE and ForwardPE should be index-level or aggregate-earnings based, not simple constituent averages",
+                "coverage": {"note": "Manual source coverage must be supplied or reviewed by user."},
+                "anomalies": [],
+                "fallback_chain": ["licensed_manual/Wind", "official", "component_model", "third_party_estimate", "proxy", "unavailable"],
+                "source_disagreement": {},
+            },
+            "notes": "Optional high-trust manual valuation input. When inactive or blank, live sources are used.",
         },
         "get_equity_risk_premium": {
-            "name": "Equity Risk Premium (Manual)",
-            "series_id": "ERP_MANUAL",
+            "name": "NDX Simple Yield Gap (Manual)",
+            "series_id": "SIMPLE_YIELD_GAP_MANUAL",
             "value": {
-                "erp_value": None,
-                "erp_percentile_5y": None,
+                "level": None,
+                "method": "earnings_yield_minus_10y_or_fcf_yield_minus_10y",
+                "yield_type": None,
+                "ndx_yield": None,
+                "treasury_10y": None,
+                "percentile_5y": None,
+                "not_implied_erp_warning": "Simple yield gap only; not Damodaran implied ERP",
+                "damodaran_reference": "get_damodaran_us_implied_erp",
             },
             "unit": "percent",
-            "source_name": "Manual Input",
-            "notes": "Manual ERP override.",
+            "source_tier": "licensed_manual/Wind",
+            "source_name": "Manual Input (optional high-trust source)",
+            "data_quality": {
+                "source_tier": "licensed_manual/Wind",
+                "data_date": "",
+                "collected_at_utc": "",
+                "update_frequency": "user supplied",
+                "formula": "earnings_yield - 10Y or fcf_yield - 10Y; not Damodaran implied ERP",
+                "coverage": {"note": "Manual source coverage must be supplied or reviewed by user."},
+                "anomalies": [],
+                "fallback_chain": ["licensed_manual/Wind", "component_model", "proxy", "unavailable"],
+                "source_disagreement": {},
+            },
+            "notes": "Optional manual simple yield gap input. This is not Damodaran-style implied ERP.",
+        },
+        "get_damodaran_us_implied_erp": {
+            "name": "Manual/Wind ERP Reference",
+            "series_id": "MANUAL_ERP_REFERENCE",
+            "value": {
+                "manual_erp": None,
+                "implied_erp_fcfe": None,
+                "implied_erp_ddm": None,
+                "tbond_rate": None,
+                "scope": "manual/Wind ERP reference; specify US market, NDX, or other scope when used",
+                "not_ndx_valuation_warning": "Manual ERP reference is not NDX PE/Forward PE/PB historical percentile.",
+            },
+            "unit": "percent",
+            "source_tier": "licensed_manual/Wind",
+            "source_name": "Manual Input (optional high-trust ERP reference)",
+            "data_quality": {
+                "source_tier": "licensed_manual/Wind",
+                "data_date": "",
+                "collected_at_utc": "",
+                "update_frequency": "user supplied",
+                "formula": "User-supplied manual ERP/reference risk premium; not NDX simple yield gap unless explicitly calculated that way",
+                "coverage": {"note": "Manual ERP scope must be supplied or reviewed by user."},
+                "anomalies": [],
+                "fallback_chain": ["licensed_manual/Wind", "official", "unavailable"],
+                "source_disagreement": {},
+            },
+            "notes": "Optional manual ERP reference; not NDX simple yield gap and not a substitute for NDX PE/Forward PE/PB percentile.",
         },
         "get_crowdedness_dashboard": {
             "name": "Crowdedness Dashboard (Manual)",
@@ -77,7 +138,11 @@ _ALLOWED_METRIC_FIELDS = (
     "series_id",
     "value",
     "unit",
+    "source_tier",
     "source_name",
+    "source_url",
+    "date",
+    "data_quality",
     "notes",
 )
 
@@ -131,6 +196,7 @@ def _sanitize_metric(metric_key: str, metric_value: Any) -> Optional[Dict[str, A
     cleaned.setdefault("value", {})
     cleaned.setdefault("unit", "")
     cleaned.setdefault("source_name", "Manual Input")
+    cleaned.setdefault("source_tier", "licensed_manual/Wind")
     cleaned.setdefault("notes", "")
     return cleaned
 
@@ -147,10 +213,27 @@ def _has_meaningful_value(value: Any) -> bool:
     return True
 
 
+_MEANINGFUL_VALUE_IGNORED_KEYS = {
+    "method",
+    "formula",
+    "yield_type",
+    "components",
+    "not_implied_erp_warning",
+    "damodaran_reference",
+}
+
+
 def has_meaningful_manual_override(metric: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(metric, dict):
         return False
-    return _has_meaningful_value(metric.get("value"))
+    value = metric.get("value")
+    if isinstance(value, dict):
+        value = {
+            key: item
+            for key, item in value.items()
+            if key not in _MEANINGFUL_VALUE_IGNORED_KEYS
+        }
+    return _has_meaningful_value(value)
 
 
 def normalize_manual_data(

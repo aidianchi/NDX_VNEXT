@@ -106,7 +106,7 @@ class ReportGenerator:
             'get_new_highs_lows': ['New Highs', 'New Lows', 'Highs-Lows'],
             'get_mcclellan_oscillator_nasdaq_or_nyse': ['McClellan', 'Oscillator'],
             'get_ndx_pe_and_earnings_yield': ['NDX Valuation', 'NDX PE', 'PB'],
-            'get_equity_risk_premium': ['Equity Risk Premium', 'ERP'],
+            'get_equity_risk_premium': ['Simple Yield Gap', '简式收益差距'],
             'get_qqq_technical_indicators': ['QQQ Technical', 'Technical Indicators'],
             'get_rsi_qqq': ['RSI'],
             'get_atr_qqq': ['ATR'],

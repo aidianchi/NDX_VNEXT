@@ -601,3 +601,56 @@ def test_layer_manual_overrides_are_layer_local(tmp_path: Path):
 
     assert list(l1_overrides["metrics"].keys()) == ["get_fed_funds_rate"]
     assert list(l4_overrides["metrics"].keys()) == ["get_ndx_pe_and_earnings_yield"]
+
+
+def test_layer_indicator_manifest_carries_data_quality(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    manifest = orchestrator._layer_indicator_manifest(
+        {
+            "get_equity_risk_premium": {
+                "function_id": "get_equity_risk_premium",
+                "name": "NDX Simple Yield Gap",
+                "value": {"level": -0.75},
+                "source_name": "Calculated simple yield gap",
+                "data_quality": {
+                    "source_tier": "component_model",
+                    "formula": "NDX FCF yield - 10Y Treasury yield",
+                    "coverage": {"market_cap_coverage_pct": 92.5},
+                },
+            }
+        }
+    )
+
+    assert manifest[0]["source_tier"] == "component_model"
+    assert manifest[0]["data_quality"]["formula"] == "NDX FCF yield - 10Y Treasury yield"
+
+
+def test_layer_payload_normalization_backfills_indicator_evidence_refs(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    normalized = orchestrator._normalize_payload(
+        "l3_analyst",
+        {
+            "layer": "L3",
+            "confidence": "medium",
+            "indicator_analyses": [
+                {
+                    "function_id": "get_advance_decline_line",
+                    "metric": "Advance Decline Line",
+                    "narrative": "腾落线可用。",
+                    "reasoning_process": "广度指标支持结构判断。",
+                }
+            ],
+        },
+    )
+
+    assert normalized["indicator_analyses"][0]["evidence_refs"] == ["L3.get_advance_decline_line"]

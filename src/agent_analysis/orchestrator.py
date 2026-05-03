@@ -256,6 +256,7 @@ class VNextOrchestrator:
                 "candidate_cross_layer_links": [_model_dump(link) for link in packet.candidate_cross_layer_links],
                 "layer_cards": [_model_dump(card) for card in layer_cards],
             },
+            validator=self._validate_bridge_memo_v2,
         )
         self._save_json(self.bridge_dir / "bridge_0.json", bridge)
         return bridge
@@ -769,6 +770,23 @@ class VNextOrchestrator:
 
         return errors
 
+    def _validate_bridge_memo_v2(self, bridge: BridgeMemo) -> List[str]:
+        """Reject soft Bridge resonance chains that lack evidence, mechanism, or falsifiers."""
+        errors: List[str] = []
+        for chain in bridge.resonance_chains:
+            chain_id = str(chain.chain_id or "resonance_chain")
+            if not chain.evidence_refs:
+                errors.append(f"bridge.resonance_chains[{chain_id}].evidence_refs must not be empty.")
+            if not chain.confirming_indicators:
+                errors.append(f"bridge.resonance_chains[{chain_id}].confirming_indicators must not be empty.")
+            if not str(chain.mechanism or "").strip():
+                errors.append(f"bridge.resonance_chains[{chain_id}].mechanism is required.")
+            if not str(chain.implication or "").strip():
+                errors.append(f"bridge.resonance_chains[{chain_id}].implication is required.")
+            if not chain.falsifiers:
+                errors.append(f"bridge.resonance_chains[{chain_id}].falsifiers must not be empty.")
+        return errors
+
     def _run_schema_guard(
         self,
         packet: AnalysisPacket,
@@ -974,7 +992,7 @@ class VNextOrchestrator:
             "- L1: 宏观流动性、利率、实际利率、期限结构、货币供应、净流动性和增长预期代理。\n"
             "- L2: 风险偏好、信用利差、波动率、情绪、仓位和拥挤度。\n"
             "- L3: 指数内部结构、广度、集中度、等权/市值权重差异和领导力质量。\n"
-            "- L4: 估值、盈利收益率、ERP、风险补偿、安全边际和估值压缩风险。\n"
+            "- L4: 估值、盈利收益率、简式收益差距、Damodaran 美国 implied ERP 参考锚、安全边际和估值压缩风险。\n"
             "- L5: 价格趋势、动量、波动、成交量、支撑阻力和趋势失效触发。\n"
             "- Bridge: 读取各层结构化产物，验证跨层共振、冲突和传导机制。\n"
             "以上只是职责边界和接口协议，不是其他层的当前数据、状态或结论。"
@@ -1038,7 +1056,7 @@ class VNextOrchestrator:
         bridge_contract += (
             "\nBridge v2 新增字段必须尽量原生填写：\n"
             "- typed_conflicts: 结构化冲突地图，包含 conflict_id、conflict_type、severity、confidence、description、mechanism、implication、involved_layers、evidence_refs、falsifiers。\n"
-            "- resonance_chains: 跨层共振链，说明哪些层在同一方向互相确认。\n"
+            "- resonance_chains: 跨层共振链，必须包含 involved_layers、evidence_refs、mechanism、confirming_indicators、falsifiers、implication；没有证据或确认指标时降低 confidence。\n"
             "- transmission_paths: 跨层传导路径，说明压力或支撑如何从 source_layer 传到 target_layer。\n"
             "- unresolved_questions: 仍需 Thesis/Critic/Risk 保留的问题。\n"
             "旧字段 conflicts 仍要填写，用于兼容；typed_conflicts 是更高优先级的 Bridge v2 产物。\n"
@@ -1093,6 +1111,11 @@ class VNextOrchestrator:
                     "analysis_required": not bool(payload.get("error")),
                     "error": payload.get("error"),
                     "value": payload.get("value"),
+                    "source_tier": payload.get("source_tier") or (payload.get("data_quality") or {}).get("source_tier"),
+                    "source_name": payload.get("source_name"),
+                    "date": payload.get("date"),
+                    "data_quality": payload.get("data_quality"),
+                    "notes": payload.get("notes"),
                     "manual_override_used": payload.get("manual_override_used", False),
                 }
             )
@@ -1121,6 +1144,7 @@ class VNextOrchestrator:
     def _normalize_payload(self, stage_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         normalized = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
         if stage_key.startswith("l") and stage_key.endswith("_analyst"):
+            layer_label = str(normalized.get("layer") or stage_key[:2].upper()).upper()
             normalized["confidence"] = self._normalize_confidence(normalized.get("confidence"))
             for text_key in ("local_conclusion", "layer_synthesis", "internal_conflict_analysis", "notes"):
                 if normalized.get(text_key) is not None and not isinstance(normalized.get(text_key), str):
@@ -1139,7 +1163,7 @@ class VNextOrchestrator:
             normalized["core_facts"] = normalized_core_facts
             if isinstance(normalized.get("indicator_analyses"), list):
                 normalized["indicator_analyses"] = [
-                    self._normalize_indicator_analysis(item)
+                    self._normalize_indicator_analysis(item, layer_label=layer_label)
                     for item in normalized["indicator_analyses"]
                     if isinstance(item, dict)
                 ]
@@ -1191,7 +1215,7 @@ class VNextOrchestrator:
             normalized["token_usage"] = None
         return normalized
 
-    def _normalize_indicator_analysis(self, item: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_indicator_analysis(self, item: Dict[str, Any], *, layer_label: Optional[str] = None) -> Dict[str, Any]:
         normalized = dict(item)
         normalized["function_id"] = str(
             normalized.get("function_id")
@@ -1233,6 +1257,8 @@ class VNextOrchestrator:
                 normalized[key] = []
             elif not isinstance(value, list):
                 normalized[key] = [str(value)]
+        if not normalized["evidence_refs"] and layer_label and normalized["function_id"] != "unknown":
+            normalized["evidence_refs"] = [f"{layer_label}.{normalized['function_id']}"]
         normalized["confidence"] = self._normalize_confidence(normalized.get("confidence"))
         self._backfill_indicator_canon_fields(normalized)
         return normalized
@@ -1365,7 +1391,9 @@ class VNextOrchestrator:
         normalized["mechanism"] = str(normalized.get("mechanism") or "")
         normalized["implication"] = str(normalized.get("implication") or "")
         normalized["confidence"] = self._normalize_confidence(normalized.get("confidence"))
-        for key in ("involved_layers", "evidence_refs"):
+        if not normalized.get("involved_layers") and normalized.get("layers"):
+            normalized["involved_layers"] = normalized.get("layers")
+        for key in ("involved_layers", "evidence_refs", "confirming_indicators", "falsifiers"):
             value = normalized.get(key)
             if value is None:
                 normalized[key] = []

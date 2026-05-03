@@ -46,8 +46,10 @@ def test_bridge_memo_accepts_v2_typed_map_fields():
                 description="风险偏好和价格趋势同向。",
                 involved_layers=["L2", "L5"],
                 evidence_refs=["L2.get_vix", "L5.get_qqq_technical_indicators"],
+                confirming_indicators=["get_vix", "get_qqq_technical_indicators"],
                 mechanism="波动回落降低持仓压力，趋势更容易延续。",
                 implication="短线执行环境改善。",
+                falsifiers=["波动重新上行且价格跌破关键均线。"],
                 confidence="medium",
             )
         ],
@@ -68,6 +70,8 @@ def test_bridge_memo_accepts_v2_typed_map_fields():
 
     assert memo.typed_conflicts[0].severity == ConflictSeverity.HIGH
     assert memo.resonance_chains[0].involved_layers[0] == "L2"
+    assert memo.resonance_chains[0].confirming_indicators == ["get_vix", "get_qqq_technical_indicators"]
+    assert memo.resonance_chains[0].falsifiers == ["波动重新上行且价格跌破关键均线。"]
     assert memo.transmission_paths[0].source_layer == "L1"
 
 
@@ -165,5 +169,39 @@ def test_bridge_prompt_requests_v2_typed_map(tmp_path: Path):
 
     assert "typed_conflicts" in prompt
     assert "resonance_chains" in prompt
+    assert "confirming_indicators" in prompt
+    assert "falsifiers" in prompt
     assert "transmission_paths" in prompt
     assert "unresolved_questions" in prompt
+
+
+def test_bridge_validator_requires_complete_resonance_chain_fields(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+    bridge = BridgeMemo(
+        bridge_type="macro_valuation",
+        layers_connected=["L1", "L4"],
+        resonance_chains=[
+            ResonanceChain(
+                chain_id="soft_chain",
+                description="缺少硬证据的共振链。",
+                involved_layers=["L1", "L4"],
+                evidence_refs=[],
+                confirming_indicators=[],
+                mechanism="",
+                implication="",
+                falsifiers=[],
+            )
+        ],
+        implication_for_ndx="谨慎。",
+    )
+
+    errors = orchestrator._validate_bridge_memo_v2(bridge)
+
+    assert "bridge.resonance_chains[soft_chain].evidence_refs must not be empty." in errors
+    assert "bridge.resonance_chains[soft_chain].confirming_indicators must not be empty." in errors
+    assert "bridge.resonance_chains[soft_chain].mechanism is required." in errors
+    assert "bridge.resonance_chains[soft_chain].falsifiers must not be empty." in errors

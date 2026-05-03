@@ -54,7 +54,7 @@ FUNCTION_ALIASES = {
     "get_new_highs_lows": ["new highs lows", "new highs", "new lows"],
     "get_mcclellan_oscillator_nasdaq_or_nyse": ["mcclellan oscillator", "mcclellan"],
     "get_ndx_pe_and_earnings_yield": ["pe_ratio", "ndx valuation", "pe ttm", "earnings yield"],
-    "get_equity_risk_premium": ["erp", "equity risk premium"],
+    "get_equity_risk_premium": ["simple yield gap", "简式收益差距", "erp", "equity risk premium"],
     "get_qqq_technical_indicators": ["price_vs_sma_200", "qqq technical indicators", "technical indicators"],
     "get_rsi_qqq": ["rsi", "qqq rsi"],
     "get_atr_qqq": ["atr", "qqq atr"],

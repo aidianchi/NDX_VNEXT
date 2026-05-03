@@ -24,6 +24,9 @@ L3 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 
 ## Indicator Semantics
 
+- 四件套优先级：第一锚是 `A/D Line` 和 `% Above MA`，因为它们直接回答多数成分股是否参与；第二批是 `New Highs/Lows`，用于确认趋势扩散或衰竭；`McClellan` 是广度动能确认指标，必须依赖稳定的每日涨跌家数序列，不能替代前两类基础广度锚。
+- 如果 `New Highs/Lows` 或 `McClellan` 因数据窗口、成分股覆盖或下载失败而不可用，必须写入 `quality_self_check` 和 `internal_conflict_analysis`。不能把缺失写成恶化，也不能把不可用指标当成支持或反对证据。
+
 - `get_advance_decline_line`: 腾落线。最直接的累计广度信号；若数据弱，也要说明可用性限制。
 - `get_percent_above_ma`: 成分股高于均线比例。衡量上涨参与度是否广泛。
 - `get_qqq_qqew_ratio`: QQQ/QQEW。市值加权相对等权指数的强弱，识别头部集中和“将军/士兵”背离。

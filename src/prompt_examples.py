@@ -73,7 +73,7 @@ MASTERS_PERSPECTIVE_EXAMPLES = [
         "context": "这是‘核心哲学整合者’（镜头5）的**最重要典范**。它演示了如何在‘价值’与‘趋势’发生核心冲突时（情景B），严格执行‘价值买入，趋势卖出’的纪律。",
         "input": {
             "comment": "大师视角(整合者-情景B)范例 - 价值(×) vs 趋势(√)",
-            "lens_1_output": "巴菲特: L4的ERP为负，没有安全边际，‘不’批准买入。",
+            "lens_1_output": "巴菲特: L4的简式收益差距为负，当前安全垫薄，不把它当作完整 implied ERP。",
             "lens_2_output": "利弗莫尔: L5趋势完好，L3未背离，‘未’触发卖出。"
         },
         "reasoning": """
@@ -399,13 +399,13 @@ PROMPT_EXAMPLES: PromptExamplesRegistry = {
     # Layer 4: 指数基本面估值 (L4)
     # =================================================================
 
-    # "equity_risk_premium" -> 重命名为 "get_equity_risk_premium"
+    # Historical function name kept for compatibility; output is now the NDX simple yield gap.
     "get_equity_risk_premium": [
         {
-            "context": "【语境化解读】股权风险溢价(ERP)是一个反直觉指标，必须在与无风险资产对比的语境下解读。ERP越高，股票越'便宜'。",
+            "context": "【语境化解读】简式收益差距是 earnings_yield 或 fcf_yield 减去10年期美债收益率，只能衡量当前收益率安全垫，不能写成 Damodaran 式 implied ERP。",
             "input": {"function_id": "get_equity_risk_premium", "raw_data": {"value": {"level": -0.5, "relativity": {"percentile_1y": 5.0}}}},
-            "reasoning": "1. **核心语境**: ERP衡量的是持有股票相对于持有无风险国债所能获得的'超额'回报补偿。2. **水平解读**: -0.5%的负值是一个极端的危险信号，意味着当前股票的预期收益率甚至低于无风险的国债，安全边际完全不存在。3. **相对性解读**: 处于1年期5%的极低分位，进一步确认了当前股票相对于债券的吸引力已降至冰点。4. **专业结论**: 在此语境下，买入股票不再是'投资'（要求回报补偿风险），而更接近于'投机'（赌价格上涨）。",
-            "output_narrative": "在与无风险国债的对比语境下，股权风险溢价已跌至-0.5%的负值区间，且处于历史极低分位。这表明股票已完全丧失相对于债券的估值吸引力，安全边际已消失，投资价值极低。"
+            "reasoning": "1. **核心语境**: 简式收益差距只比较当前盈利/现金流收益率与10年期美债收益率。2. **水平解读**: -0.5%说明当期收益率垫子为负，高估值更依赖未来增长、质量溢价或风险偏好维持。3. **相对性解读**: 处于1年期低分位，说明这一安全垫在近期样本中也偏薄。4. **专业结论**: 这不是完整 implied ERP，也不是单独交易信号；它要求 L1/L2/L3/L5 验证利率、情绪、广度和趋势是否足以支撑估值。",
+            "output_narrative": "NDX简式收益差距为-0.5%，说明当前盈利/现金流收益率相对10年期美债缺少正安全垫。该指标不是 Damodaran 式 implied ERP，只能作为估值脆弱性和跨层验证需求的锚点。"
         }
     ],
 
@@ -558,10 +558,23 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
     ],
     "get_ndx_pe_and_earnings_yield": [
         {
-            "context": "【估值双视角】PE必须同时看绝对水平、历史分位和盈利收益率。历史分位不高不代表绝对便宜。",
-            "input": {"function_id": "get_ndx_pe_and_earnings_yield", "raw_data": {"value": {"PE_TTM": 33.0, "PE_TTM_percentile_5y": 35.0, "earnings_yield": 3.03}}},
-            "reasoning": "1. 绝对PE为33倍，对指数长期回报要求较高。2. 5年分位只有35%，说明近期盈利或估值环境使相对历史不极端。3. 盈利收益率约3.03%，需要和无风险利率比较。4. 机制：若无风险收益率更高，股票风险补偿不足；若盈利增长强，可部分消化高PE。5. 结论：不能简单说便宜，应定性为绝对偏贵但相对历史未极端。",
-            "output_narrative": "NDX的33倍PE在绝对水平上偏高，但5年分位并不极端，说明盈利增长已消化部分估值压力。关键不在PE单点，而在盈利收益率相对无风险利率是否仍提供足够补偿。"
+            "context": "【百分位优先】PE必须区分当前值和真实历史分位。只有人工/Wind 或 Trendonify 等明确给出的 percentile/rank 才能支持“历史高低分位”判断；WorldPERatio 的 rolling range 只能做交叉校验，yfinance 成分股模型只提供当前值和覆盖率。",
+            "input": {
+                "function_id": "get_ndx_pe_and_earnings_yield",
+                "raw_data": {
+                    "value": {
+                        "PE": 33.0,
+                        "EarningsYield": 3.03,
+                        "ThirdPartyChecks": [
+                            {"source_name": "Trendonify", "metric": "ndx_trailing_pe", "value": 34.1, "percentile_10y": 86.0},
+                            {"source_name": "WorldPERatio", "metric": "ndx_trailing_pe", "value": 32.3, "historical_percentile": None, "methodology": "rolling average / outlier notes"},
+                        ],
+                    },
+                    "data_quality": {"source_tier": "component_model", "coverage": {"market_cap_coverage_pct": 92.5}},
+                },
+            },
+            "reasoning": "1. yfinance 成分股模型给出的是当前PE和覆盖率，不能单独承担历史估值 regime 判断。2. Trendonify 明确给出86%的估值分位，因此可以说当前估值处于历史偏高区域。3. WorldPERatio PE与当前PE接近，说明当前值方向上可互相校验；但它没有明确 percentile，不能用 rolling range 冒充分位。4. 盈利收益率约3.03%，仍需要和10年期美债以及简式收益差距一起看安全垫。5. 结论：历史分位判断来自真实 percentile，当前值判断来自多源交叉校验。",
+            "output_narrative": "NDX当前PE约33倍，Trendonify给出的历史分位为86%，支持“估值处于历史偏高位置”的判断。WorldPERatio的PE读数接近，可作为当前值校验，但它没有明确历史分位，不能替代Trendonify或人工/Wind的分位锚。"
         }
     ],
     "get_qqq_technical_indicators": [

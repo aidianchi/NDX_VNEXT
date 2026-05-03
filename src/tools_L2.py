@@ -9,18 +9,25 @@ try:
 except ImportError:
     from tools_common import *
 
+from typing import Iterable
+
+try:
+    from .tools_L3 import get_ndx100_components
+except ImportError:
+    from tools_L3 import get_ndx100_components
+
 # =====================================================
 # 第2层函数
 # =====================================================
 
-def _get_ndx100_common_price_data(effective_date: datetime) -> Tuple[List[str], pd.DataFrame]:
+def _get_ndx100_common_price_data(effective_date: datetime, lookback_days: int = 300) -> Tuple[List[str], pd.DataFrame]:
     """
     鍏变韩 NDX100 鎴愬垎鑲℃壒閲忚鎯呫€?
     鐩爣鏄 L2 鐨?breadth 鎸囨爣鍏变韩涓€娆′笅杞斤紝
     浣嗗悇鑷殑璁＄畻绐楀彛浠嶇劧鎸夊師鐗堥€昏緫鍒囩墖锛屼笉鏀瑰彉杈撳嚭鍙ｅ緞銆?
     """
     ndx100_components = get_ndx100_components(end_date=effective_date.strftime("%Y-%m-%d"))
-    common_start = effective_date - timedelta(days=300)
+    common_start = effective_date - timedelta(days=lookback_days)
     data = cached_yf_download(
         ndx100_components,
         start=common_start,
@@ -109,7 +116,7 @@ def get_qqq_qqew_ratio(end_date: str = None) -> Dict[str, Any]:
 
         qqq_ts = qqq_data.get("Time Series (Daily)", {})
         qqew_ts = qqew_data.get("Time Series (Daily)", {})
-        
+
         # 过滤日期
         qqq_ts_filtered = {k: v for k, v in qqq_ts.items() if datetime.strptime(k, "%Y-%m-%d") <= effective_date}
         qqew_ts_filtered = {k: v for k, v in qqew_ts.items() if datetime.strptime(k, "%Y-%m-%d") <= effective_date}
@@ -158,15 +165,68 @@ def get_qqq_qqew_ratio(end_date: str = None) -> Dict[str, Any]:
         return {"name": "QQQ/QQEW Ratio", "value": None, "notes": f"Error: {str(e)}"}
 
 
+def _extract_component_close_prices(data: pd.DataFrame) -> pd.DataFrame:
+    if data is None or data.empty:
+        return pd.DataFrame()
+    if isinstance(data.columns, pd.MultiIndex):
+        for field in ("Close", "close"):
+            if field in data.columns.get_level_values(0):
+                close = data[field]
+                return close.dropna(axis=1, how="all")
+    for field in ("Close", "close"):
+        if field in data.columns:
+            close = data[field]
+            if isinstance(close, pd.Series):
+                return close.to_frame()
+            return close.dropna(axis=1, how="all")
+    return pd.DataFrame()
+
+
+def _component_coverage_anomalies(components: List[str], used_columns: Iterable[Any]) -> List[str]:
+    used = {str(column).upper() for column in used_columns}
+    excluded = [str(component).upper() for component in components if str(component).upper() not in used]
+    if not excluded:
+        return []
+    preview = ", ".join(excluded[:10])
+    suffix = "" if len(excluded) <= 10 else f", +{len(excluded) - 10} more"
+    return [f"excluded_constituents_due_to_missing_or_incomplete_price_data: {preview}{suffix}"]
+
+
+def _breadth_quality(
+    *,
+    data_date: str,
+    formula: str,
+    constituents_used: int,
+    total_constituents: int,
+    anomalies: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    coverage = {
+        "constituents_used": constituents_used,
+        "total_constituents": total_constituents,
+        "constituent_coverage_pct": round(constituents_used / total_constituents * 100, 2) if total_constituents else 0.0,
+    }
+    return {
+        "source_tier": "component_model",
+        "data_date": data_date,
+        "collected_at_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "update_frequency": "daily market close",
+        "formula": formula,
+        "coverage": coverage,
+        "anomalies": anomalies or [],
+        "fallback_chain": ["component_model", "proxy", "unavailable"],
+        "source_disagreement": {},
+    }
+
+
 def get_advance_decline_line(end_date: str = None) -> Dict[str, Any]:
     """
     计算NDX100的累积腾落线 (Cumulative Advance/Decline Line)
-    
+
     核心价值：
     - 识别趋势内部健康度
     - 与指数价格进行背离分析
     - 预警顶部/底部反转
-    
+
     实现方法：
     - 获取过去126个交易日（约6个月）的成分股数据
     - 每日计算：上涨股票数 - 下跌股票数
@@ -179,7 +239,7 @@ def get_advance_decline_line(end_date: str = None) -> Dict[str, Any]:
             "value": {"level": None, "date": None, "momentum": None, "relativity": None},
             "notes": "yfinance not available, cannot fetch component data."
         }
-    
+
     if end_date:
         effective_date = datetime.strptime(end_date, "%Y-%m-%d")
     else:
@@ -192,15 +252,15 @@ def get_advance_decline_line(end_date: str = None) -> Dict[str, Any]:
         # 下载126天+20天缓冲的数据（确保有足够交易日）
         lookback_days = 126
         start_date = effective_date - timedelta(days=lookback_days + 40)
-        
-        
+
+
         if data.empty or len(data) < 2:
             raise ValueError("Insufficient data returned from yfinance.")
 
         # 提取收盘价数据
-        close_prices = data['Close']
+        close_prices = _extract_component_close_prices(data)
         close_prices = close_prices[close_prices.index >= start_date]
-        
+
         # 确保至少有2天数据
         if len(close_prices) < 2:
             raise ValueError(f"Insufficient trading days: {len(close_prices)}")
@@ -216,16 +276,16 @@ def get_advance_decline_line(end_date: str = None) -> Dict[str, Any]:
 
         # 累积求和形成腾落线
         cumulative_ad_line = np.cumsum(daily_ad_values)
-        
+
         # 获取最新值
         current_level = int(cumulative_ad_line[-1])
         latest_date_val = close_prices.index[-1].strftime("%Y-%m-%d")
-        
+
         # 计算MA20判断趋势
         if len(cumulative_ad_line) >= 20:
             ma20 = np.mean(cumulative_ad_line[-20:])
             distance_from_ma20_pct = ((current_level - ma20) / abs(ma20) * 100) if ma20 != 0 else 0
-            
+
             # 判断趋势方向
             if distance_from_ma20_pct > 2:
                 trend = "rising"
@@ -255,7 +315,15 @@ def get_advance_decline_line(end_date: str = None) -> Dict[str, Any]:
                 "relativity": None  # 保持兼容性
             },
             "unit": "cumulative_count",
+            "source_tier": "component_model",
             "source_name": "yfinance",
+            "data_quality": _breadth_quality(
+                data_date=latest_date_val,
+                formula="daily advancing constituents - declining constituents, cumulatively summed",
+                constituents_used=len(close_prices.columns),
+                total_constituents=len(ndx100_components),
+                anomalies=_component_coverage_anomalies(ndx100_components, close_prices.columns),
+            ),
             "notes": f"基于{len(ndx100_components)}只成分股的{len(daily_ad_values)}天累积数据。最新：上涨{latest_advances}只，下跌{latest_declines}只。"
         }
     except Exception as e:
@@ -274,7 +342,7 @@ def get_percent_above_ma(end_date: str = None) -> Dict[str, Any]:
             "value": {"level": None, "date": None, "momentum": None, "relativity": None},
             "notes": "yfinance not available, cannot fetch component data."
         }
-    
+
     if end_date:
         effective_date = datetime.strptime(end_date, "%Y-%m-%d")
     else:
@@ -283,14 +351,14 @@ def get_percent_above_ma(end_date: str = None) -> Dict[str, Any]:
     try:
         # **修改点**: 调用新的动态函数获取成分股
         ndx100_components, data = _get_ndx100_common_price_data(effective_date)
-        
+
         start_date = effective_date - timedelta(days=300) # 确保有足够数据计算200日均线
 
         # 批量下载过去约一年的日频数据
         if data.empty:
             raise ValueError("No data returned from yfinance.")
 
-        close_prices = data['Close'].dropna(axis=1, how='any') # 删除数据不完整的列
+        close_prices = _extract_component_close_prices(data).dropna(axis=1, how='any') # 删除数据不完整的列
 
         if close_prices.empty or len(close_prices) < 200:
              raise ValueError(f"Insufficient data for MA calculation (days={len(close_prices)}).")
@@ -322,9 +390,22 @@ def get_percent_above_ma(end_date: str = None) -> Dict[str, Any]:
                     "percent_above_200d": percent_above_200d
                 },
                 "date": latest_date_val,
+                "coverage": {
+                    "constituents_used": total_stocks,
+                    "total_constituents": len(ndx100_components),
+                    "constituent_coverage_pct": round(total_stocks / len(ndx100_components) * 100, 2) if ndx100_components else 0.0,
+                },
             },
             "unit": "percent",
+            "source_tier": "component_model",
             "source_name": "yfinance",
+            "data_quality": _breadth_quality(
+                data_date=latest_date_val,
+                formula="latest component close above 50-day and 200-day moving average",
+                constituents_used=total_stocks,
+                total_constituents=len(ndx100_components),
+                anomalies=_component_coverage_anomalies(ndx100_components, close_prices.columns),
+            ),
             "notes": f"Based on {total_stocks} NDX100 components with complete data."
         }
     except Exception as e:
@@ -337,21 +418,138 @@ def get_percent_above_ma(end_date: str = None) -> Dict[str, Any]:
 
 
 def get_new_highs_lows(end_date: str = None) -> Dict[str, Any]:
-    """新高新低指数 - 暂未实现（保持不变）"""
-    return {
-        "name": "New Highs-Lows Index",
-        "value": {"level": None, "date": None, "momentum": None, "relativity": None},
-        "notes": "Data source pending implementation"
-    }
+    """计算NDX100成分股52周新高/新低家数。"""
+    if not YF_AVAILABLE:
+        return {
+            "name": "New Highs-Lows Index",
+            "value": {"level": None, "date": None, "momentum": None, "relativity": None},
+            "source_tier": "unavailable",
+            "notes": "yfinance not available, cannot fetch component data."
+        }
+
+    effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
+
+    try:
+        try:
+            components, data = _get_ndx100_common_price_data(effective_date, lookback_days=420)
+        except TypeError:
+            components, data = _get_ndx100_common_price_data(effective_date)
+        close_prices = _extract_component_close_prices(data).dropna(axis=1, how="any")
+        if close_prices.empty or len(close_prices) < 252:
+            raise ValueError(f"Insufficient data for 52-week high/low calculation (days={len(close_prices)}).")
+
+        window = close_prices.tail(252)
+        latest = window.iloc[-1]
+        highs = window.max()
+        lows = window.min()
+        new_highs = int((latest >= highs).sum())
+        new_lows = int((latest <= lows).sum())
+        total_used = int(len(window.columns))
+        latest_date_val = window.index[-1].strftime("%Y-%m-%d")
+        level = {
+            "new_highs_52w": new_highs,
+            "new_lows_52w": new_lows,
+            "net_new_highs": new_highs - new_lows,
+            "percent_new_highs": round(new_highs / total_used * 100, 2) if total_used else 0.0,
+            "percent_new_lows": round(new_lows / total_used * 100, 2) if total_used else 0.0,
+        }
+        coverage = {
+            "constituents_used": total_used,
+            "total_constituents": len(components),
+            "constituent_coverage_pct": round(total_used / len(components) * 100, 2) if components else 0.0,
+        }
+        return {
+            "name": "New Highs-Lows Index",
+            "series_id": "NDX_COMPONENT_NEW_HIGHS_LOWS",
+            "value": {
+                "level": level,
+                "date": latest_date_val,
+                "coverage": coverage,
+                "momentum": "positive" if new_highs > new_lows else "negative" if new_lows > new_highs else "neutral",
+                "relativity": None,
+            },
+            "unit": "count/percent",
+            "source_tier": "component_model",
+            "source_name": "yfinance (NDX100 components)",
+            "data_quality": _breadth_quality(
+                data_date=latest_date_val,
+                formula="component latest close equals 252-trading-day high or low",
+                constituents_used=total_used,
+                total_constituents=len(components),
+                anomalies=_component_coverage_anomalies(components, window.columns),
+            ),
+            "notes": f"52周新高{new_highs}只，新低{new_lows}只，覆盖{total_used}/{len(components)}只成分股。"
+        }
+    except Exception as e:
+        return {
+            "name": "New Highs-Lows Index",
+            "value": {"level": None, "date": None, "momentum": None, "relativity": None},
+            "source_tier": "unavailable",
+            "notes": f"Failed to calculate: {str(e)}"
+        }
 
 
 def get_mcclellan_oscillator_nasdaq_or_nyse(end_date: str = None) -> Dict[str, Any]:
-    """McClellan Oscillator - 暂未实现（保持不变）"""
-    return {
-        "name": "McClellan Oscillator",
-        "value": {"level": None, "date": None, "momentum": None, "relativity": None},
-        "notes": "Data source pending implementation"
-    }
+    """用NDX100成分股涨跌家数序列计算McClellan Oscillator。"""
+    if not YF_AVAILABLE:
+        return {
+            "name": "McClellan Oscillator",
+            "value": {"level": None, "date": None, "momentum": None, "relativity": None},
+            "source_tier": "unavailable",
+            "notes": "yfinance not available, cannot fetch component data."
+        }
+
+    effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
+
+    try:
+        components, data = _get_ndx100_common_price_data(effective_date)
+        close_prices = _extract_component_close_prices(data).dropna(axis=1, how="any")
+        if close_prices.empty or len(close_prices) < 40:
+            raise ValueError(f"Insufficient data for McClellan calculation (days={len(close_prices)}).")
+
+        price_changes = close_prices.diff().dropna()
+        advances = (price_changes > 0).sum(axis=1)
+        declines = (price_changes < 0).sum(axis=1)
+        net_advances = advances - declines
+        ema19 = net_advances.ewm(span=19, adjust=False).mean()
+        ema39 = net_advances.ewm(span=39, adjust=False).mean()
+        oscillator = ema19 - ema39
+        latest_value = float(oscillator.iloc[-1])
+        latest_date_val = oscillator.index[-1].strftime("%Y-%m-%d")
+        total_used = int(len(close_prices.columns))
+        return {
+            "name": "McClellan Oscillator",
+            "series_id": "NDX_COMPONENT_MCCLELLAN",
+            "value": {
+                "level": round(latest_value, 2),
+                "date": latest_date_val,
+                "momentum": "positive" if latest_value > 0 else "negative" if latest_value < 0 else "neutral",
+                "relativity": None,
+                "coverage": {
+                    "constituents_used": total_used,
+                    "total_constituents": len(components),
+                    "constituent_coverage_pct": round(total_used / len(components) * 100, 2) if components else 0.0,
+                },
+            },
+            "unit": "net_advancers_ema_spread",
+            "source_tier": "component_model",
+            "source_name": "yfinance (NDX100 components)",
+            "data_quality": _breadth_quality(
+                data_date=latest_date_val,
+                formula="19-day EMA(net advances) - 39-day EMA(net advances)",
+                constituents_used=total_used,
+                total_constituents=len(components),
+                anomalies=_component_coverage_anomalies(components, close_prices.columns),
+            ),
+            "notes": "基于NDX100成分股每日涨跌家数序列的广度动能确认指标。"
+        }
+    except Exception as e:
+        return {
+            "name": "McClellan Oscillator",
+            "value": {"level": None, "date": None, "momentum": None, "relativity": None},
+            "source_tier": "unavailable",
+            "notes": f"Failed to calculate: {str(e)}"
+        }
 
 
 CNN_FGI_BASE_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
@@ -370,39 +568,39 @@ def _get_cnn_headers() -> Dict[str, str]:
 def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
     """
     获取CNN恐贪指数 (Fear & Greed Index)
-    
+
     数据源：CNN Business官方API
     URL：https://production.dataviz.cnn.io/index/fearandgreed/graphdata/{date}
-    
+
     核心价值：
     - 综合性市场情绪指标，整合7个子指标
     - 极端值是有效的反向指标（<25极度恐惧=买入机会，>75极度贪婪=风险警示）
     - 提供历史对比数据（前一日/周/月/年）
-    
+
     返回结构：
     - score: 恐贪指数得分 (0-100)
     - rating: 情绪评级 (extreme fear/fear/neutral/greed/extreme greed)
     - previous_close/week/month/year: 历史对比
     - sub_metrics: 7个子指标详情
-    
+
     投资逻辑（第一性原理）：
     - 极端恐惧（<25）：市场过度悲观，价格低于内在价值 → 买入机会
     - 极端贪婪（>75）：市场过度乐观，价格高于内在价值 → 风险警示
     """
     headers = _get_cnn_headers()
-    
+
     if end_date:
         start_date = end_date
     else:
         start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-    
+
     url = f"{CNN_FGI_BASE_URL}/{start_date}"
-    
+
     try:
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         data = response.json()
-        
+
         fear_greed = data.get('fear_and_greed', {})
         if not fear_greed:
             return {
@@ -410,10 +608,10 @@ def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
                 "value": None,
                 "notes": "No fear and greed data in response"
             }
-        
+
         score = fear_greed.get('score')
         rating = fear_greed.get('rating')
-        
+
         result = {
             "name": "CNN Fear & Greed Index",
             "series_id": "CNN_FGI",
@@ -430,7 +628,7 @@ def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
             "source_name": "CNN Business",
             "notes": "Score range: 0-100. <25=Extreme Fear (buy signal), >75=Extreme Greed (risk warning)"
         }
-        
+
         sub_metrics = {}
         sub_metric_names = {
             "market_momentum_sp500": "Market Momentum (S&P500)",
@@ -441,7 +639,7 @@ def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
             "junk_bond_demand": "Junk Bond Demand",
             "safe_haven_demand": "Safe Haven Demand"
         }
-        
+
         for key, display_name in sub_metric_names.items():
             if key in data:
                 metric_data = data[key]
@@ -449,10 +647,10 @@ def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
                     "score": metric_data.get('score'),
                     "rating": metric_data.get('rating')
                 }
-        
+
         if sub_metrics:
             result["value"]["sub_metrics"] = sub_metrics
-        
+
         trend = "neutral"
         if score is not None:
             if score < 25:
@@ -466,10 +664,10 @@ def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
             else:
                 trend = "extreme_greed"
         result["value"]["trend"] = trend
-        
+
         logging.info(f"CNN FGI: {score:.2f} ({rating})")
         return result
-        
+
     except requests.exceptions.HTTPError as e:
         logging.warning(f"CNN FGI HTTP error: {e}")
         return {

@@ -283,6 +283,16 @@ L1-L5 必须输出：
 - L1-L5 prompt 开始注入当前层的静态法典块。
 - `IndicatorAnalysis` 增加软法典字段。
 
+### 6.5 L4 估值数据发言权
+
+截至 2026-05-02，L4 估值锚必须带数据发言权元数据：
+
+- 来源等级固定为 `licensed_manual/Wind`、`official`、`component_model`、`third_party_estimate`、`proxy`、`unavailable`。
+- 每个 L4 估值指标应携带 `data_date`、`collected_at_utc`、`update_frequency`、`formula`、`coverage`、`anomalies`、`fallback_chain`、`source_disagreement`。
+- Wind 人工输入是可选高信任源，不是系统运行硬依赖；空模板不得触发人工覆盖。
+- `get_equity_risk_premium` 保留函数名兼容历史调用，但语义已经改为 NDX 简式收益差距：`earnings_yield - 10Y` 或 `fcf_yield - 10Y`。
+- Damodaran 美国 implied ERP 只作为美国市场参考锚，不替代 NDX 成分股聚合估值。
+
 ---
 
 ## 7. 当前优先级与实施状态

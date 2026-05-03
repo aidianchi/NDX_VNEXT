@@ -7,28 +7,111 @@
       "series_id": "NDX_MANUAL",
       "value": {
         "PE_TTM": null,
+        "ForwardPE": null,
+        "EarningsYield": null,
+        "ForwardEarningsYield": null,
+        "FCFYield": null,
         "PB": null,
         "PS_TTM": null,
         "PCF_TTM": null,
         "PE_TTM_percentile_5y": null,
-        "PB_percentile_5y": null,
-        "ERP_Wind": null,
-        "ERP_Wind_percentile_5y": null
+        "ForwardPE_percentile_5y": null,
+        "FCFYield_percentile_5y": null,
+        "PB_percentile_5y": null
       },
       "unit": "ratio/percent",
-      "source_name": "Manual Input",
-      "notes": "Fill this file locally or copy into manual_data.local.json."
+      "source_tier": "licensed_manual/Wind",
+      "source_name": "Manual Input (optional high-trust source)",
+      "data_quality": {
+        "source_tier": "licensed_manual/Wind",
+        "data_date": "",
+        "collected_at_utc": "",
+        "update_frequency": "user supplied",
+        "formula": "Optional Wind/manual valuation fields; PE and ForwardPE should be index-level or aggregate-earnings based, not simple constituent averages",
+        "coverage": {
+          "note": "Fill coverage notes if Wind/manual fields are used."
+        },
+        "anomalies": [],
+        "fallback_chain": [
+          "licensed_manual/Wind",
+          "official",
+          "component_model",
+          "third_party_estimate",
+          "proxy",
+          "unavailable"
+        ],
+        "source_disagreement": {}
+      },
+      "notes": "Optional high-trust manual valuation input. Leave inactive/blank to use live sources."
     },
     "get_equity_risk_premium": {
-      "name": "Equity Risk Premium (Manual)",
-      "series_id": "ERP_MANUAL",
+      "name": "NDX Simple Yield Gap (Manual)",
+      "series_id": "SIMPLE_YIELD_GAP_MANUAL",
       "value": {
-        "erp_value": null,
-        "erp_percentile_5y": null
+        "level": null,
+        "method": "earnings_yield_minus_10y_or_fcf_yield_minus_10y",
+        "yield_type": null,
+        "ndx_yield": null,
+        "treasury_10y": null,
+        "percentile_5y": null,
+        "not_implied_erp_warning": "Simple yield gap only; not Damodaran implied ERP",
+        "damodaran_reference": "get_damodaran_us_implied_erp"
       },
       "unit": "percent",
-      "source_name": "Manual Input",
-      "notes": "Manual ERP override."
+      "source_tier": "licensed_manual/Wind",
+      "source_name": "Manual Input (optional high-trust source)",
+      "data_quality": {
+        "source_tier": "licensed_manual/Wind",
+        "data_date": "",
+        "collected_at_utc": "",
+        "update_frequency": "user supplied",
+        "formula": "earnings_yield - 10Y or fcf_yield - 10Y; not Damodaran implied ERP",
+        "coverage": {
+          "note": "Fill coverage notes if Wind/manual fields are used."
+        },
+        "anomalies": [],
+        "fallback_chain": [
+          "licensed_manual/Wind",
+          "component_model",
+          "proxy",
+          "unavailable"
+        ],
+        "source_disagreement": {}
+      },
+      "notes": "Optional manual simple yield gap input. This is not Damodaran-style implied ERP."
+    },
+    "get_damodaran_us_implied_erp": {
+      "name": "Manual/Wind ERP Reference",
+      "series_id": "MANUAL_ERP_REFERENCE",
+      "value": {
+        "manual_erp": null,
+        "implied_erp_fcfe": null,
+        "implied_erp_ddm": null,
+        "tbond_rate": null,
+        "scope": "manual/Wind ERP reference; specify US market, NDX, or other scope when used",
+        "not_ndx_valuation_warning": "Manual ERP reference is not NDX PE/Forward PE/PB historical percentile."
+      },
+      "unit": "percent",
+      "source_tier": "licensed_manual/Wind",
+      "source_name": "Manual Input (optional high-trust ERP reference)",
+      "data_quality": {
+        "source_tier": "licensed_manual/Wind",
+        "data_date": "",
+        "collected_at_utc": "",
+        "update_frequency": "user supplied",
+        "formula": "User-supplied manual ERP/reference risk premium; not NDX simple yield gap unless explicitly calculated that way",
+        "coverage": {
+          "note": "Manual ERP scope must be supplied or reviewed by user."
+        },
+        "anomalies": [],
+        "fallback_chain": [
+          "licensed_manual/Wind",
+          "official",
+          "unavailable"
+        ],
+        "source_disagreement": {}
+      },
+      "notes": "Optional manual ERP reference; not NDX simple yield gap and not a substitute for NDX PE/Forward PE/PB percentile."
     },
     "get_crowdedness_dashboard": {
       "name": "Crowdedness Dashboard (Manual)",

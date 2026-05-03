@@ -16,40 +16,40 @@ except ImportError:
 def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
     """
     多源混合策略获取纳斯达克100成分股列表 (V6.1 历史回测优化版)
-    
+
     优先级顺序：
     - 回测模式（有end_date）：
         1. nasdaq-100-ticker-history（历史数据库，最优先）
         2. 纳斯达克官网API（备用）
         3. Wikipedia（备用）
         4. 静态后备列表（兜底）
-    
+
     - 实时模式（无end_date）：
         1. 纳斯达克官网API（最权威、最准确）
         2. Wikipedia实时爬取（实时更新）
         3. nasdaq-100-ticker-history（备用）
         4. 静态后备列表（兜底）
-    
+
     参数:
         end_date: 指定日期（YYYY-MM-DD），用于历史回测
-    
+
     返回:
         成分股代码列表
     """
-    
+
     # ========================================
     # 回测模式：优先使用历史数据库
     # ========================================
     if end_date:
         logging.info(f"回测模式：正在获取 {end_date} 的历史成分股...")
-        
+
         # 策略1: nasdaq-100-ticker-history（历史数据库，最优先）
         try:
             from nasdaq_100_ticker_history import tickers_as_of
-            
+
             effective_date = datetime.strptime(end_date, "%Y-%m-%d")
             req_year, req_month, req_day = effective_date.year, effective_date.month, effective_date.day
-            
+
             try:
                 components = tickers_as_of(year=req_year, month=req_month, day=req_day)
                 tickers = [str(ticker).upper() for ticker in components]
@@ -72,15 +72,15 @@ def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
                         except Exception:
                             continue
                 raise
-                
+
         except ImportError:
             logging.warning("nasdaq_100_ticker_history 未安装，回测模式降级到实时数据源")
         except Exception as e:
             logging.warning(f"从历史数据库获取失败: {str(e)[:100]}，尝试备用方案")
-        
+
         # 回测模式下，如果历史数据库失败，继续尝试其他方案
         logging.warning(f"⚠️ 历史数据不可用，使用最新成分股（可能存在幸存者偏差）")
-    
+
     # ========================================
     # 策略1: 纳斯达克官网API（最优先）
     # ========================================
@@ -90,16 +90,16 @@ def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
-        
+
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
-        
+
         data = response.json()
-        
+
         if 'data' in data and 'data' in data['data'] and 'rows' in data['data']['data']:
             rows = data['data']['data']['rows']
             tickers = [row['symbol'].upper() for row in rows if 'symbol' in row]
-            
+
             if len(tickers) >= 90:  # 合理性检查
                 logging.info(f"✅ 成功从纳斯达克官网API获取 {len(tickers)} 只成分股")
                 return tickers
@@ -107,10 +107,10 @@ def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
                 logging.warning(f"纳斯达克API返回数量异常: {len(tickers)} 只（预期≥90）")
         else:
             logging.warning("纳斯达克API响应格式不符合预期")
-            
+
     except Exception as e:
         logging.warning(f"纳斯达克官网API获取失败: {str(e)[:100]}")
-    
+
     # ========================================
     # 策略2: Wikipedia爬取（次优先）
     # ========================================
@@ -120,35 +120,35 @@ def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
-        
+
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
-        
+
         # 尝试导入BeautifulSoup
         try:
             from bs4 import BeautifulSoup
         except ImportError:
             logging.warning("BeautifulSoup未安装，跳过Wikipedia爬取")
             raise
-        
+
         soup = BeautifulSoup(response.content, 'html.parser')
-        
+
         # 查找包含成分股的表格
         tables = soup.find_all('table', {'class': 'wikitable'})
-        
+
         for table in tables:
             headers_row = [th.get_text(strip=True) for th in table.find_all('th')]
-            
+
             # 查找Ticker或Symbol列
             ticker_index = -1
             for idx, header in enumerate(headers_row):
                 if header in ['Ticker', 'Symbol', 'ticker', 'symbol']:
                     ticker_index = idx
                     break
-            
+
             if ticker_index == -1:
                 continue
-            
+
             # 提取ticker
             tickers = []
             for row in table.find_all('tr')[1:]:  # 跳过表头
@@ -158,32 +158,32 @@ def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
                     ticker = ticker.replace('\n', '').replace('\xa0', '').strip()
                     if ticker and (ticker.replace('.', '').replace('-', '').isalpha() or ticker.isalnum()):
                         tickers.append(ticker.upper())
-            
+
             if len(tickers) >= 90:
                 logging.info(f"✅ 成功从Wikipedia获取 {len(tickers)} 只成分股")
                 return tickers
-        
+
         logging.warning("Wikipedia未找到有效的成分股表格")
-        
+
     except Exception as e:
         logging.warning(f"从Wikipedia获取失败: {str(e)[:100]}")
-    
+
     # ========================================
     # 策略3: GitHub项目 nasdaq-100-ticker-history
     # ========================================
     try:
         from nasdaq_100_ticker_history import tickers_as_of
-        
+
         logging.info("正在从GitHub项目获取成分股...")
-        
+
         # 尝试获取当前年份数据
         if end_date:
             effective_date = datetime.strptime(end_date, "%Y-%m-%d")
         else:
             effective_date = datetime.now()
-        
+
         req_year, req_month, req_day = effective_date.year, effective_date.month, effective_date.day
-        
+
         try:
             components = tickers_as_of(year=req_year, month=req_month, day=req_day)
             tickers = [str(ticker).upper() for ticker in components]
@@ -205,12 +205,12 @@ def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
                     except Exception:
                         continue
             raise
-            
+
     except ImportError:
         logging.warning("nasdaq_100_ticker_history 未安装，跳过GitHub项目方法")
     except Exception as e:
         logging.warning(f"从GitHub项目获取失败: {str(e)[:100]}")
-    
+
     # ========================================
     # 策略4: 静态后备列表（兜底）
     # ========================================
@@ -262,6 +262,64 @@ def calculate_quantitative_moat_score(info: dict) -> Tuple[float, str]:
         notes.append(f"OM({op_margin:.1%})")
 
     return round(score, 1), ", ".join(notes)
+
+
+def _summarize_m7_fundamentals(m7_data: Dict[str, Any]) -> Dict[str, Any]:
+    valid_items = {
+        ticker: value
+        for ticker, value in m7_data.items()
+        if isinstance(value, dict) and not value.get("error") and value.get("MarketCap")
+    }
+    total_market_cap = sum(float(value.get("MarketCap", 0)) for value in valid_items.values())
+    summary: Dict[str, Any] = {
+        "count": len(valid_items),
+        "total_market_cap": round(total_market_cap, 2) if total_market_cap else None,
+        "top_weight_ticker": None,
+        "top_weight_pct": None,
+        "market_cap_weighted_PE": None,
+        "market_cap_weighted_ROE": None,
+        "weighted_quantitative_moat": None,
+        "contribution_note": "Weighted contribution view; simple average PE is intentionally not emphasized.",
+    }
+    if total_market_cap <= 0:
+        return summary
+
+    weights = {
+        ticker: float(value.get("MarketCap", 0)) / total_market_cap
+        for ticker, value in valid_items.items()
+    }
+    top_ticker, top_weight = max(weights.items(), key=lambda item: item[1])
+    summary["top_weight_ticker"] = top_ticker
+    summary["top_weight_pct"] = round(top_weight * 100, 2)
+
+    pe_cap = 0.0
+    earnings = 0.0
+    roe_weighted = 0.0
+    roe_weight = 0.0
+    moat_weighted = 0.0
+    moat_weight = 0.0
+    for ticker, value in valid_items.items():
+        market_cap = float(value.get("MarketCap", 0))
+        pe = value.get("PE")
+        if pe and pe > 0:
+            pe_cap += market_cap
+            earnings += market_cap / float(pe)
+        roe = value.get("ROE")
+        if roe is not None:
+            roe_weighted += float(roe) * market_cap
+            roe_weight += market_cap
+        moat = value.get("quantitative_moat_score")
+        if moat is not None:
+            moat_weighted += float(moat) * market_cap
+            moat_weight += market_cap
+
+    if pe_cap > 0 and earnings > 0:
+        summary["market_cap_weighted_PE"] = round(pe_cap / earnings, 2)
+    if roe_weight > 0:
+        summary["market_cap_weighted_ROE"] = round(roe_weighted / roe_weight, 2)
+    if moat_weight > 0:
+        summary["weighted_quantitative_moat"] = round(moat_weighted / moat_weight, 2)
+    return summary
 
 
 def get_m7_fundamentals(end_date: str = None) -> Dict[str, Any]:
@@ -378,24 +436,7 @@ def get_m7_fundamentals(end_date: str = None) -> Dict[str, Any]:
     elif not failed_tickers:
         data_source = "yfinance"
 
-    # 计算汇总统计
-    valid_pe = [v.get("PE", 0) for v in m7_data.values() if isinstance(v, dict) and v.get("PE") and not v.get("error")]
-    valid_roe = [v.get("ROE", 0) for v in m7_data.values() if isinstance(v, dict) and v.get("ROE") and not v.get("error")]
-    total_market_cap = sum(v.get("MarketCap", 0) for v in m7_data.values() if isinstance(v, dict) and v.get("MarketCap") and not v.get("error"))
-    weighted_moat_score = 0
-
-    if total_market_cap > 0:
-        for v in m7_data.values():
-            if isinstance(v, dict) and v.get("MarketCap") and v.get("quantitative_moat_score") is not None and not v.get("error"):
-                weight = v["MarketCap"] / total_market_cap
-                weighted_moat_score += v["quantitative_moat_score"] * weight
-
-    summary = {
-        "avg_PE": round(np.mean(valid_pe), 2) if valid_pe else None,
-        "avg_ROE": round(np.mean(valid_roe), 2) if valid_roe else None,
-        "weighted_quantitative_moat": round(weighted_moat_score, 2),
-        "count": len([v for v in m7_data.values() if isinstance(v, dict) and not v.get("error")])
-    }
+    summary = _summarize_m7_fundamentals(m7_data)
 
     return {
         "name": "M7 Fundamentals",
@@ -405,7 +446,7 @@ def get_m7_fundamentals(end_date: str = None) -> Dict[str, Any]:
         "date": effective_date.strftime("%Y-%m-%d"),
         "source_name": data_source,
         "source_url": "Mixed: yfinance + Alpha Vantage",
-        "notes": f"Successfully fetched {summary['count']}/7 companies. Note: Fetches latest data available.",
+        "notes": f"Successfully fetched {summary['count']}/7 companies. Summary is contribution-weighted; simple average PE is not used as a headline.",
         "summary": summary
     }
 
