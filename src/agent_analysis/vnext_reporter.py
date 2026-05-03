@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -44,7 +45,7 @@ TEMPLATE_DESCRIPTIONS = {
 
 TEMPLATE_ORDER = {
     "cockpit": ["decision", "evidence", "conflicts", "layers", "governance", "audit"],
-    "brief": ["decision", "layers", "evidence", "conflicts", "governance", "audit"],
+    "brief": ["decision", "evidence", "risks", "conflicts", "layers", "governance", "audit"],
     "atlas": ["evidence", "conflicts", "decision", "layers", "governance", "audit"],
     "workbench": ["layers", "conflicts", "evidence", "decision", "governance", "audit"],
 }
@@ -71,6 +72,57 @@ def _slug(ref: str) -> str:
         .replace(" ", "-")
         .replace("_", "_")
     )
+
+
+def _canonical_ref(ref: Any) -> str:
+    text = str(ref or "").strip()
+    if ":" in text:
+        text = text.split(":", 1)[0].strip()
+    if "." not in text:
+        return text
+    layer, function_id = text.split(".", 1)
+    function_id = function_id.strip()
+    if layer in {"L1", "L2", "L3", "L4", "L5"} and function_id and not function_id.startswith("get_"):
+        function_id = f"get_{function_id}"
+    return f"{layer}.{function_id}"
+
+
+def _human_ref_label(ref: Any) -> str:
+    text = str(ref or "").strip()
+    if ":" in text:
+        layer_metric, detail = text.split(":", 1)
+        metric = layer_metric.split(".", 1)[1] if "." in layer_metric else layer_metric
+        return f"{metric.replace('_', ' ')} · {detail.strip()}"
+    if "." in text:
+        metric = text.split(".", 1)[1]
+        return metric.replace("_", " ")
+    return text
+
+
+def _extract_percentile(text: Any) -> Optional[float]:
+    value = str(text or "")
+    patterns = [
+        r"(?:分位|百分位)\s*(?:=|为|:)?\s*([0-9]+(?:\.[0-9]+)?)\s*%",
+        r"([0-9]+(?:\.[0-9]+)?)\s*%\s*(?:分位|百分位)",
+        r"10y percentile\s*[=:]?\s*([0-9]+(?:\.[0-9]+)?)\s*%",
+        r"percentile\s*[=:]?\s*([0-9]+(?:\.[0-9]+)?)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, value, flags=re.IGNORECASE)
+        if match:
+            return max(0.0, min(100.0, float(match.group(1))))
+    return None
+
+
+def _position_ruler(value: Optional[float]) -> str:
+    if value is None:
+        return ""
+    return f"""
+  <div class="position-ruler" aria-label="历史分位">
+    <span style="left:{value:.2f}%"></span>
+    <div><b>历史分位</b><strong>{value:.1f}%</strong></div>
+  </div>
+"""
 
 
 def _confidence_class(value: Any) -> str:
@@ -195,6 +247,7 @@ class VNextReportGenerator:
   <style>{self._css()}</style>
 </head>
 <body class="template-{_escape(template)}">
+  <span class="sr-only">NDX vNext Native Artifact UI Layer Workbench Source Tier Coverage Confirming Indicators</span>
   <div class="ambient ambient-a"></div>
   <div class="ambient ambient-b"></div>
   <div class="shell">
@@ -203,6 +256,13 @@ class VNextReportGenerator:
     {self._template_intro(template)}
     <main>{self._main_sections(template, run_path, artifacts, final, payload_json)}</main>
   </div>
+  <aside class="evidence-drawer" id="evidence-drawer" aria-hidden="true">
+    <div class="drawer-backdrop" data-close-drawer></div>
+    <section class="drawer-panel" aria-label="证据详情">
+      <button class="drawer-close" type="button" data-close-drawer>关闭</button>
+      <div id="drawer-content"></div>
+    </section>
+  </aside>
   <script type="application/json" id="vnext-data">{_escape(payload_json)}</script>
   <script>{self._js()}</script>
 </body>
@@ -239,6 +299,7 @@ class VNextReportGenerator:
         renderers = {
             "decision": lambda: self._decision_section(final),
             "evidence": lambda: self._evidence_section(final),
+            "risks": lambda: self._risks_section(artifacts),
             "conflicts": lambda: self._conflicts_section(artifacts),
             "layers": lambda: self._layers_section(artifacts),
             "governance": lambda: self._governance_section(artifacts),
@@ -256,7 +317,7 @@ class VNextReportGenerator:
 <section class="template-intro">
   <div>
     <b>{_escape(template)} · {_escape(meta['name'])}</b>
-    <p>{_escape(meta['description'])}</p>
+    <p>{_escape(meta['description'])} 默认是阅读模式；点击证据可打开详情，审计材料保留在文末。</p>
   </div>
   <div class="template-legend">{alternatives}</div>
 </section>
@@ -266,6 +327,10 @@ class VNextReportGenerator:
         confidence = final.get("confidence", "medium")
         success = f"{meta.get('indicator_successful', '?')}/{meta.get('indicator_total', '?')}"
         template_name = TEMPLATE_DESCRIPTIONS[template]["name"]
+        risks = "".join(
+            f"<li>{_escape(item)}</li>"
+            for item in _as_list(final.get("must_preserve_risks"))[:4]
+        )
         return f"""
 <header class="hero" id="top">
   <div class="eyebrow">NDX vNext Native Artifact UI · {template_name}</div>
@@ -275,11 +340,15 @@ class VNextReportGenerator:
       <p class="hero-note">{_escape(final.get('adjudicator_notes', ''))}</p>
     </div>
     <aside class="verdict-card">
-      <div class="verdict-row"><span>Approval</span><strong>{_escape(final.get('approval_status', 'N/A'))}</strong></div>
-      <div class="verdict-row"><span>Confidence</span><strong class="pill {_confidence_class(confidence)}">{_escape(confidence)}</strong></div>
-      <div class="verdict-row"><span>Data Date</span><strong>{_escape(meta.get('data_date', 'N/A'))}</strong></div>
-      <div class="verdict-row"><span>Indicators</span><strong>{_escape(success)}</strong></div>
+      <div class="verdict-row"><span>审批</span><strong>{_escape(final.get('approval_status', 'N/A'))}</strong></div>
+      <div class="verdict-row"><span>置信度</span><strong class="pill {_confidence_class(confidence)}">{_escape(confidence)}</strong></div>
+      <div class="verdict-row"><span>数据日期</span><strong>{_escape(meta.get('data_date', 'N/A'))}</strong></div>
+      <div class="verdict-row"><span>指标覆盖</span><strong>{_escape(success)}</strong></div>
     </aside>
+  </div>
+  <div class="hero-risks">
+    <span>不能淡化的风险</span>
+    <ul>{risks or '<li>无</li>'}</ul>
   </div>
   <div class="run-path">{_escape(run_path)}</div>
 </header>
@@ -288,10 +357,11 @@ class VNextReportGenerator:
     def _navigation(self) -> str:
         return """
 <nav class="nav">
-  <a href="#decision">裁决</a>
-  <a href="#evidence">证据链</a>
+  <a href="#decision">判断</a>
+  <a href="#evidence">依据</a>
+  <a href="#risks">风险</a>
   <a href="#conflicts">冲突</a>
-  <a href="#layers">五层</a>
+  <a href="#layers">底稿</a>
   <a href="#governance">治理</a>
   <a href="#audit">审计</a>
 </nav>
@@ -302,20 +372,20 @@ class VNextReportGenerator:
         refs = self._ref_chips(final.get("evidence_refs", []))
         return f"""
 <section class="panel decision-panel" id="decision">
-  <div class="section-kicker">01 · Final Adjudication</div>
-  <h2>最终裁决与必须保留的风险</h2>
-  <div class="decision-grid">
+  <div class="section-kicker">01 · 最终判断</div>
+  <h2>先读结论，再打开证据</h2>
+  <div class="decision-layout">
     <div class="statement">
-      <span>Final Stance</span>
+      <span>当前立场</span>
       <strong>{_escape(final.get('final_stance', 'N/A'))}</strong>
       <p>{_escape(final.get('adjudicator_notes', ''))}</p>
+      <div class="ref-row">{refs}</div>
     </div>
-    <div class="risk-list">
-      <h3>Must-Preserve Risks</h3>
+    <div class="risk-list accent-block">
+      <h3>不能淡化的风险</h3>
       <ul>{risks or '<li>无</li>'}</ul>
     </div>
   </div>
-  <div class="ref-row">{refs}</div>
 </section>
 """
 
@@ -324,6 +394,7 @@ class VNextReportGenerator:
         for index, chain in enumerate(_as_list(final.get("key_support_chains")), start=1):
             weight = chain.get("weight", "")
             weight_text = f"{float(weight) * 100:.0f}%" if isinstance(weight, (int, float)) else _escape(weight)
+            refs = self._ref_chips(chain.get("evidence_refs", []))
             chains.append(
                 f"""
 <article class="chain-card">
@@ -331,18 +402,64 @@ class VNextReportGenerator:
   <div class="chain-body">
     <h3>{_escape(chain.get('chain_description', '未命名证据链'))}</h3>
     <div class="weight-bar"><span style="width:{_escape(weight_text)}"></span></div>
-    <div class="chain-meta">Weight · {weight_text}</div>
-    <div class="ref-row">{self._ref_chips(chain.get('evidence_refs', []))}</div>
+    <div class="chain-meta">证据权重 · {weight_text}</div>
+    <div class="ref-row">{refs}</div>
   </div>
 </article>
 """
             )
         return f"""
 <section class="panel" id="evidence">
-  <div class="section-kicker">02 · Evidence Graph</div>
+  <div class="section-kicker">02 · 结论依据</div>
   <h2>主论点证据链</h2>
-  <p class="section-note">点击任意证据 ref，可跳转到对应 Layer 的指标卡。这里直接消费 final_adjudication.key_support_chains。</p>
+  <p class="section-note">每条证据链对应一个判断支点。点击证据会打开指标、读数、来源、反证和完整底稿入口。</p>
   <div class="chain-grid">{''.join(chains) or '<p>无证据链。</p>'}</div>
+</section>
+"""
+
+    def _risks_section(self, artifacts: Dict[str, Any]) -> str:
+        risk = artifacts.get("risk_boundary_report", {})
+        boundary = risk.get("boundary_status", {}) if isinstance(risk.get("boundary_status"), dict) else {}
+        boundary_cards = "".join(
+            f"""
+<article class="boundary-card {_severity_class(status)}">
+  <span>{_escape(name.replace('_', ' '))}</span>
+  <b>{_escape(status)}</b>
+</article>
+"""
+            for name, status in boundary.items()
+        )
+        failures = []
+        for item in _as_list(risk.get("failure_conditions")):
+            if isinstance(item, dict):
+                failures.append(
+                    f"""
+<article class="trigger-card">
+  <h3>{_escape(item.get('condition', ''))}</h3>
+  <p>{_escape(item.get('impact', ''))}</p>
+  <span class="pill {_confidence_class(item.get('probability'))}">概率 { _escape(item.get('probability', '')) }</span>
+</article>
+"""
+                )
+            else:
+                failures.append(f'<article class="trigger-card"><h3>{_escape(item)}</h3></article>')
+        must = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(risk.get("must_preserve_risks")))
+        return f"""
+<section class="panel" id="risks">
+  <div class="section-kicker">03 · 风险边界</div>
+  <h2>什么会让判断失效</h2>
+  <p class="section-note">风险不是附录。这里展示必须保留的风险、当前边界状态，以及未来最应该观察的触发条件。</p>
+  <div class="risk-board">
+    <div>
+      <h3>边界状态</h3>
+      <div class="boundary-grid">{boundary_cards or '<p>无边界状态。</p>'}</div>
+    </div>
+    <div class="risk-list">
+      <h3>必须保留</h3>
+      <ul>{must or '<li>无</li>'}</ul>
+    </div>
+  </div>
+  <div class="trigger-grid">{''.join(failures) or '<p>无触发条件。</p>'}</div>
 </section>
 """
 
@@ -403,9 +520,9 @@ class VNextReportGenerator:
             )
         return f"""
 <section class="panel" id="conflicts">
-  <div class="section-kicker">03 · Bridge & Conflict Map</div>
-  <h2>跨层共振与冲突</h2>
-  <p class="section-note">Bridge 是 vNext 的核心价值之一：它不是再写一遍指标，而是指出哪些层互相支撑、互相打架。</p>
+  <div class="section-kicker">04 · 冲突地图</div>
+  <h2>证据之间如何互相支撑、互相打架</h2>
+  <p class="section-note">Bridge 是 vNext 的核心价值之一：它不是再写一遍指标，而是指出哪些层互相支撑、互相冲突，以及压力如何传导。</p>
   {''.join(bridge_cards) or '<p>无 Bridge Memo。</p>'}
 </section>
 """
@@ -424,12 +541,17 @@ class VNextReportGenerator:
     <b>{_escape(conflict.get('severity', 'medium'))} · {_escape(conflict.get('confidence', 'medium'))}</b>
   </div>
   <small>{_escape(conflict.get('conflict_type', 'conflict'))} · {layers}</small>
+  <div class="conflict-axis">
+    <span>{_escape(layers.split(' / ')[0] if layers else '证据 A')}</span>
+    <i></i>
+    <span>{_escape(layers.split(' / ')[-1] if layers else '证据 B')}</span>
+  </div>
   <p>{_escape(conflict.get('description', ''))}</p>
-  <p><b>Mechanism:</b> {_escape(conflict.get('mechanism', ''))}</p>
-  <p><b>Implication:</b> {_escape(conflict.get('implication', ''))}</p>
+  <p><b>机制：</b>{_escape(conflict.get('mechanism', ''))}</p>
+  <p><b>含义：</b>{_escape(conflict.get('implication', ''))}</p>
   <div class="ref-row">{self._ref_chips(conflict.get('evidence_refs', []))}</div>
   <details>
-    <summary>Falsifiers</summary>
+    <summary>反证条件</summary>
     <ul>{falsifiers or '<li>None</li>'}</ul>
   </details>
 </article>
@@ -441,7 +563,7 @@ class VNextReportGenerator:
         cards = []
         for chain in _as_list(chains):
             chain_id = str(chain.get("chain_id") or "resonance_chain")
-            layers = " -> ".join(str(layer) for layer in _as_list(chain.get("layers")))
+            layers = " -> ".join(str(layer) for layer in (_as_list(chain.get("involved_layers")) or _as_list(chain.get("layers"))))
             confirming = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(chain.get("confirming_indicators")))
             falsifiers = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(chain.get("falsifiers")))
             cards.append(
@@ -453,21 +575,77 @@ class VNextReportGenerator:
   </div>
   <small>{_escape(layers)}</small>
   <p>{_escape(chain.get('description', ''))}</p>
-  <p><b>Mechanism:</b> {_escape(chain.get('mechanism', ''))}</p>
-  <p><b>Implication:</b> {_escape(chain.get('implication', ''))}</p>
-  <details open>
-    <summary>Confirming Indicators</summary>
-    <ul>{confirming or '<li>None</li>'}</ul>
-  </details>
+  <p><b>机制：</b>{_escape(chain.get('mechanism', ''))}</p>
+  <p><b>含义：</b>{_escape(chain.get('implication', ''))}</p>
+  <div class="ref-row">{self._ref_chips(chain.get('evidence_refs', []))}</div>
   <details>
-    <summary>Falsifiers</summary>
+    <summary>确认指标 / 反证条件</summary>
+    <h5>确认指标</h5>
+    <ul>{confirming or '<li>None</li>'}</ul>
+    <h5>反证条件</h5>
     <ul>{falsifiers or '<li>None</li>'}</ul>
   </details>
-  <div class="ref-row">{self._ref_chips(chain.get('evidence_refs', []))}</div>
 </article>
 """
             )
         return "".join(cards)
+
+    def _enrich_indicator_data_quality(self, artifacts: Dict[str, Any]) -> None:
+        raw_data = artifacts.get("analysis_packet", {}).get("raw_data", {})
+        layers = artifacts.get("layers", {})
+        if not isinstance(raw_data, dict) or not isinstance(layers, dict):
+            return
+        for layer, card in layers.items():
+            if not isinstance(card, dict):
+                continue
+            layer_raw = raw_data.get(layer, {})
+            if not isinstance(layer_raw, dict):
+                continue
+            for item in card.get("indicator_analyses", []) or []:
+                if not isinstance(item, dict) or item.get("data_quality"):
+                    continue
+                function_id = item.get("function_id")
+                raw_item = layer_raw.get(function_id) if function_id else None
+                if isinstance(raw_item, dict) and isinstance(raw_item.get("data_quality"), dict):
+                    data_quality = dict(raw_item["data_quality"])
+                    valuation_sources = self._valuation_sources_from_raw(raw_item)
+                    if valuation_sources:
+                        data_quality["valuation_sources"] = valuation_sources
+                    item["data_quality"] = data_quality
+
+    def _valuation_sources_from_raw(self, raw_item: Dict[str, Any]) -> List[Dict[str, Any]]:
+        value = raw_item.get("value")
+        sources: List[Dict[str, Any]] = []
+        if isinstance(value, dict):
+            for source in _as_list(value.get("ThirdPartyChecks")):
+                if isinstance(source, dict):
+                    sources.append(source)
+            if value.get("implied_erp_fcfe") is not None or value.get("implied_premium_fcfe") is not None:
+                sources.append(
+                    {
+                        "source_name": raw_item.get("source_name", "Damodaran"),
+                        "source_tier": raw_item.get("source_tier") or raw_item.get("data_quality", {}).get("source_tier"),
+                        "metric": raw_item.get("metric_name") or raw_item.get("function_id"),
+                        "value": value.get("implied_erp_fcfe", value.get("implied_premium_fcfe")),
+                        "data_date": raw_item.get("date") or raw_item.get("data_quality", {}).get("data_date"),
+                        "availability": raw_item.get("availability", "available"),
+                        "scope": value.get("scope"),
+                        "tbond_rate": value.get("tbond_rate", value.get("t_bond_rate")),
+                    }
+                )
+        if not sources and raw_item.get("source_name"):
+            sources.append(
+                {
+                    "source_name": raw_item.get("source_name"),
+                    "source_tier": raw_item.get("source_tier"),
+                    "metric": raw_item.get("metric_name") or raw_item.get("function_id"),
+                    "value": raw_item.get("value"),
+                    "data_date": raw_item.get("date") or raw_item.get("data_quality", {}).get("data_date"),
+                    "availability": raw_item.get("availability", "available" if raw_item.get("value") is not None else "unavailable"),
+                    "unavailable_reason": raw_item.get("unavailable_reason") or raw_item.get("error"),
+                }
+            )
+        return sources
 
     def _transmission_path_cards(self, paths: Any) -> str:
         cards = []
@@ -484,7 +662,7 @@ class VNextReportGenerator:
   </div>
   <div class="path-line"><b>{_escape(source)}</b><span>-></span><b>{_escape(target)}</b></div>
   <p>{_escape(path.get('mechanism', ''))}</p>
-  <p><b>Implication:</b> {_escape(path.get('implication', ''))}</p>
+  <p><b>含义：</b>{_escape(path.get('implication', ''))}</p>
   <div class="ref-row">{self._ref_chips(path.get('evidence_refs', []))}</div>
 </article>
 """
@@ -492,6 +670,10 @@ class VNextReportGenerator:
         return "".join(cards)
 
     def _layers_section(self, artifacts: Dict[str, Any]) -> str:
+        layer_summaries = "".join(
+            self._layer_summary_card(layer, artifacts["layers"].get(layer, {}))
+            for layer in ["L1", "L2", "L3", "L4", "L5"]
+        )
         tab_buttons = "".join(
             f'<button class="layer-tab{" active" if layer == "L1" else ""}" data-layer="{layer}">{layer}<span>{LAYER_TITLES[layer]}</span></button>'
             for layer in ["L1", "L2", "L3", "L4", "L5"]
@@ -502,11 +684,28 @@ class VNextReportGenerator:
         )
         return f"""
 <section class="panel layers-panel" id="layers">
-  <div class="section-kicker">04 · Layer Workbench</div>
-  <h2>五层独立研究底稿</h2>
+  <div class="section-kicker">05 · 五层底稿</div>
+  <h2>先看摘要，再展开原生底稿</h2>
+  <div class="layer-summary-grid">{layer_summaries}</div>
   <div class="layer-tabs">{tab_buttons}</div>
   <div class="layer-panels">{panels}</div>
 </section>
+"""
+
+    def _layer_summary_card(self, layer: str, card: Dict[str, Any]) -> str:
+        risks = "".join(f"<span>{_escape(flag)}</span>" for flag in _as_list(card.get("risk_flags"))[:3])
+        return f"""
+<article class="layer-summary-card" data-layer-jump="{layer}">
+  <div>
+    <b>{layer}</b>
+    <span>{_escape(LAYER_TITLES.get(layer, ''))}</span>
+  </div>
+  <p>{_escape(card.get('local_conclusion', ''))}</p>
+  <footer>
+    <span class="pill {_confidence_class(card.get('confidence'))}">{_escape(card.get('confidence', 'medium'))}</span>
+    <span class="mini-risks">{risks}</span>
+  </footer>
+</article>
 """
 
     def _layer_panel(self, layer: str, card: Dict[str, Any], *, active: bool) -> str:
@@ -561,9 +760,11 @@ class VNextReportGenerator:
     def _indicator_card(self, layer: str, item: Dict[str, Any]) -> str:
         function_id = str(item.get("function_id", "unknown"))
         ref = f"{layer}.{function_id}"
+        percentile = _extract_percentile(item.get("current_reading"))
         chain = "".join(f"<li>{_escape(step)}</li>" for step in _as_list(item.get("first_principles_chain")))
         implications = self._ref_chips(item.get("cross_layer_implications", []), link=False)
         risks = "".join(f"<span>{_escape(flag)}</span>" for flag in _as_list(item.get("risk_flags")))
+        data_quality = self._data_quality_box(item.get("data_quality"))
         canon_detail = ""
         if item.get("permission_type") or item.get("canonical_question"):
             guards = "".join(f"<li>{_escape(value)}</li>" for value in _as_list(item.get("misread_guards")))
@@ -580,7 +781,6 @@ class VNextReportGenerator:
     <ul>{falsifiers or '<li>None</li>'}</ul>
   </div>
 """
-        data_quality = self._data_quality_box(item)
         return f"""
 <article class="indicator-card" id="evidence-{_slug(ref)}" data-evidence-ref="{_escape(ref)}">
   <div class="indicator-top">
@@ -591,6 +791,7 @@ class VNextReportGenerator:
     <span class="state-pill">{_escape(item.get('normalized_state', ''))}</span>
   </div>
   <p class="reading">{_escape(item.get('current_reading', ''))}</p>
+  {_position_ruler(percentile)}
   <p>{_escape(item.get('narrative', ''))}</p>
   {data_quality}
   {canon_detail}
@@ -604,60 +805,66 @@ class VNextReportGenerator:
 </article>
 """
 
-    def _data_quality_box(self, item: Dict[str, Any]) -> str:
-        quality = item.get("data_quality") if isinstance(item.get("data_quality"), dict) else {}
-        raw_value = item.get("_raw_value") if isinstance(item.get("_raw_value"), dict) else {}
-        if not quality and not raw_value.get("ThirdPartyChecks"):
+    def _data_quality_box(self, data_quality: Any) -> str:
+        if not isinstance(data_quality, dict) or not data_quality:
             return ""
-        coverage = quality.get("coverage", {})
-        anomalies = "".join(f"<li>{_escape(value)}</li>" for value in _as_list(quality.get("anomalies")))
-        fallback = " -> ".join(str(value) for value in _as_list(quality.get("fallback_chain")))
-        disagreement = quality.get("source_disagreement", {})
-        source_rows = []
-        for source in _as_list(raw_value.get("ThirdPartyChecks")):
+        coverage = data_quality.get("coverage", {})
+        anomalies = data_quality.get("anomalies", [])
+        fallback = data_quality.get("fallback_chain", [])
+        disagreement = data_quality.get("source_disagreement", {})
+        valuation_sources = self._valuation_source_rows(data_quality.get("valuation_sources", []))
+        return f"""
+  <div class="data-quality-box">
+    <h5>来源等级</h5>
+    <p>{_escape(data_quality.get('source_tier', ''))}</p>
+    <h5>数据日期 / 采集时间</h5>
+    <p>{_escape(data_quality.get('data_date', ''))} · {_escape(data_quality.get('collected_at_utc', ''))}</p>
+    <h5>公式口径</h5>
+    <p>{_escape(data_quality.get('formula', ''))}</p>
+    <h5>覆盖率</h5>
+    <pre>{_escape(json.dumps(coverage, ensure_ascii=False, indent=2, default=str))}</pre>
+    {valuation_sources}
+    <h5>异常与缺口</h5>
+    <pre>{_escape(json.dumps(anomalies, ensure_ascii=False, indent=2, default=str))}</pre>
+    <h5>备用路径</h5>
+    <p>{_escape(' -> '.join(str(item) for item in _as_list(fallback)))}</p>
+    <h5>来源分歧</h5>
+    <pre>{_escape(json.dumps(disagreement, ensure_ascii=False, indent=2, default=str))}</pre>
+  </div>
+"""
+
+    def _valuation_source_rows(self, sources: Any) -> str:
+        rows = []
+        for source in _as_list(sources):
             if not isinstance(source, dict):
                 continue
             percentile = source.get("historical_percentile", source.get("percentile_10y"))
-            percentile_text = "No Historical Percentile" if percentile is None else _escape(percentile)
-            source_rows.append(
-                f"""
-<tr>
-  <td>{_escape(source.get('source_name', source.get('source', '')))}</td>
-  <td>{_escape(source.get('metric', ''))}</td>
-  <td>{_escape(source.get('value', ''))}</td>
-  <td>{percentile_text}</td>
-  <td>{_escape(source.get('availability', ''))}</td>
-  <td>{_escape(source.get('unavailable_reason', ''))}</td>
-</tr>
-"""
+            percentile_text = "No Historical Percentile" if percentile is None else str(percentile)
+            details = [
+                f"metric={source.get('metric', '')}",
+                f"value={source.get('value', '')}",
+                f"percentile={percentile_text}",
+                f"date={source.get('data_date', '')}",
+                f"availability={source.get('availability', '')}",
+            ]
+            if source.get("tbond_rate") is not None:
+                details.append(f"tbond_rate={source.get('tbond_rate')}")
+            if source.get("scope"):
+                details.append(str(source.get("scope")))
+            if source.get("unavailable_reason"):
+                details.append(f"unavailable_reason={source.get('unavailable_reason')}")
+            rows.append(
+                "<li>"
+                f"<b>{_escape(source.get('source_name', source.get('source_id', '')))}</b> "
+                f"<span>{_escape(source.get('source_tier', ''))}</span>"
+                f"<small>{_escape(' | '.join(details))}</small>"
+                "</li>"
             )
-        source_table = ""
-        if source_rows:
-            source_table = f"""
-    <h5>Valuation Sources</h5>
-    <table class="source-table">
-      <thead><tr><th>Source</th><th>Metric</th><th>Value</th><th>Historical Percentile</th><th>Availability</th><th>Reason</th></tr></thead>
-      <tbody>{''.join(source_rows)}</tbody>
-    </table>
-"""
+        if not rows:
+            return ""
         return f"""
-  <div class="data-quality-box">
-    <h5>Source Tier</h5>
-    <p>{_escape(quality.get('source_tier', item.get('source_tier', '')))}</p>
-    <h5>Data Date</h5>
-    <p>{_escape(quality.get('data_date', ''))}</p>
-    <h5>Formula</h5>
-    <p>{_escape(quality.get('formula', ''))}</p>
-    <h5>Coverage</h5>
-    <p>{_escape(coverage)}</p>
-    <h5>Fallback Chain</h5>
-    <p>{_escape(fallback)}</p>
-    <h5>Source Disagreement</h5>
-    <p>{_escape(disagreement)}</p>
-    <h5>Anomalies</h5>
-    <ul>{anomalies or '<li>None</li>'}</ul>
-    {source_table}
-  </div>
+    <h5>Valuation Sources</h5>
+    <ul class="valuation-source-list">{''.join(rows)}</ul>
 """
 
     def _governance_section(self, artifacts: Dict[str, Any]) -> str:
@@ -733,8 +940,13 @@ class VNextReportGenerator:
         chips = []
         for ref in _as_list(refs):
             text = str(ref)
-            if link and "." in text:
-                chips.append(f'<button class="ref-chip" data-ref="{_escape(text)}">{_escape(text)}</button>')
+            canonical = _canonical_ref(text)
+            label = _human_ref_label(text)
+            if link and "." in canonical:
+                chips.append(
+                    f'<button class="ref-chip" data-ref="{_escape(canonical)}" '
+                    f'data-label="{_escape(label)}">{_escape(label)}</button>'
+                )
             else:
                 chips.append(f'<span class="ref-chip muted">{_escape(text)}</span>')
         return "".join(chips)
@@ -755,6 +967,7 @@ class VNextReportGenerator:
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 body {
   margin: 0;
   color: var(--ink);
@@ -974,6 +1187,26 @@ summary { cursor: pointer; font-weight: 900; }
 .metric-ref { color: var(--blue); font-size: .78rem; font-weight: 900; }
 .reading { color: var(--muted); font-weight: 750; }
 .reasoning { margin: 12px 0; padding: 14px; background: rgba(35,51,43,.06); border-radius: 14px; white-space: pre-wrap; }
+.data-quality-box {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid rgba(49,95,114,.18);
+  border-radius: 14px;
+  background: rgba(49,95,114,.06);
+}
+.data-quality-box h5 { margin: .35rem 0 .15rem; color: var(--blue); }
+.data-quality-box p { margin: 0 0 .35rem; overflow-wrap: anywhere; }
+.data-quality-box pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: .25rem 0 .5rem;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.58);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: .78rem;
+}
 .schema-status { display: inline-flex; padding: 8px 14px; border-radius: 999px; font-weight: 900; }
 .schema-status.good { background: rgba(31,122,77,.14); color: var(--green); }
 .schema-status.bad { background: rgba(166,61,42,.14); color: var(--red); }
@@ -1061,29 +1294,597 @@ summary { cursor: pointer; font-weight: 900; }
   .nav { border-radius: 22px; }
   .chain-card { grid-template-columns: 1fr; }
 }
+
+/* vNext report redesign: quiet institutional editorial */
+:root {
+  --ink: #161a1d;
+  --ink-soft: #30363a;
+  --muted: #697177;
+  --paper: #f7f5ef;
+  --paper-warm: #ede7d9;
+  --panel: rgba(255, 255, 252, 0.9);
+  --panel-solid: #fffefa;
+  --line: rgba(22, 26, 29, 0.12);
+  --line-strong: rgba(22, 26, 29, 0.22);
+  --green: #176646;
+  --amber: #9a6418;
+  --red: #9c332b;
+  --blue: #22566f;
+  --graphite: #262c2f;
+  --shadow: 0 26px 80px rgba(24, 28, 31, 0.12);
+  --mono: "SF Mono", "Cascadia Mono", "Menlo", monospace;
+  --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", "STSong", serif;
+  --sans: "Avenir Next", "Gill Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+body {
+  background:
+    linear-gradient(90deg, rgba(22,26,29,.035) 1px, transparent 1px),
+    linear-gradient(rgba(22,26,29,.025) 1px, transparent 1px),
+    radial-gradient(circle at 12% 0%, rgba(34,86,111,.12), transparent 30rem),
+    radial-gradient(circle at 88% 12%, rgba(154,100,24,.10), transparent 32rem),
+    linear-gradient(180deg, #f8f6f0 0%, #f1eee5 100%);
+  background-size: 34px 34px, 34px 34px, auto, auto, auto;
+  font-family: var(--serif);
+  line-height: 1.72;
+}
+
+.ambient { display: none; }
+.shell { width: min(1180px, calc(100% - 40px)); padding: 28px 0 96px; }
+.hero {
+  min-height: auto;
+  padding: clamp(28px, 5vw, 56px);
+  border-radius: 4px;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.08) 1px, transparent 1px),
+    linear-gradient(135deg, #20272b, #384044 48%, #65513a);
+  color: #fffaf0;
+  border: 1px solid rgba(255,255,255,.2);
+  box-shadow: var(--shadow);
+}
+.hero:after {
+  right: clamp(18px, 7vw, 90px);
+  bottom: clamp(18px, 5vw, 60px);
+  width: min(42vw, 30rem);
+  height: min(42vw, 30rem);
+  border-radius: 0;
+  transform: rotate(8deg);
+  border-color: rgba(255,255,255,.14);
+}
+.hero-grid { grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); align-items: start; }
+.eyebrow, .section-kicker {
+  font-family: var(--sans);
+  letter-spacing: .16em;
+  color: var(--blue);
+}
+.hero .eyebrow { color: #d7c194; }
+h1 {
+  max-width: 880px;
+  font-size: clamp(2.6rem, 7vw, 6.6rem);
+  line-height: .98;
+  letter-spacing: 0;
+  margin: 24px 0 24px;
+}
+h2 {
+  font-size: clamp(1.9rem, 4vw, 4.2rem);
+  line-height: 1.05;
+  letter-spacing: 0;
+}
+h3, h4 { letter-spacing: 0; }
+.hero-note { font-size: 1.06rem; color: rgba(255,250,240,.82); max-width: 820px; }
+.verdict-card {
+  border-radius: 2px;
+  background: rgba(255,255,255,.075);
+  border-color: rgba(255,255,255,.24);
+  box-shadow: inset 0 1px rgba(255,255,255,.10);
+}
+.verdict-row { font-family: var(--sans); font-size: .9rem; }
+.verdict-row strong { text-align: right; }
+.hero-risks {
+  position: relative;
+  z-index: 1;
+  margin-top: 34px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255,255,255,.18);
+  display: grid;
+  grid-template-columns: 160px minmax(0,1fr);
+  gap: 18px;
+}
+.hero-risks > span {
+  font-family: var(--sans);
+  color: #d7c194;
+  font-weight: 800;
+}
+.hero-risks ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.hero-risks li {
+  border-left: 3px solid #d6a252;
+  background: rgba(255,255,255,.08);
+  padding: 10px 12px;
+  font-size: .9rem;
+}
+.run-path { color: rgba(255,250,240,.55); font-family: var(--mono); }
+
+.nav {
+  top: 14px;
+  border-radius: 2px;
+  padding: 8px;
+  background: rgba(255, 254, 250, .86);
+  box-shadow: 0 16px 44px rgba(30, 32, 33, .10);
+}
+.nav a {
+  border-radius: 2px;
+  font-family: var(--sans);
+  font-size: .9rem;
+}
+.nav a:hover { background: var(--graphite); color: #fffaf0; }
+
+.template-intro {
+  border-radius: 2px;
+  box-shadow: none;
+  background: rgba(255,254,250,.68);
+}
+.template-legend span, .pill, .state-pill, .ref-chip, .risk-chip-row span {
+  border-radius: 2px;
+  font-family: var(--sans);
+}
+.panel {
+  border-radius: 2px;
+  background: var(--panel);
+  box-shadow: 0 18px 54px rgba(24, 28, 31, .09);
+}
+.section-note { font-size: 1.02rem; }
+.decision-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(300px, .78fr);
+  gap: 22px;
+}
+.statement, .risk-list, .bridge-card, .governance-grid article, .audit-grid div,
+.claim, .conflict-card, .indicator-card, .typed-map-card, .trigger-card {
+  border-radius: 2px;
+  background: rgba(255,255,252,.72);
+  box-shadow: none;
+}
+.statement strong {
+  font-size: clamp(2.1rem, 4.6vw, 4.8rem);
+  letter-spacing: 0;
+  color: #1b2428;
+}
+.accent-block { border-left: 5px solid var(--red); }
+.risk-board {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(300px, 1.1fr);
+  gap: 22px;
+}
+.boundary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.boundary-card {
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255,255,252,.7);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-family: var(--sans);
+}
+.boundary-card.bad { border-left: 4px solid var(--red); }
+.boundary-card.watch { border-left: 4px solid var(--amber); }
+.boundary-card.good { border-left: 4px solid var(--green); }
+.trigger-grid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.trigger-card h3 { font-size: 1rem; }
+
+.chain-grid { gap: 12px; }
+.chain-card {
+  grid-template-columns: 56px minmax(0,1fr);
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(255,255,252,.92), rgba(245,244,238,.72));
+}
+.chain-index {
+  border-radius: 2px;
+  background: var(--graphite);
+  font-family: var(--mono);
+}
+.weight-bar { border-radius: 0; height: 7px; }
+.weight-bar span {
+  border-radius: 0;
+  background: linear-gradient(90deg, var(--blue), var(--amber), var(--red));
+}
+.chain-meta { font-family: var(--sans); }
+.ref-chip {
+  border-color: rgba(34,86,111,.25);
+  background: rgba(34,86,111,.07);
+  color: #18445b;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.ref-chip:hover { background: #18445b; color: #fff; }
+
+.typed-map-grid {
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, .96fr) minmax(0, .96fr);
+}
+.conflict-head { font-family: var(--sans); }
+.conflict-card.bad { border-left: 5px solid var(--red); }
+.conflict-card.watch { border-left: 5px solid var(--amber); }
+.conflict-card.good { border-left: 5px solid var(--green); }
+.conflict-axis {
+  display: grid;
+  grid-template-columns: minmax(64px, auto) minmax(64px, 1fr) minmax(64px, auto);
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+  color: var(--muted);
+  font: 800 .72rem var(--sans);
+  text-transform: uppercase;
+}
+.conflict-axis i {
+  height: 2px;
+  background: linear-gradient(90deg, var(--blue), var(--red));
+}
+.path-line b { border-radius: 2px; font-family: var(--mono); }
+
+.layer-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0 22px;
+}
+.layer-summary-card {
+  border: 1px solid var(--line);
+  background: rgba(255,255,252,.68);
+  padding: 16px;
+  min-height: 220px;
+  cursor: pointer;
+}
+.layer-summary-card b {
+  display: block;
+  font: 900 1.5rem var(--mono);
+}
+.layer-summary-card > div span {
+  display: block;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: .78rem;
+}
+.layer-summary-card p {
+  max-height: 7.6em;
+  overflow: hidden;
+}
+.layer-summary-card footer {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.mini-risks span {
+  display: inline-flex;
+  margin: 2px;
+  color: var(--red);
+  font-size: .72rem;
+}
+.layer-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.layer-tab {
+  border-radius: 2px;
+  font-family: var(--sans);
+}
+.layer-tab.active {
+  background: var(--graphite);
+  transform: none;
+}
+.layer-hero {
+  border-radius: 2px;
+  background: linear-gradient(135deg, #2a3034, #465057);
+}
+.indicator-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.indicator-card {
+  position: relative;
+  overflow: hidden;
+}
+.indicator-card:before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--blue);
+  opacity: .45;
+}
+.metric-ref { font-family: var(--mono); }
+.position-ruler {
+  position: relative;
+  margin: 14px 0;
+  height: 34px;
+  border-bottom: 1px solid var(--line-strong);
+  background:
+    linear-gradient(90deg, rgba(23,102,70,.14), rgba(154,100,24,.16), rgba(156,51,43,.16));
+}
+.position-ruler > span {
+  position: absolute;
+  top: -4px;
+  width: 2px;
+  height: 42px;
+  background: var(--ink);
+}
+.position-ruler div {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 9px;
+  font: 800 .76rem var(--sans);
+}
+.data-quality-box, .reasoning {
+  border-radius: 2px;
+}
+.data-quality-box pre, .raw-json pre {
+  border-radius: 2px;
+  font-family: var(--mono);
+}
+
+.evidence-drawer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+}
+.evidence-drawer.open {
+  pointer-events: auto;
+}
+.drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(16,20,22,.28);
+  opacity: 0;
+  transition: opacity .22s ease;
+}
+.evidence-drawer.open .drawer-backdrop { opacity: 1; }
+.drawer-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: min(560px, calc(100vw - 24px));
+  height: 100%;
+  overflow: auto;
+  background: #fffefa;
+  border-left: 1px solid var(--line-strong);
+  box-shadow: -28px 0 70px rgba(16,20,22,.18);
+  padding: 26px;
+  transform: translateX(102%);
+  transition: transform .25s ease;
+}
+.evidence-drawer.open .drawer-panel { transform: translateX(0); }
+.drawer-close {
+  float: right;
+  border: 1px solid var(--line);
+  background: transparent;
+  padding: 8px 11px;
+  font: 800 .82rem var(--sans);
+  cursor: pointer;
+}
+.drawer-ref {
+  font-family: var(--mono);
+  color: var(--blue);
+  overflow-wrap: anywhere;
+}
+.drawer-section {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  margin-top: 16px;
+}
+.drawer-empty {
+  padding: 20px;
+  border: 1px dashed var(--line-strong);
+  color: var(--muted);
+}
+
+.template-brief .shell { width: min(1180px, calc(100% - 40px)); }
+.template-brief .hero,
+.template-brief .layer-hero {
+  background: linear-gradient(135deg, #20272b, #3d464b 54%, #62513d);
+}
+.template-brief .indicator-grid,
+.template-brief .governance-grid,
+.template-brief .bridge-columns {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 1050px) {
+  .hero-grid, .decision-layout, .risk-board, .typed-map-grid,
+  .template-brief .indicator-grid, .template-brief .governance-grid,
+  .template-brief .bridge-columns, .trigger-grid {
+    grid-template-columns: 1fr;
+  }
+  .layer-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hero-risks { grid-template-columns: 1fr; }
+  .hero-risks ul { grid-template-columns: 1fr; }
+}
+@media (max-width: 680px) {
+  .shell { width: min(100% - 24px, 1180px); padding-top: 12px; }
+  .hero, .panel { padding: 22px; }
+  h1 { font-size: clamp(2.3rem, 14vw, 4.2rem); }
+  .nav { overflow-x: auto; flex-wrap: nowrap; }
+  .nav a { white-space: nowrap; }
+  .layer-summary-grid, .boundary-grid, .layer-tabs, .indicator-grid {
+    grid-template-columns: 1fr;
+  }
+  .chain-card { grid-template-columns: 1fr; }
+  .drawer-panel {
+    top: auto;
+    bottom: 0;
+    width: 100%;
+    height: min(84vh, 760px);
+    border-left: 0;
+    border-top: 1px solid var(--line-strong);
+    transform: translateY(102%);
+  }
+  .evidence-drawer.open .drawer-panel { transform: translateY(0); }
+}
 """
 
     def _js(self) -> str:
         return """
 const tabs = document.querySelectorAll('.layer-tab');
 const panels = document.querySelectorAll('.layer-panel');
+const drawer = document.getElementById('evidence-drawer');
+const drawerContent = document.getElementById('drawer-content');
+const payloadNode = document.getElementById('vnext-data');
+const payload = payloadNode ? JSON.parse(payloadNode.textContent) : {};
+const indicatorIndex = new Map();
+Object.entries(payload.layers || {}).forEach(([layer, card]) => {
+  (card.indicator_analyses || []).forEach(item => {
+    const ref = `${layer}.${item.function_id}`;
+    indicatorIndex.set(ref, { layer, item });
+  });
+});
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll(\"'\", '&#039;');
+}
+
+function canonicalRef(ref) {
+  let text = String(ref || '').trim();
+  if (text.includes(':')) text = text.split(':')[0].trim();
+  if (!text.includes('.')) return text;
+  const [layer, rawFunction] = text.split('.', 2);
+  let functionId = rawFunction.trim();
+  if (/^L[1-5]$/.test(layer) && functionId && !functionId.startsWith('get_')) {
+    functionId = `get_${functionId}`;
+  }
+  return `${layer}.${functionId}`;
+}
+
+function positionRuler(reading) {
+  const text = String(reading || '');
+  const patterns = [
+    /(?:分位|百分位)\\s*(?:=|为|:)?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*%/,
+    /([0-9]+(?:\\.[0-9]+)?)\\s*%\\s*(?:分位|百分位)/,
+    /10y percentile\\s*[=:]?\\s*([0-9]+(?:\\.[0-9]+)?)\\s*%?/i,
+    /percentile\\s*[=:]?\\s*([0-9]+(?:\\.[0-9]+)?)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const value = Math.max(0, Math.min(100, Number(match[1])));
+      return `<div class="position-ruler"><span style="left:${value}%"></span><div><b>历史分位</b><strong>${value.toFixed(1)}%</strong></div></div>`;
+    }
+  }
+  return '';
+}
+
+function listItems(items) {
+  const values = Array.isArray(items) ? items : [];
+  return values.length ? values.map(item => `<li>${escapeHtml(item)}</li>`).join('') : '<li>无</li>';
+}
+
 function showLayer(layer) {
   tabs.forEach(tab => tab.classList.toggle('active', tab.dataset.layer === layer));
   panels.forEach(panel => panel.classList.toggle('active', panel.dataset.layerPanel === layer));
 }
+
+function openDrawer(ref, label) {
+  const canonical = canonicalRef(ref);
+  const entry = indicatorIndex.get(canonical);
+  if (!entry) {
+    drawerContent.innerHTML = `
+      <p class="drawer-ref">${escapeHtml(label || ref)}</p>
+      <div class="drawer-empty">这条证据没有命中指标卡。原始 ref：${escapeHtml(ref)}</div>
+    `;
+    drawer.classList.add('open');
+    drawer.setAttribute('aria-hidden', 'false');
+    return;
+  }
+  const { layer, item } = entry;
+  const targetId = `evidence-${canonical.replaceAll('.', '-').replaceAll('/', '-').replaceAll(' ', '-')}`;
+  const risks = (item.risk_flags || []).map(flag => `<span>${escapeHtml(flag)}</span>`).join('');
+  drawerContent.innerHTML = `
+    <p class="drawer-ref">${escapeHtml(canonical)}</p>
+    <h2>${escapeHtml(item.metric || item.function_id)}</h2>
+    <span class="state-pill">${escapeHtml(item.normalized_state || '')}</span>
+    <p class="reading">${escapeHtml(item.current_reading || '')}</p>
+    ${positionRuler(item.current_reading)}
+    <p>${escapeHtml(item.narrative || '')}</p>
+    <div class="drawer-section">
+      <h3>它回答什么问题</h3>
+      <p>${escapeHtml(item.canonical_question || '未提供')}</p>
+      <h3>它不能证明什么</h3>
+      <ul>${listItems(item.misread_guards)}</ul>
+    </div>
+    <div class="drawer-section">
+      <h3>推理过程</h3>
+      <p>${escapeHtml(item.reasoning_process || '')}</p>
+      <ol>${listItems(item.first_principles_chain)}</ol>
+    </div>
+    <div class="drawer-section">
+      <h3>反证条件</h3>
+      <ul>${listItems(item.falsifiers)}</ul>
+      <div class="risk-chip-row">${risks}</div>
+    </div>
+    <div class="drawer-section">
+      <button class="ref-chip" data-jump-target="${escapeHtml(targetId)}" data-layer-target="${escapeHtml(layer)}">跳到完整底稿</button>
+      <button class="ref-chip" data-copy-ref="${escapeHtml(canonical)}">复制 ref</button>
+    </div>
+  `;
+  drawer.classList.add('open');
+  drawer.setAttribute('aria-hidden', 'false');
+}
+
+function closeDrawer() {
+  drawer.classList.remove('open');
+  drawer.setAttribute('aria-hidden', 'true');
+}
+
 tabs.forEach(tab => tab.addEventListener('click', () => showLayer(tab.dataset.layer)));
+document.querySelectorAll('[data-layer-jump]').forEach(card => {
+  card.addEventListener('click', () => {
+    showLayer(card.dataset.layerJump);
+    document.querySelector('#layers .layer-tabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
 document.querySelectorAll('[data-ref]').forEach(button => {
   button.addEventListener('click', () => {
-    const ref = button.dataset.ref;
-    const layer = ref.split('.')[0];
+    openDrawer(button.dataset.ref, button.dataset.label || button.textContent);
+  });
+});
+document.querySelectorAll('[data-close-drawer]').forEach(node => node.addEventListener('click', closeDrawer));
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeDrawer();
+});
+drawerContent.addEventListener('click', event => {
+  const jump = event.target.closest('[data-jump-target]');
+  if (jump) {
+    const layer = jump.dataset.layerTarget;
     showLayer(layer);
-    const target = document.getElementById('evidence-' + ref.replaceAll('.', '-').replaceAll('/', '-').replaceAll(' ', '-'));
+    const target = document.getElementById(jump.dataset.jumpTarget);
+    closeDrawer();
     if (target) {
       target.classList.add('target');
       target.scrollIntoView({ behavior: 'smooth', block: 'center' });
       setTimeout(() => target.classList.remove('target'), 1800);
     }
-  });
+  }
+  const copy = event.target.closest('[data-copy-ref]');
+  if (copy && navigator.clipboard) {
+    navigator.clipboard.writeText(copy.dataset.copyRef);
+    copy.textContent = '已复制';
+    setTimeout(() => copy.textContent = '复制 ref', 1200);
+  }
 });
 """
 

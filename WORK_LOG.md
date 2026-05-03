@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-05-03
+
+### 完成输出体验第一轮结构改造，并记录用户验收反馈
+
+完成内容：
+
+- 为默认 `brief` 页面做了一轮原生输出体验改造：阅读顺序调整为判断、依据、风险、冲突、底稿、治理、审计。
+- 增加证据详情抽屉、风险边界区、五层摘要卡、历史分位尺和更清晰的证据 ref 归一化，目标是让用户能从结论追到指标、来源、反证和完整底稿。
+- 生成并覆盖默认 brief 页面：`output/reports/vnext_research_ui_brief_20260502.html`；未重新运行 DeepSeek，全程沿用已有 run `output/analysis/vnext/20260502_193057`。
+- 补充输出体验设计报告：`OUTPUT_EXPERIENCE_DESIGN_REPORT.md`。
+
+用户验收反馈：
+
+- 这版不是终版，距离理想效果仍有明显差距。
+- 当前审美方向不被接受，尤其主视觉配色不应继续作为默认方向。
+- 五层底稿区域的点击/展开/跳转动效有问题，用户感知为无法顺畅跳转或展开。
+- 后续只记录方向：审美美化待重新指明方向；交互、展开、跳转反馈和图表/数据打开体验待继续优化。
+
+验证结果：
+
+- `python3 -m py_compile src/agent_analysis/vnext_reporter.py`：通过。
+- `python3 src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20260502_193057 --template brief`：通过。
+- `python3 -m pytest tests/test_vnext_reporter.py -q`：1 passed。
+- `python3 -m pytest -q`：76 passed。
+- 静态 HTML 检查确认 section 顺序、证据抽屉、风险区和分位尺存在，证据 ref 无缺失匹配。
+
+---
+
 ## 2026-05-02
 
 ### 创建 P1 分支并落地 L5/数据源补强
