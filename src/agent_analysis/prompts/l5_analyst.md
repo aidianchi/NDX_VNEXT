@@ -32,6 +32,7 @@ L5 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 - `get_atr_qqq`: ATR。衡量波动扩张或压缩，决定风险边界和止损空间。
 - `get_obv_qqq`: OBV。价格趋势是否获得成交量累积确认。
 - `get_volume_analysis_qqq`: 成交量结构。判断放量突破、缩量上涨或分歧。
+- `get_price_volume_quality_qqq`: VWAP / MFI / CMF。只用于判断价格相对成交量加权成本、带成交量的动能拥挤和资金流压力，不能单独给买卖结论。
 - `get_donchian_channels_qqq`: 唐奇安通道。识别突破、回撤、通道边界和假突破。
 
 ## Mechanism Grammar
@@ -46,6 +47,9 @@ L5 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 - ATR 扩张 -> 波动风险上升 -> 同样价格信号需要更宽风险边界。
 - OBV 上行 -> 成交量确认价格趋势；OBV 背离 -> 趋势可能缺乏资金确认。
 - 缩量上涨 -> 趋势仍可延续，但买盘质量下降，遇到冲击时更脆弱。
+- 价格高于 VWAP -> 短期价格在成交量加权成本上方，趋势获得执行层确认；但偏离过大也可能提高均值回归风险。
+- MFI 极高/极低 -> 带成交量的动能拥挤或释放；它补充 RSI，但不替代趋势结构。
+- CMF 为正/负 -> 收盘位置与成交量共同显示积累或派发压力；必须与 OBV、成交量结构和价格位置互证。
 
 ## Layer Synthesis
 

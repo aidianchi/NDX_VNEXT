@@ -56,6 +56,16 @@ def test_indicator_canon_covers_all_packet_builder_functions():
     assert expected <= set(INDICATOR_CANONS)
 
 
+def test_price_volume_quality_canon_keeps_l5_boundary():
+    canon = get_indicator_canon("get_price_volume_quality_qqq")
+
+    assert canon.layer == "L5"
+    assert canon.permission_type == PermissionType.TECHNICAL
+    assert "成交量加权成本" in canon.canonical_question
+    assert any("不能单独给买卖结论" in item for item in canon.misread_guards)
+    assert "get_obv_qqq" in canon.cross_validation_targets
+
+
 def test_layer_canon_filters_to_current_layer_function_ids():
     layer_raw_data = {
         "get_10y_real_rate": {"metric_name": "10Y Real Rate", "value": {"level": 1.9}},

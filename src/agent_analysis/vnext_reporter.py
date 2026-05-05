@@ -7,7 +7,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:
     from ..config import path_config
@@ -44,28 +44,38 @@ TEMPLATE_DESCRIPTIONS = {
 }
 
 TEMPLATE_ORDER = {
-    "cockpit": ["decision", "evidence", "conflicts", "layers", "governance", "audit"],
-    "brief": ["decision", "evidence", "risks", "conflicts", "layers", "governance", "audit"],
-    "atlas": ["evidence", "conflicts", "decision", "layers", "governance", "audit"],
-    "workbench": ["layers", "conflicts", "evidence", "decision", "governance", "audit"],
+    "cockpit": ["decision", "evidence", "charts", "conflicts", "layers", "governance", "audit"],
+    "brief": ["decision", "evidence", "charts", "risks", "conflicts", "layers", "governance", "audit"],
+    "atlas": ["evidence", "charts", "conflicts", "decision", "layers", "governance", "audit"],
+    "workbench": ["layers", "charts", "conflicts", "evidence", "decision", "governance", "audit"],
 }
 
 # ---------------------------------------------------------------------------
-# Slate Editorial design tokens — locked with user 2026-05-03.
+# Style definitions — each maps to an external CSS file.
 # ---------------------------------------------------------------------------
-SLATE_TOKENS = {
-    "paper": "#F4F4F5",
-    "paper_raised": "#FFFFFF",
-    "ink": "#18181B",
-    "ink_soft": "#3F3F46",
-    "muted": "#71717A",
-    "rule": "#D4D4D8",
-    "rule_strong": "#A1A1AA",
-    "accent": "#C2410C",
-    "severity_low": "#15803D",
-    "severity_watch": "#B45309",
-    "severity_high": "#B91C1C",
+STYLE_FONTS = {
+    "slate_v2": (
+        'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700'
+        '&family=Source+Serif+Pro:ital,wght@0,400;0,600;0,700;1,400'
+        '&family=JetBrains+Mono:wght@400;500;600&display=swap'
+    ),
+    "warm_paper": (
+        'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700'
+        '&family=Merriweather:ital,wght@0,400;0,700;1,400'
+        '&family=JetBrains+Mono:wght@400;500;600&display=swap'
+    ),
+    "swiss": (
+        'https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@400;500;600;700;800'
+        '&family=IBM+Plex+Mono:wght@400;500;600&display=swap'
+    ),
+    "terminal": (
+        'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700'
+        '&family=JetBrains+Mono:wght@400;500;600'
+        '&family=Fira+Code:wght@400;500&display=swap'
+    ),
 }
+
+STYLES_DIR = Path(__file__).resolve().parent / "report_styles"
 
 LABELS: Dict[str, Dict[str, str]] = {
     "approval": {
@@ -185,6 +195,69 @@ def _position_ruler(value: Optional[float]) -> str:
 """
 
 
+def _safe_number(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace(",", "")
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def _fmt_number(value: Any, *, suffix: str = "", digits: int = 2, fallback: str = "N/A") -> str:
+    number = _safe_number(value)
+    if number is None:
+        return fallback
+    return f"{number:.{digits}f}{suffix}"
+
+
+def _json_for_script(payload: Any) -> str:
+    return json.dumps(payload, ensure_ascii=False, indent=2).replace("</", "<\\/")
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _normalize_percent(value: Any) -> Optional[float]:
+    number = _safe_number(value)
+    if number is None:
+        return None
+    if abs(number) <= 1:
+        number *= 100
+    return _clamp(number, 0, 100)
+
+
+def _polyline_path(points: List[Dict[str, Any]], field: str, *, width: int, height: int, pad: int) -> str:
+    values = [_safe_number(point.get(field)) for point in points]
+    numeric = [value for value in values if value is not None]
+    if len(numeric) < 2:
+        return ""
+    low = min(numeric)
+    high = max(numeric)
+    if abs(high - low) < 0.0001:
+        high = low + 1
+    usable_w = width - pad * 2
+    usable_h = height - pad * 2
+    segments = []
+    denominator = max(1, len(points) - 1)
+    for index, value in enumerate(values):
+        if value is None:
+            continue
+        x = pad + usable_w * index / denominator
+        y = pad + usable_h * (1 - ((value - low) / (high - low)))
+        segments.append(("M" if not segments else "L") + f"{x:.1f},{y:.1f}")
+    return " ".join(segments)
+
+
 def _confidence_class(value: Any) -> str:
     text = str(value or "").lower()
     if "high" in text:
@@ -207,1301 +280,8 @@ def _as_list(value: Any) -> List[Any]:
     return value if isinstance(value, list) else []
 
 
-# ---------------------------------------------------------------------------
-# CSS template
-# ---------------------------------------------------------------------------
-_CSS_ROOT = "\n".join(f"  --{k.replace('_', '-')}: {v};" for k, v in SLATE_TOKENS.items())
-
-CSS_TEMPLATE = f""":root {{
-{_CSS_ROOT}
-  --shadow-drawer: 0 4px 12px rgba(24, 24, 27, .08);
-  --serif: "Source Serif Pro", "Source Serif 4", "Songti SC", "Noto Serif SC", Charter, Georgia, serif;
-  --sans: "Inter", "IBM Plex Sans", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  --mono: "JetBrains Mono", "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
-  --z-nav: 10;
-  --z-drawer: 100;
-  --radius: 6px;
-  --radius-chip: 2px;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-  --space-7: 48px;
-}}
-
-* {{ box-sizing: border-box; }}
-html {{ scroll-behavior: smooth; }}
-
-body {{
-  margin: 0;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--serif);
-  font-size: 16px;
-  line-height: 1.65;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}}
-
-.skip-link {{
-  position: absolute;
-  top: -100px;
-  left: 0;
-  background: var(--ink);
-  color: var(--paper-raised);
-  padding: var(--space-2) var(--space-4);
-  text-decoration: none;
-  font-family: var(--sans);
-  font-size: 14px;
-  z-index: 1000;
-}}
-.skip-link:focus {{ top: 0; }}
-
-.sr-only {{
-  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
-}}
-
-*:focus-visible {{
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}}
-
-.shell {{
-  width: min(1080px, calc(100% - 32px));
-  margin: 0 auto;
-  padding: 24px 0 96px;
-}}
-
-.hero {{
-  padding: 56px 0 32px;
-  border-top: 2px solid var(--ink);
-  border-bottom: 1px solid var(--rule);
-  margin-bottom: 0;
-}}
-.hero .eyebrow {{
-  font-family: var(--sans);
-  font-size: 12px;
-  letter-spacing: 0.16em;
-  color: var(--accent);
-  text-transform: uppercase;
-  font-weight: 600;
-  margin-bottom: 24px;
-}}
-.hero-grid {{
-  display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 360px);
-  gap: 40px;
-  align-items: start;
-}}
-@media (max-width: 720px) {{
-  .hero-grid {{ grid-template-columns: 1fr; }}
-}}
-.hero h1 {{
-  font-family: var(--serif);
-  font-size: clamp(28px, 4.4vw, 44px);
-  line-height: 1.1;
-  margin: 0 0 20px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--ink);
-}}
-.hero-note {{
-  color: var(--ink-soft);
-  font-size: 16px;
-  line-height: 1.7;
-  max-width: 560px;
-  margin: 0 0 24px;
-}}
-.verdict-card {{
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 16px 20px;
-}}
-.verdict-row {{
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--rule);
-  font-family: var(--sans);
-  font-size: 13px;
-}}
-.verdict-row:last-child {{ border-bottom: 0; }}
-.verdict-row span {{ color: var(--muted); }}
-.verdict-row strong {{
-  color: var(--ink);
-  font-weight: 600;
-  text-align: right;
-}}
-.verdict-row strong.mono {{ font-family: var(--mono); font-size: 13px; }}
-.hero-risks {{
-  margin-top: 28px;
-  padding-top: 20px;
-  border-top: 1px solid var(--rule);
-}}
-.hero-risks > span {{
-  display: block;
-  font-family: var(--sans);
-  font-size: 12px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--accent);
-  font-weight: 600;
-  margin-bottom: 12px;
-}}
-.hero-risks ul {{
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}}
-@media (max-width: 720px) {{
-  .hero-risks ul {{ grid-template-columns: 1fr; }}
-}}
-.hero-risks li {{
-  font-size: 14px;
-  line-height: 1.55;
-  padding: 8px 12px;
-  border-left: 3px solid var(--severity-high);
-  background: var(--paper-raised);
-  color: var(--ink);
-}}
-.run-path {{
-  margin-top: 24px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--muted);
-  word-break: break-all;
-}}
-
-.nav {{
-  position: sticky;
-  top: 12px;
-  z-index: var(--z-nav);
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  margin: 16px 0;
-  padding: 6px;
-  border: 1px solid var(--rule);
-  background: rgba(244, 244, 245, 0.92);
-  backdrop-filter: blur(8px);
-  border-radius: var(--radius);
-}}
-.nav a {{
-  color: var(--ink);
-  text-decoration: none;
-  padding: 6px 12px;
-  border-radius: var(--radius-chip);
-  font-family: var(--sans);
-  font-size: 13px;
-  font-weight: 500;
-}}
-.nav a:hover {{
-  background: var(--ink);
-  color: var(--paper-raised);
-}}
-
-.template-intro {{
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, .7fr);
-  gap: 16px;
-  align-items: center;
-  margin: 16px 0;
-  padding: 14px 18px;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  background: var(--paper-raised);
-}}
-.template-intro b {{
-  font-family: var(--sans);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink);
-}}
-.template-intro p {{
-  margin: 4px 0 0;
-  color: var(--ink-soft);
-  font-size: 13px;
-}}
-.template-legend {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
-}}
-.template-legend span {{
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-chip);
-  padding: 3px 8px;
-  font-family: var(--sans);
-  font-size: 11px;
-  color: var(--muted);
-}}
-
-.panel {{
-  margin: 28px 0;
-  padding: 28px 0 24px;
-  border-top: 1px solid var(--rule);
-}}
-.panel:first-of-type {{ border-top: 0; padding-top: 8px; }}
-.section-kicker {{
-  font-family: var(--sans);
-  font-size: 11px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  font-weight: 600;
-  color: var(--accent);
-  margin-bottom: 8px;
-}}
-.panel h2 {{
-  font-family: var(--serif);
-  font-size: clamp(22px, 2.8vw, 30px);
-  line-height: 1.2;
-  font-weight: 600;
-  letter-spacing: -0.005em;
-  color: var(--ink);
-  margin: 0 0 12px;
-}}
-.panel h3 {{
-  font-family: var(--serif);
-  font-size: 17px;
-  line-height: 1.35;
-  margin: 0 0 6px;
-  font-weight: 600;
-}}
-.panel h4 {{
-  font-family: var(--sans);
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  font-weight: 600;
-  color: var(--muted);
-  margin: 0 0 8px;
-}}
-.section-note {{
-  color: var(--ink-soft);
-  font-size: 15px;
-  line-height: 1.65;
-  max-width: 720px;
-  margin: 0 0 18px;
-}}
-
-.decision-layout {{
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, .7fr);
-  gap: 24px;
-  align-items: start;
-}}
-@media (max-width: 720px) {{
-  .decision-layout {{ grid-template-columns: 1fr; }}
-}}
-.statement {{
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 24px;
-}}
-.statement > span {{
-  font-family: var(--sans);
-  font-size: 11px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--muted);
-  font-weight: 600;
-}}
-.statement strong {{
-  display: block;
-  font-family: var(--serif);
-  font-size: clamp(28px, 3.4vw, 38px);
-  line-height: 1.15;
-  font-weight: 600;
-  margin: 8px 0 12px;
-  color: var(--ink);
-}}
-.statement p {{
-  font-size: 15px;
-  line-height: 1.7;
-  color: var(--ink-soft);
-  margin: 0 0 12px;
-}}
-.risk-list {{
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-left: 4px solid var(--severity-high);
-  border-radius: var(--radius);
-  padding: 20px 22px;
-}}
-.risk-list h3 {{
-  font-family: var(--sans);
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  font-weight: 700;
-  color: var(--severity-high);
-  margin: 0 0 12px;
-}}
-.risk-list ul, .governance-grid ul {{
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}}
-.risk-list li, .governance-grid li {{
-  font-size: 14px;
-  line-height: 1.55;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--rule);
-}}
-.risk-list li:last-child, .governance-grid li:last-child {{ border-bottom: 0; }}
-
-.ref-row {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-}}
-.ref-chip {{
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: 1px solid var(--rule-strong);
-  background: var(--paper-raised);
-  color: var(--ink);
-  border-radius: var(--radius-chip);
-  padding: 3px 8px;
-  font-family: var(--mono);
-  font-size: 12px;
-  cursor: pointer;
-  font-weight: 500;
-  transition: background 120ms ease, color 120ms ease;
-}}
-.ref-chip:hover {{
-  background: var(--ink);
-  color: var(--paper-raised);
-  border-color: var(--ink);
-}}
-.ref-chip.muted {{
-  border-color: var(--rule);
-  color: var(--muted);
-  cursor: default;
-  background: transparent;
-}}
-.ref-chip.muted:hover {{
-  background: transparent;
-  color: var(--muted);
-  border-color: var(--rule);
-}}
-
-.chain-grid {{ display: grid; gap: 14px; }}
-.chain-card {{
-  display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
-  gap: 18px;
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 18px 20px;
-}}
-@media (max-width: 720px) {{
-  .chain-card {{ grid-template-columns: 1fr; }}
-}}
-.chain-index {{
-  display: grid;
-  place-items: center;
-  background: var(--ink);
-  color: var(--paper-raised);
-  font-family: var(--mono);
-  font-size: 18px;
-  font-weight: 600;
-  border-radius: var(--radius);
-  height: 56px;
-  width: 56px;
-}}
-.weight-bar {{
-  height: 4px;
-  background: var(--rule);
-  border-radius: 0;
-  overflow: hidden;
-  margin: 12px 0 4px;
-}}
-.weight-bar span {{
-  display: block;
-  height: 100%;
-  background: var(--accent);
-}}
-.chain-meta {{
-  font-family: var(--sans);
-  color: var(--muted);
-  font-size: 12px;
-  letter-spacing: 0.04em;
-}}
-
-.pill, .state-pill {{
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: var(--radius-chip);
-  border: 1px solid var(--rule-strong);
-  padding: 2px 8px;
-  font-family: var(--sans);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--ink-soft);
-  background: var(--paper-raised);
-}}
-.pill.good {{ color: var(--severity-low); border-color: var(--severity-low); }}
-.pill.bad {{ color: var(--severity-high); border-color: var(--severity-high); }}
-.pill.watch {{ color: var(--severity-watch); border-color: var(--severity-watch); }}
-.state-pill {{
-  font-family: var(--mono);
-  font-size: 11px;
-}}
-.pill::before, .state-pill::before {{
-  content: "";
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  flex-shrink: 0;
-}}
-
-.risk-board {{
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 1.1fr);
-  gap: 24px;
-  margin-bottom: 18px;
-}}
-@media (max-width: 720px) {{
-  .risk-board {{ grid-template-columns: 1fr; }}
-}}
-.boundary-grid {{
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}}
-.boundary-card {{
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--rule);
-  background: var(--paper-raised);
-  border-radius: var(--radius);
-  font-family: var(--sans);
-  font-size: 13px;
-}}
-.boundary-card span {{ color: var(--muted); }}
-.boundary-card b {{
-  color: var(--ink);
-  font-weight: 600;
-  font-family: var(--mono);
-  font-size: 12px;
-}}
-.boundary-card.bad {{ border-left: 4px solid var(--severity-high); }}
-.boundary-card.watch {{ border-left: 4px solid var(--severity-watch); }}
-.boundary-card.good {{ border-left: 4px solid var(--severity-low); }}
-.trigger-grid {{
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-}}
-@media (max-width: 720px) {{
-  .trigger-grid {{ grid-template-columns: 1fr; }}
-}}
-.trigger-card {{
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 16px 18px;
-}}
-.trigger-card h3 {{
-  font-family: var(--serif);
-  font-size: 15px;
-  line-height: 1.35;
-  margin: 0 0 6px;
-  font-weight: 600;
-}}
-.trigger-card p {{
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--ink-soft);
-  margin: 0 0 8px;
-}}
-
-.bridge-card {{
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 22px;
-  margin-bottom: 18px;
-}}
-.bridge-card > p {{
-  font-size: 14px;
-  line-height: 1.7;
-  color: var(--ink-soft);
-}}
-.typed-map-grid {{
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin: 18px 0;
-}}
-@media (max-width: 720px) {{
-  .typed-map-grid {{ grid-template-columns: 1fr; }}
-}}
-.typed-map-grid section {{ min-width: 0; }}
-.bridge-columns {{
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-  margin-top: 18px;
-}}
-@media (max-width: 720px) {{
-  .bridge-columns {{ grid-template-columns: 1fr; }}
-}}
-.claim, .conflict-card, .typed-map-card {{
-  background: var(--paper);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  margin-bottom: 10px;
-  font-size: 13px;
-  line-height: 1.6;
-}}
-.claim p, .conflict-card p, .typed-map-card p {{
-  margin: 6px 0;
-  color: var(--ink-soft);
-  overflow-wrap: anywhere;
-}}
-.claim strong, .conflict-card strong, .typed-map-card strong {{
-  font-family: var(--serif);
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ink);
-}}
-.conflict-card.bad {{ border-left: 4px solid var(--severity-high); }}
-.conflict-card.watch {{ border-left: 4px solid var(--severity-watch); }}
-.conflict-card.good {{ border-left: 4px solid var(--severity-low); }}
-.conflict-head {{
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  font-family: var(--sans);
-  font-weight: 600;
-  font-size: 12px;
-}}
-.conflict-head span {{ overflow-wrap: anywhere; color: var(--ink); }}
-.conflict-head b {{
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--muted);
-}}
-.typed-map-card small {{
-  display: block;
-  margin-top: 4px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
-  overflow-wrap: anywhere;
-}}
-.conflict-axis {{
-  display: grid;
-  grid-template-columns: minmax(64px, auto) minmax(64px, 1fr) minmax(64px, auto);
-  align-items: center;
-  gap: 10px;
-  margin: 10px 0;
-  color: var(--muted);
-  font: 600 11px var(--sans);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}}
-.conflict-axis i {{
-  height: 1px;
-  background: linear-gradient(90deg, var(--rule-strong), var(--accent), var(--severity-high));
-}}
-.path-line {{
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 0;
-  color: var(--muted);
-  font-family: var(--sans);
-  font-size: 12px;
-}}
-.path-line b {{
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-chip);
-  padding: 3px 8px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--ink);
-  font-weight: 500;
-}}
-details summary {{
-  cursor: pointer;
-  font-family: var(--sans);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-soft);
-  margin-top: 8px;
-}}
-details[open] summary {{ color: var(--ink); }}
-details ul {{ font-size: 13px; padding-left: 18px; margin: 6px 0; }}
-
-.layer-summary-grid {{
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
-  margin: 16px 0 28px;
-}}
-@media (max-width: 980px) {{
-  .layer-summary-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
-}}
-@media (max-width: 720px) {{
-  .layer-summary-grid {{ grid-template-columns: 1fr; }}
-}}
-.layer-summary-tile {{
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  cursor: pointer;
-  text-align: left;
-  font: inherit;
-  color: inherit;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  transition: border-color 120ms ease;
-}}
-.layer-summary-tile:hover {{ border-color: var(--rule-strong); }}
-.layer-summary-tile > div b {{
-  display: block;
-  font-family: var(--mono);
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--ink);
-}}
-.layer-summary-tile > div span {{
-  display: block;
-  font-family: var(--sans);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-}}
-.layer-summary-tile p {{
-  flex-grow: 1;
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--ink-soft);
-  margin: 0;
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}}
-.layer-summary-tile footer {{
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}}
-.mini-risks {{
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}}
-.mini-risks span {{
-  display: inline-flex;
-  align-items: center;
-  font-family: var(--sans);
-  font-size: 10px;
-  color: var(--severity-high);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-chip);
-  padding: 1px 5px;
-}}
-
-.layer-stack {{
-  display: flex;
-  flex-direction: column;
-}}
-.layer-card {{
-  border-top: 1px solid var(--rule);
-  scroll-margin-top: 80px;
-}}
-.layer-card:last-child {{ border-bottom: 1px solid var(--rule); }}
-.layer-card__head {{
-  width: 100%;
-  display: grid;
-  grid-template-columns: auto 1fr auto auto auto;
-  gap: 16px;
-  align-items: baseline;
-  padding: 18px 4px;
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  text-align: left;
-  font: inherit;
-  color: inherit;
-}}
-.layer-card__head:hover {{ background: rgba(228, 228, 231, 0.3); }}
-.layer-card__head .layer-no {{
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--ink);
-  letter-spacing: 0.06em;
-}}
-.layer-card__head .layer-title {{
-  font-family: var(--serif);
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--ink);
-}}
-.layer-card__head .layer-summary {{
-  font-family: var(--serif);
-  font-size: 14px;
-  color: var(--ink-soft);
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}}
-.layer-card__head .chevron {{
-  transition: transform 200ms ease;
-  color: var(--muted);
-}}
-.layer-card__head[aria-expanded="true"] .chevron {{
-  transform: rotate(90deg);
-  color: var(--ink);
-}}
-.layer-card__head[aria-expanded="true"] {{
-  background: rgba(228, 228, 231, 0.4);
-}}
-.layer-card__body {{
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 240ms ease;
-}}
-.layer-card__head[aria-expanded="true"] + .layer-card__body {{
-  grid-template-rows: 1fr;
-}}
-.layer-card__body > div {{ overflow: hidden; }}
-.layer-card__body-inner {{
-  padding: 8px 4px 28px;
-}}
-
-@media (max-width: 720px) {{
-  .layer-card__head {{
-    grid-template-columns: auto 1fr auto;
-    gap: 10px;
-  }}
-  .layer-card__head .layer-summary,
-  .layer-card__head .mini-risks {{ display: none; }}
-}}
-
-.layer-grid {{
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-  margin: 18px 0;
-}}
-@media (max-width: 720px) {{
-  .layer-grid {{ grid-template-columns: 1fr; }}
-}}
-.layer-grid section h4 {{ color: var(--accent); }}
-.layer-grid section p {{
-  font-size: 14px;
-  line-height: 1.7;
-  color: var(--ink-soft);
-  margin: 0;
-}}
-
-.risk-chip-row {{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 12px 0;
-}}
-.risk-chip-row span {{
-  font-family: var(--sans);
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--severity-high);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-chip);
-  padding: 2px 8px;
-  background: var(--paper-raised);
-}}
-
-.hook-box {{
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 12px 16px;
-  margin: 14px 0;
-}}
-.hook-box ul {{ list-style: none; padding: 0; margin: 8px 0 0; }}
-.hook-box li {{
-  font-size: 13px;
-  line-height: 1.6;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--rule);
-}}
-.hook-box li:last-child {{ border-bottom: 0; }}
-.hook-box li b {{
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--accent);
-  margin-right: 6px;
-}}
-
-.indicator-grid {{
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  margin-top: 18px;
-}}
-@media (max-width: 720px) {{
-  .indicator-grid {{ grid-template-columns: 1fr; }}
-}}
-.indicator-card {{
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 16px 18px;
-  position: relative;
-}}
-.indicator-card.target {{
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  animation: targetPulse 1400ms ease;
-}}
-@keyframes targetPulse {{
-  0% {{ box-shadow: 0 0 0 0 rgba(194, 65, 12, 0.4); }}
-  100% {{ box-shadow: 0 0 0 12px rgba(194, 65, 12, 0); }}
-}}
-.indicator-top {{
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-  margin-bottom: 8px;
-}}
-.indicator-top h4 {{
-  font-family: var(--serif);
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--ink);
-  text-transform: none;
-  letter-spacing: 0;
-  margin: 4px 0 0;
-}}
-.metric-ref {{
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--accent);
-}}
-.reading {{
-  font-family: var(--mono);
-  font-size: 13px;
-  color: var(--ink-soft);
-  margin: 4px 0 8px;
-}}
-.indicator-card > p {{
-  font-size: 14px;
-  line-height: 1.65;
-  color: var(--ink-soft);
-  margin: 8px 0;
-}}
-.position-ruler {{
-  position: relative;
-  margin: 14px 0;
-  height: 32px;
-  border-bottom: 1px solid var(--rule-strong);
-}}
-.position-ruler:before {{
-  content: "";
-  position: absolute;
-  left: 0; right: 0; top: 14px;
-  height: 4px;
-  background: linear-gradient(90deg, var(--severity-low), var(--severity-watch) 50%, var(--severity-high));
-  opacity: 0.7;
-}}
-.position-ruler > span {{
-  position: absolute;
-  top: 8px;
-  width: 2px;
-  height: 16px;
-  background: var(--ink);
-  transform: translateX(-50%);
-}}
-.position-ruler div {{
-  display: flex;
-  justify-content: space-between;
-  padding: 0 0 6px;
-  font-family: var(--sans);
-  font-size: 11px;
-  color: var(--muted);
-}}
-.position-ruler div strong {{
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--ink);
-  font-weight: 600;
-}}
-
-.data-quality-box {{
-  margin: 14px 0;
-  padding: 14px;
-  border: 1px solid var(--rule);
-  background: var(--paper);
-  border-radius: var(--radius);
-}}
-.data-quality-box h5 {{
-  font-family: var(--sans);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 700;
-  color: var(--accent);
-  margin: 6px 0 4px;
-}}
-.data-quality-box p {{
-  font-size: 13px;
-  line-height: 1.55;
-  margin: 0 0 6px;
-  color: var(--ink-soft);
-  font-family: var(--mono);
-  word-break: break-all;
-}}
-.data-quality-box pre {{
-  max-height: 160px;
-  overflow: auto;
-  margin: 4px 0 8px;
-  padding: 8px 10px;
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-chip);
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--ink);
-}}
-.valuation-source-list {{
-  list-style: none;
-  padding: 0;
-  margin: 8px 0 0;
-}}
-.valuation-source-list li {{
-  font-family: var(--mono);
-  font-size: 11px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--rule);
-  color: var(--ink);
-}}
-.valuation-source-list li:last-child {{ border-bottom: 0; }}
-.valuation-source-list li b {{
-  font-family: var(--sans);
-  font-weight: 600;
-  color: var(--ink);
-  margin-right: 6px;
-}}
-.valuation-source-list li span {{
-  font-family: var(--sans);
-  font-size: 10px;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin-right: 6px;
-}}
-.valuation-source-list li small {{
-  display: block;
-  color: var(--muted);
-  margin-top: 2px;
-}}
-
-.canon-box {{
-  margin: 12px 0;
-  padding: 14px;
-  background: var(--paper);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-}}
-.canon-box h5 {{
-  font-family: var(--sans);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 700;
-  color: var(--accent);
-  margin: 8px 0 2px;
-}}
-.canon-box p {{
-  font-size: 13px;
-  line-height: 1.6;
-  margin: 0 0 4px;
-  color: var(--ink-soft);
-}}
-.canon-box ul {{
-  list-style: disc;
-  padding-left: 18px;
-  margin: 4px 0 4px;
-  font-size: 13px;
-  line-height: 1.55;
-}}
-.canon-box li {{ margin: 2px 0; color: var(--ink-soft); }}
-.reasoning {{
-  margin: 10px 0;
-  padding: 10px 12px;
-  background: var(--paper);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-chip);
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  color: var(--ink);
-}}
-
-.governance-grid {{
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-}}
-@media (max-width: 720px) {{
-  .governance-grid {{ grid-template-columns: 1fr; }}
-}}
-.governance-grid article {{
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 18px 20px;
-}}
-.governance-grid article p {{
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--ink-soft);
-  margin: 4px 0 8px;
-}}
-.schema-status {{
-  display: inline-flex;
-  align-items: center;
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: var(--radius-chip);
-  border: 1px solid var(--rule-strong);
-}}
-.schema-status.good {{ color: var(--severity-low); border-color: var(--severity-low); }}
-.schema-status.bad {{ color: var(--severity-high); border-color: var(--severity-high); }}
-
-.audit-grid {{
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  margin-bottom: 16px;
-}}
-@media (max-width: 720px) {{
-  .audit-grid {{ grid-template-columns: 1fr; }}
-}}
-.audit-grid > div {{
-  background: var(--paper-raised);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 16px 18px;
-}}
-.audit-grid b {{
-  font-family: var(--sans);
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--accent);
-  font-weight: 600;
-  display: block;
-  margin-bottom: 4px;
-}}
-.audit-grid p {{
-  font-family: var(--mono);
-  font-size: 11px;
-  word-break: break-all;
-  color: var(--ink-soft);
-  margin: 0;
-}}
-.raw-json {{
-  margin-top: 16px;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  background: var(--paper-raised);
-  padding: 12px 16px;
-}}
-.raw-json summary {{
-  font-family: var(--sans);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink);
-  cursor: pointer;
-}}
-.raw-json pre {{
-  max-height: 480px;
-  overflow: auto;
-  margin: 12px 0 0;
-  padding: 12px;
-  background: #18181B;
-  color: #E4E4E7;
-  border-radius: var(--radius);
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: 1.5;
-}}
-
-.evidence-drawer {{
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: var(--z-drawer);
-}}
-.evidence-drawer.open {{ pointer-events: auto; }}
-.drawer-backdrop {{
-  position: absolute;
-  inset: 0;
-  background: rgba(24, 24, 27, 0.32);
-  opacity: 0;
-  transition: opacity 200ms ease;
-}}
-.evidence-drawer.open .drawer-backdrop {{ opacity: 1; }}
-.drawer-panel {{
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: min(540px, calc(100vw - 24px));
-  height: 100%;
-  overflow: auto;
-  background: var(--paper-raised);
-  border-left: 1px solid var(--rule);
-  box-shadow: var(--shadow-drawer);
-  padding: 24px 28px;
-  transform: translateX(102%);
-  transition: transform 240ms ease;
-}}
-.evidence-drawer.open .drawer-panel {{ transform: translateX(0); }}
-.drawer-close {{
-  float: right;
-  border: 1px solid var(--rule);
-  background: var(--paper-raised);
-  padding: 6px 12px;
-  font-family: var(--sans);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  border-radius: var(--radius-chip);
-  color: var(--ink);
-}}
-.drawer-close:hover {{
-  background: var(--ink);
-  color: var(--paper-raised);
-}}
-.drawer-ref {{
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--accent);
-  word-break: break-all;
-  margin: 12px 0 4px;
-}}
-.drawer-panel h2 {{
-  font-family: var(--serif);
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--ink);
-  margin: 4px 0 12px;
-}}
-.drawer-panel .reading {{ margin: 4px 0 8px; }}
-.drawer-section {{
-  border-top: 1px solid var(--rule);
-  padding-top: 14px;
-  margin-top: 16px;
-}}
-.drawer-section h3 {{
-  font-family: var(--sans);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 700;
-  color: var(--accent);
-  margin: 0 0 8px;
-}}
-.drawer-section p, .drawer-section ul, .drawer-section ol {{
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--ink-soft);
-  margin: 0 0 8px;
-  padding-left: 0;
-}}
-.drawer-section ul, .drawer-section ol {{ padding-left: 18px; }}
-.drawer-empty {{
-  padding: 18px;
-  border: 1px dashed var(--rule-strong);
-  border-radius: var(--radius);
-  color: var(--muted);
-  font-size: 13px;
-}}
-
-@media (max-width: 720px) {{
-  .drawer-panel {{
-    top: auto;
-    bottom: 0;
-    width: 100%;
-    height: min(80vh, 720px);
-    border-left: 0;
-    border-top: 1px solid var(--rule);
-    transform: translateY(102%);
-  }}
-  .evidence-drawer.open .drawer-panel {{ transform: translateY(0); }}
-}}
-
-@media (prefers-reduced-motion: reduce) {{
-  *, *::before, *::after {{
-    transition: none !important;
-    animation: none !important;
-  }}
-  .layer-card__body {{ grid-template-rows: 1fr !important; }}
-  .layer-card__head[aria-expanded="false"] + .layer-card__body {{ display: none !important; }}
-  .layer-card__head[aria-expanded="true"] + .layer-card__body {{ display: block !important; }}
-}}
-
-.template-atlas .chain-grid,
-.template-atlas .indicator-grid {{
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}}
-.template-workbench .indicator-grid {{
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}}
-@media (max-width: 720px) {{
-  .template-atlas .chain-grid,
-  .template-atlas .indicator-grid {{
-    grid-template-columns: 1fr;
-  }}
-  .template-workbench .indicator-grid {{
-    grid-template-columns: 1fr;
-  }}
-}}
-"""
+# CSS styles are loaded from external files in report_styles/ directory.
+# See: slate_v2.css, warm_paper.css, swiss.css, terminal.css
 
 
 # ---------------------------------------------------------------------------
@@ -1727,24 +507,32 @@ class VNextReportGenerator:
         output_path: Optional[str | Path] = None,
         *,
         template: str = "brief",
+        style: str = "slate_v2",
     ) -> str:
         run_path = Path(run_dir)
         artifacts = self._load_artifacts(run_path)
         template = self._normalize_template(template)
-        html_text = self._render(run_path, artifacts, template)
-        destination = Path(output_path) if output_path else self._default_output_path(run_path, artifacts, template)
+        style = self._normalize_style(style)
+        html_text = self._render(run_path, artifacts, template, style)
+        destination = Path(output_path) if output_path else self._default_output_path(run_path, artifacts, template, style)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(html_text, encoding="utf-8")
         return str(destination)
 
-    def _default_output_path(self, run_path: Path, artifacts: Dict[str, Any], template: str) -> Path:
+    def _default_output_path(self, run_path: Path, artifacts: Dict[str, Any], template: str, style: str) -> Path:
         data_date = (
             artifacts.get("synthesis_packet", {})
             .get("packet_meta", {})
             .get("data_date")
         )
         stamp = str(data_date or run_path.name or datetime.now().strftime("%Y%m%d_%H%M%S")).replace("-", "")
-        return self.reports_dir / f"vnext_research_ui_{template}_{stamp}.html"
+        style_suffix = f"_{style}" if style != "slate_v2" else ""
+        return self.reports_dir / f"vnext_research_ui_{template}_{stamp}{style_suffix}.html"
+
+    def _normalize_style(self, style: str) -> str:
+        style = str(style or "slate_v2").strip().lower()
+        valid = set(STYLE_FONTS.keys())
+        return style if style in valid else "slate_v2"
 
     def _normalize_template(self, template: str) -> str:
         template = str(template or "brief").strip().lower()
@@ -1779,28 +567,26 @@ class VNextReportGenerator:
             "run_summary": _load_json(run_path / "run_summary.json", {}),
         }
 
-    def _render(self, run_path: Path, artifacts: Dict[str, Any], template: str) -> str:
+    def _render(self, run_path: Path, artifacts: Dict[str, Any], template: str, style: str) -> str:
         self._enrich_indicator_data_quality(artifacts)
         final = artifacts["final_adjudication"]
         synthesis = artifacts["synthesis_packet"]
         meta = synthesis.get("packet_meta", {})
         template_name = TEMPLATE_DESCRIPTIONS[template]["name"]
         title = f"vNext {template_name} · {final.get('final_stance', 'N/A')}"
-        payload_json = json.dumps(
-            {
-                "run_dir": str(run_path),
-                "final_adjudication": final,
-                "analysis_packet": artifacts["analysis_packet"],
-                "synthesis_packet": synthesis,
-                "layers": artifacts["layers"],
-                "bridges": artifacts["bridges"],
-                "risk_boundary_report": artifacts["risk_boundary_report"],
-                "critique": artifacts["critique"],
-                "schema_guard_report": artifacts["schema_guard_report"],
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+        payload = {
+            "run_dir": str(run_path),
+            "final_adjudication": final,
+            "analysis_packet": artifacts["analysis_packet"],
+            "synthesis_packet": synthesis,
+            "layers": artifacts["layers"],
+            "bridges": artifacts["bridges"],
+            "risk_boundary_report": artifacts["risk_boundary_report"],
+            "critique": artifacts["critique"],
+            "schema_guard_report": artifacts["schema_guard_report"],
+        }
+        payload_json = _json_for_script(payload)
+        fonts_url = STYLE_FONTS.get(style, STYLE_FONTS["slate_v2"])
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -1809,10 +595,10 @@ class VNextReportGenerator:
   <title>{_escape(title)}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+Pro:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <style>{self._css()}</style>
+  <link href="{fonts_url}" rel="stylesheet">
+  <style>{self._css(style)}</style>
 </head>
-<body class="template-{_escape(template)}">
+<body class="template-{_escape(template)} style-{style}">
   <a class="skip-link" href="#main">跳到主内容</a>
   <span class="sr-only">NDX vNext Native Artifact UI Layer Workbench Source Tier Coverage Confirming Indicators</span>
   <div class="shell">
@@ -1828,7 +614,7 @@ class VNextReportGenerator:
       <div id="drawer-content" aria-live="polite"></div>
     </section>
   </aside>
-  <script type="application/json" id="vnext-data">{_escape(payload_json)}</script>
+  <script type="application/json" id="vnext-data">{payload_json}</script>
   <script>{self._js()}</script>
 </body>
 </html>
@@ -1902,6 +688,7 @@ class VNextReportGenerator:
         renderers = {
             "decision": lambda: self._decision_section(final),
             "evidence": lambda: self._evidence_section(final),
+            "charts": lambda: self._charts_section(artifacts),
             "risks": lambda: self._risks_section(artifacts),
             "conflicts": lambda: self._conflicts_section(artifacts),
             "layers": lambda: self._layers_section(artifacts),
@@ -1963,6 +750,7 @@ class VNextReportGenerator:
 <nav class="nav" aria-label="章节导航">
   <a href="#decision">判断</a>
   <a href="#evidence">依据</a>
+  <a href="#charts">图谱</a>
   <a href="#risks">风险</a>
   <a href="#conflicts">冲突</a>
   <a href="#layers">底稿</a>
@@ -2024,6 +812,247 @@ class VNextReportGenerator:
 </section>
 """
 
+    def _raw_metric(self, artifacts: Dict[str, Any], layer: str, function_id: str) -> Dict[str, Any]:
+        raw_data = artifacts.get("analysis_packet", {}).get("raw_data", {})
+        if not isinstance(raw_data, dict):
+            return {}
+        layer_raw = raw_data.get(layer, {})
+        if not isinstance(layer_raw, dict):
+            return {}
+        metric = layer_raw.get(function_id)
+        return metric if isinstance(metric, dict) else {}
+
+    def _metric_value(self, artifacts: Dict[str, Any], layer: str, function_id: str) -> Dict[str, Any]:
+        metric = self._raw_metric(artifacts, layer, function_id)
+        value = metric.get("value")
+        return value if isinstance(value, dict) else {}
+
+    def _indicator_item(self, artifacts: Dict[str, Any], layer: str, function_id: str) -> Dict[str, Any]:
+        card = artifacts.get("layers", {}).get(layer, {})
+        if not isinstance(card, dict):
+            return {}
+        for item in _as_list(card.get("indicator_analyses")):
+            if isinstance(item, dict) and item.get("function_id") == function_id:
+                return item
+        return {}
+
+    def _charts_section(self, artifacts: Dict[str, Any]) -> str:
+        return f"""
+<section class="panel chart-panel" id="charts">
+  <div class="section-kicker">03 · 市场图谱</div>
+  <h2>图表先把证据摊开</h2>
+  <p class="section-note">这里不把图表当装饰。每张图只回答一个问题，并保留证据入口：估值在哪里、ERP 最新月度路径是什么、WorldPERatio 的标准差语境怎样、利率与估值压力是否同向。</p>
+  <div class="chart-board">
+    {self._valuation_ruler_chart(artifacts)}
+    {self._damodaran_erp_chart(artifacts)}
+    {self._worldperatio_window_chart(artifacts)}
+    {self._rate_valuation_pressure_chart(artifacts)}
+  </div>
+</section>
+"""
+
+    def _chart_header(self, title: str, subtitle: str, ref: str) -> str:
+        return f"""
+  <header class="chart-card__head">
+    <div>
+      <h3>{_escape(title)}</h3>
+      <p>{_escape(subtitle)}</p>
+    </div>
+    <button class="ref-chip" data-ref="{_escape(ref)}">{_escape(_human_ref_label(ref))}</button>
+  </header>
+"""
+
+    def _valuation_ruler_chart(self, artifacts: Dict[str, Any]) -> str:
+        value = self._metric_value(artifacts, "L4", "get_ndx_pe_and_earnings_yield")
+        pe = _safe_number(value.get("PE", value.get("TrailingPE")))
+        forward_pe = _safe_number(value.get("ForwardPE"))
+        fcf_yield = _safe_number(value.get("FCFYield"))
+        sources = [source for source in _as_list(value.get("ThirdPartyChecks")) if isinstance(source, dict)]
+        percentile = None
+        for source in sources:
+            percentile = _safe_number(source.get("historical_percentile", source.get("percentile_10y")))
+            if percentile is not None:
+                break
+        ticks = []
+        if percentile is not None:
+            ticks.append(
+                f'<span class="chart-marker high" style="left:{_clamp(percentile, 0, 100):.2f}%"><b>{_fmt_number(percentile, suffix="%", digits=1)}</b><small>真实分位</small></span>'
+            )
+        source_rows = []
+        for source in sources[:5]:
+            source_rows.append(
+                f"""
+<li>
+  <b>{_escape(source.get('source_name', 'source'))}</b>
+  <span>{_escape(source.get('metric', ''))}</span>
+  <strong>{_fmt_number(source.get('value'), digits=2)}</strong>
+  <small>{'percentile ' + _fmt_number(source.get('historical_percentile', source.get('percentile_10y')), suffix='%', digits=1) if _safe_number(source.get('historical_percentile', source.get('percentile_10y'))) is not None else 'No Historical Percentile'}</small>
+</li>
+"""
+            )
+        if pe is not None and percentile is None:
+            pe_position = _clamp((pe - 15) / 30 * 100, 0, 100)
+            ticks.append(
+                f'<span class="chart-marker high" style="left:{pe_position:.2f}%"><b>{_fmt_number(pe, digits=1)}x</b><small>PE 当前值</small></span>'
+            )
+        return f"""
+<article class="chart-card chart-card--wide" data-chart-id="valuation-relative-ruler">
+  {self._chart_header("L4 估值相对位置尺", "真实 percentile 优先；没有 percentile 时只展示当前估值和来源分歧。", "L4.get_ndx_pe_and_earnings_yield")}
+  <div class="valuation-ruler-chart" aria-label="L4 估值相对位置尺">
+    <div class="ruler-track">{''.join(ticks)}</div>
+    <div class="ruler-labels"><span>低估/低压力</span><span>中性</span><span>高估/高压力</span></div>
+  </div>
+  <div class="metric-strip">
+    <span><b>PE</b>{_fmt_number(pe, digits=2)}x</span>
+    <span><b>Forward PE</b>{_fmt_number(forward_pe, digits=2)}x</span>
+    <span><b>FCF Yield</b>{_fmt_number(fcf_yield, suffix="%", digits=2)}</span>
+  </div>
+  <ul class="chart-source-list">{''.join(source_rows) or '<li>无外部估值源。</li>'}</ul>
+</article>
+"""
+
+    def _worldperatio_relative_position(self, artifacts: Dict[str, Any]) -> Dict[str, Any]:
+        value = self._metric_value(artifacts, "L4", "get_ndx_pe_and_earnings_yield")
+        for source in _as_list(value.get("ThirdPartyChecks")):
+            if isinstance(source, dict) and str(source.get("source_name", "")).lower() == "worldperatio":
+                relative = source.get("relative_position")
+                return relative if isinstance(relative, dict) else {}
+        return {}
+
+    def _worldperatio_window_chart(self, artifacts: Dict[str, Any]) -> str:
+        relative = self._worldperatio_relative_position(artifacts)
+        windows = relative.get("valuation_windows", {}) if isinstance(relative.get("valuation_windows"), dict) else {}
+        trend = relative.get("trend_context", {}) if isinstance(relative.get("trend_context"), dict) else {}
+        order = ["1y", "5y", "10y", "20y"]
+        rows = []
+        for key in order:
+            window = windows.get(key)
+            if not isinstance(window, dict):
+                continue
+            sigma = _safe_number(window.get("deviation_vs_mean_sigma"))
+            label = str(window.get("valuation_label") or "")
+            label_class = "bad" if "over" in label.lower() else ("good" if "under" in label.lower() else "watch")
+            rows.append(
+                f"""
+<tr>
+  <th>{_escape(key)}</th>
+  <td>{_fmt_number(window.get('average_pe'), digits=2)}x</td>
+  <td>{_fmt_number(window.get('std_dev'), digits=2)}</td>
+  <td>{_fmt_number(window.get('range_low'), digits=2)}x - {_fmt_number(window.get('range_high'), digits=2)}x</td>
+  <td>{_fmt_number(sigma, digits=2)}σ</td>
+  <td><span class="pill {label_class}">{_escape(label or 'N/A')}</span></td>
+</tr>
+"""
+            )
+        trend_html = f"""
+<div class="metric-strip">
+  <span><b>SMA50 margin</b>{_fmt_number(trend.get('sma50_margin_pct'), suffix='%', digits=1)}</span>
+  <span><b>SMA200 margin</b>{_fmt_number(trend.get('sma200_margin_pct'), suffix='%', digits=1)}</span>
+  <span><b>边界</b>std-dev context, not percentile</span>
+</div>
+"""
+        return f"""
+<article class="chart-card" data-chart-id="worldperatio-window-labels">
+  {self._chart_header("WorldPERatio 窗口标签", "均值、标准差、区间和标签可以辅助描述相对位置，但不是历史分位。", "L4.get_ndx_pe_and_earnings_yield")}
+  <div class="chart-table-wrap">
+    <table class="chart-table">
+      <thead><tr><th>窗口</th><th>均值 PE</th><th>标准差</th><th>区间</th><th>偏离</th><th>标签</th></tr></thead>
+      <tbody>{''.join(rows) or '<tr><td colspan="6">WorldPERatio 未提供结构化窗口语境。</td></tr>'}</tbody>
+    </table>
+  </div>
+  {trend_html}
+</article>
+"""
+
+    def _damodaran_erp_chart(self, artifacts: Dict[str, Any]) -> str:
+        value = self._metric_value(artifacts, "L4", "get_damodaran_us_implied_erp")
+        series = [row for row in _as_list(value.get("monthly_series")) if isinstance(row, dict)]
+        width, height, pad = 640, 260, 34
+        erp_path = _polyline_path(series, "erp_t12m_adjusted_payout", width=width, height=height, pad=pad)
+        treasury_path = _polyline_path(series, "us_10y_treasury_rate", width=width, height=height, pad=pad)
+        expected_path = _polyline_path(series, "expected_return", width=width, height=height, pad=pad)
+        latest = series[-1] if series else value
+        if erp_path:
+            svg = f"""
+<svg class="line-chart" viewBox="0 0 {width} {height}" role="img" aria-label="Damodaran ERP 月度时间序列">
+  <rect x="0" y="0" width="{width}" height="{height}" rx="6"></rect>
+  <line x1="{pad}" y1="{height-pad}" x2="{width-pad}" y2="{height-pad}"></line>
+  <line x1="{pad}" y1="{pad}" x2="{pad}" y2="{height-pad}"></line>
+  <path class="series-erp" d="{_escape(erp_path)}"></path>
+  <path class="series-rate" d="{_escape(treasury_path)}"></path>
+  <path class="series-return" d="{_escape(expected_path)}"></path>
+</svg>
+"""
+        else:
+            svg = '<div class="chart-empty">当前 artifact 没有月度序列；已展示单点官方读数。</div>'
+        lenses = [
+            ("T12M adjusted payout", value.get("erp_t12m_adjusted_payout", value.get("implied_erp_fcfe"))),
+            ("T12M cash yield", value.get("erp_t12m_cash_yield")),
+            ("10Y avg CF yield", value.get("erp_avg_cf_yield_10y")),
+            ("Net cash yield", value.get("erp_net_cash_yield")),
+            ("Normalized", value.get("erp_normalized_earnings_payout")),
+            ("US 10Y", value.get("us_10y_treasury_rate", value.get("tbond_rate"))),
+            ("Default spread", value.get("default_spread")),
+            ("Expected return", value.get("expected_return")),
+        ]
+        lens_html = "".join(
+            f"<span><b>{_escape(label)}</b>{_fmt_number(metric, suffix='%', digits=2)}</span>"
+            for label, metric in lenses
+        )
+        files = " / ".join(str(item) for item in [value.get("source_file"), value.get("current_calculator_source_file")] if item)
+        return f"""
+<article class="chart-card chart-card--wide" data-chart-id="damodaran-erp-series">
+  {self._chart_header("Damodaran ERP 月度路径", "优先展示 ERPbymonth.xlsx 的月度时间序列；当月计算表只补充 default spread 与 expected return。", "L4.get_damodaran_us_implied_erp")}
+  {svg}
+  <div class="chart-legend"><span class="series-erp">ERP T12M adjusted payout</span><span class="series-rate">US 10Y Treasury</span><span class="series-return">Expected return</span></div>
+  <div class="metric-strip">{lens_html}</div>
+  <p class="chart-footnote">data_date={_escape(value.get('data_date') or latest.get('data_date') or '')} · source={_escape(files or value.get('download_url') or '')}</p>
+</article>
+"""
+
+    def _rate_valuation_pressure_chart(self, artifacts: Dict[str, Any]) -> str:
+        l1_real = self._raw_metric(artifacts, "L1", "get_10y_real_rate")
+        l1_nominal = self._raw_metric(artifacts, "L1", "get_10y_treasury")
+        l1_real_item = self._indicator_item(artifacts, "L1", "get_10y_real_rate")
+        l1_nominal_item = self._indicator_item(artifacts, "L1", "get_10y_treasury")
+        l4_gap = self._metric_value(artifacts, "L4", "get_equity_risk_premium")
+        l4_val = self._metric_value(artifacts, "L4", "get_ndx_pe_and_earnings_yield")
+        real_reading = l1_real_item.get("current_reading") or l1_real.get("value")
+        nominal_reading = l1_nominal_item.get("current_reading") or l1_nominal.get("value")
+        real_pct = _extract_percentile(real_reading)
+        nominal_pct = _extract_percentile(nominal_reading)
+        gap = _safe_number(l4_gap.get("level"))
+        pe = _safe_number(l4_val.get("PE", l4_val.get("TrailingPE")))
+        gap_pressure = None if gap is None else _clamp((0 - gap) / 4 * 100, 0, 100)
+        pe_pressure = None if pe is None else _clamp((pe - 15) / 30 * 100, 0, 100)
+        rows = [
+            ("10Y Treasury", nominal_pct, _fmt_number(nominal_reading, suffix="%", digits=2), "L1.get_10y_treasury"),
+            ("10Y Real Rate", real_pct, _fmt_number(real_reading, suffix="%", digits=2), "L1.get_10y_real_rate"),
+            ("Simple Yield Gap", gap_pressure, _fmt_number(gap, suffix="%", digits=2), "L4.get_equity_risk_premium"),
+            ("NDX PE", pe_pressure, _fmt_number(pe, suffix="x", digits=2), "L4.get_ndx_pe_and_earnings_yield"),
+        ]
+        row_html = []
+        for label, pressure, reading, ref in rows:
+            marker = "" if pressure is None else f'<span style="left:{_clamp(pressure, 0, 100):.2f}%"></span>'
+            row_html.append(
+                f"""
+<div class="pressure-row">
+  <button class="ref-chip" data-ref="{_escape(ref)}">{_escape(label)}</button>
+  <div class="pressure-track">{marker}</div>
+  <strong>{_escape(reading)}</strong>
+</div>
+"""
+            )
+        return f"""
+<article class="chart-card" data-chart-id="rate-valuation-pressure">
+  {self._chart_header("L1-L4 利率估值压力图", "用同一方向阅读折现率压力、真实利率、简式收益差距和 PE 估值要求。", "L4.get_equity_risk_premium")}
+  <div class="pressure-chart" aria-label="L1-L4 利率估值压力图">
+    {''.join(row_html)}
+  </div>
+  <p class="chart-footnote">越靠右表示压力越高。利率行优先用历史分位；收益差距和 PE 行是方向性压力尺，不是历史分位。</p>
+</article>
+"""
+
     def _risks_section(self, artifacts: Dict[str, Any]) -> str:
         risk = artifacts.get("risk_boundary_report", {}) or {}
         boundary = risk.get("boundary_status", {}) if isinstance(risk.get("boundary_status"), dict) else {}
@@ -2056,7 +1085,7 @@ class VNextReportGenerator:
         )
         return f"""
 <section class="panel" id="risks">
-  <div class="section-kicker">03 · 风险边界</div>
+  <div class="section-kicker">04 · 风险边界</div>
   <h2>什么会让判断失效</h2>
   <p class="section-note">风险不是附录。这里展示必须保留的风险、当前边界状态，以及未来最应该观察的触发条件。</p>
   <div class="risk-board">
@@ -2130,7 +1159,7 @@ class VNextReportGenerator:
             )
         return f"""
 <section class="panel" id="conflicts">
-  <div class="section-kicker">04 · 冲突地图</div>
+  <div class="section-kicker">05 · 冲突地图</div>
   <h2>证据之间如何互相支撑、互相打架</h2>
   <p class="section-note">Bridge 是 vNext 的核心价值之一：它不是再写一遍指标，而是指出哪些层互相支撑、互相冲突，以及压力如何传导。</p>
   {''.join(bridge_cards) or '<p>无 Bridge Memo。</p>'}
@@ -2229,12 +1258,12 @@ class VNextReportGenerator:
             for layer in ["L1", "L2", "L3", "L4", "L5"]
         )
         cards = "".join(
-            self._layer_card(layer, layers.get(layer, {}), default_open=(layer == "L1"))
+            self._layer_card(layer, layers.get(layer, {}), artifacts, default_open=(layer == "L1"))
             for layer in ["L1", "L2", "L3", "L4", "L5"]
         )
         return f"""
 <section class="panel layers-panel" id="layers">
-  <div class="section-kicker">05 · 五层底稿</div>
+  <div class="section-kicker">06 · 五层底稿</div>
   <h2>先看摘要，再展开原生底稿</h2>
   <p class="section-note">五张层级卡纵向常驻；点击卡头展开当层完整底稿，多张可同时展开。摘要永远可见，避免"跳走找不回"。</p>
   <div class="layer-summary-grid">{tiles}</div>
@@ -2262,7 +1291,7 @@ class VNextReportGenerator:
 </button>
 """
 
-    def _layer_card(self, layer: str, card: Dict[str, Any], *, default_open: bool) -> str:
+    def _layer_card(self, layer: str, card: Dict[str, Any], artifacts: Dict[str, Any], *, default_open: bool) -> str:
         confidence = card.get("confidence", "medium")
         risks_inline = "".join(
             f"<span>{_escape(_label(flag, 'risk_flag'))}</span>"
@@ -2277,7 +1306,7 @@ class VNextReportGenerator:
             for hook in _as_list(card.get("cross_layer_hooks"))
         )
         indicators = "".join(
-            self._indicator_card(layer, item)
+            self._indicator_card(layer, item, artifacts)
             for item in _as_list(card.get("indicator_analyses"))
         )
         risk_flags_full = "".join(
@@ -2333,7 +1362,391 @@ class VNextReportGenerator:
 </article>
 """
 
-    def _indicator_card(self, layer: str, item: Dict[str, Any]) -> str:
+    def _indicator_visual(self, layer: str, function_id: str, item: Dict[str, Any], artifacts: Dict[str, Any]) -> str:
+        raw_value = self._metric_value(artifacts, layer, function_id)
+        ref = f"{layer}.{function_id}"
+        if not raw_value:
+            return ""
+
+        special = {
+            "get_cnn_fear_greed_index": self._fear_greed_visual,
+            "get_crowdedness_dashboard": self._crowdedness_visual,
+            "get_percent_above_ma": self._percent_above_ma_visual,
+            "get_new_highs_lows": self._new_highs_lows_visual,
+            "get_m7_fundamentals": self._m7_fundamentals_visual,
+            "get_ndx_pe_and_earnings_yield": self._valuation_indicator_visual,
+            "get_damodaran_us_implied_erp": self._damodaran_indicator_visual,
+            "get_equity_risk_premium": self._yield_gap_indicator_visual,
+            "get_qqq_technical_indicators": self._technical_snapshot_visual,
+            "get_multi_scale_ma_position": self._ma_ladder_visual,
+            "get_donchian_channels_qqq": self._donchian_indicator_visual,
+            "get_macd_qqq": self._macd_indicator_visual,
+            "get_volume_analysis_qqq": self._volume_indicator_visual,
+            "get_obv_qqq": self._obv_indicator_visual,
+        }.get(function_id)
+        if special:
+            html = special(ref, raw_value)
+            if html:
+                return html
+
+        parts = []
+        relative = self._relative_position_rows(raw_value)
+        if relative:
+            parts.append(self._relative_position_visual_body(relative))
+        benchmark = self._benchmark_visual_body(raw_value)
+        if benchmark:
+            parts.append(benchmark)
+        components = self._component_stack_visual_body(raw_value)
+        if components:
+            parts.append(components)
+        if not parts:
+            return ""
+        return self._wrap_indicator_visual(ref, "relative-position", "Relative position", "".join(parts))
+
+    def _wrap_indicator_visual(
+        self,
+        ref: str,
+        visual_type: str,
+        title: str,
+        body: str,
+        *,
+        details: bool = False,
+        open_by_default: bool = False,
+    ) -> str:
+        attrs = f'data-indicator-visual="{_escape(ref)}" data-visual-type="{_escape(visual_type)}"'
+        if details:
+            open_attr = " open" if open_by_default else ""
+            return f"""
+<details class="indicator-visual indicator-visual--details"{open_attr} {attrs}>
+  <summary>{_escape(title)}</summary>
+  {body}
+</details>
+"""
+        return f"""
+<div class="indicator-visual" {attrs}>
+  <div class="indicator-visual__title">{_escape(title)}</div>
+  {body}
+</div>
+"""
+
+    def _relative_position_rows(self, value: Dict[str, Any]) -> List[Tuple[str, Optional[float]]]:
+        source = None
+        if isinstance(value.get("relativity"), dict):
+            source = value["relativity"]
+        elif isinstance(value.get("historical_stats"), dict):
+            source = value["historical_stats"]
+        if not isinstance(source, dict):
+            return []
+        rows = [
+            ("10Y percentile", _normalize_percent(source.get("percentile_10y"))),
+            ("5Y percentile", _normalize_percent(source.get("percentile_5y"))),
+        ]
+        one_year = _normalize_percent(source.get("percentile_1y"))
+        if one_year is not None:
+            rows.append(("1Y percentile", one_year))
+        z_score = _safe_number(source.get("z_score_10y"))
+        if z_score is not None:
+            rows.append(("10Y z-score", z_score))
+        return [(label, number) for label, number in rows if number is not None]
+
+    def _relative_position_visual_body(self, rows: List[Tuple[str, Optional[float]]]) -> str:
+        markers = []
+        meta = []
+        for label, value in rows:
+            if value is None:
+                continue
+            if "z-score" in label:
+                z_position = _clamp((value + 3) / 6 * 100, 0, 100)
+                markers.append(f'<span class="mini-marker mini-marker--z" style="left:{z_position:.2f}%"></span>')
+                meta.append(f"<span><b>{_escape(label)}</b>{_fmt_number(value, digits=2)}σ</span>")
+            else:
+                markers.append(f'<span class="mini-marker" style="left:{_clamp(value, 0, 100):.2f}%"></span>')
+                meta.append(f"<span><b>{_escape(label)}</b>{_fmt_number(value, suffix='%', digits=1)}</span>")
+        return f"""
+  <div class="mini-ruler mini-ruler--percent">{''.join(markers)}</div>
+  <div class="indicator-visual-meta">{''.join(meta)}</div>
+"""
+
+    def _benchmark_visual_body(self, value: Dict[str, Any]) -> str:
+        level = _safe_number(value.get("level", value.get("current_price")))
+        candidates = [
+            ("MA", value.get("ma"), value.get("position_vs_ma")),
+            ("MA20", value.get("ma20"), value.get("position_vs_ma20") or value.get("ratio_trend_vs_ma20")),
+            ("MA50", value.get("ma50"), value.get("position_vs_ma50")),
+            ("Short MA", value.get("short_ma"), None),
+            ("Long MA", value.get("long_ma"), None),
+        ]
+        rows = []
+        for label, benchmark, position in candidates:
+            benchmark_number = _safe_number(benchmark)
+            if level is None or benchmark_number is None:
+                continue
+            low, high = sorted([level, benchmark_number])
+            if abs(high - low) < 0.000001:
+                high = low + 1
+            current_pos = _clamp((level - low) / (high - low) * 100, 0, 100)
+            benchmark_pos = _clamp((benchmark_number - low) / (high - low) * 100, 0, 100)
+            rows.append(
+                f"""
+<div class="benchmark-row">
+  <span>{_escape(label)}</span>
+  <div class="benchmark-track">
+    <i class="benchmark-dot" style="left:{benchmark_pos:.2f}%"></i>
+    <i class="benchmark-dot benchmark-dot--current" style="left:{current_pos:.2f}%"></i>
+  </div>
+  <strong>{_fmt_number(level, digits=2)} / {_fmt_number(benchmark_number, digits=2)}</strong>
+  <small>{_escape(position or '')}</small>
+</div>
+"""
+            )
+        if not rows:
+            return ""
+        return f"""
+  <div class="benchmark-legend"><span>当前值</span><span>基准线</span></div>
+  <div class="benchmark-list">{''.join(rows)}</div>
+"""
+
+    def _component_stack_visual_body(self, value: Dict[str, Any]) -> str:
+        components = value.get("components")
+        if not isinstance(components, dict) or not components:
+            return ""
+        rows = []
+        numeric = [(key, _safe_number(metric)) for key, metric in components.items()]
+        numeric = [(key, metric) for key, metric in numeric if metric is not None]
+        if not numeric:
+            return ""
+        total = sum(abs(metric) for _, metric in numeric) or 1
+        for key, metric in numeric:
+            rows.append(
+                f"""
+<div class="component-row">
+  <span>{_escape(key.replace('_', ' '))}</span>
+  <div><i style="width:{_clamp(abs(metric) / total * 100, 2, 100):.2f}%"></i></div>
+  <strong>{_fmt_number(metric, digits=2)}</strong>
+</div>
+"""
+            )
+        return f'<div class="component-stack">{"".join(rows)}</div>'
+
+    def _score_bar(self, label: str, score: Any, subtitle: Any = "") -> str:
+        value = _normalize_percent(score)
+        if value is None:
+            return ""
+        return f"""
+<div class="score-row">
+  <span>{_escape(label)}</span>
+  <div class="score-track"><i style="width:{value:.2f}%"></i></div>
+  <strong>{_fmt_number(value, digits=1)}</strong>
+  <small>{_escape(subtitle)}</small>
+</div>
+"""
+
+    def _fear_greed_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        rows = [self._score_bar("Headline", value.get("score"), value.get("rating"))]
+        sub_metrics = value.get("sub_metrics") if isinstance(value.get("sub_metrics"), dict) else {}
+        for name, payload in sub_metrics.items():
+            if isinstance(payload, dict):
+                rows.append(self._score_bar(str(name).replace(" (S&P500)", ""), payload.get("score"), payload.get("rating")))
+        body = f'<div class="score-list">{"".join(row for row in rows if row)}</div>'
+        return self._wrap_indicator_visual(ref, "sentiment-scoreboard", "Fear & Greed component map", body, details=True, open_by_default=True)
+
+    def _crowdedness_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        rows = []
+        for name, payload in value.items():
+            if not isinstance(payload, dict):
+                continue
+            metric = _safe_number(payload.get("value"))
+            if metric is None:
+                rows.append(f'<div class="crowdedness-missing"><b>{_escape(name.replace("_", " "))}</b><span>No data</span></div>')
+                continue
+            rows.append(
+                f"""
+<div class="crowdedness-tile">
+  <b>{_escape(name.replace('_', ' '))}</b>
+  <strong>{_fmt_number(metric, digits=2)}</strong>
+  <small>{_escape(payload.get('interpretation', ''))}</small>
+</div>
+"""
+            )
+        return self._wrap_indicator_visual(ref, "crowdedness-dashboard", "Crowdedness component map", f'<div class="crowdedness-grid">{"".join(rows)}</div>')
+
+    def _percent_above_ma_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        level = value.get("level") if isinstance(value.get("level"), dict) else {}
+        rows = [
+            self._score_bar("50D", level.get("percent_above_50d"), "% constituents above 50D MA"),
+            self._score_bar("200D", level.get("percent_above_200d"), "% constituents above 200D MA"),
+        ]
+        body = f'<div class="score-list">{"".join(row for row in rows if row)}</div>'
+        return self._wrap_indicator_visual(ref, "breadth-bars", "Breadth participation", body)
+
+    def _new_highs_lows_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        level = value.get("level") if isinstance(value.get("level"), dict) else {}
+        highs = _safe_number(level.get("new_highs_52w"))
+        lows = _safe_number(level.get("new_lows_52w"))
+        total = (highs or 0) + (lows or 0)
+        if total <= 0:
+            return ""
+        high_width = _clamp((highs or 0) / total * 100, 0, 100)
+        low_width = _clamp((lows or 0) / total * 100, 0, 100)
+        body = f"""
+<div class="balance-bar">
+  <i class="balance-good" style="width:{high_width:.2f}%"></i>
+  <i class="balance-bad" style="width:{low_width:.2f}%"></i>
+</div>
+<div class="indicator-visual-meta"><span><b>New highs</b>{_fmt_number(highs, digits=0)}</span><span><b>New lows</b>{_fmt_number(lows, digits=0)}</span><span><b>Net</b>{_fmt_number(level.get('net_new_highs'), digits=0)}</span></div>
+"""
+        return self._wrap_indicator_visual(ref, "new-highs-lows", "New highs versus lows", body)
+
+    def _m7_fundamentals_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        companies = []
+        for ticker, payload in value.items():
+            if isinstance(payload, dict):
+                companies.append((ticker, payload))
+        companies.sort(key=lambda item: _safe_number(item[1].get("MarketCap")) or 0, reverse=True)
+        rows = []
+        for ticker, payload in companies[:7]:
+            moat = _safe_number(payload.get("quantitative_moat_score"))
+            pe = _safe_number(payload.get("PE"))
+            roe = _safe_number(payload.get("ROE"))
+            rows.append(
+                f"""
+<div class="m7-tile">
+  <b>{_escape(ticker)}</b>
+  <span>PE {_fmt_number(pe, digits=1)}x</span>
+  <span>ROE {_fmt_number(roe, suffix='%', digits=1)}</span>
+  <i style="width:{_clamp((moat or 0) * 10, 0, 100):.2f}%"></i>
+</div>
+"""
+            )
+        body = f'<div class="m7-grid">{"".join(rows)}</div>'
+        return self._wrap_indicator_visual(ref, "m7-fundamentals", "M7 fundamentals heatmap", body, details=True)
+
+    def _valuation_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        rows = [
+            ("PE", value.get("PE", value.get("TrailingPE")), "x"),
+            ("Forward PE", value.get("ForwardPE"), "x"),
+            ("Earnings Yield", value.get("EarningsYield"), "%"),
+            ("FCF Yield", value.get("FCFYield"), "%"),
+            ("PB", value.get("PriceToBook"), "x"),
+        ]
+        metrics = "".join(f"<span><b>{_escape(label)}</b>{_fmt_number(metric, suffix=suffix, digits=2)}</span>" for label, metric, suffix in rows)
+        sources = []
+        for source in _as_list(value.get("ThirdPartyChecks"))[:4]:
+            if isinstance(source, dict):
+                sources.append(
+                    f"<li><b>{_escape(source.get('source_name', 'source'))}</b><span>{_fmt_number(source.get('value'), digits=2)}</span><small>{_escape(source.get('availability', ''))}</small></li>"
+                )
+        body = f'<div class="metric-strip">{metrics}</div><ul class="mini-source-list">{"".join(sources)}</ul>'
+        return self._wrap_indicator_visual(ref, "valuation-sources", "Valuation cross-check", body)
+
+    def _damodaran_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        rows = [
+            ("T12M payout ERP", value.get("erp_t12m_adjusted_payout", value.get("implied_erp_fcfe"))),
+            ("10Y Treasury", value.get("us_10y_treasury_rate", value.get("tbond_rate", value.get("t_bond_rate")))),
+            ("Expected return", value.get("expected_return")),
+            ("Default spread", value.get("default_spread")),
+        ]
+        body = '<div class="metric-strip">' + "".join(
+            f"<span><b>{_escape(label)}</b>{_fmt_number(metric, suffix='%', digits=2)}</span>" for label, metric in rows
+        ) + "</div>"
+        return self._wrap_indicator_visual(ref, "damodaran-current", "Damodaran current ERP lens", body)
+
+    def _yield_gap_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        gap = _safe_number(value.get("level"))
+        pressure = _clamp((0 - gap) / 4 * 100, 0, 100) if gap is not None else None
+        marker = "" if pressure is None else f'<span class="mini-marker" style="left:{pressure:.2f}%"></span>'
+        body = f"""
+<div class="mini-ruler mini-ruler--pressure">{marker}</div>
+<div class="indicator-visual-meta"><span><b>Simple gap</b>{_fmt_number(gap, suffix='%', digits=2)}</span><span><b>Boundary</b>directional, not implied ERP</span></div>
+"""
+        return self._wrap_indicator_visual(ref, "yield-gap-pressure", "Yield gap pressure", body)
+
+    def _technical_snapshot_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        rows = [
+            self._score_bar("RSI", value.get("rsi_14"), value.get("rsi_status")),
+            self._score_bar("Donchian", value.get("donchian_position_pct"), value.get("donchian_signal")),
+            self._score_bar("Volume ratio", (_safe_number(value.get("volume_ma_ratio")) or 0) * 50, value.get("volume_status")),
+        ]
+        body = f'<div class="score-list">{"".join(row for row in rows if row)}</div>{self._ma_ladder_body(value)}'
+        return self._wrap_indicator_visual(ref, "technical-snapshot", "Technical dashboard", body, details=True, open_by_default=True)
+
+    def _ma_ladder_body(self, value: Dict[str, Any]) -> str:
+        current = _safe_number(value.get("current_price"))
+        ma_positions = value.get("ma_positions") if isinstance(value.get("ma_positions"), dict) else {}
+        if not ma_positions:
+            direct = {
+                "ma50": {"value": value.get("sma_50"), "deviation_pct": None},
+                "ma200": {"value": value.get("sma_200"), "deviation_pct": None},
+            }
+            ma_positions = {key: payload for key, payload in direct.items() if _safe_number(payload.get("value")) is not None}
+        rows = []
+        for label in ["ma5", "ma20", "ma50", "ma60", "ma200"]:
+            payload = ma_positions.get(label)
+            if not isinstance(payload, dict):
+                continue
+            deviation = _safe_number(payload.get("deviation_pct"))
+            value_text = _fmt_number(payload.get("value"), digits=2)
+            marker = _clamp((deviation + 15) / 30 * 100, 0, 100) if deviation is not None else 50
+            rows.append(
+                f"""
+<div class="ma-row">
+  <span>{_escape(label.upper())}</span>
+  <div class="ma-track"><i style="left:{marker:.2f}%"></i></div>
+  <strong>{value_text}</strong>
+  <small>{_fmt_number(deviation, suffix='%', digits=2)}</small>
+</div>
+"""
+            )
+        if not rows:
+            return ""
+        current_html = f'<div class="indicator-visual-meta"><span><b>Current</b>{_fmt_number(current, digits=2)}</span><span><b>Scale</b>-15% to +15% vs MA</span></div>'
+        return f'<div class="ma-ladder">{"".join(rows)}{current_html}</div>'
+
+    def _ma_ladder_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        body = self._ma_ladder_body(value)
+        return self._wrap_indicator_visual(ref, "ma-ladder", "MA ladder", body) if body else ""
+
+    def _donchian_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        position = _normalize_percent(value.get("position_pct"))
+        marker = "" if position is None else f'<span class="mini-marker" style="left:{position:.2f}%"></span>'
+        body = f"""
+<div class="mini-ruler mini-ruler--band">{marker}</div>
+<div class="indicator-visual-meta">
+  <span><b>Lower</b>{_fmt_number(value.get('lower'), digits=2)}</span>
+  <span><b>Middle</b>{_fmt_number(value.get('middle'), digits=2)}</span>
+  <span><b>Upper</b>{_fmt_number(value.get('upper'), digits=2)}</span>
+  <span><b>Position</b>{_fmt_number(position, suffix='%', digits=1)}</span>
+</div>
+"""
+        return self._wrap_indicator_visual(ref, "donchian-channel", "Donchian channel", body)
+
+    def _macd_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        histogram = _safe_number(value.get("histogram"))
+        width = _clamp(abs(histogram or 0) / 5 * 100, 2, 100)
+        direction = "positive" if (histogram or 0) >= 0 else "negative"
+        body = f"""
+<div class="diverging-bar diverging-bar--{direction}"><i style="width:{width:.2f}%"></i></div>
+<div class="indicator-visual-meta"><span><b>MACD</b>{_fmt_number(value.get('macd_line'), digits=2)}</span><span><b>Signal</b>{_fmt_number(value.get('signal_line'), digits=2)}</span><span><b>Histogram</b>{_fmt_number(histogram, digits=2)}</span></div>
+"""
+        return self._wrap_indicator_visual(ref, "macd-histogram", "MACD momentum", body)
+
+    def _volume_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        ratio = _safe_number(value.get("volume_ma_ratio"))
+        score = None if ratio is None else _clamp(ratio / 2 * 100, 0, 100)
+        body = self._score_bar("Volume / MA", score, value.get("volume_status"))
+        return self._wrap_indicator_visual(ref, "volume-ratio", "Volume confirmation", f'<div class="score-list">{body}</div>') if body else ""
+
+    def _obv_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        change = _safe_number(value.get("change_20d_pct"))
+        marker = _clamp((change + 100) / 200 * 100, 0, 100) if change is not None else None
+        marker_html = "" if marker is None else f'<span class="mini-marker" style="left:{marker:.2f}%"></span>'
+        body = f"""
+<div class="mini-ruler mini-ruler--flow">{marker_html}</div>
+<div class="indicator-visual-meta"><span><b>20D change</b>{_fmt_number(change, suffix='%', digits=2)}</span><span><b>Trend</b>{_escape(value.get('trend', ''))}</span></div>
+"""
+        return self._wrap_indicator_visual(ref, "obv-flow", "OBV flow", body)
+
+    def _indicator_card(self, layer: str, item: Dict[str, Any], artifacts: Dict[str, Any]) -> str:
         function_id = str(item.get("function_id", "unknown"))
         ref = f"{layer}.{function_id}"
         percentile = _extract_percentile(item.get("current_reading"))
@@ -2360,6 +1773,7 @@ class VNextReportGenerator:
     <ul>{falsifiers or '<li>None</li>'}</ul>
   </div>
 """
+        visual = self._indicator_visual(layer, function_id, item, artifacts)
         return f"""
 <article class="indicator-card" id="evidence-{_slug(ref)}" data-evidence-ref="{_escape(ref)}">
   <div class="indicator-top">
@@ -2371,6 +1785,7 @@ class VNextReportGenerator:
   </div>
   <p class="reading">{_escape(item.get('current_reading', ''))}</p>
   {_position_ruler(percentile)}
+  {visual}
   <p>{_escape(item.get('narrative', ''))}</p>
   {data_quality}
   {canon_detail}
@@ -2464,7 +1879,7 @@ class VNextReportGenerator:
         firewall_warnings = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(firewall.get("warnings")))
         return f"""
 <section class="panel" id="governance">
-  <div class="section-kicker">06 · Governance</div>
+  <div class="section-kicker">07 · Governance</div>
   <h2>Critic / Risk / Schema Guard</h2>
   <div class="governance-grid">
     <article>
@@ -2505,7 +1920,7 @@ class VNextReportGenerator:
         token_usage = artifacts["final_adjudication"].get("token_usage", {})
         return f"""
 <section class="panel" id="audit">
-  <div class="section-kicker">07 · Audit Trail</div>
+  <div class="section-kicker">08 · Audit Trail</div>
   <h2>审计与原始 artifact</h2>
   <div class="audit-grid">
     <div><b>Run Dir</b><p>{_escape(run_path)}</p></div>
@@ -2533,8 +1948,12 @@ class VNextReportGenerator:
                 chips.append(f'<span class="ref-chip muted">{_escape(text)}</span>')
         return "".join(chips)
 
-    def _css(self) -> str:
-        return CSS_TEMPLATE
+    def _css(self, style: str = "slate_v2") -> str:
+        css_path = STYLES_DIR / f"{style}.css"
+        if css_path.exists():
+            return css_path.read_text(encoding="utf-8")
+        fallback = STYLES_DIR / "slate_v2.css"
+        return fallback.read_text(encoding="utf-8") if fallback.exists() else ""
 
     def _js(self) -> str:
         return JS_TEMPLATE
@@ -2550,6 +1969,12 @@ def parse_args() -> argparse.Namespace:
         choices=[*TEMPLATE_DESCRIPTIONS.keys(), "all"],
         help="UI template to generate. Use 'all' to generate every prototype.",
     )
+    parser.add_argument(
+        "--style",
+        default="slate_v2",
+        choices=[*STYLE_FONTS.keys()],
+        help="Visual style variant.",
+    )
     return parser.parse_args()
 
 
@@ -2562,9 +1987,9 @@ def main() -> int:
             if args.output:
                 base = Path(args.output)
                 output_path = base.with_name(f"{base.stem}_{template}{base.suffix or '.html'}")
-            print(reporter.run(args.run_dir, output_path=output_path, template=template))
+            print(reporter.run(args.run_dir, output_path=output_path, template=template, style=args.style))
     else:
-        report_path = reporter.run(args.run_dir, output_path=args.output, template=args.template)
+        report_path = reporter.run(args.run_dir, output_path=args.output, template=args.template, style=args.style)
         print(report_path)
     return 0
 

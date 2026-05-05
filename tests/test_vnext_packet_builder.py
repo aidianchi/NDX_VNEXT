@@ -138,6 +138,50 @@ def test_l4_state_uses_real_percentile_not_yfinance_current_pe_alone():
     assert packet.facts_by_layer["L4"].state == "neutral"
 
 
+def test_l4_signal_carries_worldperatio_relative_position_without_percentile():
+    data = _mock_data_json()
+    for indicator in data["indicators"]:
+        if indicator["function_id"] == "get_ndx_pe_and_earnings_yield":
+            indicator["raw_data"] = {
+                "name": "NDX Valuation",
+                "value": {
+                    "PE": 32.8,
+                    "ThirdPartyChecks": [
+                        {
+                            "source_name": "WorldPERatio",
+                            "source_id": "worldperatio_pe",
+                            "metric": "ndx_trailing_pe",
+                            "value": 32.27,
+                            "historical_percentile": None,
+                            "relative_position": {
+                                "position_type": "std_dev_context_not_percentile",
+                                "valuation_windows": {
+                                    "10y": {
+                                        "average_pe": 26.8,
+                                        "std_dev": 3.2,
+                                        "deviation_vs_mean_sigma": 1.71,
+                                        "valuation_label": "Overvalued",
+                                    }
+                                },
+                            },
+                        }
+                    ],
+                },
+            }
+        if indicator["function_id"] == "get_equity_risk_premium":
+            indicator["raw_data"] = {"name": "NDX Simple Yield Gap", "value": {"level": 2.2}}
+
+    packet = AnalysisPacketBuilder().build(data, manual_overrides={"active": False, "metrics": {}})
+    valuation_signal = next(
+        signal for signal in packet.facts_by_layer["L4"].core_signals if signal["metric"] == "get_ndx_pe_and_earnings_yield"
+    )
+
+    assert valuation_signal["historical_percentile"] is None
+    assert valuation_signal["relative_position_context"]["WorldPERatio"]["position_type"] == "std_dev_context_not_percentile"
+    assert valuation_signal["relative_position_context"]["WorldPERatio"]["valuation_windows"]["10y"]["valuation_label"] == "Overvalued"
+    assert packet.facts_by_layer["L4"].state == "neutral"
+
+
 def test_l4_state_accepts_trendonify_or_manual_real_percentile():
     data = _mock_data_json()
     for indicator in data["indicators"]:
@@ -216,3 +260,41 @@ def test_l3_state_reads_current_percent_above_ma_fields():
     packet = AnalysisPacketBuilder().build(data, manual_overrides={"active": False, "metrics": {}})
 
     assert packet.facts_by_layer["L3"].state == "healthy"
+
+
+def test_l5_price_volume_quality_is_native_packet_metric():
+    data = {
+        "timestamp_utc": "2026-05-04T00:00:00Z",
+        "indicators": [
+            {
+                "layer": 5,
+                "function_id": "get_price_volume_quality_qqq",
+                "metric_name": "QQQ Price-Volume Quality",
+                "raw_data": {
+                    "name": "QQQ Price-Volume Quality",
+                    "value": {
+                        "vwap_20": 350.0,
+                        "price_vs_vwap_20": "above",
+                        "mfi_14": 72.0,
+                        "mfi_status": "neutral",
+                        "cmf_20": 0.08,
+                        "cmf_status": "accumulation",
+                    },
+                },
+                "collection_timestamp_utc": "2026-05-04T00:00:01Z",
+            }
+        ],
+    }
+
+    packet = AnalysisPacketBuilder().build(data, manual_overrides={"active": False, "metrics": {}})
+
+    assert "get_price_volume_quality_qqq" in packet.raw_data["L5"]
+    assert "get_price_volume_quality_qqq" in packet.facts_by_layer["L5"].key_metrics
+    signal = next(
+        item
+        for item in packet.facts_by_layer["L5"].core_signals
+        if item["metric"] == "get_price_volume_quality_qqq"
+    )
+    assert signal["value"]["vwap_20"] == 350.0
+    assert signal["value"]["mfi_14"] == 72.0
+    assert signal["value"]["cmf_20"] == 0.08

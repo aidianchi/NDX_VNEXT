@@ -567,14 +567,48 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
                         "EarningsYield": 3.03,
                         "ThirdPartyChecks": [
                             {"source_name": "Trendonify", "metric": "ndx_trailing_pe", "value": 34.1, "percentile_10y": 86.0},
-                            {"source_name": "WorldPERatio", "metric": "ndx_trailing_pe", "value": 32.3, "historical_percentile": None, "methodology": "rolling average / outlier notes"},
+                            {
+                                "source_name": "WorldPERatio",
+                                "metric": "ndx_trailing_pe",
+                                "value": 32.3,
+                                "historical_percentile": None,
+                                "relative_position": {
+                                    "position_type": "std_dev_context_not_percentile",
+                                    "valuation_windows": {"10y": {"deviation_vs_mean_sigma": 1.7, "valuation_label": "Overvalued"}},
+                                },
+                            },
                         ],
                     },
                     "data_quality": {"source_tier": "component_model", "coverage": {"market_cap_coverage_pct": 92.5}},
                 },
             },
-            "reasoning": "1. yfinance 成分股模型给出的是当前PE和覆盖率，不能单独承担历史估值 regime 判断。2. Trendonify 明确给出86%的估值分位，因此可以说当前估值处于历史偏高区域。3. WorldPERatio PE与当前PE接近，说明当前值方向上可互相校验；但它没有明确 percentile，不能用 rolling range 冒充分位。4. 盈利收益率约3.03%，仍需要和10年期美债以及简式收益差距一起看安全垫。5. 结论：历史分位判断来自真实 percentile，当前值判断来自多源交叉校验。",
-            "output_narrative": "NDX当前PE约33倍，Trendonify给出的历史分位为86%，支持“估值处于历史偏高位置”的判断。WorldPERatio的PE读数接近，可作为当前值校验，但它没有明确历史分位，不能替代Trendonify或人工/Wind的分位锚。"
+            "reasoning": "1. yfinance 成分股模型给出的是当前PE和覆盖率，不能单独承担历史估值 regime 判断。2. Trendonify 明确给出86%的估值分位，因此可以说当前估值处于历史偏高区域。3. WorldPERatio PE与当前PE接近，且10年窗口标记为相对滚动均值偏高；但它的标准差/z-score语境不是 percentile，不能用估值标签冒充分位。4. 盈利收益率约3.03%，仍需要和10年期美债以及简式收益差距一起看安全垫。5. 结论：历史分位判断来自真实 percentile，WorldPERatio 只负责当前值与相对均值辅助描述。",
+            "output_narrative": "NDX当前PE约33倍，Trendonify给出的历史分位为86%，支持“估值处于历史偏高位置”的判断。WorldPERatio的PE读数接近，且10年窗口显示相对滚动均值偏高，可辅助描述估值位置，但它没有明确历史分位，不能替代Trendonify或人工/Wind的分位锚。"
+        }
+    ],
+    "get_damodaran_us_implied_erp": [
+        {
+            "context": "【月度优先】Damodaran 是美国市场 implied ERP 背景锚。ERPbymonth.xlsx 或当月 ERP<Month><YY>.xlsx 才能代表 monthly current ERP；histimpl.xls 只能作为 annual history fallback。",
+            "input": {
+                "function_id": "get_damodaran_us_implied_erp",
+                "raw_data": {
+                    "value": {
+                        "data_date": "2026-05-01",
+                        "erp_t12m_adjusted_payout": 4.24,
+                        "erp_t12m_cash_yield": 4.36,
+                        "erp_avg_cf_yield_10y": 6.36,
+                        "erp_net_cash_yield": 4.15,
+                        "erp_normalized_earnings_payout": 3.73,
+                        "us_10y_treasury_rate": 4.40,
+                        "default_spread": 0.26,
+                        "adjusted_riskfree_rate": 4.14,
+                        "expected_return": 8.55,
+                        "source_file": "ERPbymonth.xlsx",
+                    }
+                },
+            },
+            "reasoning": "1. 这组数据来自Damodaran月度口径，可以代表当前美国市场风险补偿背景。2. 多个ERP口径回答不同现金流假设，不能只拿一个数字当作唯一真值。3. 它不是NDX专属估值，也不能替代NDX自身PE、Forward PE、PB或简式收益差距。4. 若只拿到histimpl.xls年度历史表，则应降级为年度背景，不写成最新月度ERP。",
+            "output_narrative": "Damodaran 2026-05-01 月度数据给出的美国市场 implied ERP 约在多个口径之间分布，10年期美债、默认利差和调整后无风险利率共同说明风险补偿背景。它是美国大盘参考锚，不替代NDX自身估值分位或简式收益差距。"
         }
     ],
     "get_qqq_technical_indicators": [
@@ -623,6 +657,14 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
             "input": {"function_id": "get_volume_analysis_qqq", "raw_data": {"value": {"volume_status": "declining", "price_trend": "rising", "volume_price_relationship": "bearish_divergence"}}},
             "reasoning": "1. 价格上涨但成交量下降，属于缩量上涨。2. 机制：新增买盘不足 -> 上涨质量下降 -> 对坏消息更敏感。3. 结论：这不是趋势反转确认，但会降低L5上升趋势的质量评分。",
             "output_narrative": "QQQ呈现缩量上涨结构，说明价格继续走强但新增买盘确认不足。该信号不会单独推翻趋势，却会降低上升趋势的质量和抗冲击能力。"
+        }
+    ],
+    "get_price_volume_quality_qqq": [
+        {
+            "context": "【量价质量验证】VWAP/MFI/CMF 只回答趋势是否获得成交量加权成本、带量动能和资金流压力确认，不能单独给买卖结论。",
+            "input": {"function_id": "get_price_volume_quality_qqq", "raw_data": {"value": {"price_vs_vwap_20": "above", "vwap_deviation_pct": 1.2, "mfi_14": 72.0, "mfi_status": "neutral", "cmf_20": 0.08, "cmf_status": "accumulation"}}},
+            "reasoning": "1. 价格位于20日VWAP上方，说明短期价格仍在成交量加权成本之上。2. MFI 72 属于偏强但未到极端超买，带量动能没有明显拥挤失控。3. CMF 为正且处于积累区间，说明收盘位置与成交量共同支持资金流确认。4. 结论：这组指标提高趋势质量置信度，但它不能替代OBV、成交量结构和L3广度确认，更不能推出估值合理。",
+            "output_narrative": "VWAP/MFI/CMF 对当前趋势形成温和确认：价格仍在20日成交量加权成本上方，MFI偏强但未极端，CMF显示一定积累压力。它提高L5趋势质量置信度，但不能单独构成买入或长期价值判断。"
         }
     ],
     "get_donchian_channels_qqq": [
