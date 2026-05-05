@@ -24,6 +24,9 @@ except ImportError:
 
 from io import BytesIO, StringIO
 import re
+from typing import Iterable
+from zipfile import ZipFile
+from xml.etree import ElementTree as ET
 
 # =====================================================
 # 第4层函数
@@ -59,7 +62,11 @@ def _safe_float(value: Any) -> Optional[float]:
     except Exception:
         pass
     if isinstance(value, str):
-        value = value.strip().replace("%", "").replace(",", "")
+        value = value.strip().replace("%", "")
+        if "," in value and "." not in value and re.search(r"\d,\d{1,2}$", value):
+            value = value.replace(",", ".")
+        else:
+            value = value.replace(",", "")
         if not value:
             return None
     try:
@@ -182,6 +189,151 @@ def _first_number(pattern: str, text: str) -> Optional[float]:
 def _first_date(pattern: str, text: str) -> Optional[str]:
     match = re.search(pattern, text, flags=re.I | re.S)
     return match.group(1).strip() if match else None
+
+
+def _percent_or_none(value: Any, digits: int = 2) -> Optional[float]:
+    number = _safe_float(value)
+    if number is None:
+        return None
+    if abs(number) <= 1:
+        number *= 100
+    return _round_or_none(number, digits)
+
+
+def _excel_serial_to_date(value: Any, *, date1904: bool = False) -> Optional[str]:
+    number = _safe_float(value)
+    if number is None or number < 20000:
+        return None
+    try:
+        if date1904:
+            number += 1462
+        return (datetime(1899, 12, 30) + timedelta(days=int(number))).strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def _normalize_label(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _xlsx_cell_text(cell: ET.Element, shared_strings: List[str]) -> Any:
+    cell_type = cell.attrib.get("t")
+    if cell_type == "inlineStr":
+        return "".join(text.text or "" for text in cell.findall(".//{*}t")).strip()
+
+    raw_value = cell.findtext("{*}v")
+    if raw_value is None:
+        return ""
+    raw_value = raw_value.strip()
+    if cell_type == "s":
+        idx = int(_safe_float(raw_value) or 0)
+        return shared_strings[idx] if 0 <= idx < len(shared_strings) else ""
+    if cell_type == "str":
+        return raw_value
+    number = _safe_float(raw_value)
+    return number if number is not None else raw_value
+
+
+def _xlsx_col_index(cell_ref: str) -> int:
+    match = re.match(r"([A-Z]+)", str(cell_ref or "A1").upper())
+    letters = match.group(1) if match else "A"
+    value = 0
+    for char in letters:
+        value = value * 26 + (ord(char) - ord("A") + 1)
+    return value - 1
+
+
+def _parse_xlsx_tables(content: bytes) -> List[pd.DataFrame]:
+    """Parse simple XLSX sheets with stdlib so official Damodaran files do not require openpyxl."""
+    with ZipFile(BytesIO(content)) as zf:
+        shared_strings: List[str] = []
+        if "xl/sharedStrings.xml" in zf.namelist():
+            root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+            for item in root.findall(".//{*}si"):
+                shared_strings.append("".join(text.text or "" for text in item.findall(".//{*}t")).strip())
+
+        rels: Dict[str, str] = {}
+        rels_root = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+        for rel in rels_root.findall("{*}Relationship"):
+            target = rel.attrib.get("Target", "")
+            if target.startswith("/"):
+                path = target.lstrip("/")
+            else:
+                path = f"xl/{target}"
+            rels[rel.attrib.get("Id", "")] = path.replace("\\", "/")
+
+        workbook = ET.fromstring(zf.read("xl/workbook.xml"))
+        workbook_pr = workbook.find("{*}workbookPr")
+        date1904 = bool(workbook_pr is not None and str(workbook_pr.attrib.get("date1904", "")).lower() in {"1", "true"})
+        tables: List[pd.DataFrame] = []
+        for sheet in workbook.findall(".//{*}sheet"):
+            rel_id = sheet.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+            sheet_path = rels.get(rel_id or "")
+            if not sheet_path or sheet_path not in zf.namelist():
+                continue
+            sheet_root = ET.fromstring(zf.read(sheet_path))
+            rows: List[List[Any]] = []
+            for row in sheet_root.findall(".//{*}sheetData/{*}row"):
+                values: List[Any] = []
+                for cell in row.findall("{*}c"):
+                    idx = _xlsx_col_index(cell.attrib.get("r", ""))
+                    while len(values) <= idx:
+                        values.append("")
+                    values[idx] = _xlsx_cell_text(cell, shared_strings)
+                rows.append(values)
+            if not rows:
+                continue
+            width = max(len(row) for row in rows)
+            normalized_rows = [row + [""] * (width - len(row)) for row in rows]
+            header_idx = next((i for i, row in enumerate(normalized_rows) if any(str(item).strip() for item in row)), 0)
+            headers = [str(item).strip() or f"column_{idx}" for idx, item in enumerate(normalized_rows[header_idx])]
+            data_rows = normalized_rows[header_idx + 1 :]
+            frame = pd.DataFrame(data_rows, columns=headers)
+            frame.attrs["date1904"] = date1904
+            tables.append(frame)
+        return tables
+
+
+def _read_excel_tables(content: bytes) -> List[pd.DataFrame]:
+    try:
+        sheets = pd.read_excel(BytesIO(content), sheet_name=None)
+        return list(sheets.values())
+    except Exception:
+        return _parse_xlsx_tables(content)
+
+
+def _find_column(columns: Iterable[Any], *needles: str, any_needles: Iterable[str] = ()) -> Optional[Any]:
+    any_needles_l = tuple(item.lower() for item in any_needles)
+    for col in columns:
+        label = _normalize_label(col)
+        if all(needle.lower() in label for needle in needles) and (
+            not any_needles_l or any(needle in label for needle in any_needles_l)
+        ):
+            return col
+    return None
+
+
+def _latest_row_by_date(table: pd.DataFrame, date_col: Any) -> Optional[pd.Series]:
+    working = table.copy()
+    date1904 = bool(table.attrs.get("date1904"))
+
+    def sort_key(value: Any) -> str:
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d")
+        serial_date = _excel_serial_to_date(value, date1904=date1904)
+        if serial_date:
+            return serial_date
+        parsed = pd.to_datetime(value, errors="coerce")
+        if pd.isna(parsed):
+            return ""
+        return parsed.strftime("%Y-%m-%d")
+
+    working["_date_key"] = working[date_col].map(sort_key)
+    working = working[working["_date_key"].astype(bool)].sort_values("_date_key")
+    if working.empty:
+        return None
+    return working.iloc[-1]
+
 
 def get_crowdedness_dashboard(end_date: str = None) -> Dict[str, Any]:
     """
@@ -606,7 +758,7 @@ def _parse_worldperatio_ndx_pe(html: str) -> Dict[str, Any]:
     if len(methodology_bits) == 1:
         methodology_bits.append("published WorldPERatio methodology text")
     unavailable_reason = None if percentile is not None else "historical percentile unavailable: source does not provide explicit percentile/rank"
-    return _valuation_source_result(
+    result = _valuation_source_result(
         source_id="worldperatio_pe",
         source_name="WorldPERatio",
         source_url="https://worldperatio.com/index/nasdaq-100/",
@@ -619,6 +771,60 @@ def _parse_worldperatio_ndx_pe(html: str) -> Dict[str, Any]:
         unavailable_reason=unavailable_reason,
         formula="Published Nasdaq 100 PE; no historical percentile unless explicit percentile/rank is published",
     )
+    relative_position = _parse_worldperatio_relative_position(text, percentile_is_explicit=percentile is not None)
+    if relative_position:
+        result["relative_position"] = relative_position
+        result["methodology"] = f"{result['methodology']}; std-dev / z-score relative context is not percentile"
+    return result
+
+
+def _parse_worldperatio_relative_position(text: str, *, percentile_is_explicit: bool) -> Dict[str, Any]:
+    windows: Dict[str, Dict[str, Any]] = {}
+    for years in (1, 5, 10, 20):
+        window_key = f"{years}y"
+        block_match = re.search(
+            rf"{years}\s+Year.*?(?=\n\s*(?:1|5|10|20)\s+Year|\n\s*(?:50|200)\s+Day|$)",
+            text,
+            flags=re.I | re.S,
+        )
+        if not block_match:
+            continue
+        block = block_match.group(0)
+        average_pe = _first_number(r"Average\s+PE\s*:?\s*\n?\s*([0-9]+(?:\.[0-9]+)?)", block)
+        std_dev = _first_number(r"(?:Standard\s+Deviation|Std\.?\s*Dev\.?)\s*:?\s*\n?\s*([0-9]+(?:\.[0-9]+)?)", block)
+        range_match = re.search(
+            r"(?:Fair\s+Value\s+Range|Range)\s*:?\s*\n?\s*([0-9]+(?:\.[0-9]+)?)\s*[-–]\s*([0-9]+(?:\.[0-9]+)?)",
+            block,
+            flags=re.I,
+        )
+        deviation = _first_number(r"Deviation\s+from\s+mean\s*:?\s*\n?\s*([-+]?[0-9]+(?:\.[0-9]+)?)\s*(?:sigma|σ)?", block)
+        label = _first_date(r"Valuation\s*:?\s*\n?\s*([A-Za-z][A-Za-z\s-]+?)(?:\n|$)", block)
+        if not any(value is not None for value in (average_pe, std_dev, deviation)) and not range_match and not label:
+            continue
+        windows[window_key] = {
+            "average_pe": _round_or_none(average_pe),
+            "std_dev": _round_or_none(std_dev),
+            "range_low": _round_or_none(_safe_float(range_match.group(1)) if range_match else None),
+            "range_high": _round_or_none(_safe_float(range_match.group(2)) if range_match else None),
+            "deviation_vs_mean_sigma": _round_or_none(deviation),
+            "valuation_label": label.strip() if label else None,
+        }
+
+    trend_context = {
+        "sma50_margin_pct": _round_or_none(_first_number(r"50\s+Day\s+SMA\s+margin\s*:?\s*\n?\s*([-+]?[0-9]+(?:\.[0-9]+)?)\s*%?", text)),
+        "sma200_margin_pct": _round_or_none(_first_number(r"200\s+Day\s+SMA\s+margin\s*:?\s*\n?\s*([-+]?[0-9]+(?:\.[0-9]+)?)\s*%?", text)),
+    }
+    trend_context = {key: value for key, value in trend_context.items() if value is not None}
+
+    if not windows and not trend_context:
+        return {}
+    return {
+        "position_type": "std_dev_context_not_percentile",
+        "percentile_is_explicit": percentile_is_explicit,
+        "valuation_windows": windows,
+        "trend_context": trend_context,
+        "interpretation_boundary": "WorldPERatio rolling averages/std-dev labels describe relative position but are not historical percentile/rank.",
+    }
 
 
 def _parse_trendonify_ndx_pe(html: str, *, forward: bool = False) -> Dict[str, Any]:
@@ -771,12 +977,151 @@ def _parse_damodaran_implied_erp_html(html: str) -> Dict[str, Any]:
     return _parse_damodaran_implied_erp_tables(tables)
 
 
+def _format_damodaran_date(value: Any, *, date1904: bool = False) -> Optional[str]:
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    serial_date = _excel_serial_to_date(value, date1904=date1904)
+    if serial_date:
+        return serial_date
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.strftime("%Y-%m-%d")
+
+
+def _parse_damodaran_monthly_erp_excel(content: bytes) -> Dict[str, Any]:
+    """Parse Damodaran ERPbymonth.xlsx for the latest monthly current ERP row."""
+    tables = _read_excel_tables(content)
+    for table in tables:
+        if table.empty:
+            continue
+        date_col = _find_column(table.columns, "date")
+        if not date_col:
+            date_col = _find_column(table.columns, "start", any_needles=("month",))
+        if not date_col:
+            continue
+        latest = _latest_row_by_date(table, date_col)
+        if latest is None:
+            continue
+
+        columns = list(table.columns)
+        sp500_col = _find_column(columns, "s&p")
+        tbond_col = _find_column(columns, "t.bond")
+        if not tbond_col:
+            tbond_col = _find_column(columns, "treasury")
+        riskfree_col = _find_column(columns, "riskfree")
+        sustainable_col = _find_column(columns, "erp", any_needles=("sustainable", "adjusted payout"))
+        cash_yield_col = next(
+            (
+                col
+                for col in columns
+                if "erp" in _normalize_label(col)
+                and "t12" in _normalize_label(col).replace(" ", "")
+                and "sustainable" not in _normalize_label(col)
+                and "net" not in _normalize_label(col)
+            ),
+            None,
+        )
+        smoothed_col = _find_column(columns, "erp", any_needles=("smoothed", "average cf", "average"))
+        normalized_col = _find_column(columns, "erp", any_needles=("normalized",))
+        net_cash_col = _find_column(columns, "erp", any_needles=("net cash",))
+        expected_return_col = _find_column(columns, "expected", "return")
+
+        result = {
+            "data_date": latest.get("_date_key") or _format_damodaran_date(latest.get(date_col), date1904=bool(table.attrs.get("date1904"))),
+            "sp500_level": _round_or_none(_safe_float(latest.get(sp500_col))) if sp500_col else None,
+            "us_10y_treasury_rate": _percent_or_none(latest.get(tbond_col)) if tbond_col else None,
+            "adjusted_riskfree_rate": _percent_or_none(latest.get(riskfree_col)) if riskfree_col else None,
+            "erp_t12m_adjusted_payout": _percent_or_none(latest.get(sustainable_col)) if sustainable_col else None,
+            "erp_t12m_cash_yield": _percent_or_none(latest.get(cash_yield_col)) if cash_yield_col else None,
+            "erp_avg_cf_yield_10y": _percent_or_none(latest.get(smoothed_col)) if smoothed_col else None,
+            "erp_normalized_earnings_payout": _percent_or_none(latest.get(normalized_col)) if normalized_col else None,
+            "erp_net_cash_yield": _percent_or_none(latest.get(net_cash_col)) if net_cash_col else None,
+            "expected_return": _percent_or_none(latest.get(expected_return_col)) if expected_return_col else None,
+            "source_file": "ERPbymonth.xlsx",
+        }
+        series_frame = table.copy()
+        if "_date_key" not in series_frame.columns:
+            series_frame["_date_key"] = series_frame[date_col].apply(
+                lambda value: _format_damodaran_date(value, date1904=bool(table.attrs.get("date1904")))
+            )
+        series_frame = series_frame.dropna(subset=["_date_key"]).tail(120)
+        monthly_series = []
+        for _, row in series_frame.iterrows():
+            monthly_series.append(
+                {
+                    "data_date": str(row.get("_date_key")),
+                    "sp500_level": _round_or_none(_safe_float(row.get(sp500_col))) if sp500_col else None,
+                    "us_10y_treasury_rate": _percent_or_none(row.get(tbond_col)) if tbond_col else None,
+                    "adjusted_riskfree_rate": _percent_or_none(row.get(riskfree_col)) if riskfree_col else None,
+                    "erp_t12m_adjusted_payout": _percent_or_none(row.get(sustainable_col)) if sustainable_col else None,
+                    "erp_t12m_cash_yield": _percent_or_none(row.get(cash_yield_col)) if cash_yield_col else None,
+                    "erp_avg_cf_yield_10y": _percent_or_none(row.get(smoothed_col)) if smoothed_col else None,
+                    "erp_normalized_earnings_payout": _percent_or_none(row.get(normalized_col)) if normalized_col else None,
+                    "erp_net_cash_yield": _percent_or_none(row.get(net_cash_col)) if net_cash_col else None,
+                    "expected_return": _percent_or_none(row.get(expected_return_col)) if expected_return_col else None,
+                }
+            )
+        result["monthly_series"] = monthly_series
+        if result["us_10y_treasury_rate"] is not None and result["adjusted_riskfree_rate"] is not None:
+            result["default_spread"] = _round_or_none(result["us_10y_treasury_rate"] - result["adjusted_riskfree_rate"])
+        else:
+            result["default_spread"] = None
+        if result["data_date"] and any(value is not None for key, value in result.items() if key.startswith("erp_")):
+            return result
+    raise ValueError("No monthly Damodaran ERP row found")
+
+
+def _parse_damodaran_current_erp_calculator_excel(content: bytes, *, source_file: str) -> Dict[str, Any]:
+    """Parse the current monthly Damodaran ERP calculator workbook for current assumptions."""
+    tables = _read_excel_tables(content)
+    observations: List[Tuple[str, Any]] = []
+    for table in tables:
+        for _, row in table.iterrows():
+            cells = [cell for cell in row.tolist() if str(cell).strip()]
+            if len(cells) < 2:
+                continue
+            for idx, cell in enumerate(cells):
+                label = _normalize_label(cell)
+                if not label or _safe_float(cell) is not None:
+                    continue
+                value = next((_safe_float(candidate) for candidate in cells[idx + 1 :] if _safe_float(candidate) is not None), None)
+                if value is not None:
+                    observations.append((label, value))
+
+    def find_value(*needles: str, any_needles: Iterable[str] = ()) -> Optional[float]:
+        any_needles_l = tuple(item.lower() for item in any_needles)
+        for label, value in observations:
+            if all(needle.lower() in label for needle in needles) and (
+                not any_needles_l or any(needle in label for needle in any_needles_l)
+            ):
+                return value
+        return None
+
+    treasury = find_value("treasury", any_needles=("10-year", "10 year", "t.bond"))
+    default_spread = find_value("default", "spread")
+    adjusted_riskfree = find_value("riskfree", any_needles=("adjusted", "$"))
+    expected_return = find_value("expected", "return")
+    erp_tbond = find_value("implied", any_needles=("premium", "erp"))
+
+    result = {
+        "source_file": source_file,
+        "us_10y_treasury_rate": _percent_or_none(treasury),
+        "default_spread": _percent_or_none(default_spread),
+        "adjusted_riskfree_rate": _percent_or_none(adjusted_riskfree),
+        "expected_return": _percent_or_none(expected_return),
+        "erp_net_cash_yield": _percent_or_none(erp_tbond),
+    }
+    if not any(value is not None for key, value in result.items() if key != "source_file"):
+        raise ValueError("No current Damodaran ERP calculator assumptions found")
+    return result
+
+
 def _parse_damodaran_implied_erp_excel(content: bytes) -> Dict[str, Any]:
     """Parse Damodaran histimpl.xls bytes, falling back to HTML-table xls payloads."""
     errors: List[str] = []
     try:
-        sheets = pd.read_excel(BytesIO(content), sheet_name=None)
-        return _parse_damodaran_implied_erp_tables(list(sheets.values()))
+        return _parse_damodaran_implied_erp_tables(_read_excel_tables(content))
     except Exception as exc:
         errors.append(str(exc)[:120])
 
@@ -797,27 +1142,66 @@ def get_damodaran_us_implied_erp(end_date: str = None) -> Dict[str, Any]:
     """Damodaran US implied ERP reference anchor; not an NDX-specific valuation metric."""
     date_str = end_date or datetime.now().strftime("%Y-%m-%d")
     html_url = "https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/implpr.html"
-    download_url = "http://www.stern.nyu.edu/~adamodar/pc/datasets/histimpl.xls"
+    annual_download_url = "http://www.stern.nyu.edu/~adamodar/pc/datasets/histimpl.xls"
+    monthly_url = "https://pages.stern.nyu.edu/~adamodar/pc/implprem/ERPbymonth.xlsx"
+    try:
+        current_dt = datetime.strptime(date_str, "%Y-%m-%d")
+    except Exception:
+        current_dt = datetime.now()
+    current_source_file = f"ERP{current_dt.strftime('%B')}{current_dt.strftime('%y')}.xlsx"
+    current_url = f"https://pages.stern.nyu.edu/~adamodar/pc/implprem/{current_source_file}"
     parsed: Optional[Dict[str, Any]] = None
     retrieval_method = ""
     errors: List[str] = []
 
-    content, excel_error = _fetch_bytes(download_url)
+    content, monthly_error = _fetch_bytes(monthly_url)
     if content:
         try:
-            parsed = _parse_damodaran_implied_erp_excel(content)
-            retrieval_method = "excel"
+            parsed = _parse_damodaran_monthly_erp_excel(content)
+            retrieval_method = "monthly_excel"
+            current_content, current_error = _fetch_bytes(current_url)
+            if current_content:
+                try:
+                    current_parsed = _parse_damodaran_current_erp_calculator_excel(
+                        current_content,
+                        source_file=current_source_file,
+                    )
+                    parsed["current_calculator_source_file"] = current_source_file
+                    parsed["current_calculator_url"] = current_url
+                    for key in ("default_spread", "expected_return"):
+                        if current_parsed.get(key) is not None:
+                            parsed[key] = current_parsed[key]
+                except Exception as exc:
+                    parsed["current_calculator_error"] = str(exc)[:120]
+            elif current_error:
+                parsed["current_calculator_error"] = current_error
         except Exception as exc:
-            errors.append(f"excel_parse_failed: {str(exc)[:120]}")
+            errors.append(f"monthly_excel_parse_failed: {str(exc)[:120]}")
     else:
-        errors.append(f"excel_fetch_failed: {excel_error or 'empty_response'}")
+        errors.append(f"monthly_excel_fetch_failed: {monthly_error or 'empty_response'}")
+
+    if parsed is None:
+        annual_content, annual_excel_error = _fetch_bytes(annual_download_url)
+    else:
+        annual_content, annual_excel_error = None, None
+
+    if parsed is None and annual_content:
+        try:
+            parsed = _parse_damodaran_implied_erp_excel(annual_content)
+            parsed["source_file"] = "histimpl.xls"
+            retrieval_method = "annual_excel_fallback"
+        except Exception as exc:
+            errors.append(f"annual_excel_parse_failed: {str(exc)[:120]}")
+    elif parsed is None:
+        errors.append(f"annual_excel_fetch_failed: {annual_excel_error or 'empty_response'}")
 
     if parsed is None:
         html, html_error = _fetch_text(html_url)
         if html:
             try:
                 parsed = _parse_damodaran_implied_erp_html(html)
-                retrieval_method = "html_fallback"
+                parsed["source_file"] = "implpr.html"
+                retrieval_method = "annual_html_fallback"
             except Exception as exc:
                 errors.append(f"html_parse_failed: {str(exc)[:120]}")
         else:
@@ -832,8 +1216,8 @@ def get_damodaran_us_implied_erp(end_date: str = None) -> Dict[str, Any]:
             "unit": "percent",
             "source_tier": SOURCE_TIER_UNAVAILABLE,
             "source_name": "Damodaran",
-            "source_url": download_url,
-            "download_url": download_url,
+            "source_url": monthly_url,
+            "download_url": monthly_url,
             "availability": "unavailable",
             "unavailable_reason": unavailable_reason,
             "error": unavailable_reason,
@@ -849,26 +1233,27 @@ def get_damodaran_us_implied_erp(end_date: str = None) -> Dict[str, Any]:
     value = {
         **parsed,
         "scope": "US equity market reference, not NDX-specific",
-        "download_url": download_url,
+        "download_url": monthly_url if retrieval_method == "monthly_excel" else annual_download_url,
         "retrieval_method": retrieval_method,
     }
+    data_date_out = str(parsed.get("data_date") or parsed.get("year") or date_str)
     return {
         "name": "Damodaran US Implied ERP Reference",
         "series_id": "DAMODARAN_US_IMPLIED_ERP",
         "value": value,
         "unit": "percent",
-        "date": str(parsed.get("year") or date_str),
+        "date": data_date_out,
         "source_tier": SOURCE_TIER_OFFICIAL,
         "source_name": "Damodaran",
-        "source_url": download_url if retrieval_method == "excel" else html_url,
-        "download_url": download_url,
+        "source_url": monthly_url if retrieval_method == "monthly_excel" else (annual_download_url if retrieval_method == "annual_excel_fallback" else html_url),
+        "download_url": monthly_url if retrieval_method == "monthly_excel" else annual_download_url,
         "availability": "available",
         "notes": "美国市场 implied ERP 参考锚，不替代 NDX 自身估值或简式收益差距。",
         "data_quality": _quality_block(
             source_tier=SOURCE_TIER_OFFICIAL,
-            data_date=str(parsed.get("year") or date_str),
-            update_frequency="Damodaran dataset/page update cadence",
-            formula="US implied ERP model, FCFE/DDM as published by Damodaran",
+            data_date=data_date_out,
+            update_frequency="monthly current ERP when ERPbymonth.xlsx is available; annual history fallback otherwise",
+            formula="Damodaran US implied ERP model; monthly current ERP preferred, histimpl.xls annual history only as fallback",
             coverage={"scope": "US market/S&P 500 reference"},
             fallback_chain=[SOURCE_TIER_OFFICIAL, SOURCE_TIER_UNAVAILABLE],
         ),
@@ -1064,4 +1449,3 @@ def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:
 # =====================================================
 # 第五层：技术指标（*本轮修改部分*）
 # =====================================================
-

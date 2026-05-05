@@ -75,6 +75,7 @@ LAYER_FUNCTIONS = {
         "get_macd_qqq",
         "get_obv_qqq",
         "get_volume_analysis_qqq",
+        "get_price_volume_quality_qqq",
         "get_donchian_channels_qqq",
         "get_multi_scale_ma_position",
     },
@@ -334,7 +335,8 @@ class AnalysisPacketBuilder:
         percentile = self._extract_percentile(value)
         trend = self._extract_trend(value)
         status = self._extract_status(value)
-        compact_value = self._extract_signal_value(value)
+        compact_value = self._extract_signal_value(value, function_id=function_id)
+        relative_position_context = self._extract_relative_position_context(value, function_id=function_id)
         summary_bits = [payload.get("metric_name") or function_id]
         if compact_value is not None:
             summary_bits.append(f"值={compact_value}")
@@ -348,9 +350,11 @@ class AnalysisPacketBuilder:
             summary_bits.append("人工覆盖")
         if function_id == "get_ndx_pe_and_earnings_yield" and percentile is None and compact_value is not None:
             summary_bits.append("历史分位缺失")
+        if relative_position_context:
+            summary_bits.append("含非分位相对位置")
         if payload.get("error"):
             summary_bits.append(f"异常={payload['error']}")
-        return {
+        signal = {
             "metric": function_id,
             "metric_name": payload.get("metric_name") or function_id,
             "value": compact_value,
@@ -361,13 +365,22 @@ class AnalysisPacketBuilder:
             "error": payload.get("error"),
             "summary": " | ".join(str(bit) for bit in summary_bits if bit),
         }
+        if relative_position_context:
+            signal["relative_position_context"] = relative_position_context
+        return signal
 
-    def _extract_signal_value(self, value: Any) -> Any:
+    def _extract_signal_value(self, value: Any, *, function_id: str = "") -> Any:
         if value is None:
             return None
         if isinstance(value, (str, int, float)):
             return _round_if_float(value)
         if isinstance(value, dict):
+            if function_id == "get_price_volume_quality_qqq":
+                return {
+                    key: _round_if_float(value[key])
+                    for key in ("vwap_20", "mfi_14", "cmf_20")
+                    if key in value
+                }
             level = value.get("level")
             if isinstance(level, (str, int, float)):
                 return _round_if_float(level)
@@ -382,6 +395,20 @@ class AnalysisPacketBuilder:
 
     def _extract_percentile(self, value: Any) -> Optional[float]:
         return _find_first_number(value, ("percentile_10y", "percentile_5y", "percentile_1y", "percentile"))
+
+    def _extract_relative_position_context(self, value: Any, *, function_id: str = "") -> Dict[str, Any]:
+        if function_id != "get_ndx_pe_and_earnings_yield" or not isinstance(value, dict):
+            return {}
+        checks = value.get("ThirdPartyChecks")
+        if not isinstance(checks, list):
+            return {}
+        context: Dict[str, Any] = {}
+        for item in checks:
+            if not isinstance(item, dict) or not isinstance(item.get("relative_position"), dict):
+                continue
+            source_name = str(item.get("source_name") or item.get("source_id") or item.get("source") or "unknown")
+            context[source_name] = item["relative_position"]
+        return context
 
     def _extract_trend(self, value: Any) -> Optional[str]:
         return _find_first_string(

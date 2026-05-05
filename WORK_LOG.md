@@ -4,6 +4,126 @@
 
 ---
 
+## 2026-05-05
+
+### 推送当前版本，并继续落地指标级可视化后的下一轮观察
+
+完成内容：
+
+- 将当前数据源审计、native brief 图表、指标级微图、研究控制台和 Lightweight workbench 原型提交到 Git，并推送到 GitHub 分支 `claude/20260503-vnext-brief-redesign`。
+- 创建草稿 PR：`https://github.com/aidianchi/NDX_VNEXT/pull/1`，方便后续人工或 AI 审查。
+- 明确图表三层架构：底稿微图负责指标速读，市场总览图负责跨层压力/共振，Lightweight workbench 负责看盘式交互探索。
+- 新增 `chart_time_series.json` artifact 写入路径：vNext run 会保存 QQQ OHLCV、成交量和 MA5/20/60/200；workbench 优先读取同一 run 的 artifact，避免图表与文字来自不同抓取时点。
+- 修复 evidence hash 直达：打开 `#evidence-Lx-...` 会自动展开对应 Layer、滚动到指标卡并高亮，证据链接更适合审查和分享。
+
+验证结果：
+
+- 提交前全量测试：`python3 -m pytest -q` 为 89 passed，6 warnings。
+- 本轮新增行为先写失败测试，再实现：hash 直达、workbench artifact 优先读取、`chart_time_series.json` 写入均有测试覆盖。
+- 定向测试：`python3 -m pytest tests/test_chart_time_series_artifacts.py tests/test_interactive_chart_workbench.py tests/test_vnext_reporter.py::test_vnext_reporter_generates_native_ui -q` 为 4 passed，4 warnings。
+
+---
+
+### 调研并落地交互式看盘图原型：Lightweight Charts Workbench
+
+完成内容：
+
+- 复核当前指标微图边界：它们适合底稿速读，但不适合看盘式探索；需要把“连续阅读报告”和“交互图探索”分成两层。
+- 查阅并比较一手资料后，选择 TradingView Lightweight Charts 作为第一版看盘式原型依赖；它比 Plotly 更接近金融主图手感，比 ECharts 更适合 K 线/均线/成交量这类时间序列探索。
+- 本地安装 `lightweight-charts@5.2.0`，并把 `node_modules/` 加入 `.gitignore`，避免依赖目录污染版本管理。
+- 新增 `src/interactive_chart_workbench.py`，生成独立交互图页面 `output/reports/vnext_interactive_charts_20260502.html`：包含 QQQ K 线、成交量、MA5/20/60/200、区间按钮、crosshair readout 和 L5 摘要。
+- 修复 native brief 的 JSON payload 嵌入方式：不再把 `<script type="application/json">` 内的 JSON 转成 HTML entity，避免浏览器端 `JSON.parse` 失败影响证据抽屉和跳转。
+
+验证结果：
+
+- `npm view lightweight-charts version license dist.unpackedSize --json`：确认当前版本 5.2.0，Apache-2.0。
+- `npm install --no-save lightweight-charts@5.2.0`：成功安装。
+- `python3 -m pytest -q tests/test_vnext_reporter.py tests/test_interactive_chart_workbench.py`：6 passed，4 warnings。
+- `python3 -m py_compile src/agent_analysis/vnext_reporter.py src/interactive_chart_workbench.py`：通过。
+- `python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/20260502_193057 --lookback-days 420`：生成 `output/reports/vnext_interactive_charts_20260502.html`。
+- in-app browser 检查：交互图页面无当前页面脚本错误；K 线、均线、成交量和 3M/6M/1Y/ALL 区间按钮可见。
+
+---
+
+### 完成 L1-L5 指标级可视化：底稿旁微图与复杂指标展开图
+
+完成内容：
+
+- 从第一性原理重新审视 L1-L5 的全部指标：优先图表化“相对位置、均线/基准偏离、组成项、广度结构、集中度、估值源分歧、技术区间和资金流确认”，不把没有结构信息的单点文字硬画成图。
+- 在 native `brief` 的五层底稿指标卡内新增轻量内联微图，直接消费本次 `analysis_packet.raw_data`，不接回 legacy Plotly chart 管线，也不重新联网拉取另一批数据。
+- 覆盖主要图表族：历史分位/5Y/10Y/z-score 位置尺、均线基准对照、净流动性组成项、Fear & Greed 分项、拥挤度组件、广度参与条、M7 基本面热力格、L4 估值源校验、Damodaran 当前 ERP lens、收益差距压力尺、L5 技术 dashboard、MA ladder、MACD、OBV、成交量和 Donchian channel。
+- 对复杂指标采用可展开图：例如 Fear & Greed 默认展开，M7 基本面默认折叠，避免五层底稿被大图撑散。
+- 旧 run `output/analysis/vnext/20260502_193057` 重新生成后，`output/reports/vnext_research_ui_brief_20260502.html` 包含 29 个指标级可视化。
+
+验证结果：
+
+- 先写失败测试 `test_vnext_reporter_renders_indicator_level_visuals`，确认旧报告没有指标级微图；实现后该测试通过。
+- `python3 -m pytest -q tests/test_vnext_reporter.py`：5 passed，4 warnings。
+- `python3 -m py_compile src/agent_analysis/vnext_reporter.py`：通过。
+- `python3 src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20260502_193057 --template brief`：重新生成默认 brief 报告。
+- in-app browser 检查：报告中存在 29 个 `data-indicator-visual`，L1 底稿指标卡可见分位尺、z-score 和净流动性组成项；复杂指标以 details 呈现。
+
+---
+
+### 完成输出体验 4-5 步：报告图表一等公民和研究控制台第一屏
+
+完成内容：
+
+- 在 native `brief` 报告中新增“市场图谱”章节，直接消费 vNext artifacts 与 `analysis_packet.raw_data`，不回退到 legacy chart 叙事。
+- 新增四类报告内原生图表：L4 估值相对位置尺、Damodaran ERP 月度路径、WorldPERatio 窗口标签、L1-L4 利率估值压力图；每张图绑定 evidence refs，可继续打开指标底稿。
+- Damodaran 月度解析器保留 `monthly_series`，未来真实 run 可直接画 `ERPbymonth.xlsx` 的 ERP / 10Y / expected return 月度线图；旧 artifact 没有月度序列时会展示单点读数和边界说明。
+- 新增 `src/research_console.py`，生成 self-contained 第一屏控制台 `output/reports/vnext_research_console.html`，覆盖人工/Wind 输入、flash/pro 模型选择、数据源健康、运行命令、报告入口和人工模板保存。
+- 补充通俗说明：`PLAIN_LANGUAGE_OUTPUT_EXPERIENCE_REVIEW.md`，记录参考 TradingView、Bloomberg、Koyfin 和 FT 图表词汇后的取舍。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_vnext_reporter.py tests/test_research_console.py tests/test_l4_data_authority.py`：14 passed，4 warnings。
+- `python3 -m py_compile src/agent_analysis/vnext_reporter.py src/research_console.py src/tools_L4.py`：通过。
+- `python3 src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20260502_193057 --template brief`：生成 `output/reports/vnext_research_ui_brief_20260502.html`。
+- `python3 src/research_console.py`：生成 `output/reports/vnext_research_console.html`。
+- Chrome headless 截图检查报告首页和控制台首页可渲染；Python/Node Playwright 均未安装，因此未做 Playwright 自动交互验收。
+
+---
+
+### 完成 L4 数据源复盘 1-3 步：Damodaran 月度 ERP、WorldPERatio 相对位置和 L4 边界
+
+完成内容：
+
+- 重构 Damodaran 官方 ERP 获取优先级：优先读取 `ERPbymonth.xlsx`，并尝试读取当月 `ERP<Month><YY>.xlsx`；`histimpl.xls` 降级为年度历史 fallback。
+- 新增无 `openpyxl` 也可工作的轻量 `.xlsx` 解析兜底，并处理 Damodaran 工作簿的 `Start of month` 日期列和 1904 日期系统。
+- Damodaran 输出扩展为多口径字段：`erp_t12m_adjusted_payout`、`erp_t12m_cash_yield`、`erp_avg_cf_yield_10y`、`erp_net_cash_yield`、`erp_normalized_earnings_payout`、`us_10y_treasury_rate`、`default_spread`、`adjusted_riskfree_rate`、`expected_return`、`source_file`、`data_date`。
+- 扩展 WorldPERatio parser：保留 PE、日期和显式 percentile 规则，同时结构化 rolling average、std dev、range、deviation vs mean、valuation label、SMA50/200 margin；这些字段进入 `relative_position`，明确不是历史分位。
+- 更新 L4 packet builder、prompt 和 few-shot：模型可以使用 WorldPERatio 的 `std-dev / z-score relative context` 描述相对位置，但不能写成 percentile；Damodaran 明确区分 monthly current ERP 与 annual history fallback。
+
+验证结果：
+
+- 真实官网 smoke：`get_damodaran_us_implied_erp("2026-05-01")` 成功读取 `ERPbymonth.xlsx` 的 2026-05-01 月度 ERP，并合并 `ERPMay26.xlsx` 的 default spread / expected return。
+- 真实 smoke 关键值：T12m adjusted payout 4.24%、T12m cash yield 4.36%、10 年平均 CF yield 6.36%、net cash yield 4.15%、normalized 3.73%、10Y Treasury 4.40%、default spread 0.26%、adjusted riskfree 4.14%、expected return 8.55%。
+- `python3 -m pytest tests/test_l4_data_authority.py tests/test_l4_external_valuation_sources.py tests/test_vnext_packet_builder.py tests/test_prompt_guardrails.py -q`：29 passed，4 warnings。
+- `python3 -m pytest -q`：86 passed，6 warnings。
+
+---
+
+## 2026-05-04
+
+### 完成 P1：L5 公式层和轻量数据 fallback 收口审阅
+
+完成内容：
+
+- 复核 L5 当前实现，确认主路径仍是稳定的 yfinance 日频 OHLCV，`ta` 只作为公式层标准化引擎；内部 fallback 继续保留，不改变既有数据源优先级。
+- 复核 pandas-datareader 轻量 fallback，维持只用于 FRED 公开 CSV/reader 备用路径；不把 Fama-French、Nasdaq symbols 或 Stooq 接入主流程，避免扩大不稳定面。
+- 从第一性原理审阅 VWAP / MFI / CMF：三者有必要保留为 L5 量价质量验证，因为它们分别回答“价格相对成交量加权成本”“带成交量的动能拥挤”“收盘位置与成交量形成的积累/派发压力”。但它们只提高或降低趋势质量置信度，不能单独给买卖结论，也不能证明估值合理。
+- 补齐 `get_price_volume_quality_qqq` 的 vNext 原生消费路径：进入 `LAYER_FUNCTIONS["L5"]`，加入 deep research canon、L5 prompt 指标语义、few-shot 示例和 legacy alias。
+- 修正 packet builder 对 VWAP/MFI/CMF 复合值的压缩方式，确保三件套在 L5 core signal 中不会被截掉。
+
+验证结果：
+
+- `python3 -m py_compile src/tools_L5.py src/tools_common.py src/agent_analysis/packet_builder.py src/agent_analysis/deep_research_canon.py src/prompt_examples.py`：通过。
+- `python3 -m pytest tests/test_ta_l5_and_pdr_sources.py tests/test_vnext_packet_builder.py tests/test_deep_research_canon.py -q`：21 passed。
+- `python3 -m pytest -q`：81 passed，6 warnings。
+
+---
+
 ## 2026-05-03
 
 ### 完成输出体验第一轮结构改造，并记录用户验收反馈

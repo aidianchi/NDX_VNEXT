@@ -97,6 +97,51 @@ def test_worldperatio_parser_extracts_pe_date_and_methodology_without_fake_perce
     assert "does not provide explicit percentile" in parsed["unavailable_reason"]
 
 
+def test_worldperatio_parser_structures_stddev_windows_and_trend_context():
+    html = """
+    <html><body>
+      <h1>Nasdaq 100 PE Ratio</h1>
+      <div>P/E Ratio</div>
+      <div>32.27</div>
+      <p>01 May 2026</p>
+      <section>
+        <h2>1 Year Rolling Average</h2>
+        <p>Average PE: 31.5</p>
+        <p>Standard Deviation: 2.1</p>
+        <p>Fair Value Range: 29.4 - 33.6</p>
+        <p>Deviation from mean: 0.37 sigma</p>
+        <p>Valuation: Fair</p>
+      </section>
+      <section>
+        <h2>10 Year Rolling Average</h2>
+        <p>Average PE: 26.8</p>
+        <p>Standard Deviation: 3.2</p>
+        <p>Fair Value Range: 23.6 - 30.0</p>
+        <p>Deviation from mean: 1.71 sigma</p>
+        <p>Valuation: Overvalued</p>
+      </section>
+      <p>50 Day SMA margin: 3.4%</p>
+      <p>200 Day SMA margin: 12.6%</p>
+    </body></html>
+    """
+
+    parsed = tools_L4._parse_worldperatio_ndx_pe(html)
+    relative_position = parsed["relative_position"]
+
+    assert relative_position["position_type"] == "std_dev_context_not_percentile"
+    assert relative_position["percentile_is_explicit"] is False
+    assert relative_position["valuation_windows"]["1y"]["average_pe"] == 31.5
+    assert relative_position["valuation_windows"]["1y"]["std_dev"] == 2.1
+    assert relative_position["valuation_windows"]["1y"]["range_low"] == 29.4
+    assert relative_position["valuation_windows"]["1y"]["range_high"] == 33.6
+    assert relative_position["valuation_windows"]["1y"]["deviation_vs_mean_sigma"] == 0.37
+    assert relative_position["valuation_windows"]["1y"]["valuation_label"] == "Fair"
+    assert relative_position["valuation_windows"]["10y"]["valuation_label"] == "Overvalued"
+    assert relative_position["trend_context"]["sma50_margin_pct"] == 3.4
+    assert relative_position["trend_context"]["sma200_margin_pct"] == 12.6
+    assert parsed["historical_percentile"] is None
+
+
 def test_worldperatio_parser_only_uses_explicit_percentile_when_present():
     html = """
     <html><body>

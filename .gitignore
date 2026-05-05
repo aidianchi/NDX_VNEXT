@@ -42,6 +42,9 @@ env/
 .coverage
 htmlcov/
 
+# --- JavaScript dependencies for local report prototypes ---
+node_modules/
+
 # --- Data caches and generated market artifacts ---
 data_cache/
 output/

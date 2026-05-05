@@ -1,11 +1,54 @@
 # vNext 下一步
 
-最近更新：2026-05-03
+最近更新：2026-05-05
 阅读方式：最新事项放在最上面。完成后把结果写入 `WORK_LOG.md`，同样按时间倒序。
 
 ---
 
 ## 最新下一步
+
+### 输出体验：L1-L5 指标级可视化已落地
+
+- 用户指出“四张大图不应该是全部数据可视化”，这个判断成立。vNext 的底稿价值在于每个指标都有独立发言权，因此必要图表应贴近指标卡，而不是只集中在报告前部。
+- 本轮已完成第一版指标级微图：L1-L5 指标卡会按数据形状展示历史分位/5Y/10Y/z-score、均线或基准偏离、组成项、广度、M7 基本面、估值源、Damodaran 当前 ERP lens、收益差距压力、技术区间、MA ladder、MACD、OBV、成交量和 Donchian channel。
+- 设计原则已明确：只有能回答“位置、变化、结构、分歧、区间、压力”的数据才图表化；没有历史或结构语境的单点值不强行画图。
+- 旧 `chart_generator.py` / `chart_adapter_v6.py` 仍可作为 legacy 参考，但 native brief 当前不把它们作为主路径。主路径应继续直接消费 vNext artifacts，避免图表数据和报告文字来自不同抓取时点。
+- 旧 run `output/analysis/vnext/20260502_193057` 重新生成后，默认报告含 29 个指标级可视化；复杂指标使用可展开区，避免底稿阅读被大图打断。
+- 进一步调研后确认：底稿微图不能替代看盘式交互图。已安装 `lightweight-charts@5.2.0` 并新增独立原型 `output/reports/vnext_interactive_charts_20260502.html`，用于验证 QQQ K 线、成交量、MA overlay、区间按钮和 crosshair readout。
+- 已修复 native brief JSON payload 嵌入 bug，避免 `JSON.parse` 失败影响证据抽屉和跳转。
+- 图表三层架构已固定：底稿微图回答“这个指标当下处在哪”，市场总览图回答“跨层压力和共振在哪里”，Lightweight workbench 回答“价格、成交量和技术结构如何交互探索”。三者不能互相替代。
+- 交互图数据已开始纳入 vNext artifacts：主流水线会在 run 目录写入 `chart_time_series.json`，当前先保存 QQQ OHLCV、成交量和 MA5/20/60/200；workbench 优先读取该 artifact，只有缺失时才退回生成时报价抓取。
+- evidence hash 直达已修复：直接打开 `#evidence-Lx-...` 会自动展开对应 Layer、滚动到指标卡并高亮，便于审查者直接分享和复核证据。
+
+### 指标级可视化后的下一轮观察
+
+| 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
+| --- | --- | --- | --- | --- |
+| 1 | 输出体验 | 明确图表三层架构 | 当前微图、市场总览图、看盘式交互图各自回答的问题不同，混在一起会让报告失焦 | 已完成：底稿微图用于速读，市场总览图用于跨层总览，Lightweight workbench 用于交互探索 |
+| 2 | 数据基础 | 将交互图数据纳入 artifacts | 当前原型的 QQQ OHLCV 来自生成时 yfinance 拉取，和旧 run 的文字并非严格同一时点 | 已部分完成：vNext run 保存 `chart_time_series.json`，workbench 优先读取；后续再扩展 VIX、10Y、ERP monthly series |
+| 3 | 输出体验 | 决定哪些指标进入 Lightweight workbench | 不是所有指标都适合 K 线式交互；L1/L4 更适合多轴线图或 regime panel | 已完成第一阶段决策：先纳入 L5 价格/成交量/均线，Donchian/MACD 暂从指标卡摘要进入，L1/L4 待多 pane 方案 |
+| 4 | 输出体验 | 真实最新 run 后复核微图覆盖 | 旧 run 缺少最新 Damodaran 月度序列、WorldPERatio 结构化字段和未来新增 L5 量价质量指标 | 最新 DeepSeek run 生成 brief 后，确认每层有图指标、无图指标和降级说明都合理 |
+| 5 | 输出体验 | 修复 evidence hash 直达体验 | 浏览器直接打开 `#evidence-Lx-...` 时，目前主要依赖点击事件展开层级，直接 hash 直达仍不够自然 | 已完成：hashchange 和首屏加载都会自动展开、滚动并高亮对应指标卡 |
+| 6 | 输出体验 | 建立图表视觉回归 | 指标微图和交互图数量变多后，移动端和长文本容易产生挤压 | 对桌面/移动截取五层底稿和交互 workbench，检查微图非空、文字不溢出、details 和区间按钮可用 |
+| 7 | 输出体验 | 决定是否正式弃用 legacy chart 主路径 | 旧 Plotly 图表仍在 legacy reporter 中存在，维护两套路线上会造成混乱 | 明确 legacy chart 只服务旧报告，或迁移少数高价值时间序列到 native artifacts 后归档旧管线 |
+
+### L4 数据源复盘后的修正方向（1-5 已完成）
+
+- 用户指出的两个 L4 问题经初步官网复核后成立：WorldPERatio 不应只作为 PE 绝对值校验源，Damodaran 当前实现也不应只优先读取年度 `histimpl.xls`。
+- WorldPERatio 官网对 Nasdaq 100 提供 PE、数据日期、1/5/10/20 年滚动均值、标准差区间、相对均值的 σ 偏离、估值标签、50/200 日趋势边际和前瞻回归提示。它可以辅助描述相对位置，但除非页面明确给出 percentile/rank，仍不得写成历史分位。
+- Damodaran 官网存在更适合“当前 ERP”的官方月度路径：`ERPbymonth.xlsx` 已包含 2008-09 至 2026-05-01 的月度数据；`ERPMay26.xlsx` 也可直接下载，2026-05-01 文件内包含 10Y Treasury、Aa1 default spread、adjusted riskfree rate、expected return 和多种 implied ERP 口径。年度 `histimpl.xls` 应保留为长期历史背景，不再作为最新 ERP 首选。
+- 代码已完成 1-3 步：Damodaran 月度 ERP 优先，WorldPERatio 相对位置结构化，L4 prompt / few-shot / packet builder 已明确区分真实 percentile、std-dev / z-score relative context、monthly current ERP 和 annual history fallback。
+- 输出体验已完成 4-5 步：native `brief` 新增“市场图谱”章节，展示 L4 估值相对位置尺、Damodaran ERP 月度路径、WorldPERatio 窗口标签、L1-L4 利率估值压力图；新增 first-screen 研究控制台 `output/reports/vnext_research_console.html`。
+- 真实官网 smoke 已确认：`get_damodaran_us_implied_erp("2026-05-01")` 可读取 `ERPbymonth.xlsx` 的 2026-05-01 多口径 ERP，并合并 `ERPMay26.xlsx` 的 default spread / expected return；全量测试 `python3 -m pytest -q` 为 86 passed。
+- 详细通俗复盘已写入 `PLAIN_LANGUAGE_L4_DATA_SOURCE_REVIEW.md` 和 `PLAIN_LANGUAGE_OUTPUT_EXPERIENCE_REVIEW.md`。
+
+### 输出体验 4-5 落地后的下一轮观察
+
+| 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
+| --- | --- | --- | --- | --- |
+| 1 | 输出体验 | 用最新真实 run 验证图表数据完整性 | 当前生成页沿用 2026-05-02 旧 run，旧 artifact 没有 Damodaran 月度序列和 WorldPERatio 结构化窗口 | 下一次 DeepSeek run 后重新生成 brief，确认 ERP 月度线图、WorldPERatio 窗口标签、利率估值压力图都吃到最新字段 |
+| 2 | 输出体验 | 控制台第二阶段能力取舍 | 第一版控制台只生成模板和运行命令，不直接写文件或执行本地任务 | 决定是否允许控制台写入 `manual_data.local.json`、启动 run、自动打开最新报告；若做，必须有明确安全边界 |
+| 3 | 输出体验 | 图表视觉回归 | 本机 Python/Node Playwright 未安装，已做 Chrome headless 截图，但还不是完整交互测试 | 补齐浏览器自动化依赖后，对桌面和移动 viewport 截图，检查图表非空、文字不溢出、证据抽屉可打开 |
 
 ### 输出体验反馈：当前改造版不是终版
 
@@ -13,13 +56,6 @@
 - 五层底稿区域的点击/展开/跳转动效存在问题：用户感知为“似乎无法跳转，动画有问题”。这说明当前交互反馈不够清楚，也可能存在浏览器侧展开状态或滚动定位问题。
 - 这版可以作为“输出体验第一轮结构尝试”保留，但不能被视为最终 UI，也不能作为审美定稿。
 - 下一阶段输出体验只记录方向：审美方向需要重新指明；五层展开、证据抽屉、跳转反馈和动效需要继续优化；图表/数据/报告的打开方式仍需更自然、更低门槛。
-
-### P1：L5 公式层和轻量数据 fallback
-
-- L5 公式层优先用 `ta` 做标准化计算，同时保留内部 fallback；新增指标必须回答明确问题，不能为了显得全面而堆指标。
-- VWAP / MFI / CMF 可作为高价值量价质量验证：它们帮助判断价格上涨是否得到成交量和资金流支持，但不能单独给买卖结论。
-- pandas-datareader 先只承担 FRED 公开 CSV fallback：在 FRED API key 缺失或 JSON API 失败时，补强 L1/L2/L4 的宏观、利率、信用和流动性数据。
-- pandas-datareader 的 Fama-French、Nasdaq symbols、Stooq 暂不进主流程；当前 pandas 3 环境和部分上游接口不够稳，先记录观察，不硬接。
 
 ### L4 估值锚口径确认
 

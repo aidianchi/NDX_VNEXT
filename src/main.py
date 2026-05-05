@@ -12,6 +12,7 @@ try:
     from .agent_analysis.orchestrator import VNextOrchestrator
     from .agent_analysis.packet_builder import AnalysisPacketBuilder
     from .api_config import get_api_key, is_service_enabled
+    from .chart_time_series_artifacts import write_chart_time_series_artifact
     from .config import MODEL_CONFIGS, path_config
     from .core import DataCollector, DataIntegrity, ReportGenerator
 except ImportError:
@@ -19,6 +20,7 @@ except ImportError:
     from agent_analysis.orchestrator import VNextOrchestrator
     from agent_analysis.packet_builder import AnalysisPacketBuilder
     from api_config import get_api_key, is_service_enabled
+    from chart_time_series_artifacts import write_chart_time_series_artifact
     from config import MODEL_CONFIGS, path_config
     from core import DataCollector, DataIntegrity, ReportGenerator
 
@@ -104,6 +106,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     integrity_report = DataIntegrity().run(data_json)
     builder = AnalysisPacketBuilder()
     packet = builder.build(data_json, output_path=os.path.join(run_dir, "analysis_packet.json"))
+    chart_time_series_path = write_chart_time_series_artifact(run_dir)
 
     orchestrator = VNextOrchestrator(available_models=available_models, output_dir=run_dir)
     artifacts = orchestrator.run(packet)
@@ -135,6 +138,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "run_dir": run_dir,
         "logic_json": logic_path,
         "report_path": report_path,
+        "chart_time_series": chart_time_series_path,
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
         "approval_status": _enum_value(getattr(artifacts["final_adjudication"], "approval_status", "")),
         "models": available_models,

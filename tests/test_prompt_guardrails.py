@@ -85,6 +85,21 @@ def test_l4_prompt_requires_data_authority_metadata_for_valuation():
         assert fragment in text
 
 
+def test_l4_prompt_distinguishes_current_monthly_erp_stddev_context_and_true_percentile():
+    text = (PROMPT_DIR / "l4_analyst.md").read_text(encoding="utf-8")
+    required_fragments = [
+        "monthly current ERP",
+        "annual history fallback",
+        "std-dev / z-score relative context",
+        "不能把 WorldPERatio 的标准差区间、估值标签或回归提示写成 historical percentile",
+        "不能把 histimpl.xls 年度历史表写成最新月度 ERP",
+        "ERPbymonth.xlsx",
+    ]
+
+    for fragment in required_fragments:
+        assert fragment in text
+
+
 def test_prompts_do_not_call_ndx_simple_yield_gap_low_erp():
     prompt_files = [
         "l1_analyst.md",

@@ -62,6 +62,7 @@ FUNCTION_ALIASES = {
     "get_macd_qqq": ["macd", "qqq macd"],
     "get_obv_qqq": ["obv", "on balance volume"],
     "get_volume_analysis_qqq": ["obv", "volume analysis", "qqq volume analysis"],
+    "get_price_volume_quality_qqq": ["vwap", "mfi", "cmf", "price volume quality", "量价质量"],
     "get_donchian_channels_qqq": ["donchian_channel", "donchian channels"],
     "get_multi_scale_ma_position": ["price_vs_sma_200", "multi scale ma position", "moving average position"],
 }
