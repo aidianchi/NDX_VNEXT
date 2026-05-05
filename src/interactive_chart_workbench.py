@@ -69,7 +69,17 @@ class InteractiveChartWorkbenchGenerator:
     ) -> str:
         run_path = Path(run_dir)
         artifacts = self._load_artifacts(run_path)
-        rows = self._prepare_price_rows(price_rows if price_rows is not None else self._fetch_price_rows(lookback_days))
+        raw_rows = price_rows
+        source_label = "artifact + QQQ OHLCV"
+        if raw_rows is None:
+            raw_rows = self._artifact_price_rows(artifacts)
+            if raw_rows:
+                source_label = self._artifact_price_source(artifacts)
+            else:
+                raw_rows = self._fetch_price_rows(lookback_days)
+                source_label = "generated at report time: QQQ OHLCV"
+        artifacts["_price_source_label"] = source_label
+        rows = self._prepare_price_rows(raw_rows)
         html_text = self._render(run_path, artifacts, rows)
         destination = Path(output_path) if output_path else self._default_output_path(run_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +95,29 @@ class InteractiveChartWorkbenchGenerator:
             "analysis_packet": _load_json(run_path / "analysis_packet.json", {}),
             "l5": _load_json(run_path / "layer_cards" / "L5.json", {}),
             "final": _load_json(run_path / "final_adjudication.json", {}),
+            "chart_time_series": _load_json(run_path / "chart_time_series.json", {}),
         }
+
+    def _artifact_price_rows(self, artifacts: Dict[str, Any]) -> List[Dict[str, Any]]:
+        chart_artifact = artifacts.get("chart_time_series", {})
+        if not isinstance(chart_artifact, dict):
+            return []
+        series = chart_artifact.get("series", {})
+        if not isinstance(series, dict):
+            return []
+        qqq = series.get("QQQ_OHLCV", {})
+        rows = qqq.get("rows", []) if isinstance(qqq, dict) else []
+        return rows if isinstance(rows, list) else []
+
+    def _artifact_price_source(self, artifacts: Dict[str, Any]) -> str:
+        chart_artifact = artifacts.get("chart_time_series", {})
+        series = chart_artifact.get("series", {}) if isinstance(chart_artifact, dict) else {}
+        qqq = series.get("QQQ_OHLCV", {}) if isinstance(series, dict) else {}
+        source_file = qqq.get("source_file") if isinstance(qqq, dict) else None
+        provider = qqq.get("provider") if isinstance(qqq, dict) else None
+        if source_file and provider:
+            return f"{source_file} · {provider}"
+        return str(source_file or "chart_time_series.json")
 
     def _fetch_price_rows(self, lookback_days: int) -> List[Dict[str, Any]]:
         try:
@@ -148,7 +180,7 @@ class InteractiveChartWorkbenchGenerator:
         tech_raw = raw_l5.get("get_qqq_technical_indicators", {}).get("value", {}) if isinstance(raw_l5, dict) else {}
         l5_card = artifacts.get("l5", {})
         return {
-            "source": "artifact + QQQ OHLCV",
+            "source": artifacts.get("_price_source_label") or "artifact + QQQ OHLCV",
             "candles": [
                 {
                     "time": row["time"],
@@ -228,7 +260,7 @@ class InteractiveChartWorkbenchGenerator:
       <div class="chart-head">
         <div>
           <h2>QQQ Price Action</h2>
-          <p>TradingView Lightweight Charts prototype. 数据源：artifact + QQQ OHLCV；用于验证交互图形态，不替代最终审计链。</p>
+          <p>TradingView Lightweight Charts prototype. 数据源：{_escape(payload.get('source'))}；用于验证交互图形态，不替代最终审计链。</p>
         </div>
         <div class="range-buttons">
           <button data-range="90">3M</button>

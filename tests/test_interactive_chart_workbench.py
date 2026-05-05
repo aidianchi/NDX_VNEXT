@@ -73,3 +73,37 @@ def test_interactive_chart_workbench_generates_lightweight_chart_html(tmp_path: 
     assert '"ma5"' in html
     assert "趋势偏强但超买" in html
     assert "artifact + QQQ OHLCV" in html
+
+
+def test_interactive_chart_workbench_prefers_run_time_series_artifact(tmp_path: Path, monkeypatch):
+    run_dir = tmp_path / "run"
+    _write_json(run_dir / "layer_cards" / "L5.json", {"layer": "L5", "local_conclusion": "artifact 同源。"})
+    _write_json(run_dir / "analysis_packet.json", {})
+    _write_json(
+        run_dir / "chart_time_series.json",
+        {
+            "schema_version": "vnext_chart_time_series_v1",
+            "series": {
+                "QQQ_OHLCV": {
+                    "source_file": "chart_time_series.json",
+                    "rows": [
+                        {"time": "2026-05-01", "open": 100, "high": 102, "low": 98, "close": 101, "volume": 1000},
+                        {"time": "2026-05-04", "open": 101, "high": 105, "low": 100, "close": 104, "volume": 1500},
+                    ],
+                }
+            },
+        },
+    )
+    generator = InteractiveChartWorkbenchGenerator(
+        reports_dir=str(tmp_path / "reports"),
+        bundle_js="window.LightweightCharts={createChart:function(){return {addSeries:function(){return {setData:function(){}}},timeScale:function(){return {fitContent:function(){}}},subscribeCrosshairMove:function(){},applyOptions:function(){}}},CandlestickSeries:function(){},LineSeries:function(){},HistogramSeries:function(){}};",
+    )
+    monkeypatch.setattr(generator, "_fetch_price_rows", lambda lookback_days: (_ for _ in ()).throw(AssertionError("should use artifact rows")))
+
+    report_path = generator.run(run_dir)
+    html = Path(report_path).read_text(encoding="utf-8")
+
+    assert "chart_time_series.json" in html
+    assert "artifact 同源" in html
+    assert '"time": "2026-05-04"' in html
+    assert '"close": 104.0' in html

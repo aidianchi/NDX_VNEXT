@@ -395,6 +395,9 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert "data-ref=\"L4.get_damodaran_us_implied_erp\"" in html
     assert "std-dev context, not percentile" in html
     assert "Overvalued" in html
+    assert "function handleEvidenceHash" in html
+    assert "window.addEventListener('hashchange', handleEvidenceHash)" in html
+    assert "location.hash" in html
 
     # Redesign assertions — accordion, Slate Editorial, vocabulary translation
     assert "aria-expanded" in html

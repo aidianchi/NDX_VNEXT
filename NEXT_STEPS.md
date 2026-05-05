@@ -16,16 +16,19 @@
 - 旧 run `output/analysis/vnext/20260502_193057` 重新生成后，默认报告含 29 个指标级可视化；复杂指标使用可展开区，避免底稿阅读被大图打断。
 - 进一步调研后确认：底稿微图不能替代看盘式交互图。已安装 `lightweight-charts@5.2.0` 并新增独立原型 `output/reports/vnext_interactive_charts_20260502.html`，用于验证 QQQ K 线、成交量、MA overlay、区间按钮和 crosshair readout。
 - 已修复 native brief JSON payload 嵌入 bug，避免 `JSON.parse` 失败影响证据抽屉和跳转。
+- 图表三层架构已固定：底稿微图回答“这个指标当下处在哪”，市场总览图回答“跨层压力和共振在哪里”，Lightweight workbench 回答“价格、成交量和技术结构如何交互探索”。三者不能互相替代。
+- 交互图数据已开始纳入 vNext artifacts：主流水线会在 run 目录写入 `chart_time_series.json`，当前先保存 QQQ OHLCV、成交量和 MA5/20/60/200；workbench 优先读取该 artifact，只有缺失时才退回生成时报价抓取。
+- evidence hash 直达已修复：直接打开 `#evidence-Lx-...` 会自动展开对应 Layer、滚动到指标卡并高亮，便于审查者直接分享和复核证据。
 
 ### 指标级可视化后的下一轮观察
 
 | 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
-| 1 | 输出体验 | 明确图表三层架构 | 当前微图、市场总览图、看盘式交互图各自回答的问题不同，混在一起会让报告失焦 | 写入设计规则：底稿微图用于速读，大图用于跨层总览，Lightweight workbench 用于交互探索 |
-| 2 | 数据基础 | 将交互图数据纳入 artifacts | 当前原型的 QQQ OHLCV 来自生成时 yfinance 拉取，和旧 run 的文字并非严格同一时点 | 在 vNext run 中保存必要时间序列，例如 QQQ OHLCV、MA、volume、VIX、10Y、ERP monthly series，让交互图同源可审计 |
-| 3 | 输出体验 | 决定哪些指标进入 Lightweight workbench | 不是所有指标都适合 K 线式交互；L1/L4 更适合多轴线图或 regime panel | 先纳入 L5 价格/成交量/均线/Donchian/MACD，再评估 L1 利率、VIX、ERP 是否做多 pane |
+| 1 | 输出体验 | 明确图表三层架构 | 当前微图、市场总览图、看盘式交互图各自回答的问题不同，混在一起会让报告失焦 | 已完成：底稿微图用于速读，市场总览图用于跨层总览，Lightweight workbench 用于交互探索 |
+| 2 | 数据基础 | 将交互图数据纳入 artifacts | 当前原型的 QQQ OHLCV 来自生成时 yfinance 拉取，和旧 run 的文字并非严格同一时点 | 已部分完成：vNext run 保存 `chart_time_series.json`，workbench 优先读取；后续再扩展 VIX、10Y、ERP monthly series |
+| 3 | 输出体验 | 决定哪些指标进入 Lightweight workbench | 不是所有指标都适合 K 线式交互；L1/L4 更适合多轴线图或 regime panel | 已完成第一阶段决策：先纳入 L5 价格/成交量/均线，Donchian/MACD 暂从指标卡摘要进入，L1/L4 待多 pane 方案 |
 | 4 | 输出体验 | 真实最新 run 后复核微图覆盖 | 旧 run 缺少最新 Damodaran 月度序列、WorldPERatio 结构化字段和未来新增 L5 量价质量指标 | 最新 DeepSeek run 生成 brief 后，确认每层有图指标、无图指标和降级说明都合理 |
-| 5 | 输出体验 | 修复 evidence hash 直达体验 | 浏览器直接打开 `#evidence-Lx-...` 时，目前主要依赖点击事件展开层级，直接 hash 直达仍不够自然 | 打开任一 evidence hash 能自动展开对应 Layer、滚动到指标卡并高亮 |
+| 5 | 输出体验 | 修复 evidence hash 直达体验 | 浏览器直接打开 `#evidence-Lx-...` 时，目前主要依赖点击事件展开层级，直接 hash 直达仍不够自然 | 已完成：hashchange 和首屏加载都会自动展开、滚动并高亮对应指标卡 |
 | 6 | 输出体验 | 建立图表视觉回归 | 指标微图和交互图数量变多后，移动端和长文本容易产生挤压 | 对桌面/移动截取五层底稿和交互 workbench，检查微图非空、文字不溢出、details 和区间按钮可用 |
 | 7 | 输出体验 | 决定是否正式弃用 legacy chart 主路径 | 旧 Plotly 图表仍在 legacy reporter 中存在，维护两套路线上会造成混乱 | 明确 legacy chart 只服务旧报告，或迁移少数高价值时间序列到 native artifacts 后归档旧管线 |
 

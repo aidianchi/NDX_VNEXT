@@ -374,6 +374,33 @@ function expandLayerCard(layer) {
   return btn;
 }
 
+function jumpToEvidenceTarget(targetId, layer, updateHash = false) {
+  if (!targetId) return;
+  if (layer) expandLayerCard(layer);
+  requestAnimationFrame(() => {
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    target.classList.add('target');
+    target.setAttribute('tabindex', '-1');
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.focus({ preventScroll: true });
+    if (updateHash && window.location.hash !== `#${targetId}`) {
+      history.replaceState(null, '', `#${targetId}`);
+    }
+    setTimeout(() => target.classList.remove('target'), 1600);
+  });
+}
+
+function handleEvidenceHash() {
+  const targetId = decodeURIComponent(String(window.location.hash || '').replace(/^#/, ''));
+  if (!targetId || !targetId.startsWith('evidence-')) return;
+  const target = document.getElementById(targetId);
+  if (!target) return;
+  const ref = target.dataset.evidenceRef || '';
+  const layerMatch = ref.match(/^(L[1-5])\\./);
+  jumpToEvidenceTarget(targetId, layerMatch ? layerMatch[1] : '', false);
+}
+
 function showDrawer() {
   drawer.classList.add('open');
   drawer.setAttribute('aria-hidden', 'false');
@@ -465,15 +492,9 @@ drawerContent.addEventListener('click', (event) => {
   if (jump) {
     const layer = jump.dataset.layerTarget;
     const targetId = jump.dataset.jumpTarget;
-    expandLayerCard(layer);
     requestAnimationFrame(() => {
       closeDrawer();
-      const target = document.getElementById(targetId);
-      if (target) {
-        target.classList.add('target');
-        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        setTimeout(() => target.classList.remove('target'), 1400);
-      }
+      jumpToEvidenceTarget(targetId, layer, true);
     });
   }
   const copy = event.target.closest('[data-copy-ref]');
@@ -487,6 +508,8 @@ drawerContent.addEventListener('click', (event) => {
 
 // Expose toggleLayerCard for inline onclick handlers
 window.toggleLayerCard = toggleLayerCard;
+window.addEventListener('hashchange', handleEvidenceHash);
+setTimeout(handleEvidenceHash, 0);
 """
 
 

@@ -6,6 +6,24 @@
 
 ## 2026-05-05
 
+### 推送当前版本，并继续落地指标级可视化后的下一轮观察
+
+完成内容：
+
+- 将当前数据源审计、native brief 图表、指标级微图、研究控制台和 Lightweight workbench 原型提交到 Git，并推送到 GitHub 分支 `claude/20260503-vnext-brief-redesign`。
+- 创建草稿 PR：`https://github.com/aidianchi/NDX_VNEXT/pull/1`，方便后续人工或 AI 审查。
+- 明确图表三层架构：底稿微图负责指标速读，市场总览图负责跨层压力/共振，Lightweight workbench 负责看盘式交互探索。
+- 新增 `chart_time_series.json` artifact 写入路径：vNext run 会保存 QQQ OHLCV、成交量和 MA5/20/60/200；workbench 优先读取同一 run 的 artifact，避免图表与文字来自不同抓取时点。
+- 修复 evidence hash 直达：打开 `#evidence-Lx-...` 会自动展开对应 Layer、滚动到指标卡并高亮，证据链接更适合审查和分享。
+
+验证结果：
+
+- 提交前全量测试：`python3 -m pytest -q` 为 89 passed，6 warnings。
+- 本轮新增行为先写失败测试，再实现：hash 直达、workbench artifact 优先读取、`chart_time_series.json` 写入均有测试覆盖。
+- 定向测试：`python3 -m pytest tests/test_chart_time_series_artifacts.py tests/test_interactive_chart_workbench.py tests/test_vnext_reporter.py::test_vnext_reporter_generates_native_ui -q` 为 4 passed，4 warnings。
+
+---
+
 ### 调研并落地交互式看盘图原型：Lightweight Charts Workbench
 
 完成内容：
