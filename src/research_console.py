@@ -154,14 +154,25 @@ class ResearchConsoleGenerator:
               <option value="low">low</option>
             </select>
           </label>
-          <label>PE <input data-manual-field="pe" type="number" step="0.01" min="0"></label>
-          <label>PB <input data-manual-field="pb" type="number" step="0.01" min="0"></label>
-          <label>PS <input data-manual-field="ps" type="number" step="0.01" min="0"></label>
           <label>ERP % <input data-manual-field="erp" type="number" step="0.01"></label>
-          <label>PE 5Y percentile <input data-manual-field="pe_percentile_5y" type="number" step="0.1" min="0" max="100"></label>
-          <label>PE 10Y percentile <input data-manual-field="pe_percentile_10y" type="number" step="0.1" min="0" max="100"></label>
-          <label>PB percentile <input data-manual-field="pb_percentile" type="number" step="0.1" min="0" max="100"></label>
-          <label>PS percentile <input data-manual-field="ps_percentile" type="number" step="0.1" min="0" max="100"></label>
+          <fieldset class="metric-pair">
+            <legend>PE</legend>
+            <label>当前 PE <input data-manual-field="pe" type="number" step="0.01" min="0"></label>
+            <label>PE 5Y 分位 <input data-manual-field="pe_percentile_5y" type="number" step="0.1" min="0" max="100"></label>
+            <label>PE 10Y 分位 <input data-manual-field="pe_percentile_10y" type="number" step="0.1" min="0" max="100"></label>
+          </fieldset>
+          <fieldset class="metric-pair">
+            <legend>PB</legend>
+            <label>当前 PB <input data-manual-field="pb" type="number" step="0.01" min="0"></label>
+            <label>PB 5Y 分位 <input data-manual-field="pb_percentile_5y" type="number" step="0.1" min="0" max="100"></label>
+            <label>PB 10Y 分位 <input data-manual-field="pb_percentile_10y" type="number" step="0.1" min="0" max="100"></label>
+          </fieldset>
+          <fieldset class="metric-pair">
+            <legend>PS</legend>
+            <label>当前 PS <input data-manual-field="ps" type="number" step="0.01" min="0"></label>
+            <label>PS 5Y 分位 <input data-manual-field="ps_percentile_5y" type="number" step="0.1" min="0" max="100"></label>
+            <label>PS 10Y 分位 <input data-manual-field="ps_percentile_10y" type="number" step="0.1" min="0" max="100"></label>
+          </fieldset>
         </div>
         <p id="manualValidation" class="validation-note">等待输入。</p>
         <details class="advanced-json">
@@ -179,8 +190,8 @@ class ResearchConsoleGenerator:
         <div class="panel-head">
           <span>03</span>
           <div>
-            <h2>模型与运行模式</h2>
-            <p>默认遵守 deepseek-v4-flash 到 deepseek-v4-pro 的 fallback 顺序。</p>
+            <h2>模型与 vNext 流程</h2>
+            <p>按 vNext 当前架构组织：采集、五层分析、native brief、workbench 和视觉回归。</p>
           </div>
         </div>
         <div class="segmented" role="radiogroup" aria-label="模型策略">
@@ -189,13 +200,13 @@ class ResearchConsoleGenerator:
           <label><input type="radio" name="modelMode" value="custom"> 自定义顺序</label>
         </div>
         <label class="custom-models">自定义模型顺序 <input id="customModels" type="text" value="deepseek-v4-flash,deepseek-v4-pro"></label>
-        <div class="mode-grid" role="radiogroup" aria-label="运行模式">
-          <label><input type="radio" name="runMode" value="full" checked> full</label>
-          <label><input type="radio" name="runMode" value="data_only"> data only</label>
-          <label><input type="radio" name="runMode" value="analysis_only"> analysis only</label>
-          <label><input type="radio" name="runMode" value="draft_only"> draft only</label>
-          <label><input type="radio" name="runMode" value="report_only"> report only</label>
-          <label><input type="radio" name="runMode" value="quick_report"> quick report</label>
+        <div class="mode-grid" role="radiogroup" aria-label="vNext 流程">
+          <label><input type="radio" name="runMode" value="vnext_full" checked> 完整 vNext</label>
+          <label><input type="radio" name="runMode" value="collect_data"> 只采集数据</label>
+          <label><input type="radio" name="runMode" value="analyze_existing"> 已有数据分析</label>
+          <label><input type="radio" name="runMode" value="native_brief"> 只生成 brief</label>
+          <label><input type="radio" name="runMode" value="workbench_only"> 只生成 workbench</label>
+          <label><input type="radio" name="runMode" value="visual_check"> 视觉回归</label>
         </div>
       </article>
 
@@ -204,16 +215,17 @@ class ResearchConsoleGenerator:
           <span>04</span>
           <div>
             <h2>数据源 / 功能开关</h2>
-            <p>把可选功能集中管理，避免隐藏在命令行里。</p>
+            <p>把可选功能集中管理；旧版 HTML 仅保留兼容入口，默认不建议使用。</p>
           </div>
         </div>
         <div class="toggle-line">
-          <label><input id="skipLegacyReport" type="checkbox" checked> 跳过 legacy HTML</label>
-          <label><input id="disableCharts" type="checkbox" checked> 关闭 legacy charts</label>
+          <label><input id="skipLegacyReport" type="checkbox" checked> 不生成旧版 HTML</label>
+          <label><input id="disableCharts" type="checkbox" checked> 不生成旧版 charts</label>
           <label><input id="enableNews" type="checkbox"> 新闻源预留</label>
           <label><input id="enableTrendonify" type="checkbox" disabled> Trendonify 暂缓</label>
-          <label><input id="enableLegacyCharts" type="checkbox"> legacy charts opt-in</label>
+          <label><input id="enableLegacyCharts" type="checkbox"> 临时启用旧版 charts</label>
         </div>
+        <p class="legacy-note">旧版 HTML 是过渡期兼容产物：线性长页、审计跳转弱、审美已过时。vNext 默认入口应是 native brief 和 workbench。</p>
         <div class="module-picker" aria-label="交互工作台模块">
           <h3>交互工作台模块</h3>
           <label><input type="checkbox" name="workbenchModule" value="price_technical" checked> 价格技术</label>
@@ -467,13 +479,27 @@ textarea {
 .manual-form label {
   margin: 0;
 }
-.manual-form label:nth-child(1),
-.manual-form label:nth-child(2) {
-  grid-column: span 1;
+.metric-pair {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: #fffefa;
+  padding: 10px;
+  margin: 0;
+}
+.metric-pair legend {
+  padding: 0 6px;
+  color: var(--accent);
+  font: 800 12px var(--sans);
+  letter-spacing: .08em;
 }
 @media (max-width: 640px) {
   .field-grid,
-  .manual-form { grid-template-columns: 1fr; }
+  .manual-form,
+  .metric-pair { grid-template-columns: 1fr; }
 }
 textarea {
   min-height: 240px;
@@ -538,6 +564,9 @@ textarea {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
+.mode-grid label {
+  min-height: 58px;
+}
 .custom-models { margin-top: 12px; }
 .module-picker {
   margin: 14px 0;
@@ -571,6 +600,14 @@ h3 {
 }
 .good { color: var(--good); }
 .watch { color: var(--watch); }
+.legacy-note {
+  margin: 10px 0 0;
+  border-left: 3px solid var(--watch);
+  padding-left: 10px;
+  color: var(--soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
 pre {
   overflow: auto;
   border: 1px solid var(--rule);
@@ -648,7 +685,7 @@ function currentModels() {
 
 function selectedRunMode() {
   const selected = document.querySelector('input[name="runMode"]:checked');
-  return selected ? selected.value : 'full';
+  return selected ? selected.value : 'vnext_full';
 }
 
 function pathValue(id) {
@@ -663,20 +700,20 @@ function modeCommand(mode, models) {
   if (document.getElementById('skipLegacyReport').checked) base.push('--skip-report');
   if (document.getElementById('disableCharts').checked && !document.getElementById('enableLegacyCharts').checked) base.push('--disable-charts');
   if (document.getElementById('enableLegacyCharts').checked) base.push('--enable-legacy-charts');
-  if (mode === 'report_only') {
+  if (mode === 'native_brief') {
     return `python3 src/agent_analysis/vnext_reporter.py --run-dir ${runDir} --template brief`;
   }
-  if (mode === 'quick_report') {
-    return `python3 src/agent_analysis/vnext_reporter.py --run-dir ${runDir} --template brief && python3 src/interactive_chart_workbench.py --run-dir ${runDir}`;
+  if (mode === 'workbench_only') {
+    return `python3 src/interactive_chart_workbench.py --run-dir ${runDir} --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity`;
   }
-  if (mode === 'analysis_only') {
-    return base.concat(['--skip-report']).join(' ');
+  if (mode === 'visual_check') {
+    return `python3 src/report_visual_regression.py --brief-html output/reports/<brief.html> --workbench-html output/reports/<workbench.html> --output-dir output/reports/visual_regression/<run_id>`;
   }
-  if (mode === 'draft_only') {
-    return `${base.concat(['--skip-report']).join(' ')}\\npython3 src/agent_analysis/vnext_reporter.py --run-dir ${runDir} --template brief`;
+  if (mode === 'analyze_existing') {
+    return dataPath ? base.concat(['--skip-report']).join(' ') : '# 请先填写“已有数据 JSON”，再基于同源数据进入 vNext 五层分析。';
   }
-  if (mode === 'data_only') {
-    return '# data only 仍需本地 control service 拆分 collector；当前用 full 命令生成同源数据。\\n' + base.join(' ');
+  if (mode === 'collect_data') {
+    return '# 只采集数据需要后续拆出 collector-only CLI 或本地 control service；当前 vNext CLI 仍以完整 run 产生同源数据。\\n' + base.join(' ');
   }
   return base.join(' ');
 }
@@ -714,8 +751,10 @@ function buildManualPayload() {
   if (fields.ps !== undefined) valuation.value.PS_TTM = fields.ps;
   if (fields.pe_percentile_5y !== undefined) valuation.value.PE_TTM_percentile_5y = fields.pe_percentile_5y;
   if (fields.pe_percentile_10y !== undefined) valuation.value.PE_TTM_percentile_10y = fields.pe_percentile_10y;
-  if (fields.pb_percentile !== undefined) valuation.value.PB_percentile_5y = fields.pb_percentile;
-  if (fields.ps_percentile !== undefined) valuation.value.PS_TTM_percentile_5y = fields.ps_percentile;
+  if (fields.pb_percentile_5y !== undefined) valuation.value.PB_percentile_5y = fields.pb_percentile_5y;
+  if (fields.pb_percentile_10y !== undefined) valuation.value.PB_percentile_10y = fields.pb_percentile_10y;
+  if (fields.ps_percentile_5y !== undefined) valuation.value.PS_TTM_percentile_5y = fields.ps_percentile_5y;
+  if (fields.ps_percentile_10y !== undefined) valuation.value.PS_TTM_percentile_10y = fields.ps_percentile_10y;
   if (fields.erp !== undefined) {
     erp.value.manual_erp = fields.erp;
     gap.value.level = fields.erp;
@@ -726,12 +765,13 @@ function buildManualPayload() {
 
 function validateManualPayload(payload) {
   const warnings = [];
-  ['pe_percentile_5y', 'pe_percentile_10y', 'pb_percentile', 'ps_percentile'].forEach(key => {
-    const value = payload[key];
+  const valuation = payload.metrics.get_ndx_pe_and_earnings_yield.value;
+  ['PE_TTM_percentile_5y', 'PE_TTM_percentile_10y', 'PB_percentile_5y', 'PB_percentile_10y', 'PS_TTM_percentile_5y', 'PS_TTM_percentile_10y'].forEach(key => {
+    const value = valuation[key];
     if (value !== undefined && value !== null && (value < 0 || value > 100)) warnings.push(`${key} 应在 0-100`);
   });
-  ['pe', 'pb', 'ps'].forEach(key => {
-    const value = payload[key];
+  ['PE_TTM', 'PB', 'PS_TTM'].forEach(key => {
+    const value = valuation[key];
     if (value !== undefined && value !== null && value < 0) warnings.push(`${key} 不应为负数`);
   });
   return warnings;

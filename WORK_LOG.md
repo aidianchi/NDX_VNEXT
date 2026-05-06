@@ -6,6 +6,30 @@
 
 ## 2026-05-06
 
+### 修复 workbench 与研究控制台页面批注
+
+完成内容：
+
+- 修复 workbench 副图布局：Volume、OBV、MACD、RSI/ATR、MFI/CMF 从并列小图改为全宽纵向 pane，避免不同副图横轴宽度和起止日期观感不一致。
+- 修复 workbench 默认时间窗口：所有 pane 初始化后统一到同一 1Y 时间窗口；ALL/3M/6M/1Y 按真实日期范围同步，而不是让各副图按自身数据 fitContent。
+- 修复副图对齐：去掉副图容器内边距，把标题浮在图内左上角，主图和副图的绘图区宽度更接近。
+- 修正研究控制台“运行模式”语言：从 full/data only/report only 等旧式流程词，改为完整 vNext、只采集数据、已有数据分析、只生成 brief、只生成 workbench、视觉回归。
+- 重排人工估值字段：PE、PB、PS 分别成组，每组把当前值、5Y 分位和 10Y 分位放在一起；JSON 预览同步写入对应字段。
+- 明确 legacy HTML 边界：控制台改为“不生成旧版 HTML / 不生成旧版 charts”，并标注旧版 HTML 是过渡期兼容产物，默认入口应是 native brief 和 workbench。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_interactive_chart_workbench.py tests/test_research_console.py`：4 passed。
+- 重新生成 `output/reports/vnext_interactive_charts_20260506_controls.html` 和 `output/reports/vnext_research_console.html`。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_research_ui_brief_20260505_20260506_075229.html --workbench-html output/reports/vnext_interactive_charts_20260506_controls.html --output-dir output/reports/visual_regression/20260506_review_fix`：passed。
+- 额外生成 tall workbench 截图确认副图全宽纵向对齐：`output/reports/visual_regression/20260506_review_fix/workbench_tall.png`。
+
+剩余观察：
+
+- workbench 的时间轴同步已经按日期范围统一，但更接近 TradingView 的独立 pane 管理还可以继续加入拖拽排序、pane 高度调整和指标参数编辑。
+
+---
+
 ### 完成 workbench 操作化与研究控制台总控重构
 
 完成内容：

@@ -149,6 +149,7 @@ def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(t
 
     assert 'data-module-tab="price_technical"' in html
     assert 'data-module="volatility_credit"' in html
+    assert 'subpanel-grid is-time-synced' in html
     assert 'data-panel-root="macd"' in html
     assert 'data-panel-root="money-flow"' in html
     assert 'data-pane-toggle="macd"' in html
@@ -160,6 +161,8 @@ def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(t
     assert "VWAP" in html
     assert "overlay_volume" in html
     assert "subscribeVisibleLogicalRangeChange" in html
+    assert "setVisibleTimeRangeAll" in html
+    assert "updateRange(365)" in html
     assert "setCrosshairPosition" in html
     assert "VIX" in html
     assert "Damodaran ERP" in html

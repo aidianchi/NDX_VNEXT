@@ -19,16 +19,24 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path):
     assert "NDX vNext 研究控制台" in html
     assert "运行对象与日期" in html
     assert "人工 / Wind 数据" in html
-    assert "PE 5Y percentile" in html
+    assert "当前 PE" in html
+    assert "PE 10Y 分位" in html
+    assert "当前 PB" in html
+    assert "PB 10Y 分位" in html
     assert "高级 JSON 预览" in html
-    assert "模型与运行模式" in html
-    assert "data only" in html
-    assert "report only" in html
-    assert "quick report" in html
+    assert "模型与 vNext 流程" in html
+    assert "完整 vNext" in html
+    assert "已有数据分析" in html
+    assert "只生成 brief" in html
+    assert "只生成 workbench" in html
+    assert "视觉回归" in html
     assert "deepseek-v4-flash" in html
     assert "deepseek-v4-pro" in html
     assert "自定义顺序" in html
     assert "数据源 / 功能开关" in html
+    assert "旧版 HTML 仅保留兼容入口" in html
+    assert "不生成旧版 HTML" in html
+    assert "旧版 HTML 是过渡期兼容产物" in html
     assert "新闻源预留" in html
     assert "Trendonify 暂缓" in html
     assert "L5 默认预设" in html

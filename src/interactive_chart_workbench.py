@@ -433,7 +433,7 @@ class InteractiveChartWorkbenchGenerator:
         <div>
           <section class="module-section is-active" data-module="price_technical">
             <div class="price-chart" data-chart-root="qqq-price-action"></div>
-            <div class="subpanel-grid" aria-label="L5 technical subpanels">
+            <div class="subpanel-grid is-time-synced" aria-label="L5 technical subpanels">
               <article data-panel-shell="volume"><h3>Volume</h3><div data-panel-root="volume"></div></article>
               <article data-panel-shell="obv"><h3>OBV</h3><div data-panel-root="obv"></div></article>
               <article data-panel-shell="macd"><h3>MACD</h3><div data-panel-root="macd"></div></article>
@@ -711,25 +711,30 @@ body {
 }
 .subpanel-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 8px;
   margin-top: 8px;
 }
 .subpanel-grid article {
+  position: relative;
   border: 1px solid var(--rule);
   background: #fff;
   min-width: 0;
-  padding: 8px;
+  padding: 0;
 }
-.subpanel-grid article:first-child { grid-column: 1 / -1; }
 .subpanel-grid h3 {
-  margin: 0 0 6px;
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  left: 8px;
+  margin: 0;
   color: var(--muted);
   font-size: 11px;
   letter-spacing: .08em;
   text-transform: uppercase;
+  pointer-events: none;
 }
-[data-panel-root] { height: 150px; min-width: 0; }
+[data-panel-root] { height: 136px; min-width: 0; }
 .module-copy {
   border: 1px solid var(--rule);
   border-bottom: 0;
@@ -825,7 +830,6 @@ body {
   .sync-buttons,
   .range-buttons { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .price-chart { height: 520px; }
-  .subpanel-grid { grid-template-columns: 1fr; }
   .module-chart { height: 360px; }
 }
 """
@@ -1138,13 +1142,32 @@ function setRangeAll(range) {
   syncingRange = false;
 }
 
+function setVisibleTimeRangeAll(from, to) {
+  syncingRange = true;
+  chartEntries.forEach(item => {
+    const timeScale = item.chart.timeScale();
+    if (timeScale && typeof timeScale.setVisibleRange === 'function') {
+      timeScale.setVisibleRange({ from, to });
+    } else if (timeScale && typeof timeScale.setVisibleLogicalRange === 'function') {
+      const fromIndex = payload.candles.findIndex(candle => candle.time === from);
+      const toIndex = payload.candles.findIndex(candle => candle.time === to);
+      if (fromIndex >= 0 && toIndex >= 0) {
+        timeScale.setVisibleLogicalRange({ from: fromIndex, to: toIndex });
+      }
+    }
+  });
+  syncingRange = false;
+}
+
 function updateRange(days) {
+  if (!payload.candles.length) return;
   if (days === 'all' || payload.candles.length <= days) {
-    syncedCharts.forEach(item => item.timeScale().fitContent());
+    setVisibleTimeRangeAll(payload.candles[0].time, payload.candles[payload.candles.length - 1].time);
     return;
   }
   const to = payload.candles.length - 1;
-  setRangeAll({ from: Math.max(0, to - Number(days)), to });
+  const from = Math.max(0, to - Number(days));
+  setVisibleTimeRangeAll(payload.candles[from].time, payload.candles[to].time);
 }
 
 document.querySelectorAll('[data-range]').forEach(button => {
@@ -1241,6 +1264,7 @@ chartEntries.forEach(entry => {
 let savedPreset = 'simple_price';
 try { savedPreset = localStorage.getItem(STORAGE_KEY) || 'simple_price'; } catch (error) {}
 applyPreset(PRESETS[savedPreset] ? savedPreset : 'simple_price', false);
+updateRange(365);
 """
 
 
