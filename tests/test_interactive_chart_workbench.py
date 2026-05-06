@@ -73,6 +73,10 @@ def test_interactive_chart_workbench_generates_lightweight_chart_html(tmp_path: 
     assert '"ma5"' in html
     assert "趋势偏强但超买" in html
     assert "artifact + QQQ OHLCV" in html
+    assert "data-indicator-toggle=\"ma20\"" in html
+    assert "data-preset=\"simple_price\"" in html
+    assert "时间轴锁定" in html
+    assert "统一时间轴" in html
 
 
 def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(tmp_path: Path):
@@ -147,9 +151,16 @@ def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(t
     assert 'data-module="volatility_credit"' in html
     assert 'data-panel-root="macd"' in html
     assert 'data-panel-root="money-flow"' in html
+    assert 'data-pane-toggle="macd"' in html
+    assert 'data-module-normalize="rates_valuation"' in html
+    assert 'data-module-dual-axis="liquidity"' in html
+    assert 'data-module-legend="volatility_credit"' in html
     assert "Bollinger" in html
     assert "Donchian" in html
     assert "VWAP" in html
+    assert "overlay_volume" in html
+    assert "subscribeVisibleLogicalRangeChange" in html
+    assert "setCrosshairPosition" in html
     assert "VIX" in html
     assert "Damodaran ERP" in html
     assert "QQQ/QQEW" in html

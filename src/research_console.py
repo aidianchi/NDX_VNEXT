@@ -40,6 +40,32 @@ class ResearchConsoleGenerator:
         )
         return reports[:6]
 
+    def _latest_workbenches(self) -> List[Path]:
+        workbenches = sorted(
+            self.reports_dir.glob("vnext_interactive_charts_*.html"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        return workbenches[:4]
+
+    def _latest_runs(self) -> List[Path]:
+        run_root = Path(path_config.analysis_dir) / "vnext"
+        if not run_root.exists():
+            return []
+        runs = sorted([path for path in run_root.iterdir() if path.is_dir()], key=lambda path: path.stat().st_mtime, reverse=True)
+        return runs[:5]
+
+    def _latest_visual_summaries(self) -> List[Path]:
+        visual_root = self.reports_dir / "visual_regression"
+        if not visual_root.exists():
+            return []
+        return sorted(visual_root.glob("**/visual_regression_summary.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:4]
+
+    def _links(self, paths: List[Path], empty_text: str) -> str:
+        if not paths:
+            return f'<span class="empty-link">{_escape(empty_text)}</span>'
+        return "".join(f'<a href="{_escape(path.resolve().as_uri())}">{_escape(path.name)}</a>' for path in paths)
+
     def _manual_template_json(self) -> str:
         template = json.loads(json.dumps(DEFAULT_MANUAL_DATA, ensure_ascii=False))
         template["active"] = True
@@ -49,18 +75,20 @@ class ResearchConsoleGenerator:
     def _render(self) -> str:
         manual_template = self._manual_template_json()
         reports = self._latest_reports()
+        workbenches = self._latest_workbenches()
+        runs = self._latest_runs()
+        visual_summaries = self._latest_visual_summaries()
         latest_report = reports[0] if reports else None
-        report_links = "".join(
-            f'<a href="{_escape(path.resolve().as_uri())}">{_escape(path.name)}</a>'
-            for path in reports
-        )
+        latest_workbench = workbenches[0] if workbenches else None
         latest_href = latest_report.resolve().as_uri() if latest_report else "#"
+        latest_workbench_href = latest_workbench.resolve().as_uri() if latest_workbench else "#"
         manual_path = get_manual_data_local_path()
         payload = json.dumps(
             {
                 "manualTemplate": manual_template,
                 "manualPath": manual_path,
                 "latestReport": str(latest_report or ""),
+                "latestRun": str(runs[0] if runs else ""),
             },
             ensure_ascii=False,
         )
@@ -78,28 +106,68 @@ class ResearchConsoleGenerator:
       <div>
         <p class="eyebrow">NDX vNext</p>
         <h1>研究控制台</h1>
-        <p>把人工数据、模型选择、数据源健康、运行命令和报告入口放在同一屏。它先服务研究动作，不抢报告本身的注意力。</p>
+        <p>把运行对象、人工数据、模型策略、功能开关、输出入口和健康状态放在同一屏。它是研究动作的总控台，不替代最终报告。</p>
       </div>
       <aside class="status-card">
         <span>默认路径</span>
         <strong>brief 报告</strong>
-        <a class="primary-link" href="{_escape(latest_href)}">打开最新报告</a>
+        <div class="status-actions">
+          <a class="primary-link" href="{_escape(latest_href)}">打开最新报告</a>
+          <a class="secondary-link" href="{_escape(latest_workbench_href)}">打开 workbench</a>
+        </div>
       </aside>
     </section>
 
     <section class="control-grid">
-      <article class="panel manual-panel">
+      <article class="panel">
         <div class="panel-head">
           <span>01</span>
           <div>
-            <h2>人工 / Wind 输入</h2>
-            <p>只填有把握的字段。空字段不会触发人工覆盖。</p>
+            <h2>运行对象与日期</h2>
+            <p>先确定研究对象和时点，再决定是否使用已有数据。</p>
           </div>
         </div>
-        <label>数据日期 <input id="dataDate" type="date"></label>
-        <label>手工模板
+        <div class="field-grid">
+          <label>标的 <input id="ticker" type="text" value="NDX / QQQ"></label>
+          <label>分析日期 <input id="dataDate" type="date"></label>
+          <label>已有数据 JSON <input id="dataJsonPath" type="text" placeholder="output/data/data_collected_YYYYMMDD_live.json"></label>
+          <label>已有 run 目录 <input id="runDirPath" type="text" value="{_escape(str(runs[0]) if runs else '')}" placeholder="output/analysis/vnext/<run_id>"></label>
+        </div>
+      </article>
+
+      <article class="panel manual-panel">
+        <div class="panel-head">
+          <span>02</span>
+          <div>
+            <h2>人工 / Wind 数据</h2>
+            <p>结构化录入高信任锚。空字段不会覆盖自动采集结果。</p>
+          </div>
+        </div>
+        <div class="manual-form">
+          <label>数据日期 <input data-manual-field="date" type="date"></label>
+          <label>来源 <input data-manual-field="source" type="text" placeholder="Wind / manual"></label>
+          <label>置信度
+            <select data-manual-field="confidence">
+              <option value="">不覆盖</option>
+              <option value="high">high</option>
+              <option value="medium">medium</option>
+              <option value="low">low</option>
+            </select>
+          </label>
+          <label>PE <input data-manual-field="pe" type="number" step="0.01" min="0"></label>
+          <label>PB <input data-manual-field="pb" type="number" step="0.01" min="0"></label>
+          <label>PS <input data-manual-field="ps" type="number" step="0.01" min="0"></label>
+          <label>ERP % <input data-manual-field="erp" type="number" step="0.01"></label>
+          <label>PE 5Y percentile <input data-manual-field="pe_percentile_5y" type="number" step="0.1" min="0" max="100"></label>
+          <label>PE 10Y percentile <input data-manual-field="pe_percentile_10y" type="number" step="0.1" min="0" max="100"></label>
+          <label>PB percentile <input data-manual-field="pb_percentile" type="number" step="0.1" min="0" max="100"></label>
+          <label>PS percentile <input data-manual-field="ps_percentile" type="number" step="0.1" min="0" max="100"></label>
+        </div>
+        <p id="manualValidation" class="validation-note">等待输入。</p>
+        <details class="advanced-json">
+          <summary>高级 JSON 预览</summary>
           <textarea id="manualJson" spellcheck="false">{_escape(manual_template)}</textarea>
-        </label>
+        </details>
         <div class="button-row">
           <button type="button" id="downloadManual">保存人工模板</button>
           <button type="button" id="resetManual">恢复模板</button>
@@ -109,37 +177,42 @@ class ResearchConsoleGenerator:
 
       <article class="panel">
         <div class="panel-head">
-          <span>02</span>
+          <span>03</span>
           <div>
-            <h2>模型选择</h2>
-            <p>默认先快后稳；需要更审慎时可直接使用 pro。</p>
+            <h2>模型与运行模式</h2>
+            <p>默认遵守 deepseek-v4-flash 到 deepseek-v4-pro 的 fallback 顺序。</p>
           </div>
         </div>
-        <div class="segmented" role="radiogroup" aria-label="模型选择">
+        <div class="segmented" role="radiogroup" aria-label="模型策略">
           <label><input type="radio" name="modelMode" value="deepseek-v4-flash,deepseek-v4-pro" checked> flash 优先</label>
           <label><input type="radio" name="modelMode" value="deepseek-v4-pro"> pro only</label>
-          <label><input type="radio" name="modelMode" value="deepseek-v4-flash"> flash only</label>
+          <label><input type="radio" name="modelMode" value="custom"> 自定义顺序</label>
         </div>
-        <div class="health-list" aria-label="数据源健康">
-          <h3>数据源健康</h3>
-          <div><b>Manual/Wind</b><span class="watch">可选高信任输入</span></div>
-          <div><b>Damodaran ERPbymonth.xlsx</b><span class="good">官方月度优先</span></div>
-          <div><b>WorldPERatio</b><span class="good">相对位置辅助</span></div>
-          <div><b>Trendonify</b><span class="watch">不可用时只记录缺口</span></div>
+        <label class="custom-models">自定义模型顺序 <input id="customModels" type="text" value="deepseek-v4-flash,deepseek-v4-pro"></label>
+        <div class="mode-grid" role="radiogroup" aria-label="运行模式">
+          <label><input type="radio" name="runMode" value="full" checked> full</label>
+          <label><input type="radio" name="runMode" value="data_only"> data only</label>
+          <label><input type="radio" name="runMode" value="analysis_only"> analysis only</label>
+          <label><input type="radio" name="runMode" value="draft_only"> draft only</label>
+          <label><input type="radio" name="runMode" value="report_only"> report only</label>
+          <label><input type="radio" name="runMode" value="quick_report"> quick report</label>
         </div>
       </article>
 
-      <article class="panel run-panel">
+      <article class="panel">
         <div class="panel-head">
-          <span>03</span>
+          <span>04</span>
           <div>
-            <h2>运行与报告</h2>
-            <p>浏览器不直接执行本地命令，但会生成清晰、可复制的运行指令。</p>
+            <h2>数据源 / 功能开关</h2>
+            <p>把可选功能集中管理，避免隐藏在命令行里。</p>
           </div>
         </div>
         <div class="toggle-line">
           <label><input id="skipLegacyReport" type="checkbox" checked> 跳过 legacy HTML</label>
           <label><input id="disableCharts" type="checkbox" checked> 关闭 legacy charts</label>
+          <label><input id="enableNews" type="checkbox"> 新闻源预留</label>
+          <label><input id="enableTrendonify" type="checkbox" disabled> Trendonify 暂缓</label>
+          <label><input id="enableLegacyCharts" type="checkbox"> legacy charts opt-in</label>
         </div>
         <div class="module-picker" aria-label="交互工作台模块">
           <h3>交互工作台模块</h3>
@@ -149,12 +222,67 @@ class ResearchConsoleGenerator:
           <label><input type="checkbox" name="workbenchModule" value="breadth_concentration" checked> 广度集中度</label>
           <label><input type="checkbox" name="workbenchModule" value="liquidity" checked> 流动性</label>
         </div>
+        <label>L5 默认预设
+          <select id="l5Preset">
+            <option value="simple_price">简洁价格</option>
+            <option value="trend_ma">趋势均线</option>
+            <option value="volatility_bands">波动区间</option>
+            <option value="volume_confirmation">量价确认</option>
+            <option value="full_stack">全部指标</option>
+          </select>
+        </label>
+      </article>
+
+      <article class="panel run-panel">
+        <div class="panel-head">
+          <span>05</span>
+          <div>
+            <h2>输出与工作台</h2>
+            <p>浏览器默认不执行本地任务，只生成可审计命令和入口。</p>
+          </div>
+        </div>
         <button class="command-button" type="button" id="buildCommand">生成运行命令</button>
         <pre id="runCommandPreview">python3 src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts</pre>
         <pre id="workbenchCommandPreview">python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/&lt;run_id&gt; --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity</pre>
-        <div class="report-list">
-          <h3>报告入口</h3>
-          {report_links or '<span>还没有生成过 native 报告。</span>'}
+        <div class="artifact-grid">
+          <div class="report-list">
+            <h3>最新 brief</h3>
+            {self._links(reports, '还没有生成过 native 报告。')}
+          </div>
+          <div class="report-list">
+            <h3>最新 workbench</h3>
+            {self._links(workbenches, '还没有生成过 workbench。')}
+          </div>
+          <div class="report-list">
+            <h3>最新 run</h3>
+            {self._links(runs, '还没有 vNext run 目录。')}
+          </div>
+          <div class="report-list">
+            <h3>视觉回归</h3>
+            {self._links(visual_summaries, '还没有 visual regression summary。')}
+          </div>
+        </div>
+      </article>
+
+      <article class="panel health-panel">
+        <div class="panel-head">
+          <span>06</span>
+          <div>
+            <h2>运行日志 / 健康 / 安全</h2>
+            <p>一键运行要等本地 control service 有清楚权限边界后再开放。</p>
+          </div>
+        </div>
+        <div class="health-list" aria-label="数据源健康">
+          <h3>数据源健康</h3>
+          <div><b>Manual/Wind</b><span class="watch">可选高信任输入</span></div>
+          <div><b>Damodaran ERPbymonth.xlsx</b><span class="good">官方月度优先</span></div>
+          <div><b>WorldPERatio</b><span class="good">相对位置辅助</span></div>
+          <div><b>Trendonify</b><span class="watch">暂缓，不静默 fallback</span></div>
+          <div><b>LLM diagnostics</b><span class="good">run 内写入诊断</span></div>
+        </div>
+        <div class="safety-box">
+          <h3>一键运行安全方案</h3>
+          <p>推荐下一阶段采用轻量本地 control service：命令 allowlist、显式确认弹窗、逐步日志、失败恢复和只写入项目白名单路径。当前 HTML 继续只做配置、预览和下载。</p>
         </div>
       </article>
     </section>
@@ -240,6 +368,7 @@ h1 {
   font: 650 24px var(--serif);
 }
 .primary-link,
+.secondary-link,
 button {
   display: inline-flex;
   align-items: center;
@@ -253,14 +382,32 @@ button {
   font: 700 13px var(--sans);
   cursor: pointer;
 }
+.secondary-link {
+  background: transparent;
+  color: var(--ink);
+  text-decoration: none;
+}
+.status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .control-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr);
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr) minmax(300px, .85fr);
   gap: 16px;
   margin-top: 18px;
 }
-@media (max-width: 900px) { .control-grid { grid-template-columns: 1fr; } }
-.run-panel { grid-column: 1 / -1; }
+.run-panel { grid-column: span 2; }
+.health-panel { grid-row: span 2; }
+@media (max-width: 1080px) {
+  .control-grid { grid-template-columns: 1fr 1fr; }
+  .run-panel,
+  .health-panel { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+  .control-grid { grid-template-columns: 1fr; }
+}
 .panel {
   padding: 18px 20px;
 }
@@ -298,6 +445,9 @@ label {
   font-weight: 650;
 }
 input[type="date"],
+input[type="text"],
+input[type="number"],
+select,
 textarea {
   width: 100%;
   border: 1px solid var(--rule);
@@ -307,14 +457,51 @@ textarea {
   padding: 9px 10px;
   font: 12px var(--mono);
 }
+.field-grid,
+.manual-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.field-grid label,
+.manual-form label {
+  margin: 0;
+}
+.manual-form label:nth-child(1),
+.manual-form label:nth-child(2) {
+  grid-column: span 1;
+}
+@media (max-width: 640px) {
+  .field-grid,
+  .manual-form { grid-template-columns: 1fr; }
+}
 textarea {
-  min-height: 360px;
+  min-height: 240px;
   resize: vertical;
   line-height: 1.45;
 }
+.advanced-json {
+  margin-top: 12px;
+  border: 1px solid var(--rule);
+  background: #fffefa;
+  border-radius: 4px;
+  padding: 8px;
+}
+.advanced-json summary {
+  cursor: pointer;
+  font: 700 13px var(--sans);
+  color: var(--accent);
+}
+.validation-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font: 12px var(--mono);
+}
+.validation-note.is-warning { color: var(--watch); }
 .button-row,
 .toggle-line,
-.module-picker {
+.module-picker,
+.mode-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -336,7 +523,8 @@ textarea {
 }
 .segmented label,
 .toggle-line label,
-.module-picker label {
+.module-picker label,
+.mode-grid label {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -346,6 +534,11 @@ textarea {
   padding: 10px 12px;
   margin: 0;
 }
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.custom-models { margin-top: 12px; }
 .module-picker {
   margin: 14px 0;
 }
@@ -393,11 +586,19 @@ pre {
   gap: 8px;
   margin-top: 14px;
 }
+.artifact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+@media (max-width: 760px) { .artifact-grid { grid-template-columns: 1fr; } }
 .report-list h3 {
   flex-basis: 100%;
 }
 .report-list a,
-.report-list span {
+.report-list span,
+.empty-link {
   border: 1px solid var(--rule);
   border-radius: 4px;
   color: var(--ink);
@@ -405,6 +606,23 @@ pre {
   padding: 6px 8px;
   font: 12px var(--mono);
   text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.empty-link {
+  color: var(--muted);
+}
+.safety-box {
+  margin-top: 18px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 12px;
+  background: #fffefa;
+}
+.safety-box p {
+  margin: 0;
+  color: var(--soft);
+  line-height: 1.65;
+  font-size: 13px;
 }
 """
 
@@ -415,29 +633,143 @@ const manualJson = document.getElementById('manualJson');
 const dataDate = document.getElementById('dataDate');
 const preview = document.getElementById('runCommandPreview');
 const workbenchPreview = document.getElementById('workbenchCommandPreview');
+const validation = document.getElementById('manualValidation');
 
 dataDate.value = new Date().toISOString().slice(0, 10);
+document.querySelector('[data-manual-field="date"]').value = dataDate.value;
 
 function currentModels() {
   const selected = document.querySelector('input[name="modelMode"]:checked');
+  if (selected && selected.value === 'custom') {
+    return document.getElementById('customModels').value.trim() || 'deepseek-v4-flash,deepseek-v4-pro';
+  }
   return selected ? selected.value : 'deepseek-v4-flash,deepseek-v4-pro';
 }
 
-function buildCommand() {
-  const parts = ['python3 src/main.py', `--models ${currentModels()}`];
-  if (document.getElementById('skipLegacyReport').checked) parts.push('--skip-report');
-  if (document.getElementById('disableCharts').checked) parts.push('--disable-charts');
-  preview.textContent = parts.join(' ');
-  const modules = Array.from(document.querySelectorAll('input[name="workbenchModule"]:checked')).map(node => node.value);
-  workbenchPreview.textContent = `python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/<run_id> --modules ${modules.join(',') || 'price_technical'}`;
+function selectedRunMode() {
+  const selected = document.querySelector('input[name="runMode"]:checked');
+  return selected ? selected.value : 'full';
 }
 
-document.querySelectorAll('input[name="modelMode"], #skipLegacyReport, #disableCharts, input[name="workbenchModule"]')
+function pathValue(id) {
+  return document.getElementById(id).value.trim();
+}
+
+function modeCommand(mode, models) {
+  const dataPath = pathValue('dataJsonPath');
+  const runDir = pathValue('runDirPath') || 'output/analysis/vnext/<run_id>';
+  const base = ['python3 src/main.py', `--models ${models}`];
+  if (dataPath) base.push(`--data-json ${dataPath}`);
+  if (document.getElementById('skipLegacyReport').checked) base.push('--skip-report');
+  if (document.getElementById('disableCharts').checked && !document.getElementById('enableLegacyCharts').checked) base.push('--disable-charts');
+  if (document.getElementById('enableLegacyCharts').checked) base.push('--enable-legacy-charts');
+  if (mode === 'report_only') {
+    return `python3 src/agent_analysis/vnext_reporter.py --run-dir ${runDir} --template brief`;
+  }
+  if (mode === 'quick_report') {
+    return `python3 src/agent_analysis/vnext_reporter.py --run-dir ${runDir} --template brief && python3 src/interactive_chart_workbench.py --run-dir ${runDir}`;
+  }
+  if (mode === 'analysis_only') {
+    return base.concat(['--skip-report']).join(' ');
+  }
+  if (mode === 'draft_only') {
+    return `${base.concat(['--skip-report']).join(' ')}\\npython3 src/agent_analysis/vnext_reporter.py --run-dir ${runDir} --template brief`;
+  }
+  if (mode === 'data_only') {
+    return '# data only 仍需本地 control service 拆分 collector；当前用 full 命令生成同源数据。\\n' + base.join(' ');
+  }
+  return base.join(' ');
+}
+
+function numberOrNull(value) {
+  if (value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildManualPayload() {
+  const payload = JSON.parse(data.manualTemplate);
+  payload.active = true;
+  const fields = {};
+  document.querySelectorAll('[data-manual-field]').forEach(input => {
+    const raw = input.value.trim();
+    if (!raw) return;
+    fields[input.dataset.manualField] = input.type === 'number' ? numberOrNull(raw) : raw;
+  });
+  if (fields.date) payload.date = fields.date;
+  const valuation = payload.metrics.get_ndx_pe_and_earnings_yield;
+  const gap = payload.metrics.get_equity_risk_premium;
+  const erp = payload.metrics.get_damodaran_us_implied_erp;
+  const setMetricSource = (metric) => {
+    if (fields.source) metric.source_name = fields.source;
+    if (fields.date && metric.data_quality) metric.data_quality.data_date = fields.date;
+    if (fields.confidence && metric.data_quality) {
+      metric.data_quality.coverage = metric.data_quality.coverage || {};
+      metric.data_quality.coverage.confidence = fields.confidence;
+    }
+  };
+  [valuation, gap, erp].forEach(setMetricSource);
+  if (fields.pe !== undefined) valuation.value.PE_TTM = fields.pe;
+  if (fields.pb !== undefined) valuation.value.PB = fields.pb;
+  if (fields.ps !== undefined) valuation.value.PS_TTM = fields.ps;
+  if (fields.pe_percentile_5y !== undefined) valuation.value.PE_TTM_percentile_5y = fields.pe_percentile_5y;
+  if (fields.pe_percentile_10y !== undefined) valuation.value.PE_TTM_percentile_10y = fields.pe_percentile_10y;
+  if (fields.pb_percentile !== undefined) valuation.value.PB_percentile_5y = fields.pb_percentile;
+  if (fields.ps_percentile !== undefined) valuation.value.PS_TTM_percentile_5y = fields.ps_percentile;
+  if (fields.erp !== undefined) {
+    erp.value.manual_erp = fields.erp;
+    gap.value.level = fields.erp;
+    gap.value.yield_type = 'manual_erp_reference';
+  }
+  return payload;
+}
+
+function validateManualPayload(payload) {
+  const warnings = [];
+  ['pe_percentile_5y', 'pe_percentile_10y', 'pb_percentile', 'ps_percentile'].forEach(key => {
+    const value = payload[key];
+    if (value !== undefined && value !== null && (value < 0 || value > 100)) warnings.push(`${key} 应在 0-100`);
+  });
+  ['pe', 'pb', 'ps'].forEach(key => {
+    const value = payload[key];
+    if (value !== undefined && value !== null && value < 0) warnings.push(`${key} 不应为负数`);
+  });
+  return warnings;
+}
+
+function syncManualPreview() {
+  const payload = buildManualPayload();
+  const warnings = validateManualPayload(payload);
+  manualJson.value = JSON.stringify(payload, null, 2);
+  validation.textContent = warnings.length ? warnings.join('；') : '人工数据预览已同步，空字段不会覆盖。';
+  validation.classList.toggle('is-warning', Boolean(warnings.length));
+}
+
+function buildCommand() {
+  const mode = selectedRunMode();
+  const models = currentModels();
+  preview.textContent = modeCommand(mode, models);
+  const modules = Array.from(document.querySelectorAll('input[name="workbenchModule"]:checked')).map(node => node.value);
+  const runDir = pathValue('runDirPath') || 'output/analysis/vnext/<run_id>';
+  workbenchPreview.textContent = `python3 src/interactive_chart_workbench.py --run-dir ${runDir} --modules ${modules.join(',') || 'price_technical'}`;
+}
+
+document.querySelectorAll('input[name="modelMode"], input[name="runMode"], #customModels, #dataJsonPath, #runDirPath, #skipLegacyReport, #disableCharts, #enableLegacyCharts, #enableNews, #l5Preset, input[name="workbenchModule"]')
   .forEach((node) => node.addEventListener('change', buildCommand));
+document.querySelectorAll('#customModels, #dataJsonPath, #runDirPath').forEach((node) => node.addEventListener('input', buildCommand));
+document.querySelectorAll('[data-manual-field]').forEach((node) => node.addEventListener('input', syncManualPreview));
+dataDate.addEventListener('change', () => {
+  document.querySelector('[data-manual-field="date"]').value = dataDate.value;
+  syncManualPreview();
+  buildCommand();
+});
 
 document.getElementById('buildCommand').addEventListener('click', buildCommand);
 document.getElementById('resetManual').addEventListener('click', () => {
   manualJson.value = data.manualTemplate;
+  document.querySelectorAll('[data-manual-field]').forEach(input => { input.value = ''; });
+  document.querySelector('[data-manual-field="date"]').value = dataDate.value;
+  syncManualPreview();
 });
 document.getElementById('downloadManual').addEventListener('click', () => {
   const blob = new Blob([manualJson.value], { type: 'application/json;charset=utf-8' });
@@ -448,6 +780,7 @@ document.getElementById('downloadManual').addEventListener('click', () => {
   link.click();
   URL.revokeObjectURL(url);
 });
+syncManualPreview();
 buildCommand();
 """
 

@@ -6,6 +6,39 @@
 
 ## 2026-05-06
 
+### 完成 workbench 操作化与研究控制台总控重构
+
+完成内容：
+
+- 先将既有成果快进合入 `main` 并推送到 GitHub，提交为 `e1a6f5b Advance vNext workbench and console planning`。
+- 按用户对 workbench 的两个批注，重构 L5 价格技术工作台交互：默认只显示 Candles、MA20、MA200，避免主图全指标过载。
+- 新增 L5 指标显隐和图例点击切换：Candles、MA5/20/60/200、Bollinger、Donchian、VWAP、Volume overlay 可独立启停。
+- 新增指标预设：简洁价格、趋势均线、波动区间、量价确认、全部指标；预设写入 localStorage，不改变 run artifact。
+- 新增时间轴锁定/解锁和统一时间轴：锁定时主图、副图和模块图共享 visible logical range；解锁后可局部检查，再一键统一。
+- 新增跨 pane readout：主图或副图移动 crosshair 时，右侧统一展示 OHLC、Volume、OBV、MACD hist、RSI、ATR、MFI、CMF。
+- 新增副图启停：Volume、OBV、MACD、RSI/ATR、MFI/CMF 均可折叠，移动端保持单列。
+- 非 L5 模块新增序列图例显隐、归一化和双轴控制，覆盖波动信用、利率估值、广度集中度、流动性模块。
+- 重构研究控制台为六区总控：运行对象与日期、人工/Wind 数据、模型与运行模式、数据源/功能开关、输出与工作台、运行日志/健康/安全。
+- 人工数据输入从纯 JSON 文本升级为结构化表单，支持 PE/PB/PS/ERP/percentile/date/source/confidence；保留高级 JSON 预览和下载。
+- 控制台新增 full、data only、analysis only、draft only、report only、quick report 运行模式，新增 flash 优先、pro only、自定义顺序模型策略。
+- 控制台纳入新闻源预留、Trendonify 暂缓、legacy charts opt-in、workbench 模块、L5 默认预设、最新 brief/workbench/run/visual regression 入口。
+- 控制台明确一键运行安全方案：后续若做本地 control service，必须有 allowlist、显式确认、日志、失败恢复和项目路径白名单。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_interactive_chart_workbench.py tests/test_research_console.py`：4 passed。
+- 重新生成 workbench：`output/reports/vnext_interactive_charts_20260506_controls.html`。
+- 重新生成控制台：`output/reports/vnext_research_console.html`。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_research_ui_brief_20260505_20260506_075229.html --workbench-html output/reports/vnext_interactive_charts_20260506_controls.html --output-dir output/reports/visual_regression/20260506_controls`：passed，desktop/mobile 截图和 layout checks 均 ok。
+- 额外生成控制台 desktop/mobile 截图：`output/reports/visual_regression/20260506_controls/console_desktop.png`、`output/reports/visual_regression/20260506_controls/console_mobile.png`。
+
+剩余观察：
+
+- data only 运行模式在控制台已有入口，但当前 `src/main.py` 还没有真正拆出独立 collector-only 命令；控制台已明确标注需要后续本地 control service 或 CLI 拆分。
+- 非 L5 模块已经可控，但更专业的宏观图还可以继续引入 navigator、收益差距专用面板和单位标注增强。
+
+---
+
 ### 完成阶段收尾知识同步
 
 完成内容：

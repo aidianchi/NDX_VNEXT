@@ -384,26 +384,61 @@ class InteractiveChartWorkbenchGenerator:
           <h2>QQQ Price Action</h2>
           <p>TradingView Lightweight Charts prototype. 数据源：{_escape(payload.get('source'))}；用于验证交互图形态，不替代最终审计链。</p>
         </div>
-        <div class="range-buttons">
-          <button data-range="90">3M</button>
-          <button data-range="180">6M</button>
-          <button data-range="365">1Y</button>
-          <button data-range="all">ALL</button>
+        <div class="workbench-tools">
+          <div class="range-buttons" aria-label="Time ranges">
+            <button data-range="90">3M</button>
+            <button data-range="180">6M</button>
+            <button data-range="365">1Y</button>
+            <button data-range="all">ALL</button>
+          </div>
+          <div class="sync-buttons" aria-label="Time axis controls">
+            <button type="button" id="axisLock" class="is-active" aria-pressed="true">时间轴锁定</button>
+            <button type="button" id="axisUnify">统一时间轴</button>
+          </div>
         </div>
       </div>
       <nav class="module-tabs" aria-label="Workbench modules">
         {module_tabs}
       </nav>
+      <section class="indicator-workbench-controls" aria-label="L5 indicator controls">
+        <div class="preset-row">
+          <span>指标预设</span>
+          <button type="button" data-preset="simple_price">简洁价格</button>
+          <button type="button" data-preset="trend_ma">趋势均线</button>
+          <button type="button" data-preset="volatility_bands">波动区间</button>
+          <button type="button" data-preset="volume_confirmation">量价确认</button>
+          <button type="button" data-preset="full_stack">全部指标</button>
+        </div>
+        <div class="toggle-row" aria-label="Price overlays">
+          <label><input type="checkbox" data-indicator-toggle="candles" checked> Candles</label>
+          <label><input type="checkbox" data-indicator-toggle="ma5"> MA5</label>
+          <label><input type="checkbox" data-indicator-toggle="ma20" checked> MA20</label>
+          <label><input type="checkbox" data-indicator-toggle="ma60"> MA60</label>
+          <label><input type="checkbox" data-indicator-toggle="ma200" checked> MA200</label>
+          <label><input type="checkbox" data-indicator-toggle="bollinger"> Bollinger</label>
+          <label><input type="checkbox" data-indicator-toggle="donchian"> Donchian</label>
+          <label><input type="checkbox" data-indicator-toggle="vwap20"> VWAP</label>
+          <label><input type="checkbox" data-indicator-toggle="overlay_volume"> Volume overlay</label>
+        </div>
+        <div class="toggle-row pane-toggles" aria-label="Subpanel controls">
+          <span>副图</span>
+          <label><input type="checkbox" data-pane-toggle="volume" checked> Volume</label>
+          <label><input type="checkbox" data-pane-toggle="obv" checked> OBV</label>
+          <label><input type="checkbox" data-pane-toggle="macd" checked> MACD</label>
+          <label><input type="checkbox" data-pane-toggle="rsi-atr" checked> RSI / ATR</label>
+          <label><input type="checkbox" data-pane-toggle="money-flow" checked> MFI / CMF</label>
+        </div>
+      </section>
       <div class="chart-grid">
         <div>
           <section class="module-section is-active" data-module="price_technical">
             <div class="price-chart" data-chart-root="qqq-price-action"></div>
             <div class="subpanel-grid" aria-label="L5 technical subpanels">
-              <article><h3>Volume</h3><div data-panel-root="volume"></div></article>
-              <article><h3>OBV</h3><div data-panel-root="obv"></div></article>
-              <article><h3>MACD</h3><div data-panel-root="macd"></div></article>
-              <article><h3>RSI / ATR</h3><div data-panel-root="rsi-atr"></div></article>
-              <article><h3>MFI / CMF</h3><div data-panel-root="money-flow"></div></article>
+              <article data-panel-shell="volume"><h3>Volume</h3><div data-panel-root="volume"></div></article>
+              <article data-panel-shell="obv"><h3>OBV</h3><div data-panel-root="obv"></div></article>
+              <article data-panel-shell="macd"><h3>MACD</h3><div data-panel-root="macd"></div></article>
+              <article data-panel-shell="rsi-atr"><h3>RSI / ATR</h3><div data-panel-root="rsi-atr"></div></article>
+              <article data-panel-shell="money-flow"><h3>MFI / CMF</h3><div data-panel-root="money-flow"></div></article>
             </div>
           </section>
           {module_sections}
@@ -413,16 +448,16 @@ class InteractiveChartWorkbenchGenerator:
           <p>把鼠标移到图上查看 OHLC、成交量和均线读数。</p>
         </aside>
       </div>
-      <div class="legend">
-        <span class="candle">Candles</span>
-        <span class="ma5">MA5</span>
-        <span class="ma20">MA20</span>
-        <span class="ma60">MA60</span>
-        <span class="ma200">MA200</span>
-        <span class="bollinger">Bollinger</span>
-        <span class="donchian">Donchian</span>
-        <span class="vwap">VWAP</span>
-        <span class="volume">Volume</span>
+      <div class="legend" aria-label="Clickable legend">
+        <button type="button" class="candle" data-indicator-legend="candles">Candles</button>
+        <button type="button" class="ma5" data-indicator-legend="ma5">MA5</button>
+        <button type="button" class="ma20" data-indicator-legend="ma20">MA20</button>
+        <button type="button" class="ma60" data-indicator-legend="ma60">MA60</button>
+        <button type="button" class="ma200" data-indicator-legend="ma200">MA200</button>
+        <button type="button" class="bollinger" data-indicator-legend="bollinger">Bollinger</button>
+        <button type="button" class="donchian" data-indicator-legend="donchian">Donchian</button>
+        <button type="button" class="vwap" data-indicator-legend="vwap20">VWAP</button>
+        <button type="button" class="volume" data-indicator-legend="overlay_volume">Volume</button>
       </div>
     </section>
   </main>
@@ -464,6 +499,11 @@ class InteractiveChartWorkbenchGenerator:
             <div class="module-copy">
               <h2>{_escape(title)}</h2>
               <p>{_escape(hints[key])}</p>
+            </div>
+            <div class="module-controls" data-module-controls="{_escape(key)}">
+              <label><input type="checkbox" data-module-normalize="{_escape(key)}"> 归一化</label>
+              <label><input type="checkbox" data-module-dual-axis="{_escape(key)}"> 双轴</label>
+              <div class="module-series-legend" data-module-legend="{_escape(key)}"></div>
             </div>
             <div class="module-chart" data-module-chart="{_escape(key)}"></div>
           </section>
@@ -571,12 +611,22 @@ body {
 .chart-head { align-items: end; margin-bottom: 12px; }
 .chart-head h2 { margin: 0 0 4px; font-size: 22px; }
 .chart-head p { margin: 0; color: var(--muted); line-height: 1.55; font-size: 13px; }
-.range-buttons {
+.workbench-tools {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.range-buttons,
+.sync-buttons {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
 }
-.range-buttons button {
+.sync-buttons { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.range-buttons button,
+.sync-buttons button,
+.preset-row button,
+.legend button,
+.module-series-legend button {
   border: 1px solid var(--rule);
   background: #fff;
   color: var(--ink);
@@ -584,7 +634,17 @@ body {
   padding: 7px 0;
   cursor: pointer;
 }
-.range-buttons button:hover { border-color: var(--ink); }
+.range-buttons button:hover,
+.sync-buttons button:hover,
+.preset-row button:hover,
+.legend button:hover,
+.module-series-legend button:hover { border-color: var(--ink); }
+.sync-buttons button.is-active,
+.preset-row button.is-active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
 .module-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -608,6 +668,41 @@ body {
 }
 .module-section { display: none; }
 .module-section.is-active { display: block; }
+.indicator-workbench-controls {
+  border: 1px solid var(--rule);
+  background: #fff;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+.preset-row,
+.toggle-row,
+.module-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.preset-row { margin-bottom: 8px; }
+.preset-row span,
+.pane-toggles span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.toggle-row label,
+.module-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--rule);
+  background: #fbfbf8;
+  padding: 6px 8px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
 .price-chart {
   height: 640px;
   min-width: 0;
@@ -640,6 +735,26 @@ body {
   border-bottom: 0;
   background: #fff;
   padding: 14px;
+}
+.module-controls {
+  border: 1px solid var(--rule);
+  border-bottom: 0;
+  background: #fff;
+  padding: 8px;
+}
+.module-series-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.module-series-legend button {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.module-series-legend button.is-muted,
+.legend button.is-muted {
+  opacity: .35;
+  text-decoration: line-through;
 }
 .module-copy h2 { margin: 0 0 4px; font-size: 18px; }
 .module-copy p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
@@ -680,7 +795,13 @@ body {
   color: var(--muted);
   font-size: 12px;
 }
-.legend span::before {
+.legend button {
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  padding: 4px 2px;
+}
+.legend button::before {
   content: "";
   display: inline-block;
   width: 18px;
@@ -701,6 +822,8 @@ body {
   .summary-grid,
   .chart-head,
   .chart-grid { grid-template-columns: 1fr; }
+  .sync-buttons,
+  .range-buttons { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .price-chart { height: 520px; }
   .subpanel-grid { grid-template-columns: 1fr; }
   .module-chart { height: 360px; }
@@ -713,20 +836,54 @@ const payload = JSON.parse(document.getElementById('chart-data').textContent);
 const root = document.querySelector('[data-chart-root="qqq-price-action"]');
 const readout = document.getElementById('readout');
 const syncedCharts = [];
+const chartEntries = [];
+const indicatorSeries = {};
+const panelShells = {};
+let syncLocked = true;
+let syncingRange = false;
+let syncingCrosshair = false;
+
+const PRESETS = {
+  simple_price: ['candles', 'ma20', 'ma200'],
+  trend_ma: ['candles', 'ma5', 'ma20', 'ma60', 'ma200'],
+  volatility_bands: ['candles', 'ma20', 'bollinger', 'donchian'],
+  volume_confirmation: ['candles', 'ma20', 'vwap20', 'overlay_volume'],
+  full_stack: ['candles', 'ma5', 'ma20', 'ma60', 'ma200', 'bollinger', 'donchian', 'vwap20', 'overlay_volume'],
+};
+const STORAGE_KEY = 'vnext_l5_indicator_preset';
 
 function fmt(value, digits = 2) {
   return Number.isFinite(value) ? value.toFixed(digits) : 'N/A';
 }
 
-function lineData(name) {
-  return (payload.ma[name] || []).filter(point => Number.isFinite(point.value));
-}
-
-function points(rows) {
+function asSeriesData(rows) {
   return (rows || []).filter(point => Number.isFinite(point.value));
 }
 
-function createBaseChart(target, height) {
+function lineData(name) {
+  return asSeriesData(payload.ma[name]);
+}
+
+function points(rows) {
+  return asSeriesData(rows);
+}
+
+function findPoint(rows, time) {
+  return (rows || []).find(item => item.time === time);
+}
+
+function addIndicator(key, series) {
+  if (!indicatorSeries[key]) indicatorSeries[key] = [];
+  indicatorSeries[key].push(series);
+}
+
+function applySeriesVisible(series, visible) {
+  if (series && typeof series.applyOptions === 'function') {
+    series.applyOptions({ visible });
+  }
+}
+
+function createBaseChart(target, height, key = 'chart') {
   const chart = LightweightCharts.createChart(target, {
     autoSize: true,
     height,
@@ -736,16 +893,34 @@ function createBaseChart(target, height) {
     timeScale: { borderColor: '#d7d4cb', timeVisible: false },
   });
   syncedCharts.push(chart);
+  const entry = { chart, key, primarySeries: null, primaryData: [] };
+  chartEntries.push(entry);
+  const timeScale = chart.timeScale();
+  if (timeScale && typeof timeScale.subscribeVisibleLogicalRangeChange === 'function') {
+    timeScale.subscribeVisibleLogicalRangeChange((range) => {
+      if (!syncLocked || syncingRange || !range) return;
+      syncingRange = true;
+      chartEntries.forEach((item) => {
+        if (item.chart === chart) return;
+        const targetScale = item.chart.timeScale();
+        if (targetScale && typeof targetScale.setVisibleLogicalRange === 'function') {
+          targetScale.setVisibleLogicalRange(range);
+        }
+      });
+      syncingRange = false;
+    });
+  }
   return chart;
 }
 
-const chart = createBaseChart(root, 640);
+const chart = createBaseChart(root, 640, 'price');
 chart.applyOptions({
   grid: { vertLines: { color: '#eeeeea' }, horzLines: { color: '#eeeeea' } },
   crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
   rightPriceScale: { borderColor: '#d7d4cb', scaleMargins: { top: 0.08, bottom: 0.24 } },
   timeScale: { borderColor: '#d7d4cb', timeVisible: false },
 });
+const priceEntry = chartEntries.find(item => item.key === 'price');
 
 const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
   upColor: '#18845b',
@@ -755,6 +930,11 @@ const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
   wickDownColor: '#b93632',
 });
 candleSeries.setData(payload.candles);
+addIndicator('candles', candleSeries);
+if (priceEntry) {
+  priceEntry.primarySeries = candleSeries;
+  priceEntry.primaryData = payload.candles.map(item => ({ time: item.time, value: item.close }));
+}
 
 const volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
   priceFormat: { type: 'volume' },
@@ -762,6 +942,7 @@ const volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
 });
 volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
 volumeSeries.setData(payload.volume);
+addIndicator('overlay_volume', volumeSeries);
 
 [
   ['ma5', '#be4d25', 2],
@@ -771,22 +952,25 @@ volumeSeries.setData(payload.volume);
 ].forEach(([name, color, width]) => {
   const series = chart.addSeries(LightweightCharts.LineSeries, { color, lineWidth: width, priceLineVisible: false });
   series.setData(lineData(name));
+  addIndicator(name, series);
 });
 [
-  ['bb_upper', '#64748b', 1],
-  ['bb_lower', '#64748b', 1],
-  ['donchian_upper', '#0f766e', 1],
-  ['donchian_lower', '#0f766e', 1],
-  ['vwap20', '#7c3aed', 2],
-].forEach(([name, color, width]) => {
+  ['bb_upper', 'bollinger', '#64748b', 1],
+  ['bb_lower', 'bollinger', '#64748b', 1],
+  ['donchian_upper', 'donchian', '#0f766e', 1],
+  ['donchian_lower', 'donchian', '#0f766e', 1],
+  ['vwap20', 'vwap20', '#7c3aed', 2],
+].forEach(([name, group, color, width]) => {
   const series = chart.addSeries(LightweightCharts.LineSeries, { color, lineWidth: width, priceLineVisible: false });
   series.setData(points(payload.bands[name]));
+  addIndicator(group, series);
 });
 
-function renderPanel(rootSelector, config) {
+function renderPanel(rootSelector, panelKey, config) {
   const target = document.querySelector(rootSelector);
   if (!target) return;
-  const panel = createBaseChart(target, 150);
+  const panel = createBaseChart(target, 150, panelKey);
+  const entry = chartEntries.find(item => item.key === panelKey);
   config.forEach(item => {
     const kind = item.kind || 'line';
     const series = panel.addSeries(kind === 'histogram' ? LightweightCharts.HistogramSeries : LightweightCharts.LineSeries, {
@@ -796,41 +980,93 @@ function renderPanel(rootSelector, config) {
       priceFormat: item.priceFormat || { type: 'price', precision: 2, minMove: 0.01 },
     });
     series.setData(points(item.data));
+    if (entry && !entry.primarySeries) {
+      entry.primarySeries = series;
+      entry.primaryData = points(item.data);
+    }
   });
   panel.timeScale().fitContent();
 }
 
-renderPanel('[data-panel-root="volume"]', [{ kind: 'histogram', data: payload.volume, color: 'rgba(75, 85, 99, .45)', priceFormat: { type: 'volume' } }]);
-renderPanel('[data-panel-root="obv"]', [{ data: payload.subpanels.obv, color: '#7c3aed' }]);
-renderPanel('[data-panel-root="macd"]', [
+renderPanel('[data-panel-root="volume"]', 'volume', [{ kind: 'histogram', data: payload.volume, color: 'rgba(75, 85, 99, .45)', priceFormat: { type: 'volume' } }]);
+renderPanel('[data-panel-root="obv"]', 'obv', [{ data: payload.subpanels.obv, color: '#7c3aed' }]);
+renderPanel('[data-panel-root="macd"]', 'macd', [
   { kind: 'histogram', data: payload.subpanels.macd_histogram, color: '#94a3b8' },
   { data: payload.subpanels.macd, color: '#2563eb' },
   { data: payload.subpanels.macd_signal, color: '#be4d25' },
 ]);
-renderPanel('[data-panel-root="rsi-atr"]', [
+renderPanel('[data-panel-root="rsi-atr"]', 'rsi-atr', [
   { data: payload.subpanels.rsi14, color: '#b7791f' },
   { data: payload.subpanels.atr14, color: '#0f766e' },
 ]);
-renderPanel('[data-panel-root="money-flow"]', [
+renderPanel('[data-panel-root="money-flow"]', 'money-flow', [
   { data: payload.subpanels.mfi14, color: '#2563eb' },
   { data: payload.subpanels.cmf20, color: '#18845b' },
 ]);
+
+document.querySelectorAll('[data-panel-shell]').forEach((node) => {
+  panelShells[node.dataset.panelShell] = node;
+});
+
+function normalizedRows(rows) {
+  const clean = points(rows);
+  const base = clean.find(item => Number.isFinite(item.value));
+  if (!base || base.value === 0) return clean;
+  return clean.map(item => ({ time: item.time, value: ((item.value / base.value) - 1) * 100 }));
+}
 
 function renderModuleChart(moduleKey, colors) {
   const target = document.querySelector(`[data-module-chart="${moduleKey}"]`);
   const module = payload.modules[moduleKey];
   if (!target || !module) return;
-  const moduleChart = createBaseChart(target, 460);
+  target.innerHTML = '';
+  const normalize = Boolean(document.querySelector(`[data-module-normalize="${moduleKey}"]`)?.checked);
+  const dualAxis = Boolean(document.querySelector(`[data-module-dual-axis="${moduleKey}"]`)?.checked);
+  const moduleChart = createBaseChart(target, 460, moduleKey);
+  moduleChart.applyOptions({
+    leftPriceScale: { visible: dualAxis, borderColor: '#d7d4cb' },
+    rightPriceScale: { visible: true, borderColor: '#d7d4cb' },
+  });
+  const legend = document.querySelector(`[data-module-legend="${moduleKey}"]`);
+  if (legend) legend.innerHTML = '';
   (module.series || []).forEach((seriesKey, index) => {
+    let label = seriesKey;
+    let data = [];
     if (seriesKey === 'QQQ_OHLCV') {
-      const closeSeries = moduleChart.addSeries(LightweightCharts.LineSeries, { color: colors[index % colors.length], lineWidth: 2, priceLineVisible: false });
-      closeSeries.setData(payload.candles.map(item => ({ time: item.time, value: item.close })));
-      return;
+      label = 'QQQ Close';
+      data = payload.candles.map(item => ({ time: item.time, value: item.close }));
+    } else {
+      const item = payload.supplementalSeries[seriesKey];
+      if (!item || !item.rows || !item.rows.length) return;
+      label = item.label || seriesKey;
+      data = points(item.rows);
     }
-    const item = payload.supplementalSeries[seriesKey];
-    if (!item || !item.rows || !item.rows.length) return;
-    const line = moduleChart.addSeries(LightweightCharts.LineSeries, { color: colors[index % colors.length], lineWidth: 2, priceLineVisible: false, title: item.label });
-    line.setData(points(item.rows));
+    const renderedData = normalize ? normalizedRows(data) : data;
+    const line = moduleChart.addSeries(LightweightCharts.LineSeries, {
+      color: colors[index % colors.length],
+      lineWidth: 2,
+      priceLineVisible: false,
+      title: normalize ? `${label} (normalized)` : label,
+      priceScaleId: dualAxis && index % 2 ? 'left' : 'right',
+    });
+    line.setData(renderedData);
+    const entry = chartEntries.find(item => item.key === moduleKey);
+    if (entry && !entry.primarySeries) {
+      entry.primarySeries = line;
+      entry.primaryData = renderedData;
+    }
+    if (legend) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.dataset.seriesKey = seriesKey;
+      button.style.color = colors[index % colors.length];
+      button.addEventListener('click', () => {
+        const muted = button.classList.toggle('is-muted');
+        applySeriesVisible(line, !muted);
+      });
+      legend.appendChild(button);
+    }
   });
   moduleChart.timeScale().fitContent();
 }
@@ -840,7 +1076,67 @@ renderModuleChart('rates_valuation', ['#2563eb', '#be4d25', '#0f766e', '#64748b'
 renderModuleChart('breadth_concentration', ['#7c3aed', '#2563eb']);
 renderModuleChart('liquidity', ['#18845b', '#2563eb', '#be4d25', '#64748b', '#b7791f']);
 
+document.querySelectorAll('[data-module-normalize], [data-module-dual-axis]').forEach(input => {
+  input.addEventListener('change', () => {
+    const key = input.dataset.moduleNormalize || input.dataset.moduleDualAxis;
+    const palettes = {
+      volatility_credit: ['#be4d25', '#7c3aed', '#b7791f', '#2563eb', '#18845b'],
+      rates_valuation: ['#2563eb', '#be4d25', '#0f766e', '#64748b', '#7c3aed'],
+      breadth_concentration: ['#7c3aed', '#2563eb'],
+      liquidity: ['#18845b', '#2563eb', '#be4d25', '#64748b', '#b7791f'],
+    };
+    renderModuleChart(key, palettes[key] || ['#2563eb', '#be4d25', '#18845b']);
+    unifyTimeAxis();
+  });
+});
+
 syncedCharts.forEach(item => item.timeScale().fitContent());
+
+function setIndicatorState(key, visible) {
+  (indicatorSeries[key] || []).forEach(series => applySeriesVisible(series, visible));
+  document.querySelectorAll(`[data-indicator-toggle="${key}"]`).forEach(input => { input.checked = visible; });
+  document.querySelectorAll(`[data-indicator-legend="${key}"]`).forEach(button => button.classList.toggle('is-muted', !visible));
+}
+
+function applyPreset(name, persist = true) {
+  const active = new Set(PRESETS[name] || PRESETS.simple_price);
+  Object.keys(indicatorSeries).forEach(key => setIndicatorState(key, active.has(key)));
+  document.querySelectorAll('[data-preset]').forEach(button => button.classList.toggle('is-active', button.dataset.preset === name));
+  if (persist) {
+    try { localStorage.setItem(STORAGE_KEY, name); } catch (error) {}
+  }
+}
+
+document.querySelectorAll('[data-indicator-toggle]').forEach(input => {
+  input.addEventListener('change', () => setIndicatorState(input.dataset.indicatorToggle, input.checked));
+});
+document.querySelectorAll('[data-indicator-legend]').forEach(button => {
+  button.addEventListener('click', () => {
+    const key = button.dataset.indicatorLegend;
+    const input = document.querySelector(`[data-indicator-toggle="${key}"]`);
+    setIndicatorState(key, !(input && input.checked));
+  });
+});
+document.querySelectorAll('[data-preset]').forEach(button => {
+  button.addEventListener('click', () => applyPreset(button.dataset.preset));
+});
+document.querySelectorAll('[data-pane-toggle]').forEach(input => {
+  input.addEventListener('change', () => {
+    const shell = panelShells[input.dataset.paneToggle];
+    if (shell) shell.hidden = !input.checked;
+  });
+});
+
+function setRangeAll(range) {
+  syncingRange = true;
+  chartEntries.forEach(item => {
+    const timeScale = item.chart.timeScale();
+    if (timeScale && typeof timeScale.setVisibleLogicalRange === 'function') {
+      timeScale.setVisibleLogicalRange(range);
+    }
+  });
+  syncingRange = false;
+}
 
 function updateRange(days) {
   if (days === 'all' || payload.candles.length <= days) {
@@ -848,44 +1144,103 @@ function updateRange(days) {
     return;
   }
   const to = payload.candles.length - 1;
-  syncedCharts.forEach(item => item.timeScale().setVisibleLogicalRange({ from: Math.max(0, to - Number(days)), to }));
+  setRangeAll({ from: Math.max(0, to - Number(days)), to });
 }
 
 document.querySelectorAll('[data-range]').forEach(button => {
   button.addEventListener('click', () => updateRange(button.dataset.range));
 });
 
+function unifyTimeAxis() {
+  const sourceScale = chart.timeScale();
+  const range = sourceScale && typeof sourceScale.getVisibleLogicalRange === 'function'
+    ? sourceScale.getVisibleLogicalRange()
+    : null;
+  if (range) {
+    setRangeAll(range);
+  } else {
+    syncedCharts.forEach(item => item.timeScale().fitContent());
+  }
+}
+
+document.getElementById('axisLock').addEventListener('click', () => {
+  syncLocked = !syncLocked;
+  const button = document.getElementById('axisLock');
+  button.classList.toggle('is-active', syncLocked);
+  button.setAttribute('aria-pressed', String(syncLocked));
+  button.textContent = syncLocked ? '时间轴锁定' : '时间轴解锁';
+});
+document.getElementById('axisUnify').addEventListener('click', unifyTimeAxis);
+
 document.querySelectorAll('[data-module-tab]').forEach(button => {
   button.addEventListener('click', () => {
     const key = button.dataset.moduleTab;
     document.querySelectorAll('[data-module-tab]').forEach(item => item.classList.toggle('is-active', item === button));
     document.querySelectorAll('[data-module]').forEach(item => item.classList.toggle('is-active', item.dataset.module === key));
+    unifyTimeAxis();
   });
 });
 
-chart.subscribeCrosshairMove(param => {
-  if (!param || !param.time || !param.seriesData) {
-    readout.innerHTML = '<h3>Crosshair</h3><p>把鼠标移到图上查看 OHLC、成交量和均线读数。</p>';
-    return;
-  }
-  const candle = param.seriesData.get(candleSeries);
-  if (!candle) return;
-  const row = payload.candles.find(item => item.time === param.time) || {};
-  readout.innerHTML = `
-    <h3>${param.time}</h3>
+function readoutHtml(time) {
+  const candle = payload.candles.find(item => item.time === time) || {};
+  const volume = findPoint(payload.volume, time) || {};
+  const values = {
+    rsi: findPoint(payload.subpanels.rsi14, time),
+    atr: findPoint(payload.subpanels.atr14, time),
+    macd: findPoint(payload.subpanels.macd_histogram, time),
+    obv: findPoint(payload.subpanels.obv, time),
+    mfi: findPoint(payload.subpanels.mfi14, time),
+    cmf: findPoint(payload.subpanels.cmf20, time),
+  };
+  return `
+    <h3>${time}</h3>
     <dl>
       <dt>Open</dt><dd>${fmt(candle.open)}</dd>
       <dt>High</dt><dd>${fmt(candle.high)}</dd>
       <dt>Low</dt><dd>${fmt(candle.low)}</dd>
       <dt>Close</dt><dd>${fmt(candle.close)}</dd>
-      <dt>Volume</dt><dd>${fmt((payload.volume.find(item => item.time === param.time) || {}).value, 0)}</dd>
-      <dt>RSI</dt><dd>${fmt((payload.subpanels.rsi14.find(item => item.time === param.time) || {}).value)}</dd>
-      <dt>MACD</dt><dd>${fmt((payload.subpanels.macd_histogram.find(item => item.time === param.time) || {}).value)}</dd>
-      <dt>MFI</dt><dd>${fmt((payload.subpanels.mfi14.find(item => item.time === param.time) || {}).value)}</dd>
-      <dt>CMF</dt><dd>${fmt((payload.subpanels.cmf20.find(item => item.time === param.time) || {}).value, 4)}</dd>
+      <dt>Volume</dt><dd>${fmt(volume.value, 0)}</dd>
+      <dt>OBV</dt><dd>${fmt(values.obv?.value, 0)}</dd>
+      <dt>MACD hist</dt><dd>${fmt(values.macd?.value)}</dd>
+      <dt>RSI</dt><dd>${fmt(values.rsi?.value)}</dd>
+      <dt>ATR</dt><dd>${fmt(values.atr?.value)}</dd>
+      <dt>MFI</dt><dd>${fmt(values.mfi?.value)}</dd>
+      <dt>CMF</dt><dd>${fmt(values.cmf?.value, 4)}</dd>
     </dl>
   `;
+}
+
+function syncCrosshair(time, sourceEntry) {
+  if (syncingCrosshair) return;
+  syncingCrosshair = true;
+  chartEntries.forEach(entry => {
+    if (entry === sourceEntry || !entry.primarySeries || !entry.chart || typeof entry.chart.setCrosshairPosition !== 'function') return;
+    const point = findPoint(entry.primaryData, time);
+    if (point && Number.isFinite(point.value)) {
+      entry.chart.setCrosshairPosition(point.value, time, entry.primarySeries);
+    }
+  });
+  syncingCrosshair = false;
+}
+
+function handleCrosshair(param, entry) {
+  if (!param || !param.time || !param.seriesData) {
+    readout.innerHTML = '<h3>Crosshair</h3><p>把鼠标移到图上查看 OHLC、成交量和均线读数。</p>';
+    return;
+  }
+  readout.innerHTML = readoutHtml(param.time);
+  syncCrosshair(param.time, entry);
+}
+
+chartEntries.forEach(entry => {
+  if (entry.chart && typeof entry.chart.subscribeCrosshairMove === 'function') {
+    entry.chart.subscribeCrosshairMove(param => handleCrosshair(param, entry));
+  }
 });
+
+let savedPreset = 'simple_price';
+try { savedPreset = localStorage.getItem(STORAGE_KEY) || 'simple_price'; } catch (error) {}
+applyPreset(PRESETS[savedPreset] ? savedPreset : 'simple_price', false);
 """
 
 

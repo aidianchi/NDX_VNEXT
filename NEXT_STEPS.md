@@ -18,33 +18,35 @@
   - Highcharts Stock 的 range selector / navigator 提供成熟时间窗口和全局预览思路，适合借鉴“底部全局时间滑块”，但不必立即换库。
   - ECharts 的 legend selected、dataZoom、axisPointer 联动适合宏观多线图模块；后续若利率/估值/流动性模块要做归一化、多轴和强联动，可作为补充库候选。
 - 第一性原则判断：workbench 不应只是“把报告里的图放大”。它要回答“我想看什么、隐藏什么、哪些 pane 共享同一时间、当前日期所有指标读数如何互相印证”。因此下一轮应优先补交互控制，而不是继续扩指标数量。
+- 本轮已完成第一版可操作看盘台：L5 主图默认采用克制预设，支持指标显隐、图例点击切换、五类预设、副图折叠、时间轴锁定/解锁、一键统一时间轴、跨 pane readout；非 L5 模块支持序列图例显隐、归一化和双轴切换。最新输出：`output/reports/vnext_interactive_charts_20260506_controls.html`。
 
 | 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
-| 1 | 输出体验 | L5 主图增加指标显示/隐藏控制 | 默认全开会造成视觉拥挤，用户需要在简洁观察和综合验证之间切换 | 主图上方或侧栏提供 Candles、MA5/20/60/200、Bollinger、Donchian、VWAP、Volume overlay 的开关；默认使用克制预设；图例点击也能切换可见性 |
-| 2 | 输出体验 | 增加指标预设模板 | 看盘软件的价值不是让用户每次手动点十几个开关，而是提供常用观察模式 | 提供“简洁价格”“趋势均线”“波动区间”“量价确认”“全部指标”预设；预设状态写入 payload/localStorage，不影响 artifact |
-| 3 | 输出体验 | 实现主图与副图时间轴锁定/解锁 | 当前副图共享窗口不够强，缩放/拖拽后容易失去同屏比较意义 | 增加“时间轴锁定”开关和“统一时间轴”按钮；锁定时任一 pane 缩放/平移同步到所有 pane；解锁时允许单 pane 检查；重新统一后一键恢复 |
-| 4 | 输出体验 | 联动 crosshair 与统一读数面板 | 用户看某一天时，需要同时读 OHLC、Volume、OBV、MACD、RSI、MFI、CMF，而不是只读主图 | 鼠标移动主图或副图时，所有 pane 显示同一日期的 vertical marker；右侧 readout 同步展示主图与副图核心值 |
-| 5 | 输出体验 | 副图 pane 重新分组与可折叠 | 四个副图好看，但不是每次都需要；移动端更容易拥挤 | Volume 默认展开；OBV/MACD/RSI-MFI 允许折叠或启停；移动端保持主图优先，副图可按研究问题展开 |
-| 6 | 输出体验 | 非 L5 模块增加 legend / normalize / dual-axis 控制 | VIX、OAS、10Y、ERP、流动性单位不同，简单多线图容易误导 | 波动信用、利率估值、广度集中度、流动性模块至少支持序列显隐；利率/估值/流动性提供归一化或双轴选项，并清楚标注单位 |
-| 7 | 输出体验 | 为 workbench 交互增加回归测试 | 这类交互最容易在后续改样式时悄悄坏掉 | 测试覆盖指标开关 DOM、预设按钮、时间轴锁定按钮、统一按钮、crosshair readout 文案；视觉回归保留桌面/移动截图 |
+| 1 | 输出体验 | L5 主图增加指标显示/隐藏控制 | 默认全开会造成视觉拥挤，用户需要在简洁观察和综合验证之间切换 | 已完成：主图提供 Candles、MA5/20/60/200、Bollinger、Donchian、VWAP、Volume overlay 开关；默认克制；图例点击可切换 |
+| 2 | 输出体验 | 增加指标预设模板 | 看盘软件的价值不是让用户每次手动点十几个开关，而是提供常用观察模式 | 已完成：提供“简洁价格”“趋势均线”“波动区间”“量价确认”“全部指标”；预设写入 localStorage，不污染 artifact |
+| 3 | 输出体验 | 实现主图与副图时间轴锁定/解锁 | 当前副图共享窗口不够强，缩放/拖拽后容易失去同屏比较意义 | 已完成：增加“时间轴锁定”和“统一时间轴”；锁定时 visible logical range 联动，解锁后可局部检查 |
+| 4 | 输出体验 | 联动 crosshair 与统一读数面板 | 用户看某一天时，需要同时读 OHLC、Volume、OBV、MACD、RSI、MFI、CMF，而不是只读主图 | 已完成第一版：主图/副图移动会更新统一 readout，并在支持的 Lightweight Charts 环境中同步 crosshair |
+| 5 | 输出体验 | 副图 pane 重新分组与可折叠 | 四个副图好看，但不是每次都需要；移动端更容易拥挤 | 已完成：Volume、OBV、MACD、RSI/ATR、MFI/CMF 均可启停；移动端保持单列 |
+| 6 | 输出体验 | 非 L5 模块增加 legend / normalize / dual-axis 控制 | VIX、OAS、10Y、ERP、流动性单位不同，简单多线图容易误导 | 已完成第一版：波动信用、利率估值、广度集中度、流动性模块支持序列显隐、归一化和双轴重绘 |
+| 7 | 输出体验 | 为 workbench 交互增加回归测试 | 这类交互最容易在后续改样式时悄悄坏掉 | 已完成：测试覆盖指标开关、预设、时间轴按钮、模块归一化/双轴控件和 crosshair 同步代码；视觉回归保留桌面/移动截图 |
 
 ### 新一轮反馈：研究控制台从报告入口升级为总控开关
 
 - 现有 `output/reports/vnext_research_console.html` 比旧 GUI 美观，但仍偏“命令生成页”。用户的定位更高：它应是 vNext 的运行前总控台，集中处理人工数据、模型选择、运行模式、可选数据源、报告/工作台生成和未来新闻源等扩展入口。
 - 旧 `/Users/aidianchi/Desktop/launcher.py` 外观和交互确实落后，但功能线索有价值：人工 L4 顺序输入、历史时点分析、模型调用顺序、API 配置入口、新闻开关、图表叠加模式、运行模式选择和启动本地任务。这些不应被新控制台遗忘。
 - 关键边界：self-contained HTML 默认不能直接安全写本地文件或执行命令。下一阶段应先做“高质量配置与命令面板”；若要真正一键运行，应建立一个明确权限边界的本地 control service，所有写文件/执行命令都必须有显式确认和日志。
+- 本轮已完成第一版总控台重构：页面按六区组织，人工数据从纯 JSON 升级为结构化表单，运行模式、模型顺序、功能开关、workbench 模块、artifact 入口、数据源健康和一键运行安全方案均有明确位置。最新输出：`output/reports/vnext_research_console.html`。
 
 | 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
-| 1 | 输出体验 | 重构控制台信息架构 | 总控台不能把所有开关堆成表单，应按真实研究流程组织 | 分成“运行对象与日期”“人工/Wind 数据”“模型与 API”“数据源/功能开关”“输出与工作台”“运行日志/健康”六区 |
-| 2 | 输出体验 | 人工数据从 JSON 文本升级为结构化表单 | 普通使用者不应直接编辑大段 JSON，且手填数值需要校验 | PE/PB/PS/ERP/percentile/date/source/confidence 以表单输入；保留高级 JSON 抽屉；空字段不覆盖；输入有范围校验和预览 |
-| 3 | 输出体验 | 恢复并现代化运行模式选择 | 旧 launcher 的 full/data_only/report_only 等模式有实际价值 | 控制台可选择 full、data only、analysis only、draft only、report only、quick report；命令预览同步更新 |
-| 4 | 输出体验 | 模型选择升级为“策略 + 顺序” | 只给 flash/pro 三个按钮不够表达 fallback 策略 | 提供 flash 优先、pro only、自定义顺序；默认遵守项目规则 deepseek-v4-flash -> deepseek-v4-pro；显示 API 可用性但不暴露密钥 |
-| 5 | 数据基础 | 功能开关纳入控制台 | 新闻源、Trendonify、legacy charts、workbench 模块、图表叠加模式都应从同一处管理 | 控制台列出新闻源预留开关、Trendonify 状态/暂缓标记、legacy charts opt-in、workbench 模块、L5 指标预设和宏观模块选项 |
-| 6 | 输出体验 | 报告与 artifact 入口升级 | 用户应能从控制台打开最新 brief、workbench、run 目录和诊断结果 | 列出最新 run、最新报告、workbench、visual regression summary、llm_stage_diagnostics；缺失时显示缺口原因 |
-| 7 | 核心系统 | 评估一键运行的安全方案 | 直接在浏览器执行本地任务风险较高，但长期总控台需要真正启动能力 | 先形成方案：继续命令复制、轻量本地 HTTP control service、或保留桌面 GUI；若选 service，必须有 allowlist、确认弹窗、日志和失败恢复 |
-| 8 | 输出体验 | 控制台视觉与交互重设计 | 总控台应像专业研究终端，不像临时表单 | 采用高密度但清晰的工作台布局：左侧配置、中间运行计划、右侧健康/输出；移动端可读；视觉回归覆盖控制台 desktop/mobile |
+| 1 | 输出体验 | 重构控制台信息架构 | 总控台不能把所有开关堆成表单，应按真实研究流程组织 | 已完成：分成“运行对象与日期”“人工/Wind 数据”“模型与运行模式”“数据源/功能开关”“输出与工作台”“运行日志/健康/安全”六区 |
+| 2 | 输出体验 | 人工数据从 JSON 文本升级为结构化表单 | 普通使用者不应直接编辑大段 JSON，且手填数值需要校验 | 已完成：PE/PB/PS/ERP/percentile/date/source/confidence 表单输入；保留高级 JSON 抽屉；空字段不覆盖；有范围校验和预览 |
+| 3 | 输出体验 | 恢复并现代化运行模式选择 | 旧 launcher 的 full/data_only/report_only 等模式有实际价值 | 已完成：可选 full、data only、analysis only、draft only、report only、quick report；命令预览同步更新 |
+| 4 | 输出体验 | 模型选择升级为“策略 + 顺序” | 只给 flash/pro 三个按钮不够表达 fallback 策略 | 已完成：提供 flash 优先、pro only、自定义顺序；默认 deepseek-v4-flash -> deepseek-v4-pro；不暴露密钥 |
+| 5 | 数据基础 | 功能开关纳入控制台 | 新闻源、Trendonify、legacy charts、workbench 模块、图表叠加模式都应从同一处管理 | 已完成：控制台列出新闻源预留、Trendonify 暂缓、legacy charts opt-in、workbench 模块和 L5 默认预设 |
+| 6 | 输出体验 | 报告与 artifact 入口升级 | 用户应能从控制台打开最新 brief、workbench、run 目录和诊断结果 | 已完成：列出最新 brief、workbench、run 目录和 visual regression summary；缺失时显示缺口原因 |
+| 7 | 核心系统 | 评估一键运行的安全方案 | 直接在浏览器执行本地任务风险较高，但长期总控台需要真正启动能力 | 已完成第一版方案：建议轻量本地 control service，必须具备 allowlist、确认弹窗、日志、失败恢复和项目路径白名单 |
+| 8 | 输出体验 | 控制台视觉与交互重设计 | 总控台应像专业研究终端，不像临时表单 | 已完成：高密度三列/响应式布局；desktop/mobile 截图已生成到 `output/reports/visual_regression/20260506_controls/` |
 
 ### 输出体验：L1-L5 指标级可视化已落地
 
