@@ -134,8 +134,19 @@ body {
   color: var(--ink);
   font-weight: 600;
   text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .verdict-row strong.mono { font-family: var(--mono); font-size: 13px; }
+@media (max-width: 520px) {
+  .verdict-card { padding: 14px 16px; }
+  .verdict-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .verdict-row strong { text-align: left; }
+}
 .hero-risks {
   margin-top: 28px;
   padding-top: 20px;
@@ -169,6 +180,7 @@ body {
   border-left: 3px solid var(--severity-high);
   background: var(--paper-raised);
   color: var(--ink);
+  overflow-wrap: anywhere;
 }
 .run-path {
   margin-top: 24px;

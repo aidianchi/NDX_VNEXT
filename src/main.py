@@ -41,7 +41,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-json", type=str, help="Use an existing collector output JSON.")
     parser.add_argument("--models", type=str, help="Comma-separated model priority override.")
     parser.add_argument("--skip-report", action="store_true", help="Stop after logic_json generation.")
-    parser.add_argument("--disable-charts", action="store_true", help="Disable legacy chart rendering.")
+    chart_group = parser.add_mutually_exclusive_group()
+    chart_group.add_argument(
+        "--disable-charts",
+        dest="disable_charts",
+        action="store_true",
+        default=True,
+        help="Disable legacy Plotly chart rendering. This is the vNext default.",
+    )
+    chart_group.add_argument(
+        "--enable-legacy-charts",
+        dest="disable_charts",
+        action="store_false",
+        help="Opt in to legacy Plotly charts for old HTML reports.",
+    )
     return parser.parse_args()
 
 

@@ -537,6 +537,17 @@ def test_vnext_reporter_renders_indicator_level_visuals(tmp_path: Path):
                 "cross_layer_implications": [],
                 "risk_flags": [],
             },
+            {
+                "function_id": "get_price_volume_quality_qqq",
+                "metric": "QQQ Price Volume Quality",
+                "current_reading": "VWAP above, MFI 72, CMF 0.08",
+                "normalized_state": "constructive_flow",
+                "narrative": "价格和资金流确认度偏正面。",
+                "reasoning_process": "",
+                "first_principles_chain": [],
+                "cross_layer_implications": [],
+                "risk_flags": [],
+            },
         ],
     }
     for layer, indicators in layer_payloads.items():
@@ -606,6 +617,16 @@ def test_vnext_reporter_renders_indicator_level_visuals(tmp_path: Path):
                     "get_donchian_channels_qqq": {
                         "value": {"upper": 675.97, "middle": 627.18, "lower": 578.4, "position_pct": 98.1}
                     },
+                    "get_price_volume_quality_qqq": {
+                        "value": {
+                            "price_vs_vwap_20": "above",
+                            "vwap_deviation_pct": 1.2,
+                            "mfi_14": 72.0,
+                            "mfi_status": "neutral",
+                            "cmf_20": 0.08,
+                            "cmf_status": "accumulation",
+                        }
+                    },
                 },
             }
         },
@@ -633,6 +654,9 @@ def test_vnext_reporter_renders_indicator_level_visuals(tmp_path: Path):
     assert "MA ladder" in html
     assert 'data-indicator-visual="L5.get_donchian_channels_qqq"' in html
     assert "Donchian channel" in html
+    assert 'data-indicator-visual="L5.get_price_volume_quality_qqq"' in html
+    assert "Price-volume quality" in html
+    assert "MFI" in html
 
 
 def test_vnext_reporter_handles_missing_data_quality(tmp_path: Path):
@@ -730,3 +754,16 @@ def test_vnext_reporter_label_mapping():
     assert _label("high", "severity") == "高"
     assert _label("valuation_compression", "risk_flag") == "估值压缩"
     assert _label("unknown_key", "approval") == "unknown_key"
+
+
+def test_vnext_reporter_default_output_keeps_run_id_when_data_date_repeats(tmp_path: Path):
+    run_dir = tmp_path / "20260506_061216"
+    _write_json(
+        run_dir / "synthesis_packet.json",
+        {"packet_meta": {"data_date": "2026-05-02", "indicator_total": 0, "indicator_successful": 0}},
+    )
+    reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
+
+    output = reporter._default_output_path(run_dir, reporter._load_artifacts(run_dir), "brief", "slate_v2")
+
+    assert output.name == "vnext_research_ui_brief_20260502_20260506_061216.html"

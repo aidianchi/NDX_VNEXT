@@ -1,7 +1,7 @@
 # vNext 目标 Agent 架构与实施路线图
 
 日期：2026-04-24  
-最近更新：2026-04-29
+最近更新：2026-05-06
 状态：主架构文件；以 `RESEARCH_CANON.md` 的研究结论为路线图基准。
 
 ---
@@ -233,7 +233,8 @@ vNext 必须保留以下张力：
 16. Reviser：修订但不抹平冲突。
 17. Final Adjudicator：独立裁决。
 18. Native vNext UI：直接消费 v2 artifacts。
-19. Legacy HTML：兼容输出。
+19. Lightweight Chart Workbench：直接消费 vNext chart time-series artifacts。
+20. Legacy HTML：兼容输出。
 
 ---
 
@@ -272,6 +273,14 @@ L1-L5 必须输出：
 - `workbench`
 
 当前默认模板是 `brief`。但 UI 现在降为 P2：等研究法典、Bridge v2 和治理输入更稳定后再重点迭代。
+
+图表分三层，不应混用：
+
+- 底稿微图：贴在 L1-L5 指标卡旁，用于速读“相对位置、结构、分歧、区间、压力”。
+- 市场总览图：放在 `brief` 的“市场图谱”，用于观察跨层压力和共振。
+- Lightweight workbench：独立看盘式页面，用于 K 线、成交量、均线和未来多面板序列的交互探索。
+
+native 图表主路径必须直接消费 vNext artifacts 或 `analysis_packet.raw_data`。如果某个时间序列需要交互探索，应先进入 `chart_time_series.json`，再由 workbench 展示，避免图表与文字来自不同采集时点。
 
 ### 6.4 Deep Research 法典第一切口
 
@@ -485,6 +494,7 @@ UI 需要展示：
 
 - legacy adapter 只保留兼容映射。
 - legacy HTML 不再作为质量基线。
+- legacy Plotly charts 不再是默认主路径；`src/main.py` 默认关闭 legacy charts，只有显式 `--enable-legacy-charts` 才开启旧 HTML 图表。
 
 ---
 

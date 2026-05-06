@@ -307,6 +307,44 @@ def test_damodaran_getter_prefers_excel_and_marks_it_official(monkeypatch):
     assert html_called["value"] is False
 
 
+def test_damodaran_getter_uses_latest_monthly_row_not_after_target_date(monkeypatch):
+    monthly_bytes = _minimal_xlsx(
+        [
+            [
+                "Date",
+                "S&P 500",
+                "T.Bond Rate",
+                "$ Riskfree Rate",
+                "ERP (T12 m with sustainable Payout)",
+                "ERP (T12m)",
+                "ERP (Smoothed)",
+                "ERP (Normalized)",
+                "ERP (Net Cash Yield)",
+                "Expected Return",
+            ],
+            ["2026-04-01", 6600, 0.041, 0.039, 0.041, 0.042, 0.061, 0.036, 0.04, 0.082],
+            ["2026-05-01", 7209, 0.044, 0.0414, 0.0424, 0.0436, 0.0636, 0.0373, 0.0415, 0.0876],
+            ["2026-06-01", 7300, 0.05, 0.047, 0.05, 0.051, 0.07, 0.04, 0.048, 0.10],
+        ]
+    )
+    calculator_bytes = _minimal_xlsx([["Label", "Value"], ["Default spread for Aa1", 0.0026]])
+
+    def fake_fetch_bytes(url, timeout=12):
+        if url.endswith("ERPbymonth.xlsx"):
+            return monthly_bytes, None
+        if url.endswith("ERPMay26.xlsx"):
+            return calculator_bytes, None
+        return None, "not needed"
+
+    monkeypatch.setattr(tools_L4, "_fetch_bytes", fake_fetch_bytes)
+    monkeypatch.setattr(tools_L4, "_fetch_text", lambda url, timeout=8: (None, "not needed"))
+
+    result = tools_L4.get_damodaran_us_implied_erp("2026-05-06")
+
+    assert result["value"]["data_date"] == "2026-05-01"
+    assert result["value"]["erp_t12m_adjusted_payout"] == 4.24
+
+
 def test_damodaran_getter_falls_back_to_html_when_excel_fails(monkeypatch):
     html = """
     <table>

@@ -1,6 +1,6 @@
 # vNext 下一步
 
-最近更新：2026-05-05
+最近更新：2026-05-06
 阅读方式：最新事项放在最上面。完成后把结果写入 `WORK_LOG.md`，同样按时间倒序。
 
 ---
@@ -19,18 +19,32 @@
 - 图表三层架构已固定：底稿微图回答“这个指标当下处在哪”，市场总览图回答“跨层压力和共振在哪里”，Lightweight workbench 回答“价格、成交量和技术结构如何交互探索”。三者不能互相替代。
 - 交互图数据已开始纳入 vNext artifacts：主流水线会在 run 目录写入 `chart_time_series.json`，当前先保存 QQQ OHLCV、成交量和 MA5/20/60/200；workbench 优先读取该 artifact，只有缺失时才退回生成时报价抓取。
 - evidence hash 直达已修复：直接打开 `#evidence-Lx-...` 会自动展开对应 Layer、滚动到指标卡并高亮，便于审查者直接分享和复核证据。
+- 已用 2026-05-06 新采集数据完成真实 DeepSeek smoke：`output/analysis/vnext/20260506_075229`，并生成 `output/reports/vnext_research_ui_brief_20260505_20260506_075229.html` 和 `output/reports/vnext_interactive_charts_20260506.html`。
+- 最新 packet 已确认吃到 Damodaran `ERPbymonth.xlsx` / `ERPMay26.xlsx`、`monthly_series=120`、WorldPERatio 结构化相对位置；Trendonify 仍不可用，应继续作为数据源边界。
+- 最新 brief 指标级微图覆盖为 30 个：L1 7/8、L2 8/9、L3 5/6、L4 3/3、L5 7/9。无图项主要是缺少结构/历史语境的单点或节奏指标，不应硬画。
+- 已建立 Chrome headless 视觉回归：桌面/移动截图覆盖 latest brief 与 workbench，摘要在 `output/reports/visual_regression/20260506_final/visual_regression_summary.json`。
+- legacy Plotly chart 已退出默认主路径：`src/main.py` 默认关闭 legacy charts，只有显式 `--enable-legacy-charts` 才开启旧 HTML 图表。
 
 ### 指标级可视化后的下一轮观察
 
 | 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
 | 1 | 输出体验 | 明确图表三层架构 | 当前微图、市场总览图、看盘式交互图各自回答的问题不同，混在一起会让报告失焦 | 已完成：底稿微图用于速读，市场总览图用于跨层总览，Lightweight workbench 用于交互探索 |
-| 2 | 数据基础 | 将交互图数据纳入 artifacts | 当前原型的 QQQ OHLCV 来自生成时 yfinance 拉取，和旧 run 的文字并非严格同一时点 | 已部分完成：vNext run 保存 `chart_time_series.json`，workbench 优先读取；后续再扩展 VIX、10Y、ERP monthly series |
+| 2 | 数据基础 | 将交互图数据纳入 artifacts | 当前原型的 QQQ OHLCV 来自生成时 yfinance 拉取，和旧 run 的文字并非严格同一时点 | 已完成第一阶段：vNext run 保存 `chart_time_series.json`，workbench 优先读取；后续扩展 VIX、10Y、ERP monthly series |
 | 3 | 输出体验 | 决定哪些指标进入 Lightweight workbench | 不是所有指标都适合 K 线式交互；L1/L4 更适合多轴线图或 regime panel | 已完成第一阶段决策：先纳入 L5 价格/成交量/均线，Donchian/MACD 暂从指标卡摘要进入，L1/L4 待多 pane 方案 |
-| 4 | 输出体验 | 真实最新 run 后复核微图覆盖 | 旧 run 缺少最新 Damodaran 月度序列、WorldPERatio 结构化字段和未来新增 L5 量价质量指标 | 最新 DeepSeek run 生成 brief 后，确认每层有图指标、无图指标和降级说明都合理 |
+| 4 | 输出体验 | 真实最新 run 后复核微图覆盖 | 旧 run 缺少最新 Damodaran 月度序列、WorldPERatio 结构化字段和未来新增 L5 量价质量指标 | 已完成：`20260506_075229` 生成 brief，覆盖审计通过，L5 量价质量指标新增微图 |
 | 5 | 输出体验 | 修复 evidence hash 直达体验 | 浏览器直接打开 `#evidence-Lx-...` 时，目前主要依赖点击事件展开层级，直接 hash 直达仍不够自然 | 已完成：hashchange 和首屏加载都会自动展开、滚动并高亮对应指标卡 |
-| 6 | 输出体验 | 建立图表视觉回归 | 指标微图和交互图数量变多后，移动端和长文本容易产生挤压 | 对桌面/移动截取五层底稿和交互 workbench，检查微图非空、文字不溢出、details 和区间按钮可用 |
-| 7 | 输出体验 | 决定是否正式弃用 legacy chart 主路径 | 旧 Plotly 图表仍在 legacy reporter 中存在，维护两套路线上会造成混乱 | 明确 legacy chart 只服务旧报告，或迁移少数高价值时间序列到 native artifacts 后归档旧管线 |
+| 6 | 输出体验 | 建立图表视觉回归 | 指标微图和交互图数量变多后，移动端和长文本容易产生挤压 | 已完成第一版：`src/report_visual_regression.py` 截取 desktop/mobile，latest run 摘要 passed |
+| 7 | 输出体验 | 决定是否正式弃用 legacy chart 主路径 | 旧 Plotly 图表仍在 legacy reporter 中存在，维护两套路线上会造成混乱 | 已完成：legacy chart 只服务旧 HTML，默认关闭；显式 `--enable-legacy-charts` 才启用 |
+
+### 下一轮新观察
+
+| 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
+| --- | --- | --- | --- | --- |
+| 1 | 数据基础 | 继续解决 Trendonify 可用性 | 最新真实采集仍显示 Trendonify unavailable，NDX 历史估值分位仍缺一个高价值自动源 | 决定浏览器采集、缓存或人工输入路径；不得静默退回 yfinance |
+| 2 | 数据基础 | 扩展 `chart_time_series.json` 多面板序列 | workbench 当前只覆盖 QQQ OHLCV/MA/volume，L1/L2/L4 的 VIX、10Y、ERP 仍不能同源交互 | artifact 增加 VIX、10Y、Damodaran ERP monthly series，并在 workbench 做多 pane |
+| 3 | 核心系统 | 复盘 DeepSeek 输出稳定性 | 两次真实 run 暴露过 L1/L2 JSON parse retry、L5 coverage retry，以及 L4 超长输入 | 记录失败样本，压缩 L4 输入或加强 JSON-only guard，减少重试成本 |
+| 4 | 输出体验 | 提升视觉回归判定能力 | 当前视觉回归能确认截图非空并提供人工检查基线，但还不能自动识别横向溢出 | 增加 DOM/layout overflow 检测或 browser-use 专项检查，覆盖 details、hash、区间按钮 |
 
 ### L4 数据源复盘后的修正方向（1-5 已完成）
 
@@ -46,9 +60,9 @@
 
 | 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
-| 1 | 输出体验 | 用最新真实 run 验证图表数据完整性 | 当前生成页沿用 2026-05-02 旧 run，旧 artifact 没有 Damodaran 月度序列和 WorldPERatio 结构化窗口 | 下一次 DeepSeek run 后重新生成 brief，确认 ERP 月度线图、WorldPERatio 窗口标签、利率估值压力图都吃到最新字段 |
+| 1 | 输出体验 | 用最新真实 run 验证图表数据完整性 | 当前生成页沿用 2026-05-02 旧 run，旧 artifact 没有 Damodaran 月度序列和 WorldPERatio 结构化窗口 | 已完成：`20260506_075229` packet 含 Damodaran 月度序列和 WorldPERatio 结构化窗口，brief 已重新生成 |
 | 2 | 输出体验 | 控制台第二阶段能力取舍 | 第一版控制台只生成模板和运行命令，不直接写文件或执行本地任务 | 决定是否允许控制台写入 `manual_data.local.json`、启动 run、自动打开最新报告；若做，必须有明确安全边界 |
-| 3 | 输出体验 | 图表视觉回归 | 本机 Python/Node Playwright 未安装，已做 Chrome headless 截图，但还不是完整交互测试 | 补齐浏览器自动化依赖后，对桌面和移动 viewport 截图，检查图表非空、文字不溢出、证据抽屉可打开 |
+| 3 | 输出体验 | 图表视觉回归 | 本机 Python/Node Playwright 未安装，已做 Chrome headless 截图，但还不是完整交互测试 | 已完成第一版：Chrome headless desktop/mobile 截图落盘，browser-use 检查 hash 和 workbench 可见 |
 
 ### 输出体验反馈：当前改造版不是终版
 

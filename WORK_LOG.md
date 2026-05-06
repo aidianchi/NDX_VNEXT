@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-05-06
+
+### 完成 NEXT_STEPS：最新真实 run、视觉回归、legacy chart 降为显式 opt-in
+
+完成内容：
+
+- 修复 Damodaran 默认日期选择：当目标日期不是月初时，`ERPbymonth.xlsx` 会选择不晚于目标日期的最新月度行；2026-05-06 默认可正确落到 2026-05-01。
+- 重新采集实时数据并保存 `output/data/data_collected_20260506_live.json`；确认 Damodaran `ERPbymonth.xlsx` / `ERPMay26.xlsx`、`monthly_series=120` 和 WorldPERatio 结构化相对位置进入 packet。
+- 用新采集数据完成真实 DeepSeek smoke：`output/analysis/vnext/20260506_075229`，Final 为“中性偏谨慎”，审批状态 `approved_with_reservations`。
+- 生成最新 native brief：`output/reports/vnext_research_ui_brief_20260505_20260506_075229.html`；生成最新交互 workbench：`output/reports/vnext_interactive_charts_20260506.html`。
+- 新增 L5 `get_price_volume_quality_qqq` 指标微图，展示 VWAP 偏离、MFI 和 CMF，最新 brief 指标级微图数量从 29/30 提升到 30。
+- 新增 `src/report_visual_coverage.py`，输出每层指标级微图覆盖审计；最新覆盖为 L1 7/8、L2 8/9、L3 5/6、L4 3/3、L5 7/9。
+- 新增 `src/report_visual_regression.py`，用 Chrome headless 对 brief/workbench 做 desktop/mobile 截图回归；同时修复移动端 verdict card 和长风险文本挤压。
+- 调整 native brief 默认文件名：当 `data_date` 重复时追加 run id，避免不同 run 覆盖同名报告。
+- legacy Plotly charts 从默认主路径退出：`src/main.py` 默认关闭 legacy charts，只有显式 `--enable-legacy-charts` 才开启旧 HTML 图表。
+
+验证结果：
+
+- `python3 src/main.py --models deepseek-v4-flash,deepseek-v4-pro --data-json output/data/data_collected_20260506_live.json --skip-report`：完成真实 DeepSeek run。
+- `python3 src/report_visual_coverage.py --run-dir output/analysis/vnext/20260506_075229 --html output/reports/vnext_research_ui_brief_20260505_20260506_075229.html --output output/reports/visual_regression/20260506_final/visual_coverage_20260506_075229.json`：通过，输出 30 个指标级微图覆盖。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_research_ui_brief_20260505_20260506_075229.html --workbench-html output/reports/vnext_interactive_charts_20260506.html --output-dir output/reports/visual_regression/20260506_final`：passed。
+- in-app browser 检查：`#evidence-L5-get_price_volume_quality_qqq` 自动展开 L5 并高亮；workbench 显示数据源 `chart_time_series.json · yfinance via chart_adapter_v6`，主图可见。
+
+剩余观察：
+
+- Trendonify 在最新采集里仍不可用，不能宣称自动历史估值分位已完整解决。
+- 视觉回归当前能产出桌面/移动截图并验证 PNG 非空，但自动 layout overflow 检测仍可继续加强。
+- 两次真实 run 暴露模型输出稳定性问题：旧数据 run 有 L1/L2 JSON parse retry、L5 coverage retry；新数据 run 成功但 L4 输入达到约 59k tokens，应继续压缩。
+
+---
+
 ## 2026-05-05
 
 ### 推送当前版本，并继续落地指标级可视化后的下一轮观察

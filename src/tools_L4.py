@@ -313,7 +313,7 @@ def _find_column(columns: Iterable[Any], *needles: str, any_needles: Iterable[st
     return None
 
 
-def _latest_row_by_date(table: pd.DataFrame, date_col: Any) -> Optional[pd.Series]:
+def _latest_row_by_date(table: pd.DataFrame, date_col: Any, *, max_date: Optional[str] = None) -> Optional[pd.Series]:
     working = table.copy()
     date1904 = bool(table.attrs.get("date1904"))
 
@@ -330,6 +330,8 @@ def _latest_row_by_date(table: pd.DataFrame, date_col: Any) -> Optional[pd.Serie
 
     working["_date_key"] = working[date_col].map(sort_key)
     working = working[working["_date_key"].astype(bool)].sort_values("_date_key")
+    if max_date:
+        working = working[working["_date_key"] <= max_date]
     if working.empty:
         return None
     return working.iloc[-1]
@@ -989,7 +991,7 @@ def _format_damodaran_date(value: Any, *, date1904: bool = False) -> Optional[st
     return parsed.strftime("%Y-%m-%d")
 
 
-def _parse_damodaran_monthly_erp_excel(content: bytes) -> Dict[str, Any]:
+def _parse_damodaran_monthly_erp_excel(content: bytes, *, target_date: Optional[str] = None) -> Dict[str, Any]:
     """Parse Damodaran ERPbymonth.xlsx for the latest monthly current ERP row."""
     tables = _read_excel_tables(content)
     for table in tables:
@@ -1000,7 +1002,7 @@ def _parse_damodaran_monthly_erp_excel(content: bytes) -> Dict[str, Any]:
             date_col = _find_column(table.columns, "start", any_needles=("month",))
         if not date_col:
             continue
-        latest = _latest_row_by_date(table, date_col)
+        latest = _latest_row_by_date(table, date_col, max_date=target_date)
         if latest is None:
             continue
 
@@ -1157,7 +1159,7 @@ def get_damodaran_us_implied_erp(end_date: str = None) -> Dict[str, Any]:
     content, monthly_error = _fetch_bytes(monthly_url)
     if content:
         try:
-            parsed = _parse_damodaran_monthly_erp_excel(content)
+            parsed = _parse_damodaran_monthly_erp_excel(content, target_date=date_str)
             retrieval_method = "monthly_excel"
             current_content, current_error = _fetch_bytes(current_url)
             if current_content:

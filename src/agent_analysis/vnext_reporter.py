@@ -548,7 +548,12 @@ class VNextReportGenerator:
             .get("packet_meta", {})
             .get("data_date")
         )
-        stamp = str(data_date or run_path.name or datetime.now().strftime("%Y%m%d_%H%M%S")).replace("-", "")
+        date_stamp = str(data_date).replace("-", "") if data_date else ""
+        run_stamp = str(run_path.name or "").strip()
+        if date_stamp and run_stamp and run_stamp != date_stamp:
+            stamp = f"{date_stamp}_{run_stamp}"
+        else:
+            stamp = str(data_date or run_path.name or datetime.now().strftime("%Y%m%d_%H%M%S")).replace("-", "")
         style_suffix = f"_{style}" if style != "slate_v2" else ""
         return self.reports_dir / f"vnext_research_ui_{template}_{stamp}{style_suffix}.html"
 
@@ -1406,6 +1411,7 @@ class VNextReportGenerator:
             "get_macd_qqq": self._macd_indicator_visual,
             "get_volume_analysis_qqq": self._volume_indicator_visual,
             "get_obv_qqq": self._obv_indicator_visual,
+            "get_price_volume_quality_qqq": self._price_volume_quality_visual,
         }.get(function_id)
         if special:
             html = special(ref, raw_value)
@@ -1768,6 +1774,34 @@ class VNextReportGenerator:
 <div class="indicator-visual-meta"><span><b>20D change</b>{_fmt_number(change, suffix='%', digits=2)}</span><span><b>Trend</b>{_escape(value.get('trend', ''))}</span></div>
 """
         return self._wrap_indicator_visual(ref, "obv-flow", "OBV flow", body)
+
+    def _price_volume_quality_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        vwap_dev = _safe_number(value.get("vwap_deviation_pct"))
+        cmf = _safe_number(value.get("cmf_20"))
+        cmf_score = None if cmf is None else _clamp((cmf + 0.3) / 0.6 * 100, 0, 100)
+        rows = [
+            self._score_bar("MFI", _normalize_percent(value.get("mfi_14")), value.get("mfi_status")),
+            self._score_bar("CMF", cmf_score, value.get("cmf_status")),
+        ]
+        vwap_width = _clamp(abs(vwap_dev or 0) / 5 * 100, 2, 100)
+        direction = "positive" if (vwap_dev or 0) >= 0 else "negative"
+        rows.append(
+            f"""
+<div class="score-row">
+  <span>VWAP</span>
+  <div class="diverging-bar diverging-bar--{direction}"><i style="width:{vwap_width:.2f}%"></i></div>
+  <b>{_fmt_number(vwap_dev, suffix='%', digits=2)}</b>
+</div>
+"""
+        )
+        meta = f"""
+<div class="indicator-visual-meta">
+  <span><b>Price vs VWAP</b>{_escape(value.get('price_vs_vwap_20', ''))}</span>
+  <span><b>CMF raw</b>{_fmt_number(cmf, digits=2)}</span>
+</div>
+"""
+        body = f'<div class="score-list">{"".join(row for row in rows if row)}</div>{meta}'
+        return self._wrap_indicator_visual(ref, "price-volume-quality", "Price-volume quality", body)
 
     def _indicator_card(self, layer: str, item: Dict[str, Any], artifacts: Dict[str, Any]) -> str:
         function_id = str(item.get("function_id", "unknown"))
