@@ -119,7 +119,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     integrity_report = DataIntegrity().run(data_json)
     builder = AnalysisPacketBuilder()
     packet = builder.build(data_json, output_path=os.path.join(run_dir, "analysis_packet.json"))
-    chart_time_series_path = write_chart_time_series_artifact(run_dir)
+    chart_time_series_path = write_chart_time_series_artifact(run_dir, analysis_packet=packet)
 
     orchestrator = VNextOrchestrator(available_models=available_models, output_dir=run_dir)
     artifacts = orchestrator.run(packet)

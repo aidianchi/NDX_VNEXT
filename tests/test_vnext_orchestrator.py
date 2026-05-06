@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from pydantic import BaseModel
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -36,6 +37,29 @@ class SequencedFakeLLMEngine(FakeLLMEngine):
             index = min(self.calls[stage_name] - 1, len(response) - 1)
             return response[index]
         return response
+
+
+class MiniStageModel(BaseModel):
+    value: str
+
+
+class ParseRetryFakeLLMEngine:
+    def __init__(self):
+        self.calls = 0
+        self.prompts = []
+
+    def call_with_fallback(self, prompt, stage_name=""):
+        self.calls += 1
+        self.prompts.append(prompt)
+        return "not-json" if self.calls == 1 else '{"value": "ok"}'
+
+    def extract_json(self, text, stage):
+        if text == "not-json":
+            return None
+        return json.loads(text)
+
+    def get_token_report(self):
+        return {}
 
 
 def _mock_packet():
@@ -654,3 +678,26 @@ def test_layer_payload_normalization_backfills_indicator_evidence_refs(tmp_path:
     )
 
     assert normalized["indicator_analyses"][0]["evidence_refs"] == ["L3.get_advance_decline_line"]
+
+
+def test_run_stage_records_parse_retry_diagnostics(tmp_path: Path):
+    engine = ParseRetryFakeLLMEngine()
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="mini",
+        stage_name="mini_stage",
+        model_cls=MiniStageModel,
+        payload={"example": "payload"},
+    )
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+
+    assert result.value == "ok"
+    assert engine.calls == 2
+    assert "上一次返回未通过结构校验" in engine.prompts[1]
+    assert diagnostics["stages"]["mini_stage"]["attempts"] == 2
+    assert diagnostics["stages"]["mini_stage"]["errors"][0]["kind"] == "parse_error"

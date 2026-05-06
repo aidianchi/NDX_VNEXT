@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -64,6 +65,43 @@ def _is_png_nonempty(path: Path, min_bytes: int = 1024) -> bool:
         return handle.read(8) == b"\x89PNG\r\n\x1a\n"
 
 
+def _scan_static_overflow_risk(html_path: Path, viewport: Viewport) -> dict:
+    """Catch obvious layout risks before a human opens screenshots.
+
+    This is intentionally conservative: it does not try to replace visual QA,
+    but it flags fixed-width/nowrap patterns that commonly create mobile
+    horizontal scrolling in self-contained HTML reports.
+    """
+    issues = []
+    try:
+        html_text = html_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception as exc:
+        return {"status": "failed", "issues": [{"kind": "html_read_error", "detail": str(exc)[:200]}]}
+
+    for match in re.finditer(r"(?<![-\w])(?:min-)?width\s*:\s*(\d{3,5})px", html_text, flags=re.IGNORECASE):
+        width = int(match.group(1))
+        if width > viewport.width:
+            issues.append(
+                {
+                    "kind": "fixed_width_exceeds_viewport",
+                    "value": width,
+                    "viewport_width": viewport.width,
+                    "snippet": html_text[max(0, match.start() - 60) : match.end() + 60],
+                }
+            )
+    if viewport.width <= 480:
+        inline_nowrap = r"<[^>]+style=[\"'][^\"']*white-space\s*:\s*nowrap[^\"']*[\"'][^>]*>"
+        for match in re.finditer(inline_nowrap, html_text, flags=re.IGNORECASE):
+            issues.append(
+                {
+                    "kind": "mobile_nowrap_overflow_risk",
+                    "viewport_width": viewport.width,
+                    "snippet": html_text[max(0, match.start() - 60) : match.end() + 60],
+                }
+            )
+    return {"status": "failed" if issues else "ok", "issues": issues[:12]}
+
+
 def build_default_targets(
     brief_html: str | Path,
     workbench_html: str | Path,
@@ -121,6 +159,7 @@ def run_visual_regression(
         raise RuntimeError("Chrome/Chromium not found; cannot capture visual regression screenshots.")
 
     captures = []
+    layout_checks = []
     for target in targets:
         for viewport in target.viewports:
             output_path = _output_for_viewport(target, viewport)
@@ -142,14 +181,24 @@ def run_visual_regression(
                     "stderr": stderr[-1000:],
                 }
             )
+            layout_scan = _scan_static_overflow_risk(target.html_path, viewport)
+            layout_checks.append(
+                {
+                    "target": target.name,
+                    "viewport": viewport.name,
+                    "html_path": str(target.html_path),
+                    **layout_scan,
+                }
+            )
 
     first_output = Path(next(iter(captures))["output_path"]).parent if captures else Path("output/reports/visual_regression")
     destination = Path(summary_path) if summary_path else first_output / "visual_regression_summary.json"
     payload = {
         "schema_version": "vnext_visual_regression_v1",
         "generated_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        "passed": all(item["status"] == "ok" for item in captures),
+        "passed": all(item["status"] == "ok" for item in captures) and all(item["status"] == "ok" for item in layout_checks),
         "captures": captures,
+        "layout_checks": layout_checks,
     }
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -24,6 +24,13 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path):
     assert "WorldPERatio" in html
     assert "Damodaran ERPbymonth.xlsx" in html
     assert "生成运行命令" in html
+    assert "交互工作台模块" in html
+    assert "价格技术" in html
+    assert "波动信用" in html
+    assert "利率估值" in html
+    assert "广度集中度" in html
+    assert "流动性" in html
+    assert "--modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity" in html
     assert "打开最新报告" in html
     assert "保存人工模板" in html
     assert "vnext_research_ui_brief_20260505.html" in html

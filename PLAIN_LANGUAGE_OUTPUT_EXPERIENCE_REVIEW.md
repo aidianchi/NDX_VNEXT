@@ -12,6 +12,8 @@
 
 第五次补充：现在已经用 2026-05-06 新采集数据跑过完整 DeepSeek smoke，并重新生成最新报告。最新报告确认吃到了 Damodaran 官方月度 ERP、WorldPERatio 相对位置，以及 L5 量价质量指标；同时也确认 Trendonify 仍不可用，不能把历史估值分位说满。
 
+第六次补充：交互 workbench 已从单一 QQQ 技术图扩展为五个研究模块：价格技术、波动信用、利率估值、广度集中度、流动性。用户进一步指出，价格技术主图不应默认把所有指标全铺上，主图和副图也应像看盘软件一样共享时间轴并可一键统一。因此下一轮重点转为“可控制、可同步、可折叠”的看盘台交互，而不是继续增加更多图。
+
 ## 为什么要改
 
 只靠文字报告有一个问题：结论看起来完整，但读者很难快速判断“关键证据到底长什么样”。尤其是 L4 估值层，PE、ERP、WorldPERatio 标准差语境、真实利率压力这些信息，天然适合用图表先展示相对位置，再让文字解释原因。
@@ -43,10 +45,15 @@
 10. 修复 brief 页面 JSON 嵌入错误，避免浏览器端解析失败影响证据抽屉和跳转。
 11. 修复 evidence hash 直达体验：别人打开 `#evidence-L1-get_10y_real_rate` 这类链接时，页面会自动展开对应层级、滚动到指标卡并高亮。
 12. 新增 `chart_time_series.json` 写入路径。当前先保存 QQQ OHLCV、成交量和 MA5/20/60/200；交互图优先读取这个 artifact，缺失时才退回生成时抓取。
-13. 修复 Damodaran 默认日期问题：如果今天不是月初，系统会选择不晚于今天的最新月度官方行，而不是因为找不到当天行就降级或空缺。
+13. 修复 Damodaran 默认日期问题：如果目标日期不是月初，系统会选择不晚于目标日期的最新月度官方行，而不是因为找不到当天行就降级或空缺。
 14. 新增 L5 量价质量微图，展示 VWAP 偏离、MFI 和 CMF。
 15. 新增视觉回归脚本，自动截取 brief 和 workbench 的桌面/移动截图，并生成摘要。
 16. legacy Plotly 图表不再默认开启，只有明确要求旧 HTML 图表时才开启。
+17. `chart_time_series.json` 扩展为多模块序列，包含 VIX/VXN、信用利差、HYG、10 年期利率、真实利率、通胀预期、Fed funds、Damodaran 月度 ERP、QQQ/QQEW、净流动性、WALCL、TGA、RRP 和 M2 YoY。
+18. 交互 workbench 增加模块 tabs，L5 价格技术模块包含主图和 Volume、OBV、MACD、RSI/ATR、MFI/CMF 副图。
+19. 研究控制台新增 workbench 模块选择，能生成 `--modules` 命令。
+20. 视觉回归摘要增加基础布局检查，用来捕捉明显固定宽度溢出和移动端 nowrap 风险。
+21. 新一轮设计复盘已明确：workbench 下一步优先做指标显隐、预设模板、时间轴锁定/解锁、统一时间轴和联动读数；控制台下一步从命令页升级为运行前总控台。
 
 ## 修改后有什么变化
 
@@ -63,7 +70,7 @@
 - 没有把 WorldPERatio 标准差标签写成历史分位。
 - 没有让控制台直接改写 `manual_data.local.json` 或直接执行 DeepSeek run。浏览器下载模板更安全，运行命令由用户确认后执行。
 - 没有宣称 Trendonify 已恢复。最新采集仍显示 Trendonify 不可用，所以 NDX 自动历史估值分位仍需要人工/Wind、缓存或浏览器采集方案补足。
-- 没有把视觉回归说成完整自动审美评审。它现在能生成桌面/移动截图并确认非空，仍需要继续增加自动横向溢出检测。
+- 没有把视觉回归说成完整自动审美评审。它现在能生成桌面/移动截图、确认非空，并检查基础布局溢出风险；但还不能替代人工审美复核，也不能完整验证所有交互状态。
 
 ## 如何验证有效
 
@@ -79,6 +86,9 @@
 - 最新 native brief：`output/reports/vnext_research_ui_brief_20260505_20260506_075229.html`。
 - 最新覆盖审计：L1 7/8、L2 8/9、L3 5/6、L4 3/3、L5 7/9，总计 30 个指标级微图。
 - 最新视觉回归：`output/reports/visual_regression/20260506_final/visual_regression_summary.json`，desktop/mobile 截图均 passed。
+- 最新多模块 workbench：`output/reports/vnext_interactive_charts_20260506_modules.html`。
+- 最新多模块视觉回归：`output/reports/visual_regression/20260506_modules/visual_regression_summary.json`，desktop/mobile 截图和布局检查均 passed。
+- 全量测试在本阶段已跑到 `103 passed`。
 
 ## 普通读者该怎么看
 
@@ -89,11 +99,12 @@
 ## 后续最重要的观察点
 
 1. Trendonify 不可用的问题还要继续处理；它仍是自动历史估值分位的关键缺口。
-2. 交互图下一步应扩展 VIX、10Y 和 Damodaran ERP 月度序列，形成多面板 workbench。
-3. 控制台是否应该进入第二阶段：真正写入本地人工模板、启动运行、打开最新报告。
-4. 视觉回归应从“截图非空”升级到自动检查横向溢出、details 展开和按钮状态。
-5. DeepSeek 输出稳定性需要复盘，尤其是 JSON parse retry、coverage retry 和 L4 超长输入。
-6. evidence hash 直达已完成第一版修复；下一步要观察真实分享链接、浏览器返回和移动端滚动是否都自然。
+2. 交互 workbench 下一步应优先补指标显隐、预设模板、时间轴锁定/解锁、统一时间轴和联动读数。
+3. 控制台下一步应从“命令生成页”升级为运行前总控台：结构化人工数据、运行模式、模型策略、功能开关、输出入口都应在一处管理。
+4. 一键运行必须先做安全方案；浏览器页面不能无边界地写本地文件或执行本地命令。
+5. 视觉回归应继续从基础截图和布局风险，升级到按钮状态、details 展开、hash 跳转、时间轴同步和指标开关的交互检查。
+6. DeepSeek 输出稳定性需要复盘，尤其是 JSON parse retry、coverage retry 和 L4 超长输入。
+7. evidence hash 直达已完成第一版修复；下一步要观察真实分享链接、浏览器返回和移动端滚动是否都自然。
 
 ## 简单词汇表
 

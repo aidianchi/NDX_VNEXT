@@ -6,6 +6,72 @@
 
 ## 2026-05-06
 
+### 完成阶段收尾知识同步
+
+完成内容：
+
+- 使用 `neat-freak` 盘点 Codex 全局配置、项目根 Markdown、`docs/` 历史文档和当前输出体验文档；确认 `~/.codex/AGENTS.md` 为空，当前没有独立记忆索引需要同步。
+- 更新 `README.md`，补充研究控制台、交互 workbench、视觉回归命令和当前输出入口。
+- 更新 `AGENTS.md`，补充 `chart_time_series_artifacts.py`、`interactive_chart_workbench.py`、`research_console.py`、`report_visual_regression.py` 等关键路径，并明确 UI 改动要区分 brief、图表层和 workbench。
+- 更新 `ARCHITECTURE.md`，记录 2026-05-06 多模块 workbench、控制台边界和下一轮交互重点。
+- 更新 `DATA_COVERAGE_REVIEW.md`，把数据覆盖复盘推进到 2026-05-06 最新 run，明确 Damodaran 月度 ERP、WorldPERatio、L5 量价质量和 Trendonify 缺口。
+- 更新 `PLAIN_LANGUAGE_OUTPUT_EXPERIENCE_REVIEW.md`，补充多模块 workbench、控制台总控方向、视觉回归布局检查和下一轮观察点。
+- 清理当前受审文档中的相对时间词，改为绝对日期或“当日/目标日期”。
+
+剩余观察：
+
+- `docs/` 下多份 2026-04-24/2026-04-25 文档是历史研究记录，本轮只修正相对时间词，不把后续实现倒灌进历史报告。
+- 本轮是文档同步，没有修改运行代码。
+
+---
+
+### 完成 workbench 与研究控制台下一轮设计复盘
+
+完成内容：
+
+- 复核用户对 `vnext_interactive_charts_20260506_modules.html` 的两个批注：主图指标全开导致视觉过载；主图和副图需要更强的共享时间轴、联动读数和“一键统一”能力。
+- 查阅一手图表资料后形成取舍：当前继续以 Lightweight Charts 为主，因为它足以支持 visible range 控制和 pane 同步；TradingView Advanced Charts 虽然指标/模板能力强，但官方限制不适合作为当前默认依赖；Highcharts Stock 和 ECharts 分别作为 navigator/range selector、多轴宏观图的后续参照。
+- 审阅旧 `/Users/aidianchi/Desktop/launcher.py`，提取有价值功能线索：人工 L4 输入、历史日期、运行模式、模型顺序、API 配置、新闻开关、图表叠加模式和本地任务启动。
+- 更新 `NEXT_STEPS.md`，新增两组下一步：
+  - workbench：指标显隐、预设模板、时间轴锁定/解锁、统一时间轴、联动 crosshair、副图折叠、非 L5 模块 legend/normalize/dual-axis、交互回归测试。
+  - 研究控制台：信息架构重构、结构化人工数据输入、运行模式、模型策略、功能开关、报告/artifact 入口、一键运行安全方案、视觉重设计。
+
+剩余观察：
+
+- 这次只做规划与审视，未修改 workbench/控制台运行代码。
+- 下一轮若进入实现，建议先做 workbench 的指标显隐和时间轴锁定，因为它直接回应用户批注，也能最快验证“看盘台”方向是否成立。
+
+---
+
+### 完成 NEXT_STEPS 2-7：多模块 workbench、同源时序数据和回归增强
+
+完成内容：
+
+- 按用户指示暂缓 Trendonify 可用性问题，只推进 NEXT_STEPS 2-7。
+- 固化 workbench 双层分类原则：底稿/审计继续按 L1-L5；交互 workbench 按价格技术、波动信用、利率估值、广度集中度、流动性组织，同时保留每条序列的 Layer、function_id、provider 和 frequency。
+- 扩展 `chart_time_series.json`：除 QQQ OHLCV 外，新增 VIX、VXN、VXN/VIX、HY/IG OAS、HYG、10Y、10Y real、10Y breakeven、Fed funds、Damodaran ERP monthly、QQQ/QQEW、net liquidity、WALCL、TGA、RRP、M2 YoY。
+- 升级 L5 价格技术工作台：主图支持 K 线、MA5/20/60/200、Bollinger、Donchian、VWAP；副图支持 Volume、OBV、MACD、RSI、ATR、MFI、CMF；区间按钮同步主图和副图。
+- 重构 workbench 为研究模块选择器：页面提供模块 tabs；控制台新增模块勾选，并生成 `--modules` workbench 命令。
+- 增加 DeepSeek/LLM 阶段诊断：`llm_stage_diagnostics.json` 会记录 stage、attempts、parse/schema/contract errors、raw_excerpt、prompt_chars，后续可直接复盘 JSON parse retry 和 coverage retry。
+- 增强视觉回归：`visual_regression_summary.json` 新增 `layout_checks`，检测明显固定宽度超视口和移动端内联 nowrap 风险。
+- 生成最新多模块 workbench：`output/reports/vnext_interactive_charts_20260506_modules.html`；重新生成控制台：`output/reports/vnext_research_console.html`。
+
+验证结果：
+
+- 测试先行：新增失败测试覆盖多面板 artifact、workbench 模块与副图、控制台模块选择、视觉回归布局检查、LLM retry diagnostics。
+- `python3 -m pytest tests/test_chart_time_series_artifacts.py tests/test_interactive_chart_workbench.py tests/test_research_console.py tests/test_report_visual_regression.py tests/test_vnext_orchestrator.py::test_run_stage_records_parse_retry_diagnostics -q`：11 passed，4 warnings。
+- `python3 -m py_compile src/chart_time_series_artifacts.py src/interactive_chart_workbench.py src/research_console.py src/report_visual_regression.py src/agent_analysis/orchestrator.py src/main.py`：通过。
+- 使用最新 run `output/analysis/vnext/20260506_075229` 重新写入 `chart_time_series.json`，确认多模块序列均落盘，Damodaran monthly 为 120 行。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_research_ui_brief_20260505_20260506_075229.html --workbench-html output/reports/vnext_interactive_charts_20260506_modules.html --output-dir output/reports/visual_regression/20260506_modules`：passed，desktop/mobile 截图和 layout checks 均 ok。
+
+剩余观察：
+
+- Trendonify 仍按用户要求暂停，不在本轮解决。
+- 新 workbench 已能表达 5 个研究模块，但非 L5 模块目前以多线图为主，后续可继续增加双轴、归一化切换、drawdown overlay 和更强的 crosshair 联动。
+- L4 token 膨胀已开始被 diagnostics 量化，但真正压缩 L4 prompt/packet 仍是后续工作。
+
+---
+
 ### 完成 NEXT_STEPS：最新真实 run、视觉回归、legacy chart 降为显式 opt-in
 
 完成内容：

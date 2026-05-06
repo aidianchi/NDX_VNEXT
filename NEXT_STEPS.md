@@ -1,11 +1,50 @@
 # vNext 下一步
 
-最近更新：2026-05-06
+更新日期：2026-05-06
 阅读方式：最新事项放在最上面。完成后把结果写入 `WORK_LOG.md`，同样按时间倒序。
 
 ---
 
 ## 最新下一步
+
+### 新一轮反馈：workbench 从展示图升级为可操作看盘台
+
+- 用户对多模块 workbench 的两个批注成立，而且是第一优先级的交互债：
+  - 主图一次性显示 MA5/20/60/200、Bollinger、Donchian、VWAP 和 Volume，虽然信息全，但默认画面过载。看盘台应允许用户像 TradingView 一样随时显示/隐藏指标，并提供“简洁 / 趋势 / 波动区间 / 综合”预设。
+  - 主图和 Volume/OBV/MACD/RSI/ATR/MFI/CMF 副图目前只被同一个区间按钮粗略同步。真正的研究体验应支持共享时间轴、联动十字光标和缩放，也应允许临时解除联动做局部检查，然后一键“统一时间轴”回到同一窗口。
+- 外部一手参照结论：
+  - TradingView Advanced Charts 的指标体系支持添加、显示、位置和模板化，但官方说明 Advanced Charts/Trading Platform 不面向个人、爱好或测试使用，不能作为当前默认依赖；当前继续以 Lightweight Charts 为主更稳。
+  - Lightweight Charts 官方 time scale 支持读取/设置 visible range，也支持订阅 range 变化；这足够实现“主图/副图时间轴锁定、解除锁定、统一时间轴”。
+  - Highcharts Stock 的 range selector / navigator 提供成熟时间窗口和全局预览思路，适合借鉴“底部全局时间滑块”，但不必立即换库。
+  - ECharts 的 legend selected、dataZoom、axisPointer 联动适合宏观多线图模块；后续若利率/估值/流动性模块要做归一化、多轴和强联动，可作为补充库候选。
+- 第一性原则判断：workbench 不应只是“把报告里的图放大”。它要回答“我想看什么、隐藏什么、哪些 pane 共享同一时间、当前日期所有指标读数如何互相印证”。因此下一轮应优先补交互控制，而不是继续扩指标数量。
+
+| 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
+| --- | --- | --- | --- | --- |
+| 1 | 输出体验 | L5 主图增加指标显示/隐藏控制 | 默认全开会造成视觉拥挤，用户需要在简洁观察和综合验证之间切换 | 主图上方或侧栏提供 Candles、MA5/20/60/200、Bollinger、Donchian、VWAP、Volume overlay 的开关；默认使用克制预设；图例点击也能切换可见性 |
+| 2 | 输出体验 | 增加指标预设模板 | 看盘软件的价值不是让用户每次手动点十几个开关，而是提供常用观察模式 | 提供“简洁价格”“趋势均线”“波动区间”“量价确认”“全部指标”预设；预设状态写入 payload/localStorage，不影响 artifact |
+| 3 | 输出体验 | 实现主图与副图时间轴锁定/解锁 | 当前副图共享窗口不够强，缩放/拖拽后容易失去同屏比较意义 | 增加“时间轴锁定”开关和“统一时间轴”按钮；锁定时任一 pane 缩放/平移同步到所有 pane；解锁时允许单 pane 检查；重新统一后一键恢复 |
+| 4 | 输出体验 | 联动 crosshair 与统一读数面板 | 用户看某一天时，需要同时读 OHLC、Volume、OBV、MACD、RSI、MFI、CMF，而不是只读主图 | 鼠标移动主图或副图时，所有 pane 显示同一日期的 vertical marker；右侧 readout 同步展示主图与副图核心值 |
+| 5 | 输出体验 | 副图 pane 重新分组与可折叠 | 四个副图好看，但不是每次都需要；移动端更容易拥挤 | Volume 默认展开；OBV/MACD/RSI-MFI 允许折叠或启停；移动端保持主图优先，副图可按研究问题展开 |
+| 6 | 输出体验 | 非 L5 模块增加 legend / normalize / dual-axis 控制 | VIX、OAS、10Y、ERP、流动性单位不同，简单多线图容易误导 | 波动信用、利率估值、广度集中度、流动性模块至少支持序列显隐；利率/估值/流动性提供归一化或双轴选项，并清楚标注单位 |
+| 7 | 输出体验 | 为 workbench 交互增加回归测试 | 这类交互最容易在后续改样式时悄悄坏掉 | 测试覆盖指标开关 DOM、预设按钮、时间轴锁定按钮、统一按钮、crosshair readout 文案；视觉回归保留桌面/移动截图 |
+
+### 新一轮反馈：研究控制台从报告入口升级为总控开关
+
+- 现有 `output/reports/vnext_research_console.html` 比旧 GUI 美观，但仍偏“命令生成页”。用户的定位更高：它应是 vNext 的运行前总控台，集中处理人工数据、模型选择、运行模式、可选数据源、报告/工作台生成和未来新闻源等扩展入口。
+- 旧 `/Users/aidianchi/Desktop/launcher.py` 外观和交互确实落后，但功能线索有价值：人工 L4 顺序输入、历史时点分析、模型调用顺序、API 配置入口、新闻开关、图表叠加模式、运行模式选择和启动本地任务。这些不应被新控制台遗忘。
+- 关键边界：self-contained HTML 默认不能直接安全写本地文件或执行命令。下一阶段应先做“高质量配置与命令面板”；若要真正一键运行，应建立一个明确权限边界的本地 control service，所有写文件/执行命令都必须有显式确认和日志。
+
+| 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
+| --- | --- | --- | --- | --- |
+| 1 | 输出体验 | 重构控制台信息架构 | 总控台不能把所有开关堆成表单，应按真实研究流程组织 | 分成“运行对象与日期”“人工/Wind 数据”“模型与 API”“数据源/功能开关”“输出与工作台”“运行日志/健康”六区 |
+| 2 | 输出体验 | 人工数据从 JSON 文本升级为结构化表单 | 普通使用者不应直接编辑大段 JSON，且手填数值需要校验 | PE/PB/PS/ERP/percentile/date/source/confidence 以表单输入；保留高级 JSON 抽屉；空字段不覆盖；输入有范围校验和预览 |
+| 3 | 输出体验 | 恢复并现代化运行模式选择 | 旧 launcher 的 full/data_only/report_only 等模式有实际价值 | 控制台可选择 full、data only、analysis only、draft only、report only、quick report；命令预览同步更新 |
+| 4 | 输出体验 | 模型选择升级为“策略 + 顺序” | 只给 flash/pro 三个按钮不够表达 fallback 策略 | 提供 flash 优先、pro only、自定义顺序；默认遵守项目规则 deepseek-v4-flash -> deepseek-v4-pro；显示 API 可用性但不暴露密钥 |
+| 5 | 数据基础 | 功能开关纳入控制台 | 新闻源、Trendonify、legacy charts、workbench 模块、图表叠加模式都应从同一处管理 | 控制台列出新闻源预留开关、Trendonify 状态/暂缓标记、legacy charts opt-in、workbench 模块、L5 指标预设和宏观模块选项 |
+| 6 | 输出体验 | 报告与 artifact 入口升级 | 用户应能从控制台打开最新 brief、workbench、run 目录和诊断结果 | 列出最新 run、最新报告、workbench、visual regression summary、llm_stage_diagnostics；缺失时显示缺口原因 |
+| 7 | 核心系统 | 评估一键运行的安全方案 | 直接在浏览器执行本地任务风险较高，但长期总控台需要真正启动能力 | 先形成方案：继续命令复制、轻量本地 HTTP control service、或保留桌面 GUI；若选 service，必须有 allowlist、确认弹窗、日志和失败恢复 |
+| 8 | 输出体验 | 控制台视觉与交互重设计 | 总控台应像专业研究终端，不像临时表单 | 采用高密度但清晰的工作台布局：左侧配置、中间运行计划、右侧健康/输出；移动端可读；视觉回归覆盖控制台 desktop/mobile |
 
 ### 输出体验：L1-L5 指标级可视化已落地
 
@@ -17,6 +56,7 @@
 - 进一步调研后确认：底稿微图不能替代看盘式交互图。已安装 `lightweight-charts@5.2.0` 并新增独立原型 `output/reports/vnext_interactive_charts_20260502.html`，用于验证 QQQ K 线、成交量、MA overlay、区间按钮和 crosshair readout。
 - 已修复 native brief JSON payload 嵌入 bug，避免 `JSON.parse` 失败影响证据抽屉和跳转。
 - 图表三层架构已固定：底稿微图回答“这个指标当下处在哪”，市场总览图回答“跨层压力和共振在哪里”，Lightweight workbench 回答“价格、成交量和技术结构如何交互探索”。三者不能互相替代。
+- workbench 分层不应机械等同 L1-L5。L1-L5 是推理隔离层，适合底稿、审计和 evidence refs；workbench 是同屏比较层，应按“共享时间轴 + 共同研究问题”组织模块，并在每条序列上保留 L1-L5 来源标签。推荐模块为：价格技术、波动信用、利率估值、广度集中度、流动性。
 - 交互图数据已开始纳入 vNext artifacts：主流水线会在 run 目录写入 `chart_time_series.json`，当前先保存 QQQ OHLCV、成交量和 MA5/20/60/200；workbench 优先读取该 artifact，只有缺失时才退回生成时报价抓取。
 - evidence hash 直达已修复：直接打开 `#evidence-Lx-...` 会自动展开对应 Layer、滚动到指标卡并高亮，便于审查者直接分享和复核证据。
 - 已用 2026-05-06 新采集数据完成真实 DeepSeek smoke：`output/analysis/vnext/20260506_075229`，并生成 `output/reports/vnext_research_ui_brief_20260505_20260506_075229.html` 和 `output/reports/vnext_interactive_charts_20260506.html`。
@@ -24,6 +64,8 @@
 - 最新 brief 指标级微图覆盖为 30 个：L1 7/8、L2 8/9、L3 5/6、L4 3/3、L5 7/9。无图项主要是缺少结构/历史语境的单点或节奏指标，不应硬画。
 - 已建立 Chrome headless 视觉回归：桌面/移动截图覆盖 latest brief 与 workbench，摘要在 `output/reports/visual_regression/20260506_final/visual_regression_summary.json`。
 - legacy Plotly chart 已退出默认主路径：`src/main.py` 默认关闭 legacy charts，只有显式 `--enable-legacy-charts` 才开启旧 HTML 图表。
+- 用户确认暂缓 Trendonify 可用性，本轮按顺序完成 2-7：workbench 双层分类原则已固化；`chart_time_series.json` 已扩展到多面板序列；控制台新增 workbench 模块选择；L5 价格技术工作台升级为 K 线 + MA/Bollinger/Donchian/VWAP + Volume/OBV/MACD/RSI/ATR/MFI/CMF 副图；LLM 阶段新增 `llm_stage_diagnostics.json` 记录重试样本；视觉回归新增布局溢出风险检查。
+- 最新多模块 workbench 原型：`output/reports/vnext_interactive_charts_20260506_modules.html`；控制台：`output/reports/vnext_research_console.html`；视觉回归摘要：`output/reports/visual_regression/20260506_modules/visual_regression_summary.json`。
 
 ### 指标级可视化后的下一轮观察
 
@@ -42,9 +84,12 @@
 | 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
 | 1 | 数据基础 | 继续解决 Trendonify 可用性 | 最新真实采集仍显示 Trendonify unavailable，NDX 历史估值分位仍缺一个高价值自动源 | 决定浏览器采集、缓存或人工输入路径；不得静默退回 yfinance |
-| 2 | 数据基础 | 扩展 `chart_time_series.json` 多面板序列 | workbench 当前只覆盖 QQQ OHLCV/MA/volume，L1/L2/L4 的 VIX、10Y、ERP 仍不能同源交互 | artifact 增加 VIX、10Y、Damodaran ERP monthly series，并在 workbench 做多 pane |
-| 3 | 核心系统 | 复盘 DeepSeek 输出稳定性 | 两次真实 run 暴露过 L1/L2 JSON parse retry、L5 coverage retry，以及 L4 超长输入 | 记录失败样本，压缩 L4 输入或加强 JSON-only guard，减少重试成本 |
-| 4 | 输出体验 | 提升视觉回归判定能力 | 当前视觉回归能确认截图非空并提供人工检查基线，但还不能自动识别横向溢出 | 增加 DOM/layout overflow 检测或 browser-use 专项检查，覆盖 details、hash、区间按钮 |
+| 2 | 输出体验 | 固定 workbench 双层分类原则 | 直接按 L1-L5 分会保留审计秩序，但会削弱同屏比较；直接按主题分会更直观，但可能丢失证据来源边界 | 已完成：底稿/审计按 L1-L5；workbench 按价格技术、波动信用、利率估值、广度集中度、流动性组织；模块与序列保留 Layer、function_id、provider、frequency |
+| 3 | 数据基础 | 扩展 `chart_time_series.json` 多面板序列 | workbench 当前只覆盖 QQQ OHLCV/MA/volume，VIX、10Y、ERP、广度和流动性仍不能同源交互 | 已完成：artifact 增加 VIX/VXN/VXN-VIX、HY/IG OAS、HYG、10Y/真实利率/breakeven/Fed funds、Damodaran ERP monthly、QQQ/QQEW、净流动性/WALCL/TGA/RRP、M2 YoY |
+| 4 | 输出体验 | 重构 workbench 为研究模块选择器 | 控制台若按单个函数选择会淹没用户；按研究模块选择更接近真实看盘/投研工作流 | 已完成：控制台可勾选价格技术、波动信用、利率估值、广度集中度、流动性，并生成 `--modules` workbench 命令；workbench 页面也有模块 tabs |
+| 5 | 输出体验 | 优先完成 L5 价格技术工作台 | L5 指标共享 QQQ 价格时间轴，最适合 TradingView 式交互，也最能检验突破、回撤和量价确认 | 已完成：主图含 K 线、MA、Bollinger、Donchian、VWAP；副图含 Volume、OBV、MACD、RSI、ATR、MFI、CMF；区间按钮同步主图和副图读数 |
+| 6 | 核心系统 | 复盘 DeepSeek 输出稳定性 | 两次真实 run 暴露过 L1/L2 JSON parse retry、L5 coverage retry，以及 L4 超长输入 | 已完成第一阶段：新增 `llm_stage_diagnostics.json`，记录 stage、attempts、parse/schema/contract error、raw_excerpt 和 prompt_chars；后续真实 run 可直接定位重试成本 |
+| 7 | 输出体验 | 提升视觉回归判定能力 | 当前视觉回归能确认截图非空并提供人工检查基线，但还不能自动识别横向溢出 | 已完成：视觉回归摘要新增 `layout_checks`，检测明显固定宽度超视口和移动端内联 nowrap 风险；最新 brief + 多模块 workbench desktop/mobile 均 passed |
 
 ### L4 数据源复盘后的修正方向（1-5 已完成）
 

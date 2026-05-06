@@ -141,8 +141,17 @@ class ResearchConsoleGenerator:
           <label><input id="skipLegacyReport" type="checkbox" checked> 跳过 legacy HTML</label>
           <label><input id="disableCharts" type="checkbox" checked> 关闭 legacy charts</label>
         </div>
+        <div class="module-picker" aria-label="交互工作台模块">
+          <h3>交互工作台模块</h3>
+          <label><input type="checkbox" name="workbenchModule" value="price_technical" checked> 价格技术</label>
+          <label><input type="checkbox" name="workbenchModule" value="volatility_credit" checked> 波动信用</label>
+          <label><input type="checkbox" name="workbenchModule" value="rates_valuation" checked> 利率估值</label>
+          <label><input type="checkbox" name="workbenchModule" value="breadth_concentration" checked> 广度集中度</label>
+          <label><input type="checkbox" name="workbenchModule" value="liquidity" checked> 流动性</label>
+        </div>
         <button class="command-button" type="button" id="buildCommand">生成运行命令</button>
         <pre id="runCommandPreview">python3 src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts</pre>
+        <pre id="workbenchCommandPreview">python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/&lt;run_id&gt; --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity</pre>
         <div class="report-list">
           <h3>报告入口</h3>
           {report_links or '<span>还没有生成过 native 报告。</span>'}
@@ -304,7 +313,8 @@ textarea {
   line-height: 1.45;
 }
 .button-row,
-.toggle-line {
+.toggle-line,
+.module-picker {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -325,7 +335,8 @@ textarea {
   gap: 8px;
 }
 .segmented label,
-.toggle-line label {
+.toggle-line label,
+.module-picker label {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -334,6 +345,12 @@ textarea {
   background: #fffefa;
   padding: 10px 12px;
   margin: 0;
+}
+.module-picker {
+  margin: 14px 0;
+}
+.module-picker h3 {
+  flex-basis: 100%;
 }
 .health-list {
   margin-top: 18px;
@@ -397,6 +414,7 @@ const data = JSON.parse(document.getElementById('console-data').textContent);
 const manualJson = document.getElementById('manualJson');
 const dataDate = document.getElementById('dataDate');
 const preview = document.getElementById('runCommandPreview');
+const workbenchPreview = document.getElementById('workbenchCommandPreview');
 
 dataDate.value = new Date().toISOString().slice(0, 10);
 
@@ -410,9 +428,11 @@ function buildCommand() {
   if (document.getElementById('skipLegacyReport').checked) parts.push('--skip-report');
   if (document.getElementById('disableCharts').checked) parts.push('--disable-charts');
   preview.textContent = parts.join(' ');
+  const modules = Array.from(document.querySelectorAll('input[name="workbenchModule"]:checked')).map(node => node.value);
+  workbenchPreview.textContent = `python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/<run_id> --modules ${modules.join(',') || 'price_technical'}`;
 }
 
-document.querySelectorAll('input[name="modelMode"], #skipLegacyReport, #disableCharts')
+document.querySelectorAll('input[name="modelMode"], #skipLegacyReport, #disableCharts, input[name="workbenchModule"]')
   .forEach((node) => node.addEventListener('change', buildCommand));
 
 document.getElementById('buildCommand').addEventListener('click', buildCommand);

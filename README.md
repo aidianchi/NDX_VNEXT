@@ -72,6 +72,24 @@ python src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --di
 python src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/<run_id> --template brief
 ```
 
+生成研究控制台：
+
+```bash
+python src/research_console.py
+```
+
+生成交互 workbench：
+
+```bash
+python src/interactive_chart_workbench.py --run-dir output/analysis/vnext/<run_id> --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity
+```
+
+运行报告视觉回归：
+
+```bash
+python src/report_visual_regression.py --brief-html output/reports/<brief>.html --workbench-html output/reports/<workbench>.html --output-dir output/reports/visual_regression/<label>
+```
+
 ### Windows PowerShell
 
 运行测试：
@@ -85,3 +103,13 @@ python src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/<run
 ```powershell
 .\.venv\Scripts\python.exe src\agent_analysis\vnext_reporter.py --run-dir output\analysis\vnext\<run_id> --template brief
 ```
+
+## 当前输出入口
+
+- 默认阅读入口：`output/reports/vnext_research_ui_brief_*.html`。
+- 研究控制台：`output/reports/vnext_research_console.html`。
+- 交互 workbench：`output/reports/vnext_interactive_charts_*.html`。
+- 同源图表数据：`output/analysis/vnext/<run_id>/chart_time_series.json`。
+- 视觉回归摘要：`output/reports/visual_regression/<label>/visual_regression_summary.json`。
+
+`brief` 是连续阅读报告；workbench 是看盘式探索页面；控制台是运行前配置面板。三者不要互相替代。

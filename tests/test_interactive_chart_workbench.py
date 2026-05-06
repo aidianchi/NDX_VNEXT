@@ -75,6 +75,87 @@ def test_interactive_chart_workbench_generates_lightweight_chart_html(tmp_path: 
     assert "artifact + QQQ OHLCV" in html
 
 
+def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    _write_json(run_dir / "layer_cards" / "L5.json", {"layer": "L5", "local_conclusion": "价格技术模块。"})
+    _write_json(run_dir / "analysis_packet.json", {})
+    rows = []
+    for index in range(40):
+        rows.append(
+            {
+                "time": f"2026-04-{index + 1:02d}",
+                "open": 100 + index,
+                "high": 103 + index,
+                "low": 98 + index,
+                "close": 101 + index,
+                "volume": 1000 + index,
+                "ma5": 99 + index,
+                "ma20": 95 + index,
+                "ma60": 90 + index,
+                "ma200": 80 + index,
+                "bb_upper": 105 + index,
+                "bb_lower": 93 + index,
+                "donchian_upper": 106 + index,
+                "donchian_lower": 92 + index,
+                "vwap20": 97 + index,
+                "obv": index * 1000,
+                "macd": 1.2,
+                "macd_signal": 1.0,
+                "macd_histogram": 0.2,
+                "rsi14": 61,
+                "atr14": 4.4,
+                "mfi14": 58,
+                "cmf20": 0.12,
+            }
+        )
+    _write_json(
+        run_dir / "chart_time_series.json",
+        {
+            "schema_version": "vnext_chart_time_series_v1",
+            "workbench_modules": {
+                "price_technical": {"title": "价格技术", "series": ["QQQ_OHLCV"], "layer_tags": ["L5"]},
+                "volatility_credit": {"title": "波动信用", "series": ["VIX", "VXN", "HY_OAS", "IG_OAS"], "layer_tags": ["L2"]},
+                "rates_valuation": {"title": "利率估值", "series": ["US10Y", "DAMODARAN_ERP_MONTHLY"], "layer_tags": ["L1", "L4"]},
+                "breadth_concentration": {"title": "广度集中度", "series": ["QQQ_QQEW_RATIO"], "layer_tags": ["L3"]},
+                "liquidity": {"title": "流动性", "series": ["NET_LIQUIDITY", "WALCL", "TGA", "RRP"], "layer_tags": ["L1"]},
+            },
+            "series": {
+                "QQQ_OHLCV": {"source_file": "chart_time_series.json", "rows": rows},
+                "VIX": {"rows": [{"time": "2026-04-01", "value": 18}]},
+                "VXN": {"rows": [{"time": "2026-04-01", "value": 23}]},
+                "HY_OAS": {"rows": [{"time": "2026-04-01", "value": 2.8}]},
+                "IG_OAS": {"rows": [{"time": "2026-04-01", "value": 0.8}]},
+                "US10Y": {"rows": [{"time": "2026-04-01", "value": 4.4}]},
+                "DAMODARAN_ERP_MONTHLY": {"rows": [{"time": "2026-04-01", "value": 4.2}]},
+                "QQQ_QQEW_RATIO": {"rows": [{"time": "2026-04-01", "value": 4.8}]},
+                "NET_LIQUIDITY": {"rows": [{"time": "2026-04-01", "value": 6100}]},
+                "WALCL": {"rows": [{"time": "2026-04-01", "value": 7600}]},
+                "TGA": {"rows": [{"time": "2026-04-01", "value": 600}]},
+                "RRP": {"rows": [{"time": "2026-04-01", "value": 900}]},
+            },
+        },
+    )
+    generator = InteractiveChartWorkbenchGenerator(
+        reports_dir=str(tmp_path / "reports"),
+        bundle_js="window.LightweightCharts={createChart:function(){return {addSeries:function(){return {setData:function(){},priceScale:function(){return {applyOptions:function(){}}}}},timeScale:function(){return {fitContent:function(){},setVisibleLogicalRange:function(){}}},subscribeCrosshairMove:function(){},applyOptions:function(){}}},CandlestickSeries:function(){},LineSeries:function(){},HistogramSeries:function(){},AreaSeries:function(){}};",
+    )
+
+    report_path = generator.run(run_dir, modules=["price_technical", "volatility_credit", "rates_valuation", "breadth_concentration", "liquidity"])
+    html = Path(report_path).read_text(encoding="utf-8")
+
+    assert 'data-module-tab="price_technical"' in html
+    assert 'data-module="volatility_credit"' in html
+    assert 'data-panel-root="macd"' in html
+    assert 'data-panel-root="money-flow"' in html
+    assert "Bollinger" in html
+    assert "Donchian" in html
+    assert "VWAP" in html
+    assert "VIX" in html
+    assert "Damodaran ERP" in html
+    assert "QQQ/QQEW" in html
+    assert "Net Liquidity" in html
+
+
 def test_interactive_chart_workbench_prefers_run_time_series_artifact(tmp_path: Path, monkeypatch):
     run_dir = tmp_path / "run"
     _write_json(run_dir / "layer_cards" / "L5.json", {"layer": "L5", "local_conclusion": "artifact 同源。"})

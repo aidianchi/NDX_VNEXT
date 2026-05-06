@@ -118,6 +118,7 @@ class VNextOrchestrator:
         self.layer_cards_dir.mkdir(exist_ok=True)
         self.layer_context_dir.mkdir(exist_ok=True)
         self.bridge_dir.mkdir(exist_ok=True)
+        self.stage_diagnostics: Dict[str, Any] = {"schema_version": "vnext_llm_stage_diagnostics_v1", "stages": {}}
 
     def run(self, packet: AnalysisPacket | Dict[str, Any]) -> Dict[str, Any]:
         packet_model = packet if isinstance(packet, AnalysisPacket) else AnalysisPacket.model_validate(packet)
@@ -682,7 +683,18 @@ class VNextOrchestrator:
     ) -> Any:
         prompt = self._compose_prompt(stage_key, model_cls, payload)
         last_error = ""
+        stage_record: Dict[str, Any] = {
+            "stage_key": stage_key,
+            "stage_name": stage_name,
+            "attempts": 0,
+            "errors": [],
+            "prompt_chars": len(prompt),
+            "status": "running",
+        }
+        self.stage_diagnostics["stages"][stage_name] = stage_record
+        self._save_stage_diagnostics()
         for attempt in range(1, self.max_node_retries + 1):
+            stage_record["attempts"] = attempt
             active_prompt = prompt
             if last_error:
                 active_prompt = (
@@ -692,22 +704,49 @@ class VNextOrchestrator:
             raw = self.llm_engine.call_with_fallback(active_prompt, stage_name=stage_name)
             if not raw:
                 last_error = f"{stage_name} received empty response"
+                stage_record["errors"].append({"attempt": attempt, "kind": "empty_response", "message": last_error})
+                self._save_stage_diagnostics()
                 continue
             parsed = self.llm_engine.extract_json(raw, stage_name)
             if not isinstance(parsed, dict):
                 last_error = f"{stage_name} did not return a parseable JSON object"
+                stage_record["errors"].append(
+                    {
+                        "attempt": attempt,
+                        "kind": "parse_error",
+                        "message": last_error,
+                        "raw_excerpt": str(raw)[:500],
+                    }
+                )
+                self._save_stage_diagnostics()
                 continue
             parsed = self._normalize_payload(stage_key, parsed)
             try:
                 validated = model_cls.model_validate(parsed)
             except Exception as exc:
                 last_error = str(exc)
+                stage_record["errors"].append(
+                    {
+                        "attempt": attempt,
+                        "kind": "schema_validation_error",
+                        "message": last_error[:1000],
+                    }
+                )
+                self._save_stage_diagnostics()
                 logger.warning("%s validation failed on attempt %s: %s", stage_name, attempt, exc)
                 continue
             if validator:
                 validation_errors = validator(validated)
                 if validation_errors:
                     last_error = "\n".join(validation_errors)
+                    stage_record["errors"].append(
+                        {
+                            "attempt": attempt,
+                            "kind": "contract_validation_error",
+                            "message": last_error[:1000],
+                        }
+                    )
+                    self._save_stage_diagnostics()
                     logger.warning(
                         "%s contract validation failed on attempt %s: %s",
                         stage_name,
@@ -715,8 +754,16 @@ class VNextOrchestrator:
                         last_error,
                     )
                     continue
+            stage_record["status"] = "ok"
+            self._save_stage_diagnostics()
             return validated
+        stage_record["status"] = "failed"
+        self._save_stage_diagnostics()
         raise RuntimeError(f"{stage_name} failed after {self.max_node_retries} attempts: {last_error}")
+
+    def _save_stage_diagnostics(self) -> None:
+        path = self.output_dir / "llm_stage_diagnostics.json"
+        path.write_text(json.dumps(self.stage_diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _validate_layer_card_v2(
         self,
