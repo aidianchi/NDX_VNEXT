@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from chart_time_series_artifacts import build_chart_time_series_artifact, write_chart_time_series_artifact
+from chart_time_series_artifacts import DEFAULT_CHART_LOOKBACK_DAYS, build_chart_time_series_artifact, write_chart_time_series_artifact
 
 
 class _MiniFrame:
@@ -130,6 +130,7 @@ def test_chart_time_series_artifact_adds_workbench_modules_and_research_series()
     assert payload["series"]["VIX"]["rows"][1] == {"time": "2026-05-02", "value": 18.2}
     assert payload["series"]["DAMODARAN_ERP_MONTHLY"]["rows"][1]["value"] == 4.24
     latest_qqq = payload["series"]["QQQ_OHLCV"]["rows"][-1]
+    assert payload["series"]["QQQ_OHLCV"]["lookback_days"] == DEFAULT_CHART_LOOKBACK_DAYS
     for key in [
         "bb_upper",
         "bb_lower",

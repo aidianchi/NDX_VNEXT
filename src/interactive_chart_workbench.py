@@ -10,9 +10,11 @@ from typing import Any, Dict, List, Optional
 
 try:
     from .config import path_config
+    from .chart_time_series_artifacts import DEFAULT_CHART_LOOKBACK_DAYS
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from config import path_config
+    from chart_time_series_artifacts import DEFAULT_CHART_LOOKBACK_DAYS
 
 
 def _escape(value: Any) -> str:
@@ -42,6 +44,13 @@ def _fmt_number(value: Any, digits: int = 2) -> str:
     return "N/A" if number is None else f"{number:.{digits}f}"
 
 
+def _clip_text(value: Any, limit: int = 260) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
 def _json_for_script(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
 
@@ -65,7 +74,7 @@ class InteractiveChartWorkbenchGenerator:
         output_path: str | Path | None = None,
         *,
         price_rows: Optional[List[Dict[str, Any]]] = None,
-        lookback_days: int = 420,
+        lookback_days: int = DEFAULT_CHART_LOOKBACK_DAYS,
         modules: Optional[List[str]] = None,
     ) -> str:
         run_path = Path(run_dir)
@@ -92,9 +101,14 @@ class InteractiveChartWorkbenchGenerator:
         return self.reports_dir / f"vnext_interactive_charts_{suffix}.html"
 
     def _load_artifacts(self, run_path: Path) -> Dict[str, Any]:
+        layer_cards: Dict[str, Any] = {}
+        layer_dir = run_path / "layer_cards"
+        for layer in ["L1", "L2", "L3", "L4", "L5"]:
+            layer_cards[layer] = _load_json(layer_dir / f"{layer}.json", {})
         return {
             "analysis_packet": _load_json(run_path / "analysis_packet.json", {}),
-            "l5": _load_json(run_path / "layer_cards" / "L5.json", {}),
+            "layers": layer_cards,
+            "l5": layer_cards.get("L5", {}),
             "final": _load_json(run_path / "final_adjudication.json", {}),
             "chart_time_series": _load_json(run_path / "chart_time_series.json", {}),
         }
@@ -222,6 +236,7 @@ class InteractiveChartWorkbenchGenerator:
         return {
             "source": artifacts.get("_price_source_label") or "artifact + QQQ OHLCV",
             "modules": modules,
+            "moduleSummaries": self._module_summaries(modules, artifacts, series, price_rows),
             "supplementalSeries": self._supplemental_payload(series),
             "candles": [
                 {
@@ -272,6 +287,50 @@ class InteractiveChartWorkbenchGenerator:
                 "ma_order": ma_raw.get("ma_order"),
             },
         }
+
+    def _module_summaries(
+        self,
+        modules: Dict[str, Any],
+        artifacts: Dict[str, Any],
+        series: Dict[str, Any],
+        price_rows: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        layer_cards = artifacts.get("layers", {}) if isinstance(artifacts.get("layers"), dict) else {}
+        summaries: Dict[str, Any] = {}
+        latest_close = price_rows[-1].get("close") if price_rows else None
+        for key, module in modules.items():
+            if not isinstance(module, dict):
+                continue
+            layer_tags = [str(item) for item in module.get("layer_tags", []) if item]
+            layer_notes = []
+            for layer in layer_tags:
+                card = layer_cards.get(layer, {}) if isinstance(layer_cards, dict) else {}
+                if not isinstance(card, dict):
+                    continue
+                text = card.get("local_conclusion") or card.get("layer_synthesis") or card.get("internal_conflict_analysis")
+                if text:
+                    layer_notes.append(f"{layer}: {_clip_text(text)}")
+            readings = []
+            for series_key in module.get("series", []):
+                if series_key == "QQQ_OHLCV":
+                    if latest_close is not None:
+                        readings.append(f"QQQ close {_fmt_number(latest_close)}")
+                    continue
+                item = series.get(series_key, {}) if isinstance(series, dict) else {}
+                rows = item.get("rows", []) if isinstance(item, dict) else []
+                latest = rows[-1] if isinstance(rows, list) and rows else {}
+                value = latest.get("value") if isinstance(latest, dict) else None
+                if value is not None:
+                    readings.append(f"{item.get('label') or series_key} {_fmt_number(value)}")
+            summaries[key] = {
+                "title": module.get("title") or key,
+                "question": module.get("question") or "",
+                "layers": " / ".join(layer_tags) if layer_tags else "N/A",
+                "analysis": "；".join(layer_notes) if layer_notes else "该模块暂无对应 layer synthesis，可先看图表序列。",
+                "latest": " · ".join(readings[:3]) if readings else "暂无可读最新值",
+                "lens": "、".join(module.get("function_ids", [])[:3]) if isinstance(module.get("function_ids"), list) else "",
+            }
+        return summaries
 
     def _line_points(self, rows: List[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
         return [{"time": row["time"], "value": _safe_number(row.get(key))} for row in rows if _safe_number(row.get(key)) is not None]
@@ -372,11 +431,11 @@ class InteractiveChartWorkbenchGenerator:
       </div>
       <a href="./vnext_research_ui_brief_20260502.html#layers">返回 brief 底稿</a>
     </header>
-    <section class="summary-grid">
-      <article><span>Final</span><b>{_escape(summary.get('final_stance'))}</b></article>
-      <article><span>L5</span><b>{_escape(summary.get('l5_conclusion'))}</b></article>
-      <article><span>Last Close</span><b>{_fmt_number(last.get('close'))}</b></article>
-      <article><span>RSI / Donchian</span><b>{_fmt_number(summary.get('rsi'))} / {_fmt_number(summary.get('donchian_position'))}%</b></article>
+    <section class="summary-grid" aria-label="Active module analysis summary">
+      <article><span id="summaryLabelA">模块</span><b id="summaryValueA">价格技术</b></article>
+      <article><span id="summaryLabelB">对应分析</span><b id="summaryValueB">{_escape(summary.get('l5_conclusion'))}</b></article>
+      <article><span id="summaryLabelC">Last Close</span><b id="summaryValueC">{_fmt_number(last.get('close'))}</b></article>
+      <article><span id="summaryLabelD">RSI / Donchian</span><b id="summaryValueD">{_fmt_number(summary.get('rsi'))} / {_fmt_number(summary.get('donchian_position'))}%</b></article>
     </section>
     <section class="chart-shell">
       <div class="chart-head">
@@ -400,7 +459,7 @@ class InteractiveChartWorkbenchGenerator:
       <nav class="module-tabs" aria-label="Workbench modules">
         {module_tabs}
       </nav>
-      <section class="indicator-workbench-controls" aria-label="L5 indicator controls">
+      <section class="indicator-workbench-controls" data-price-module-only aria-label="L5 indicator controls">
         <div class="preset-row">
           <span>指标预设</span>
           <button type="button" data-preset="simple_price">简洁价格</button>
@@ -448,7 +507,7 @@ class InteractiveChartWorkbenchGenerator:
           <p>把鼠标移到图上查看 OHLC、成交量和均线读数。</p>
         </aside>
       </div>
-      <div class="legend" aria-label="Clickable legend">
+      <div class="legend" data-price-module-only aria-label="Clickable legend">
         <button type="button" class="candle" data-indicator-legend="candles">Candles</button>
         <button type="button" class="ma5" data-indicator-legend="ma5">MA5</button>
         <button type="button" class="ma20" data-indicator-legend="ma20">MA20</button>
@@ -823,6 +882,7 @@ body {
 .donchian { color: #0f766e; }
 .vwap { color: #7c3aed; }
 .volume { color: var(--muted); }
+[data-price-module-only][hidden] { display: none; }
 @media (max-width: 900px) {
   .summary-grid,
   .chart-head,
@@ -843,9 +903,11 @@ const syncedCharts = [];
 const chartEntries = [];
 const indicatorSeries = {};
 const panelShells = {};
+const moduleSeriesData = {};
 let syncLocked = true;
 let syncingRange = false;
 let syncingCrosshair = false;
+const PRICE_SCALE_WIDTH = 112;
 
 const PRESETS = {
   simple_price: ['candles', 'ma20', 'ma200'],
@@ -876,6 +938,16 @@ function findPoint(rows, time) {
   return (rows || []).find(item => item.time === time);
 }
 
+function findPointAtOrBefore(rows, time) {
+  const exact = findPoint(rows, time);
+  if (exact) return exact;
+  const clean = rows || [];
+  for (let index = clean.length - 1; index >= 0; index -= 1) {
+    if (clean[index].time <= time) return clean[index];
+  }
+  return null;
+}
+
 function addIndicator(key, series) {
   if (!indicatorSeries[key]) indicatorSeries[key] = [];
   indicatorSeries[key].push(series);
@@ -893,7 +965,7 @@ function createBaseChart(target, height, key = 'chart') {
     height,
     layout: { background: { color: '#ffffff' }, textColor: '#2b2b2a', attributionLogo: false },
     grid: { vertLines: { color: '#eeeeea' }, horzLines: { color: '#eeeeea' } },
-    rightPriceScale: { borderColor: '#d7d4cb' },
+    rightPriceScale: { borderColor: '#d7d4cb', minimumWidth: PRICE_SCALE_WIDTH },
     timeScale: { borderColor: '#d7d4cb', timeVisible: false },
   });
   syncedCharts.push(chart);
@@ -921,7 +993,7 @@ const chart = createBaseChart(root, 640, 'price');
 chart.applyOptions({
   grid: { vertLines: { color: '#eeeeea' }, horzLines: { color: '#eeeeea' } },
   crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-  rightPriceScale: { borderColor: '#d7d4cb', scaleMargins: { top: 0.08, bottom: 0.24 } },
+  rightPriceScale: { borderColor: '#d7d4cb', minimumWidth: PRICE_SCALE_WIDTH, scaleMargins: { top: 0.08, bottom: 0.24 } },
   timeScale: { borderColor: '#d7d4cb', timeVisible: false },
 });
 const priceEntry = chartEntries.find(item => item.key === 'price');
@@ -1029,8 +1101,9 @@ function renderModuleChart(moduleKey, colors) {
   const moduleChart = createBaseChart(target, 460, moduleKey);
   moduleChart.applyOptions({
     leftPriceScale: { visible: dualAxis, borderColor: '#d7d4cb' },
-    rightPriceScale: { visible: true, borderColor: '#d7d4cb' },
+    rightPriceScale: { visible: true, borderColor: '#d7d4cb', minimumWidth: PRICE_SCALE_WIDTH },
   });
+  moduleSeriesData[moduleKey] = [];
   const legend = document.querySelector(`[data-module-legend="${moduleKey}"]`);
   if (legend) legend.innerHTML = '';
   (module.series || []).forEach((seriesKey, index) => {
@@ -1054,6 +1127,7 @@ function renderModuleChart(moduleKey, colors) {
       priceScaleId: dualAxis && index % 2 ? 'left' : 'right',
     });
     line.setData(renderedData);
+    moduleSeriesData[moduleKey].push({ label, rows: renderedData, rawRows: data, normalized: normalize });
     const entry = chartEntries.find(item => item.key === moduleKey);
     if (entry && !entry.primarySeries) {
       entry.primarySeries = line;
@@ -1200,11 +1274,42 @@ document.querySelectorAll('[data-module-tab]').forEach(button => {
     const key = button.dataset.moduleTab;
     document.querySelectorAll('[data-module-tab]').forEach(item => item.classList.toggle('is-active', item === button));
     document.querySelectorAll('[data-module]').forEach(item => item.classList.toggle('is-active', item.dataset.module === key));
+    updateActiveModuleChrome(key);
     unifyTimeAxis();
   });
 });
 
-function readoutHtml(time) {
+function activeModuleKey() {
+  const active = document.querySelector('[data-module].is-active');
+  return active ? active.dataset.module : 'price_technical';
+}
+
+function defaultReadoutHtml(moduleKey = activeModuleKey()) {
+  const summary = payload.moduleSummaries[moduleKey] || {};
+  if (moduleKey === 'price_technical') {
+    return '<h3>Crosshair</h3><p>把鼠标移到图上查看 OHLC、成交量和均线读数。</p>';
+  }
+  return `<h3>${summary.title || 'Crosshair'}</h3><p>把鼠标移到当前模块图上，右侧会显示该时间点对应的序列读数。</p>`;
+}
+
+function updateActiveModuleChrome(moduleKey = activeModuleKey()) {
+  const summary = payload.moduleSummaries[moduleKey] || {};
+  const isPrice = moduleKey === 'price_technical';
+  document.getElementById('summaryLabelA').textContent = isPrice ? '模块' : '模块 / 层';
+  document.getElementById('summaryValueA').textContent = isPrice ? '价格技术' : `${summary.title || moduleKey} · ${summary.layers || 'N/A'}`;
+  document.getElementById('summaryLabelB').textContent = '对应分析';
+  document.getElementById('summaryValueB').textContent = summary.analysis || '暂无对应 layer 分析摘要。';
+  document.getElementById('summaryLabelC').textContent = isPrice ? 'Last Close' : 'Latest';
+  document.getElementById('summaryValueC').textContent = isPrice && payload.candles.length ? fmt(payload.candles[payload.candles.length - 1].close) : (summary.latest || '暂无可读最新值');
+  document.getElementById('summaryLabelD').textContent = isPrice ? 'RSI / Donchian' : '研究问题';
+  document.getElementById('summaryValueD').textContent = isPrice
+    ? `${fmt(payload.summary.rsi)} / ${fmt(payload.summary.donchian_position)}%`
+    : (summary.question || summary.lens || '查看图中序列的同向、背离和时滞。');
+  document.querySelectorAll('[data-price-module-only]').forEach(node => { node.hidden = !isPrice; });
+  readout.innerHTML = defaultReadoutHtml(moduleKey);
+}
+
+function priceReadoutHtml(time) {
   const candle = payload.candles.find(item => item.time === time) || {};
   const volume = findPoint(payload.volume, time) || {};
   const values = {
@@ -1233,6 +1338,24 @@ function readoutHtml(time) {
   `;
 }
 
+function moduleReadoutHtml(time, moduleKey) {
+  const rows = moduleSeriesData[moduleKey] || [];
+  if (!rows.length) return defaultReadoutHtml(moduleKey);
+  const items = rows.map((item) => {
+    const point = findPointAtOrBefore(item.rows, time);
+    const stale = point && point.time !== time ? ` <small>${point.time}</small>` : '';
+    return `<dt>${item.label}</dt><dd>${fmt(point?.value)}${stale}</dd>`;
+  }).join('');
+  return `
+    <h3>${time}</h3>
+    <dl>${items}</dl>
+  `;
+}
+
+function readoutHtml(time, moduleKey = activeModuleKey()) {
+  return moduleKey === 'price_technical' ? priceReadoutHtml(time) : moduleReadoutHtml(time, moduleKey);
+}
+
 function syncCrosshair(time, sourceEntry) {
   if (syncingCrosshair) return;
   syncingCrosshair = true;
@@ -1248,10 +1371,11 @@ function syncCrosshair(time, sourceEntry) {
 
 function handleCrosshair(param, entry) {
   if (!param || !param.time || !param.seriesData) {
-    readout.innerHTML = '<h3>Crosshair</h3><p>把鼠标移到图上查看 OHLC、成交量和均线读数。</p>';
+    readout.innerHTML = defaultReadoutHtml(activeModuleKey());
     return;
   }
-  readout.innerHTML = readoutHtml(param.time);
+  const moduleKey = entry && entry.key ? entry.key : activeModuleKey();
+  readout.innerHTML = readoutHtml(param.time, moduleKey);
   syncCrosshair(param.time, entry);
 }
 
@@ -1264,6 +1388,7 @@ chartEntries.forEach(entry => {
 let savedPreset = 'simple_price';
 try { savedPreset = localStorage.getItem(STORAGE_KEY) || 'simple_price'; } catch (error) {}
 applyPreset(PRESETS[savedPreset] ? savedPreset : 'simple_price', false);
+updateActiveModuleChrome('price_technical');
 updateRange(365);
 """
 
@@ -1272,7 +1397,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Generate vNext interactive chart workbench.")
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--output")
-    parser.add_argument("--lookback-days", type=int, default=420)
+    parser.add_argument("--lookback-days", type=int, default=DEFAULT_CHART_LOOKBACK_DAYS)
     parser.add_argument(
         "--modules",
         default="price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity",

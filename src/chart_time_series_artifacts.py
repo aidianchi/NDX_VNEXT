@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 
 Fetcher = Callable[[int], Any]
+DEFAULT_CHART_LOOKBACK_DAYS = 1825
 
 
 WORKBENCH_MODULES: Dict[str, Dict[str, Any]] = {
@@ -432,7 +433,7 @@ def _damodaran_rows_from_packet(packet: Any) -> List[Dict[str, Any]]:
 
 def build_chart_time_series_artifact(
     *,
-    lookback_days: int = 420,
+    lookback_days: int = DEFAULT_CHART_LOOKBACK_DAYS,
     fetcher: Optional[Fetcher] = None,
     supplemental_fetchers: Optional[Dict[str, Fetcher]] = None,
     analysis_packet: Any = None,
@@ -584,7 +585,7 @@ def _default_supplemental_fetchers() -> Dict[str, Fetcher]:
 def write_chart_time_series_artifact(
     run_dir: str | Path,
     *,
-    lookback_days: int = 420,
+    lookback_days: int = DEFAULT_CHART_LOOKBACK_DAYS,
     fetcher: Optional[Fetcher] = None,
     supplemental_fetchers: Optional[Dict[str, Fetcher]] = None,
     analysis_packet: Any = None,

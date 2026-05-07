@@ -4,6 +4,33 @@
 
 ---
 
+## 2026-05-07
+
+### 修复 workbench 对齐、模块切换读数和 QQQ 数据窗口
+
+完成内容：
+
+- 修复 L5 workbench 主图与 Volume、OBV、MACD、RSI/ATR、MFI/CMF 副图纵向轴线不齐：所有 Lightweight chart 统一右侧价格刻度最小宽度，绘图区右边界现在保持一致。
+- 修复模块切换后的上下文错位：切换到波动信用、利率估值、广度集中度、流动性时，顶部摘要改为对应 layer 的精简分析，不再停留在 L5。
+- 修复模块 crosshair 读数：L5 继续显示 OHLC、Volume、OBV、MACD、RSI、ATR、MFI、CMF；非 L5 模块显示当前模块序列读数，并对低频序列显示最近可用值。
+- QQQ 图表数据默认窗口从约 420 天扩展到 1825 天；最新 `chart_time_series.json` 中 QQQ 为 1254 行，覆盖 2021-05-10 至 2026-05-06。页面仍默认显示 1Y，ALL 可查看完整 5 年窗口。
+- 控制台新增“运行”按钮：按钮调用本机 `127.0.0.1:8765` vNext control service；服务未启动时明确提示没有执行命令，保留安全边界。
+- 重新生成 `output/reports/vnext_interactive_charts_20260506_controls.html`、`output/reports/vnext_research_console.html` 和 `output/reports/visual_regression/20260507_workbench_fix/`。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_interactive_chart_workbench.py tests/test_research_console.py tests/test_chart_time_series_artifacts.py`：6 passed。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_research_ui_brief_20260505_20260506_075229.html --workbench-html output/reports/vnext_interactive_charts_20260506_controls.html --output-dir output/reports/visual_regression/20260507_workbench_fix`：passed。
+- 额外生成 tall workbench 截图确认纵轴和副图对齐：`output/reports/visual_regression/20260507_workbench_fix/workbench_tall.png`。
+- 额外生成控制台截图确认运行按钮位置：`output/reports/visual_regression/20260507_workbench_fix/console_desktop.png`。
+
+剩余观察：
+
+- 控制台已有运行入口，但本地 control service 本体尚未实现；下一步若继续做一键运行，应先做 allowlist、显式确认、运行日志和失败恢复。
+- workbench 现在解决了对齐和读数语义；后续更专业的方向是增加 navigator、pane 高度调整和指标参数编辑。
+
+---
+
 ## 2026-05-06
 
 ### 修复 workbench 与研究控制台页面批注

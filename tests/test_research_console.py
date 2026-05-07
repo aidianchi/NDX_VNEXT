@@ -43,6 +43,9 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path):
     assert "输出与工作台" in html
     assert "运行日志 / 健康 / 安全" in html
     assert "一键运行安全方案" in html
+    assert "运行按钮会调用本机 127.0.0.1 的 vNext control service" in html
+    assert 'id="runNow"' in html
+    assert "fetch('http://127.0.0.1:8765/run'" in html
     assert "control service" in html
     assert "数据源健康" in html
     assert "WorldPERatio" in html

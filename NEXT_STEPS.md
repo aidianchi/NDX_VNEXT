@@ -1,6 +1,6 @@
 # vNext 下一步
 
-更新日期：2026-05-06
+更新日期：2026-05-07
 阅读方式：最新事项放在最上面。完成后把结果写入 `WORK_LOG.md`，同样按时间倒序。
 
 ---
@@ -20,13 +20,15 @@
 - 第一性原则判断：workbench 不应只是“把报告里的图放大”。它要回答“我想看什么、隐藏什么、哪些 pane 共享同一时间、当前日期所有指标读数如何互相印证”。因此下一轮应优先补交互控制，而不是继续扩指标数量。
 - 本轮已完成第一版可操作看盘台：L5 主图默认采用克制预设，支持指标显隐、图例点击切换、五类预设、副图折叠、时间轴锁定/解锁、一键统一时间轴、跨 pane readout；非 L5 模块支持序列图例显隐、归一化和双轴切换。最新输出：`output/reports/vnext_interactive_charts_20260506_controls.html`。
 - 根据页面批注追加修正：L5 副图不再用 2x2 并列布局，改为全宽纵向 pane，并默认统一到同一 1Y 时间窗口；这样 Volume、OBV、MACD、RSI/ATR、MFI/CMF 与主图保持同一横轴阅读逻辑。
+- 2026-05-07 追加修正：所有 L5 pane 统一右侧价格刻度最小宽度，解决主图与副图绘图区纵向轴线不齐；切换到波动信用、利率估值、广度集中度、流动性时，顶部摘要改为对应 layer 的精简分析，右侧 crosshair 改读当前模块序列，不再停留在 L5 OHLC/RSI。
+- QQQ 交互图默认数据窗口从约 420 天扩到 1825 天；最新 `chart_time_series.json` 中 QQQ 行数为 1254，覆盖 2021-05-10 至 2026-05-06。页面默认仍打开 1Y 视窗，用户可点 ALL 查看完整窗口。
 
 | 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
 | 1 | 输出体验 | L5 主图增加指标显示/隐藏控制 | 默认全开会造成视觉拥挤，用户需要在简洁观察和综合验证之间切换 | 已完成：主图提供 Candles、MA5/20/60/200、Bollinger、Donchian、VWAP、Volume overlay 开关；默认克制；图例点击可切换 |
 | 2 | 输出体验 | 增加指标预设模板 | 看盘软件的价值不是让用户每次手动点十几个开关，而是提供常用观察模式 | 已完成：提供“简洁价格”“趋势均线”“波动区间”“量价确认”“全部指标”；预设写入 localStorage，不污染 artifact |
 | 3 | 输出体验 | 实现主图与副图时间轴锁定/解锁 | 当前副图共享窗口不够强，缩放/拖拽后容易失去同屏比较意义 | 已完成：增加“时间轴锁定”和“统一时间轴”；锁定时 visible logical range 联动，解锁后可局部检查 |
-| 4 | 输出体验 | 联动 crosshair 与统一读数面板 | 用户看某一天时，需要同时读 OHLC、Volume、OBV、MACD、RSI、MFI、CMF，而不是只读主图 | 已完成第一版：主图/副图移动会更新统一 readout，并在支持的 Lightweight Charts 环境中同步 crosshair |
+| 4 | 输出体验 | 联动 crosshair 与统一读数面板 | 用户看某一天时，需要同时读 OHLC、Volume、OBV、MACD、RSI、MFI、CMF，而不是只读主图；切换模块后还必须读当前模块序列 | 已完成：L5 主图/副图移动会更新统一 readout；非 L5 模块 crosshair 显示该模块序列值，并在支持的 Lightweight Charts 环境中同步 crosshair |
 | 5 | 输出体验 | 副图 pane 重新分组与可折叠 | 四个副图好看，但不是每次都需要；移动端更容易拥挤 | 已完成：Volume、OBV、MACD、RSI/ATR、MFI/CMF 均可启停；移动端保持单列 |
 | 6 | 输出体验 | 非 L5 模块增加 legend / normalize / dual-axis 控制 | VIX、OAS、10Y、ERP、流动性单位不同，简单多线图容易误导 | 已完成第一版：波动信用、利率估值、广度集中度、流动性模块支持序列显隐、归一化和双轴重绘 |
 | 7 | 输出体验 | 为 workbench 交互增加回归测试 | 这类交互最容易在后续改样式时悄悄坏掉 | 已完成：测试覆盖指标开关、预设、时间轴按钮、模块归一化/双轴控件和 crosshair 同步代码；视觉回归保留桌面/移动截图 |
@@ -38,16 +40,17 @@
 - 关键边界：self-contained HTML 默认不能直接安全写本地文件或执行命令。下一阶段应先做“高质量配置与命令面板”；若要真正一键运行，应建立一个明确权限边界的本地 control service，所有写文件/执行命令都必须有显式确认和日志。
 - 本轮已完成第一版总控台重构：页面按六区组织，人工数据从纯 JSON 升级为结构化表单，运行模式、模型顺序、功能开关、workbench 模块、artifact 入口、数据源健康和一键运行安全方案均有明确位置。最新输出：`output/reports/vnext_research_console.html`。
 - 根据页面批注追加修正：运行模式不再使用 full/data only/report only 这类旧式流程词，改为 vNext 当前架构语言：完整 vNext、只采集数据、已有数据分析、只生成 brief、只生成 workbench、视觉回归。人工估值输入改为 PE/PB/PS 各自成组，当前值、5Y 分位和 10Y 分位放在一起；旧版 HTML 明确标注为过渡期兼容产物，默认不建议使用。
+- 2026-05-07 追加修正：控制台新增“运行”按钮。当前按钮调用本机 `127.0.0.1:8765` vNext control service；若服务未启动则明确提示没有执行命令。这保留了总控台的真实运行入口，同时不让静态 HTML 越权执行本地任务。
 
 | 顺序 | 类别 | 任务 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
 | 1 | 输出体验 | 重构控制台信息架构 | 总控台不能把所有开关堆成表单，应按真实研究流程组织 | 已完成：分成“运行对象与日期”“人工/Wind 数据”“模型与运行模式”“数据源/功能开关”“输出与工作台”“运行日志/健康/安全”六区 |
 | 2 | 输出体验 | 人工数据从 JSON 文本升级为结构化表单 | 普通使用者不应直接编辑大段 JSON，且手填数值需要校验 | 已完成：PE/PB/PS/ERP/percentile/date/source/confidence 表单输入；保留高级 JSON 抽屉；空字段不覆盖；有范围校验和预览 |
-| 3 | 输出体验 | 恢复并现代化运行模式选择 | 旧 launcher 的 full/data_only/report_only 等模式有实际价值 | 已完成：可选 full、data only、analysis only、draft only、report only、quick report；命令预览同步更新 |
+| 3 | 输出体验 | 恢复并现代化运行模式选择 | 旧 launcher 的 full/data_only/report_only 等模式有实际价值，但 UI 文案必须符合 vNext 架构 | 已完成：可选完整 vNext、只采集数据、已有数据分析、只生成 brief、只生成 workbench、视觉回归；命令预览同步更新 |
 | 4 | 输出体验 | 模型选择升级为“策略 + 顺序” | 只给 flash/pro 三个按钮不够表达 fallback 策略 | 已完成：提供 flash 优先、pro only、自定义顺序；默认 deepseek-v4-flash -> deepseek-v4-pro；不暴露密钥 |
 | 5 | 数据基础 | 功能开关纳入控制台 | 新闻源、Trendonify、legacy charts、workbench 模块、图表叠加模式都应从同一处管理 | 已完成：控制台列出新闻源预留、Trendonify 暂缓、legacy charts opt-in、workbench 模块和 L5 默认预设 |
 | 6 | 输出体验 | 报告与 artifact 入口升级 | 用户应能从控制台打开最新 brief、workbench、run 目录和诊断结果 | 已完成：列出最新 brief、workbench、run 目录和 visual regression summary；缺失时显示缺口原因 |
-| 7 | 核心系统 | 评估一键运行的安全方案 | 直接在浏览器执行本地任务风险较高，但长期总控台需要真正启动能力 | 已完成第一版方案：建议轻量本地 control service，必须具备 allowlist、确认弹窗、日志、失败恢复和项目路径白名单 |
+| 7 | 核心系统 | 评估一键运行的安全方案 | 直接在浏览器执行本地任务风险较高，但长期总控台需要真正启动能力 | 已完成第一版入口：页面有“运行”按钮，调用本机 control service；后续服务本体必须具备 allowlist、确认弹窗、日志、失败恢复和项目路径白名单 |
 | 8 | 输出体验 | 控制台视觉与交互重设计 | 总控台应像专业研究终端，不像临时表单 | 已完成：高密度三列/响应式布局；desktop/mobile 截图已生成到 `output/reports/visual_regression/20260506_controls/` |
 
 ### 输出体验：L1-L5 指标级可视化已落地

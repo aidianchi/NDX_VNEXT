@@ -253,7 +253,11 @@ class ResearchConsoleGenerator:
             <p>浏览器默认不执行本地任务，只生成可审计命令和入口。</p>
           </div>
         </div>
-        <button class="command-button" type="button" id="buildCommand">生成运行命令</button>
+        <div class="run-actions">
+          <button class="command-button" type="button" id="buildCommand">生成运行命令</button>
+          <button class="run-now-button" type="button" id="runNow">运行</button>
+        </div>
+        <p id="runStatus" class="run-status">运行按钮会调用本机 127.0.0.1 的 vNext control service；未启动服务时不会执行任何命令。</p>
         <pre id="runCommandPreview">python3 src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts</pre>
         <pre id="workbenchCommandPreview">python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/&lt;run_id&gt; --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity</pre>
         <div class="artifact-grid">
@@ -525,6 +529,7 @@ textarea {
 }
 .validation-note.is-warning { color: var(--watch); }
 .button-row,
+.run-actions,
 .toggle-line,
 .module-picker,
 .mode-grid {
@@ -537,6 +542,19 @@ textarea {
   background: transparent;
   color: var(--ink);
 }
+.run-now-button {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fffefa;
+}
+.run-status {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font: 12px var(--mono);
+  line-height: 1.55;
+}
+.run-status.is-warning { color: var(--watch); }
+.run-status.is-good { color: var(--good); }
 .path-note {
   margin: 10px 0 0;
   color: var(--muted);
@@ -671,6 +689,7 @@ const dataDate = document.getElementById('dataDate');
 const preview = document.getElementById('runCommandPreview');
 const workbenchPreview = document.getElementById('workbenchCommandPreview');
 const validation = document.getElementById('manualValidation');
+const runStatus = document.getElementById('runStatus');
 
 dataDate.value = new Date().toISOString().slice(0, 10);
 document.querySelector('[data-manual-field="date"]').value = dataDate.value;
@@ -805,6 +824,30 @@ dataDate.addEventListener('change', () => {
 });
 
 document.getElementById('buildCommand').addEventListener('click', buildCommand);
+document.getElementById('runNow').addEventListener('click', async () => {
+  buildCommand();
+  const command = preview.textContent.trim();
+  runStatus.textContent = '正在尝试连接本机 vNext control service...';
+  runStatus.className = 'run-status';
+  try {
+    const response = await fetch('http://127.0.0.1:8765/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        command,
+        workbench_command: workbenchPreview.textContent.trim(),
+        manual_json: manualJson.value,
+      }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    runStatus.textContent = result.message || '已提交运行。请在服务日志里查看进度。';
+    runStatus.classList.add('is-good');
+  } catch (error) {
+    runStatus.textContent = '未检测到本机 control service，因此没有执行命令。下一步需要启动受控服务，或使用下方命令手动运行。';
+    runStatus.classList.add('is-warning');
+  }
+});
 document.getElementById('resetManual').addEventListener('click', () => {
   manualJson.value = data.manualTemplate;
   document.querySelectorAll('[data-manual-field]').forEach(input => { input.value = ''; });

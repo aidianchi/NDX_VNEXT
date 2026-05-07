@@ -77,6 +77,12 @@ def test_interactive_chart_workbench_generates_lightweight_chart_html(tmp_path: 
     assert "data-preset=\"simple_price\"" in html
     assert "时间轴锁定" in html
     assert "统一时间轴" in html
+    assert "moduleSummaries" in html
+    assert "PRICE_SCALE_WIDTH = 112" in html
+    assert "minimumWidth: PRICE_SCALE_WIDTH" in html
+    assert "updateActiveModuleChrome" in html
+    assert "moduleReadoutHtml" in html
+    assert "findPointAtOrBefore" in html
 
 
 def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(tmp_path: Path):
@@ -164,6 +170,8 @@ def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(t
     assert "setVisibleTimeRangeAll" in html
     assert "updateRange(365)" in html
     assert "setCrosshairPosition" in html
+    assert 'data-price-module-only' in html
+    assert 'id="summaryValueB"' in html
     assert "VIX" in html
     assert "Damodaran ERP" in html
     assert "QQQ/QQEW" in html
