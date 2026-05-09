@@ -820,9 +820,13 @@ class VNextOrchestrator:
 
         if card.quality_self_check is not None:
             covered = set(card.quality_self_check.covered_function_ids)
-            missing_from_self_check = sorted(expected_function_ids - covered)
-            if expected_function_ids and not card.quality_self_check.coverage_complete:
-                errors.append(f"{layer_label}.quality_self_check.coverage_complete must be true.")
+            covered_from_analyses = expected_function_ids & set(analyses_by_function)
+            effective_covered = covered | covered_from_analyses
+            missing_from_self_check = sorted(expected_function_ids - effective_covered)
+            if covered_from_analyses - covered:
+                card.quality_self_check.covered_function_ids = sorted(effective_covered)
+            if expected_function_ids and not missing_analyses and not card.quality_self_check.coverage_complete:
+                card.quality_self_check.coverage_complete = True
             if missing_from_self_check:
                 errors.append(
                     f"{layer_label}.quality_self_check.covered_function_ids missing: "

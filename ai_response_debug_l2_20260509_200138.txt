@@ -1,0 +1,138 @@
+=== l2 Stage Debug Info ===
+No valid JSON block found.
+
+Full response:
+{
+  "layer": "L2",
+  "generated_at": "2026-05-09T11:57:27.014593",
+  "core_facts": [
+    "VIX 17.19，5年分位43.15%，10年分位52.68%，低于20日均线18.11，趋势偏弱。",
+    "HY OAS 2.79bp，5年分位13.23%，短期均线低于长期均线，利差收窄。",
+    "IG OAS 0.79bp，5年分位14.90%，短期均线低于长期均线，利差收窄。",
+    "HY CCC&Lower减BB OAS 7.44bp，5年分位81.55%，短期均线略低于长期均线，但整体偏高。",
+    "XLY/XLP 1.4279，10年分位93.36%，高于20日均线1.4268。",
+    "CNN Fear & Greed 66.91，评级'greed'，一周前71.17，一月前29.17。",
+    "Crowdedness Dashboard：大部分子数据不可用，无法量化拥挤度。"
+  ],
+  "local_conclusion": "L2风险偏好当前呈中性偏强状态，但存在内部冲突：信用市场（HY/IG OAS）处于历史低位且收窄，显示信用风险偏好稳健；而CNN恐贪指数显示贪婪但未到极端，且子指标中垃圾债需求处于极端恐惧，形成背离。XLY/XLP处于高位，周期偏好明确。VIX处于中性偏低，未显示恐慌。整体而言，风险偏好有支撑但并非无风险，需警惕信用分层利差偏高（CCC减BB）反映的尾部压力。",
+  "confidence": "medium",
+  "risk_flags": ["credit_tail_pressure", "greed_not_extreme", "internal_divergence"],
+  "cross_layer_hooks": [
+    {
+      "target_layer": "L4",
+      "question": "当前信用利差低位是否已被估值充分定价？NDX的远期收益率是否仍提供合理补偿？"
+    },
+    {
+      "target_layer": "L3",
+      "question": "XLY/XLP高位和VIX低位是否对应NDX内部广度改善，还是仅由头部权重驱动？"
+    },
+    {
+      "target_layer": "L5",
+      "question": "若VXN/VIX数据可用，科技股相对波动是否已引发趋势结构变化？"
+    }
+  ],
+  "indicator_analyses": [
+    {
+      "function_id": "get_vix",
+      "metric": "VIX Index",
+      "current_reading": "17.19，低于20日均线18.11，5年分位43%，10年分位53%",
+      "normalized_state": "neutral_low",
+      "narrative": "VIX处于历史中低位，且低于均线，反映市场情绪稳定，保护成本便宜。但低波动本身不构成风险偏好证据，更多是环境条件。",
+      "reasoning_process": "水平在中性偏低，趋势向下，显示预期波动下降。机制：低波动支持风险偏好，但也可能隐含自满。需结合信用和广度验证。",
+      "first_principles_chain": ["低隐含波动", "对冲成本低", "市场情绪稳定", "风险偏好中性偏强"],
+      "evidence_refs": ["L2.get_vix"],
+      "cross_layer_implications": ["需L5确认实际波动是否与隐含一致"],
+      "risk_flags": ["complacency_potential"],
+      "confidence": "high"
+    },
+    {
+      "function_id": "get_hy_oas_bp",
+      "metric": "High Yield OAS",
+      "current_reading": "2.79bp，5年分位13.23%，短期均线2.772低于长期2.8375（trend=short_below_long）",
+      "normalized_state": "low_and_improving",
+      "narrative": "高收益信用利差处于历史低位且持续收窄，表明信用市场风险偏好强劲，融资环境宽松。这是L2最强风险偏好信号之一。",
+      "reasoning_process": "水平极低（分位13%），趋势收窄，说明信用市场要求补偿很低，风险偏好旺盛。机制：低利差->融资成本低->支持股权风险。",
+      "first_principles_chain": ["信用利差低位", "风险补偿要求低", "企业融资环境宽松", "风险偏好支撑"],
+      "evidence_refs": ["L2.get_hy_oas_bp"],
+      "cross_layer_implications": ["需L4验证估值是否已充分反映低利差"],
+      "risk_flags": ["credit_complacency"],
+      "confidence": "high"
+    },
+    {
+      "function_id": "get_ig_oas_bp",
+      "metric": "Investment Grade OAS",
+      "current_reading": "0.79bp，5年分位14.9%，短期均线0.794低于长期0.8035（trend=short_below_long）",
+      "normalized_state": "low_and_improving",
+      "narrative": "投资级信用利差同样处于历史低位且收窄，确认信用市场系统性宽松。与HY OAS一致，说明压力未向高质量扩散。",
+      "reasoning_process": "水平极低，趋势收窄，验证信用环境整体宽松。机制：高质量信用利差低->系统性风险低->风险偏好可维持。",
+      "first_principles_chain": ["IG利差低位", "高质量融资成本低", "系统性信用风险低", "支撑风险偏好"],
+      "evidence_refs": ["L2.get_ig_oas_bp"],
+      "cross_layer_implications": [],
+      "risk_flags": [],
+      "confidence": "high"
+    },
+    {
+      "function_id": "get_hy_quality_spread_bp",
+      "metric": "HY CCC & Lower minus BB OAS",
+      "current_reading": "7.44bp，5年分位81.55%，短期均线7.4略低于长期7.4465（trend=short_below_long）",
+      "normalized_state": "elevated_but_improving",
+      "narrative": "尽管总体HY利差很低，但CCC及以下与BB利差的分层利差处于历史高位（分位82%），显示低质量信用尾部压力仍在。不过趋势微幅收窄，边际改善。",
+      "reasoning_process": "水平偏高，趋势稍降。机制：分层利差高 -> 信用市场对尾部借款人仍有疑虑，但边际改善。这与总体HY低利差形成反差，需关注。",
+      "first_principles_chain": ["尾部信用利差高", "低质量融资条件偏紧", "信用市场内部质量分化", "非系统性风险"],
+      "evidence_refs": ["L2.get_hy_quality_spread_bp"],
+      "cross_layer_implications": ["需L1验证宏观流动性是否对低质量信用造成压力"],
+      "risk_flags": ["credit_tail_pressure"],
+      "confidence": "medium"
+    },
+    {
+      "function_id": "get_xly_xlp_ratio",
+      "metric": "XLY/XLP Ratio",
+      "current_reading": "1.4279，10年分位93.36%，高于20日均线1.4268",
+      "normalized_state": "high_and_above_ma",
+      "narrative": "可选消费相对必需消费处于历史极高水平，表明市场对经济周期和消费者信心非常乐观，风险偏好进攻性强。",
+      "reasoning_process": "水平极高，略高于均线。机制：消费者偏周期->经济预期强->风险偏好强。但极高分位可能暗示均值回归风险。",
+      "first_principles_chain": ["XLY跑赢XLP", "周期偏好强", "经济预期乐观", "风险偏好进攻"],
+      "evidence_refs": ["L2.get_xly_xlp_ratio"],
+      "cross_layer_implications": ["需L3验证广度是否确认"),
+      "risk_flags": ["mean_reversion_risk"],
+      "confidence": "high"
+    },
+    {
+      "function_id": "get_crowdedness_dashboard",
+      "metric": "Crowdedness Dashboard",
+      "current_reading": "几乎所有子指标缺失（skew、put/call、short interest均不可用）",
+      "normalized_state": "insufficient_data",
+      "narrative": "由于数据源问题，无法有效评估当前仓位拥挤程度。建议通过其他指标（如VXN、资金流）间接判断。",
+      "reasoning_process": "数据缺失，无法分析。需注意拥挤度缺失限制了判断极端头寸风险的能力。",
+      "first_principles_chain": ["数据缺失", "无法判断拥挤度", "风险提醒受限"],
+      "evidence_refs": ["L2.get_crowdedness_dashboard"],
+      "cross_layer_implications": ["需依赖L3持仓分布或L5成交量确认拥挤"],
+      "risk_flags": ["data_gap"],
+      "confidence": "low"
+    },
+    {
+      "function_id": "get_cnn_fear_greed_index",
+      "metric": "CNN Fear & Greed Index",
+      "current_reading": "66.91，评级'greed'，一周前71.17，一月前29.17",
+      "normalized_state": "greed",
+      "narrative": "综合恐贪指数处于贪婪区间（66.91），但未达极端（>75）。子指标分化：市场动量（99.6极端贪婪）与垃圾债需求（24极端恐惧）明显背离，显示情绪内部冲突。",
+      "reasoning_process": "水平在贪婪但非极端，趋势从一周前71.17回落，显示贪婪略有降温。子指标矛盾：动量极端贪婪，但垃圾债需求极端恐惧。机制：贪婪情绪主要由股票动量驱动，但信用市场情绪谨慎。",
+      "first_principles_chain": ["情绪贪婪但非极端", "子指标背离", "动量驱动vs信用谨慎", "风险偏好表面强但内部分化"],
+      "evidence_refs": ["L2.get_cnn_fear_greed_index"],
+      "cross_layer_implications": ["需L5确认动量持续性"],
+      "risk_flags": ["sentiment_divergence"],
+      "confidence": "medium"
+    }
+  ],
+  "layer_synthesis": "L2风险偏好整体呈中性偏强状态，核心支撑来自信用市场：HY OAS和IG OAS均处于历史低位且收窄，显示融资环境宽松，信用风险偏好扎实。XLY/XLP比率处于极高分位，表明周期偏好明确，消费者进攻性强。VIX中性偏低，市场情绪稳定。然而，内部存在显著冲突：CNN恐贪指数虽为贪婪，但垃圾债需求子指标处于极端恐惧，反映信用市场尾部压力；HY分层利差（CCC减BB）处于高位，提示低质量信用融资条件依然偏紧。此外，拥挤度数据缺失，无法评估仓位极端风险。因此，当前风险偏好并非无懈可击，需警惕信用内部分化驱动的情绪脆弱性。",
+  "internal_conflict_analysis": "主要冲突：CNN恐贪指数中的垃圾债需求（24，极端恐惧）与整体贪婪评级（66.91）严重背离，同时HY分层利差高位，说明信用市场对低质量信用态度谨慎，但股票动量（99.6极端贪婪）和XLY/XLP高位显示周期偏好强劲。这种分化意味着风险偏好更多由大盘动量而非广泛信用支持。次要冲突：HY/IG OAS低且收窄，与分层利差高位形成对比，表明信用市场内部对尾部风险仍有定价。此外，VIX中性偏低但未到极端，未提供额外风险信号。优先级：HY OAS和IG OAS作为核心信号，位阶高于恐贪指数，因此主信号偏强，但需关注分层利差和垃圾债需求恶化风险。",
+  "quality_self_check": {
+    "coverage_complete": true,
+    "covered_function_ids": ["get_vix", "get_hy_oas_bp", "get_ig_oas_bp", "get_hy_quality_spread_bp", "get_xly_xlp_ratio", "get_crowdedness_dashboard", "get_cnn_fear_greed_index"],
+    "missing_or_weak_indicators": ["get_crowdedness_dashboard（数据缺失）", "get_vxn, get_hyg_momentum, get_vxn_vix_ratio未分析（analysis_required=false或错误）"],
+    "weak_reasoning_points": ["get_crowdedness_dashboard因数据缺失置信度低", "get_cnn_fear_greed_index的子指标背离分析依赖有限数据"],
+    "unresolved_internal_tensions": ["垃圾债需求极端恐惧与总体贪婪的矛盾未完全解释，需更多信用数据"],
+    "confidence_limitations": ["部分数据缺失限制全面判断", "分层利差风险虽被识别但未获完整确认"]
+  },
+  "notes": "手动覆盖crowdedness_dashboard但未能提供有效数据；VXN与VXN/VIX ratio缺失限制了对科技股特有风险的判断。"
+}

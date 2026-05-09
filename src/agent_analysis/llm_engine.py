@@ -247,8 +247,12 @@ class LLMEngine:
             match = re.search(r'```json\s*\n(.*?)\n```', text, re.DOTALL)
 
         if match:
+            json_block = match.group(1).strip()
+            parsed = self._loads_json_with_light_repair(json_block, stage)
+            if parsed is not None:
+                return parsed
             try:
-                return json.loads(match.group(1).strip())
+                json.loads(json_block)
             except json.JSONDecodeError as e:
                 logger.error(f"  ! [Stage: {stage}] AI返回了格式错误的JSON: {e}")
                 debug_filename = f"ai_response_debug_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -256,17 +260,17 @@ class LLMEngine:
                     with open(debug_filename, "w", encoding="utf-8") as f:
                         f.write(f"=== {stage} Stage Debug Info ===\n")
                         f.write(f"Error: {e}\n\n")
-                        f.write(f"Extracted JSON block:\n{match.group(1).strip()}\n\n")
+                        f.write(f"Extracted JSON block:\n{json_block}\n\n")
                         f.write(f"Full response:\n{text}")
                     logger.warning(f"  原始响应已保存至: {debug_filename}")
                 except Exception as save_error:
                     logger.error(f"  无法保存调试文件: {save_error}")
                 return None
 
-        try:
-            return json.loads(text.strip())
-        except json.JSONDecodeError:
-            pass
+        raw_text = text.strip()
+        parsed = self._loads_json_with_light_repair(raw_text, stage)
+        if parsed is not None:
+            return parsed
 
         logger.warning(f"  ! [Stage: {stage}] 在AI响应中未找到任何有效的JSON块。")
         debug_filename = f"ai_response_debug_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -279,6 +283,33 @@ class LLMEngine:
         except Exception as save_error:
             logger.error(f"  无法保存调试文件: {save_error}")
         return None
+
+    def _loads_json_with_light_repair(self, text: str, stage: str) -> Optional[Dict]:
+        """Parse model JSON, with a narrow repair for common single-character slips."""
+        if not text:
+            return None
+        candidates = [text.strip()]
+        repaired = self._light_repair_json(candidates[0])
+        if repaired != candidates[0]:
+            candidates.append(repaired)
+        for index, candidate in enumerate(candidates):
+            try:
+                parsed = json.loads(candidate)
+                if index > 0:
+                    logger.warning(f"  ! [Stage: {stage}] AI JSON contained minor syntax issues; light repair succeeded.")
+                return parsed if isinstance(parsed, dict) else None
+            except json.JSONDecodeError:
+                continue
+        return None
+
+    @staticmethod
+    def _light_repair_json(text: str) -> str:
+        repaired = text.strip().lstrip("\ufeff")
+        # Model occasionally closes a one-item array as ["text") instead of ["text"].
+        repaired = re.sub(r'(?<=")\s*\)\s*([,\]])', r']\1', repaired)
+        # Standard JSON does not allow trailing commas.
+        repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+        return repaired
 
     def get_token_report(self) -> Dict:
         """汇总 token 使用情况"""

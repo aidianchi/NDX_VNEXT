@@ -21,6 +21,7 @@
 
 ### 2026-05-09
 
+- 修复控制台分段验证闭环：`src/main.py --collect-only` 支持只采集数据；控制台自动填入最近数据 JSON，“已有数据分析”改为只跑 vNext/LLM；workbench 在 yfinance 限流、L5 技术指标缺失时降级生成，不再因 `None.get()` 崩溃。
 - 控制台完成产品化闭环：新增一键启动器 `open_research_console.command` / `src/open_research_console.py`，`control_service` 根地址直接服务控制台，控制台载入上次人工数据，保存人工数据后可一键运行完整报告，自动串联 vNext、native brief 和 workbench。
 - 用 `$impeccable` 对控制台和 brief 完成 shape/craft/polish：控制台改成“运行仪器”层级，brief 改成左侧 sticky 导航 + 右侧长文阅读，默认样式切到 OKLCH token，去掉彩色侧边条惯性，并把 console 纳入桌面/移动视觉回归。
 - 新增本地 `control_service` MVP：提供 `/health` 和 `/run`，只接受白名单命令，日志写入 `output/logs/control_service/`。

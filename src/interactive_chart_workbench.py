@@ -218,6 +218,8 @@ class InteractiveChartWorkbenchGenerator:
         raw_l5 = artifacts.get("analysis_packet", {}).get("raw_data", {}).get("L5", {})
         ma_raw = raw_l5.get("get_multi_scale_ma_position", {}).get("value", {}) if isinstance(raw_l5, dict) else {}
         tech_raw = raw_l5.get("get_qqq_technical_indicators", {}).get("value", {}) if isinstance(raw_l5, dict) else {}
+        ma_raw = ma_raw if isinstance(ma_raw, dict) else {}
+        tech_raw = tech_raw if isinstance(tech_raw, dict) else {}
         l5_card = artifacts.get("l5", {})
         chart_artifact = artifacts.get("chart_time_series", {}) if isinstance(artifacts.get("chart_time_series"), dict) else {}
         all_modules = chart_artifact.get("workbench_modules", {}) if isinstance(chart_artifact.get("workbench_modules"), dict) else {}

@@ -9,11 +9,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from research_console import ResearchConsoleGenerator
 
 
-def test_research_console_generates_first_screen_controls(tmp_path: Path):
+def test_research_console_generates_first_screen_controls(tmp_path: Path, monkeypatch):
     reports_dir = tmp_path / "reports"
     reports_dir.mkdir()
     (reports_dir / "vnext_research_ui_brief_20260505.html").write_text("<html></html>", encoding="utf-8")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    latest_data = data_dir / "data_collected_v9_20260509.json"
+    latest_data.write_text("{}", encoding="utf-8")
 
+    import research_console
+    monkeypatch.setattr(research_console.path_config, "data_dir", str(data_dir))
     generator = ResearchConsoleGenerator(reports_dir=reports_dir)
     output = Path(generator.run(output_path=tmp_path / "console.html"))
     html = output.read_text(encoding="utf-8")
@@ -53,6 +59,8 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path):
     assert "fetch(`${controlOrigin}/run`" in html
     assert "fetch(`${controlOrigin}/manual-data`" in html
     assert "src/console_run_all.py" in html
+    assert "data_collected_v9_20260509.json" in html
+    assert "base.concat(['--collect-only']).join(' ')" in html
     assert "control service" in html
     assert "news_event_ledger" not in html
     assert "数据源健康" in html
@@ -81,3 +89,4 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path):
     assert "manualTemplate" in parsed
     assert "initialManualData" in parsed
     assert "manual_data.local.json" in parsed["manualPath"]
+    assert parsed["latestDataJson"].endswith("data_collected_v9_20260509.json")

@@ -17,6 +17,15 @@ def test_control_service_allows_main_news_command():
     assert "--enable-news" in args
 
 
+def test_control_service_allows_collect_only_command():
+    args = validate_command(
+        "python3 src/main.py --date 2026-05-09 --models deepseek-v4-flash,deepseek-v4-pro --collect-only"
+    )
+
+    assert args[:2] == ["python3", "src/main.py"]
+    assert "--collect-only" in args
+
+
 def test_control_service_rejects_unlisted_entrypoint():
     with pytest.raises(ValueError):
         validate_command("python3 src/unknown.py")

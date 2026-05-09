@@ -225,12 +225,22 @@ def get_vxn_vix_ratio(end_date: str = None) -> Dict[str, Any]:
     vxn_data = get_vxn(end_date=end_date)
     vix_data = get_vix(end_date=end_date)
     ratio, date = None, None
-    vxn_level = vxn_data.get("value", {}).get("level")
-    vix_level = vix_data.get("value", {}).get("level")
+    vxn_value = vxn_data.get("value") if isinstance(vxn_data, dict) else None
+    vix_value = vix_data.get("value") if isinstance(vix_data, dict) else None
+    vxn_level = vxn_value.get("level") if isinstance(vxn_value, dict) else None
+    vix_level = vix_value.get("level") if isinstance(vix_value, dict) else None
 
     if vxn_level and vix_level:
         ratio = round(vxn_level / vix_level, 4)
-        date = max(vxn_data["value"]["date"], vix_data["value"]["date"])
+        date = max(vxn_value.get("date"), vix_value.get("date"))
+
+    if ratio is None:
+        return {
+            "name": "VXN/VIX Ratio",
+            "value": None,
+            "unit": "ratio",
+            "notes": f"Calculated from latest levels unavailable: VXN={vxn_level}, VIX={vix_level}",
+        }
 
     return {
         "name": "VXN/VIX Ratio", "value": {"level": ratio, "date": date}, "unit": "ratio",
@@ -1201,4 +1211,3 @@ def get_gold_wti_ratio(end_date: str = None) -> Dict[str, Any]:
 # =====================================================
 # 工具注册表（整合所有层级函数）
 # =====================================================
-

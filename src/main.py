@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--date", type=str, help="Backtest date in YYYY-MM-DD format.")
     parser.add_argument("--data-json", type=str, help="Use an existing collector output JSON.")
     parser.add_argument("--models", type=str, help="Comma-separated model priority override.")
+    parser.add_argument("--collect-only", action="store_true", help="Only collect market data JSON, then exit before any LLM calls.")
     parser.add_argument("--enable-news", action="store_true", help="Write an independent official news/event sidecar artifact.")
     parser.add_argument("--skip-report", action="store_true", help="Stop after logic_json generation.")
     chart_group = parser.add_mutually_exclusive_group()
@@ -104,6 +105,28 @@ def build_run_dir(backtest_date: Optional[str]) -> str:
     run_dir = os.path.join(path_config.analysis_dir, "vnext", stamp)
     os.makedirs(run_dir, exist_ok=True)
     return run_dir
+
+
+def collector_output_path(backtest_date: Optional[str]) -> str:
+    if backtest_date:
+        return os.path.join(path_config.data_dir, f"data_collected_v9_{backtest_date.replace('-', '')}.json")
+    return os.path.join(path_config.data_dir, "data_collected_v9_live.json")
+
+
+def run_collect_only(args: argparse.Namespace) -> Dict[str, Any]:
+    backtest_date = validate_date(args.date)
+    if args.data_json:
+        raise RuntimeError("--collect-only cannot be combined with --data-json.")
+    collector = DataCollector()
+    data_json = collector.run(backtest_date=backtest_date, enable_news=args.enable_news)
+    summary = {
+        "mode": "collect_only",
+        "data_json": collector_output_path(backtest_date),
+        "indicator_count": len(data_json.get("indicators", [])),
+        "backtest_date": backtest_date,
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return summary
 
 
 def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
@@ -181,6 +204,9 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
 def main() -> int:
     args = parse_args()
     setup_logging()
+    if args.collect_only:
+        run_collect_only(args)
+        return 0
     summary = run_pipeline(args)
     logging.info("vNext run complete: %s", summary["run_dir"])
     logging.info("Final stance: %s | Approval: %s", summary["final_stance"], summary["approval_status"])

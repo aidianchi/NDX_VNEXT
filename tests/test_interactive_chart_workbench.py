@@ -210,3 +210,34 @@ def test_interactive_chart_workbench_prefers_run_time_series_artifact(tmp_path: 
     assert "artifact 同源" in html
     assert '"time": "2026-05-04"' in html
     assert '"close": 104.0' in html
+
+
+def test_interactive_chart_workbench_tolerates_missing_l5_indicator_values(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    _write_json(run_dir / "layer_cards" / "L5.json", {"layer": "L5", "local_conclusion": "L5 数据缺口。"})
+    _write_json(
+        run_dir / "analysis_packet.json",
+        {
+            "raw_data": {
+                "L5": {
+                    "get_multi_scale_ma_position": {"value": None},
+                    "get_qqq_technical_indicators": {"value": None},
+                }
+            }
+        },
+    )
+    rows = [
+        {"time": "2026-05-01", "open": 100, "high": 102, "low": 99, "close": 101, "volume": 1000},
+        {"time": "2026-05-04", "open": 101, "high": 103, "low": 100, "close": 102, "volume": 1100},
+    ]
+
+    generator = InteractiveChartWorkbenchGenerator(
+        reports_dir=str(tmp_path / "reports"),
+        bundle_js="window.LightweightCharts={createChart:function(){return {addSeries:function(){return {setData:function(){}}},timeScale:function(){return {fitContent:function(){}}},subscribeCrosshairMove:function(){},applyOptions:function(){}}},CandlestickSeries:function(){},LineSeries:function(){},HistogramSeries:function(){}};",
+    )
+
+    report_path = generator.run(run_dir, price_rows=rows)
+    html = Path(report_path).read_text(encoding="utf-8")
+
+    assert "L5 数据缺口" in html
+    assert '"current_price": null' in html

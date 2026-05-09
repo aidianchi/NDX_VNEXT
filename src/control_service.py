@@ -29,6 +29,7 @@ ALLOWED_ENTRYPOINTS = {
         "--date": "value",
         "--data-json": "path",
         "--models": "value",
+        "--collect-only": "flag",
         "--skip-report": "flag",
         "--disable-charts": "flag",
         "--enable-legacy-charts": "flag",

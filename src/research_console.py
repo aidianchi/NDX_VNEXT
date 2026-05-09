@@ -66,6 +66,12 @@ class ResearchConsoleGenerator:
         runs = sorted([path for path in run_root.iterdir() if path.is_dir()], key=lambda path: path.stat().st_mtime, reverse=True)
         return runs[:5]
 
+    def _latest_data_jsons(self) -> List[Path]:
+        data_root = Path(path_config.data_dir)
+        if not data_root.exists():
+            return []
+        return sorted(data_root.glob("data_collected_v9_*.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:5]
+
     def _latest_visual_summaries(self) -> List[Path]:
         visual_root = self.reports_dir / "visual_regression"
         if not visual_root.exists():
@@ -107,6 +113,8 @@ class ResearchConsoleGenerator:
         browser_sidecars = self._latest_browser_sidecars()
         latest_report = reports[0] if reports else None
         latest_workbench = workbenches[0] if workbenches else None
+        data_jsons = self._latest_data_jsons()
+        latest_data_json = data_jsons[0] if data_jsons else None
         latest_href = latest_report.resolve().as_uri() if latest_report else "#"
         latest_workbench_href = latest_workbench.resolve().as_uri() if latest_workbench else "#"
         manual_path = get_manual_data_local_path()
@@ -118,6 +126,7 @@ class ResearchConsoleGenerator:
                 "manualPath": manual_path,
                 "latestReport": str(latest_report or ""),
                 "latestRun": str(runs[0] if runs else ""),
+                "latestDataJson": str(latest_data_json or ""),
                 "browserSidecarPath": str((Path(path_config.output_dir) / "browser_sidecar" / "trendonify_ndx_valuation.json")),
             },
             ensure_ascii=False,
@@ -167,7 +176,7 @@ class ResearchConsoleGenerator:
         <div class="field-grid">
           <label>标的 <input id="ticker" type="text" value="NDX / QQQ"></label>
           <label>分析日期 <input id="dataDate" type="date"></label>
-          <label>已有数据 JSON <input id="dataJsonPath" type="text" placeholder="output/data/data_collected_YYYYMMDD_live.json"></label>
+          <label>已有数据 JSON <input id="dataJsonPath" type="text" value="{_escape(str(latest_data_json or ''))}" placeholder="output/data/data_collected_YYYYMMDD_live.json"></label>
           <label>已有 run 目录 <input id="runDirPath" type="text" value="{_escape(str(runs[0]) if runs else '')}" placeholder="output/analysis/vnext/<run_id>"></label>
         </div>
       </article>
@@ -937,7 +946,7 @@ function pathValue(id) {
 }
 
 function modeCommand(mode, models) {
-  const dataPath = pathValue('dataJsonPath');
+  const dataPath = pathValue('dataJsonPath') || data.latestDataJson || '';
   const runDir = pathValue('runDirPath') || 'output/analysis/vnext/<run_id>';
   const modules = Array.from(document.querySelectorAll('input[name="workbenchModule"]:checked')).map(node => node.value).join(',') || 'price_technical';
   const base = ['python3 src/main.py', `--models ${models}`];
@@ -946,7 +955,7 @@ function modeCommand(mode, models) {
     base.push(`--date ${dataDate.value}`);
     full.push(`--date ${dataDate.value}`);
   }
-  if (dataPath) {
+  if (dataPath && mode !== 'collect_data') {
     base.push(`--data-json ${dataPath}`);
     full.push(`--data-json ${dataPath}`);
   }
@@ -973,10 +982,10 @@ function modeCommand(mode, models) {
     return `python3 src/report_visual_regression.py --brief-html output/reports/<brief.html> --workbench-html output/reports/<workbench.html> --console-html output/reports/vnext_research_console.html --output-dir output/reports/visual_regression/<run_id>`;
   }
   if (mode === 'analyze_existing') {
-    return dataPath ? full.join(' ') : '# 请先填写“已有数据 JSON”，再基于同源数据进入 vNext 五层分析。';
+    return dataPath ? base.join(' ') : '# 请先填写“已有数据 JSON”，再基于同源数据进入 vNext 五层分析。';
   }
   if (mode === 'collect_data') {
-    return '# 只采集数据需要后续拆出 collector-only CLI 或本地 control service；当前 vNext CLI 仍以完整 run 产生同源数据。\\n' + base.join(' ');
+    return base.concat(['--collect-only']).join(' ');
   }
   return full.join(' ');
 }

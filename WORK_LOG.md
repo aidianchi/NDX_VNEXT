@@ -6,6 +6,29 @@
 
 ## 2026-05-09
 
+### 修复控制台分段验证与 yfinance 缺数下的 workbench 崩溃
+
+完成内容：
+
+- 排查 `output/logs/control_service/20260509_220522_366.log`：本轮 DeepSeek 从 L1 到 Final 全部成功，实际失败点是 workbench 生成阶段；yfinance 限流导致 L5 技术指标值为 `None`，`src/interactive_chart_workbench.py` 直接 `.get()` 触发崩溃。
+- `src/interactive_chart_workbench.py` 增加 L5 原始指标空值保护：`get_multi_scale_ma_position` 和 `get_qqq_technical_indicators` 的 value 为 `None` 时降级为空字典，workbench 继续生成，缺失指标在 payload 中保持 `null`。
+- `src/main.py` 新增 `--collect-only`，用于只采集市场数据 JSON，不进入 DeepSeek / vNext LLM 链路；便于 VPN 开关下把 yfinance 与 DeepSeek 分开排查。
+- `src/control_service.py` 白名单允许 `src/main.py --collect-only`。
+- `src/research_console.py` 自动填入最近的 `output/data/data_collected_v9_*.json`；“已有数据分析”改为只运行 `src/main.py --data-json ... --skip-report --disable-charts`，不再串联 native brief 和 workbench；“只采集数据”现在生成真正的 `--collect-only` 命令。
+- 保留上一轮 L2 韧性修复：`VXN/VIX` 上游缺数不再抛异常；Layer 自检覆盖字段可从实际 `indicator_analyses` 派生校正；LLM JSON 解析器可修复模型偶发的数组错括号和尾逗号。
+
+验证结果：
+
+- `python3 -m pytest tests/test_control_service.py tests/test_research_console.py tests/test_main_collect_only.py tests/test_interactive_chart_workbench.py tests/test_runtime_resilience.py -q`：15 passed。
+- `python3 src/research_console.py`：重新生成 `output/reports/vnext_research_console.html`。
+- `python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/20260509 --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity`：在 QQQ 仍被 yfinance 限流的情况下成功生成 `output/reports/vnext_interactive_charts_20260509.html`。
+- `python3 -m pytest -q`：124 passed，6 warnings。
+
+结论：
+
+- VPN / 网络路径对 yfinance 与 DeepSeek 产生相反影响是合理的现实假设；当前系统已支持先在适合 yfinance 的网络下“只采集数据”，再切到适合 DeepSeek 的网络下用“已有数据分析”消费同一份 JSON。
+- 本轮 DeepSeek 没有在 L2 JSON 输出处失败；上一轮 L2 格式问题是大上下文、强约束 JSON 与模型偶发语法失误叠加，不能简单归因于单个示范或模型“完全不行”。系统已增加窄口径解析修复和合约自校正。
+
 ### 产品化研究控制台启动与完整运行闭环
 
 完成内容：
