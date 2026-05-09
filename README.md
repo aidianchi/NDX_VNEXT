@@ -106,6 +106,14 @@ python src/report_visual_regression.py --brief-html output/reports/<brief>.html 
 
 ## 当前输出入口
 
+- 一键开启控制台：双击仓库根目录的 `open_research_console.command`。它会启动本地 control service、生成控制台页面并打开浏览器。
+- 命令行开启控制台：
+
+```bash
+python src/open_research_console.py
+```
+
+- 备选手动方式：先运行 `python src/control_service.py`，再打开 `http://127.0.0.1:8765`。服务根地址现在会直接显示控制台。
 - 默认阅读入口：`output/reports/vnext_research_ui_brief_*.html`。
 - 研究控制台：`output/reports/vnext_research_console.html`。
 - 交互 workbench：`output/reports/vnext_interactive_charts_*.html`。

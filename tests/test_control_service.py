@@ -34,3 +34,12 @@ def test_control_service_allows_browser_sidecar_command():
 
     assert args[:2] == ["python3", "src/browser_sidecar.py"]
     assert "--trusted" in args
+
+
+def test_control_service_allows_full_console_flow_command():
+    args = validate_command(
+        "python3 src/console_run_all.py --date 2026-05-09 --models deepseek-v4-flash,deepseek-v4-pro --workbench-modules price_technical,liquidity --skip-legacy-report --enable-news"
+    )
+
+    assert args[:2] == ["python3", "src/console_run_all.py"]
+    assert "--workbench-modules" in args

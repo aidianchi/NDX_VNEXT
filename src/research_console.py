@@ -9,10 +9,10 @@ from typing import Any, Dict, List, Optional
 
 try:
     from .config import path_config
-    from .manual_data import DEFAULT_MANUAL_DATA, get_manual_data_local_path
+    from .manual_data import DEFAULT_MANUAL_DATA, get_active_manual_data_path, get_manual_data_local_path, load_manual_data
 except ImportError:
     from config import path_config
-    from manual_data import DEFAULT_MANUAL_DATA, get_manual_data_local_path
+    from manual_data import DEFAULT_MANUAL_DATA, get_active_manual_data_path, get_manual_data_local_path, load_manual_data
 
 
 def _escape(value: Any) -> str:
@@ -89,6 +89,15 @@ class ResearchConsoleGenerator:
         template["date"] = datetime.now().strftime("%Y-%m-%d")
         return json.dumps(template, ensure_ascii=False, indent=2)
 
+    def _initial_manual_data_json(self) -> str:
+        active_path = get_active_manual_data_path()
+        if not active_path:
+            return self._manual_template_json()
+        data = load_manual_data(active_path)
+        if not data.get("date"):
+            data["date"] = datetime.now().strftime("%Y-%m-%d")
+        return json.dumps(data, ensure_ascii=False, indent=2)
+
     def _render(self) -> str:
         manual_template = self._manual_template_json()
         reports = self._latest_reports()
@@ -101,9 +110,11 @@ class ResearchConsoleGenerator:
         latest_href = latest_report.resolve().as_uri() if latest_report else "#"
         latest_workbench_href = latest_workbench.resolve().as_uri() if latest_workbench else "#"
         manual_path = get_manual_data_local_path()
+        initial_manual_data = self._initial_manual_data_json()
         payload = json.dumps(
             {
                 "manualTemplate": manual_template,
+                "initialManualData": initial_manual_data,
                 "manualPath": manual_path,
                 "latestReport": str(latest_report or ""),
                 "latestRun": str(runs[0] if runs else ""),
@@ -138,10 +149,10 @@ class ResearchConsoleGenerator:
     </section>
 
     <nav class="workflow-rail" aria-label="研究控制台流程">
-      <a href="#setup-panel"><b>01</b><span>设定对象</span></a>
-      <a href="#manual-panel"><b>02</b><span>校准输入</span></a>
-      <a href="#run-panel"><b>03</b><span>生成命令</span></a>
-      <a href="#health-panel"><b>04</b><span>审计边界</span></a>
+      <a href="#setup-panel"><b>01</b><span>对象与日期</span></a>
+      <a href="#manual-panel"><b>02</b><span>数据校准</span></a>
+      <a href="#run-panel"><b>03</b><span>运行报告</span></a>
+      <a href="#health-panel"><b>04</b><span>健康审计</span></a>
     </nav>
 
     <section class="control-grid">
@@ -165,8 +176,8 @@ class ResearchConsoleGenerator:
         <div class="panel-head">
           <span>02</span>
           <div>
-            <h2>人工 / Wind 数据</h2>
-            <p>结构化录入高信任锚。空字段不会覆盖自动采集结果。</p>
+            <h2>人工数据与数据源校准</h2>
+            <p>上次保存的人工锚会自动带入；这里同时决定哪些外部来源可以进入本轮校准。</p>
           </div>
         </div>
         <div class="manual-form">
@@ -211,8 +222,32 @@ class ResearchConsoleGenerator:
           <textarea id="manualJson" spellcheck="false">{_escape(manual_template)}</textarea>
         </details>
         <div class="button-row">
-          <button type="button" id="downloadManual">保存人工模板</button>
+          <button type="button" id="downloadManual">保存人工数据</button>
           <button type="button" id="resetManual">恢复模板</button>
+        </div>
+        <div class="source-calibration" aria-label="数据源校准">
+          <div>
+            <h3>数据源选择</h3>
+            <p>人工/Wind 是最高信任校准源；新闻和 bb-browser 只作为显式 sidecar 或人工确认来源。</p>
+          </div>
+          <div class="toggle-line">
+            <label><input id="enableNews" type="checkbox"> 生成官方事件底账</label>
+            <label><input id="trustBbBrowser" type="checkbox"> 信任 bb-browser 来源</label>
+          </div>
+          <div class="browser-sidecar">
+            <h3>bb-browser 估值 sidecar</h3>
+            <div class="browser-actions">
+              <a href="https://trendonify.com/united-states/stock-market/nasdaq-100/pe-ratio">查看 PE 页</a>
+              <a href="https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio">查看 Forward PE 页</a>
+              {self._links(browser_sidecars, '还没有 browser sidecar JSON。')}
+            </div>
+            <pre id="browserCommandPreview">python3 src/browser_sidecar.py --source trendonify_valuation --output output/browser_sidecar/trendonify_ndx_valuation.json</pre>
+            <div class="button-row">
+              <button type="button" id="runBrowserSidecar">单独拿数据</button>
+              <button type="button" id="openBrowserSidecar">打开输出位置</button>
+            </div>
+            <p id="browserStatus" class="run-status">bb-browser 结果必须人工查看和确认；不会自动进入 L1-L5。</p>
+          </div>
         </div>
         <p class="path-note">目标文件：{_escape(manual_path)}</p>
       </article>
@@ -241,36 +276,20 @@ class ResearchConsoleGenerator:
         </div>
       </article>
 
-      <article class="panel source-panel">
+      <article class="panel run-panel" id="run-panel">
         <div class="panel-head">
           <span>04</span>
           <div>
-            <h2>数据源 / 功能开关</h2>
-            <p>把可选功能集中管理；旧版 HTML 仅保留兼容入口，默认不建议使用。</p>
+            <h2>运行完整报告</h2>
+            <p>一次运行会保存人工数据，执行 vNext，生成 native brief，并生成 workbench。</p>
           </div>
         </div>
         <div class="toggle-line">
           <label><input id="skipLegacyReport" type="checkbox" checked> 不生成旧版 HTML</label>
           <label><input id="disableCharts" type="checkbox" checked> 不生成旧版 charts</label>
-          <label><input id="enableNews" type="checkbox"> 生成官方事件底账</label>
-          <label><input id="trustBbBrowser" type="checkbox"> 信任 bb-browser 来源</label>
           <label><input id="enableLegacyCharts" type="checkbox"> 临时启用旧版 charts</label>
         </div>
-        <p class="legacy-note">旧版 HTML 是过渡期兼容产物。Trendonify 暂缓进入主数据链；如勾选信任 bb-browser，它只作为人工确认来源写入模板来源标记。</p>
-        <div class="browser-sidecar">
-          <h3>bb-browser 估值 sidecar</h3>
-          <div class="browser-actions">
-            <a href="https://trendonify.com/united-states/stock-market/nasdaq-100/pe-ratio">查看 PE 页</a>
-            <a href="https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio">查看 Forward PE 页</a>
-            {self._links(browser_sidecars, '还没有 browser sidecar JSON。')}
-          </div>
-          <pre id="browserCommandPreview">python3 src/browser_sidecar.py --source trendonify_valuation --output output/browser_sidecar/trendonify_ndx_valuation.json</pre>
-          <div class="button-row">
-            <button type="button" id="runBrowserSidecar">单独拿数据</button>
-            <button type="button" id="openBrowserSidecar">打开输出位置</button>
-          </div>
-          <p id="browserStatus" class="run-status">bb-browser 结果必须人工查看和确认；不会自动进入 L1-L5。</p>
-        </div>
+        <p class="legacy-note">旧版 HTML 是过渡期兼容产物；默认只生成 vNext artifacts、native brief 和 workbench。</p>
         <div class="module-picker" aria-label="交互工作台模块">
           <h3>交互工作台模块</h3>
           <label><input type="checkbox" name="workbenchModule" value="price_technical" checked> 价格技术</label>
@@ -279,32 +298,13 @@ class ResearchConsoleGenerator:
           <label><input type="checkbox" name="workbenchModule" value="breadth_concentration" checked> 广度集中度</label>
           <label><input type="checkbox" name="workbenchModule" value="liquidity" checked> 流动性</label>
         </div>
-        <label>L5 默认预设
-          <select id="l5Preset">
-            <option value="simple_price">简洁价格</option>
-            <option value="trend_ma">趋势均线</option>
-            <option value="volatility_bands">波动区间</option>
-            <option value="volume_confirmation">量价确认</option>
-            <option value="full_stack">全部指标</option>
-          </select>
-        </label>
-      </article>
-
-      <article class="panel run-panel" id="run-panel">
-        <div class="panel-head">
-          <span>05</span>
-          <div>
-            <h2>输出与工作台</h2>
-            <p>浏览器默认不执行本地任务，只生成可审计命令和入口。</p>
-          </div>
-        </div>
         <div class="run-actions">
           <button class="command-button" type="button" id="buildCommand">生成运行命令</button>
-          <button class="run-now-button" type="button" id="runNow">运行</button>
+          <button class="run-now-button" type="button" id="runNow">运行完整报告</button>
           <button type="button" id="refreshJob">刷新状态</button>
           <button type="button" id="cancelJob">取消任务</button>
         </div>
-        <p id="runStatus" class="run-status">运行按钮会调用本机 127.0.0.1 的 vNext control service；未启动服务时不会执行任何命令。</p>
+        <p id="runStatus" class="run-status">运行按钮会调用本机 127.0.0.1 的 vNext control service；它会先保存人工数据，再串联生成报告。</p>
         <pre id="jobStatusPreview">尚无任务。</pre>
         <pre id="runCommandPreview">python3 src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts</pre>
         <pre id="workbenchCommandPreview">python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/&lt;run_id&gt; --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity</pre>
@@ -330,7 +330,7 @@ class ResearchConsoleGenerator:
 
       <article class="panel health-panel" id="health-panel">
         <div class="panel-head">
-          <span>06</span>
+          <span>05</span>
           <div>
             <h2>运行日志 / 健康 / 安全</h2>
             <p>一键运行通过本地 control service 执行白名单命令；新闻只生成独立事件底账，不进入 L1-L5 输入上下文。</p>
@@ -534,13 +534,14 @@ button:hover {
   margin-top: 18px;
   align-items: start;
 }
-.setup-panel,
-.model-panel,
-.source-panel { grid-column: span 1; }
-.manual-panel { grid-column: 1 / -1; }
-.run-panel { grid-column: span 2; }
+.setup-panel { order: 1; grid-column: span 1; }
+.model-panel { order: 2; grid-column: span 2; }
+.manual-panel { order: 3; grid-column: 1 / -1; }
+.run-panel { order: 4; grid-column: span 2; }
+.health-panel { order: 5; }
 @media (max-width: 1080px) {
   .control-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .model-panel,
   .manual-panel,
   .run-panel,
   .health-panel { grid-column: 1 / -1; }
@@ -773,6 +774,17 @@ h3 {
   font-size: 12px;
   line-height: 1.6;
 }
+.source-calibration {
+  margin-top: 14px;
+  border-top: 1px solid var(--rule);
+  padding-top: 14px;
+}
+.source-calibration p {
+  margin: 2px 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
 pre {
   overflow: auto;
   border: 1px solid var(--rule);
@@ -863,9 +875,49 @@ const browserStatus = document.getElementById('browserStatus');
 const browserCommandPreview = document.getElementById('browserCommandPreview');
 let activeJobId = '';
 let activeBrowserJobId = '';
+const controlOrigin = window.location.protocol.startsWith('http') ? window.location.origin : 'http://127.0.0.1:8765';
 
-dataDate.value = new Date().toISOString().slice(0, 10);
-document.querySelector('[data-manual-field="date"]').value = dataDate.value;
+function parseJson(text, fallback) {
+  try { return JSON.parse(text || ''); } catch (error) { return fallback; }
+}
+
+function setManualField(name, value) {
+  const node = document.querySelector(`[data-manual-field="${name}"]`);
+  if (!node) return;
+  node.value = value === null || value === undefined ? '' : String(value);
+}
+
+function manualMetric(payload, key) {
+  return ((payload.metrics || {})[key] || {});
+}
+
+function applyManualPayloadToForm(payload) {
+  const dateValue = payload.date || new Date().toISOString().slice(0, 10);
+  dataDate.value = dateValue;
+  setManualField('date', dateValue);
+  const valuation = manualMetric(payload, 'get_ndx_pe_and_earnings_yield');
+  const erp = manualMetric(payload, 'get_damodaran_us_implied_erp');
+  const quality = valuation.data_quality || {};
+  setManualField('source', valuation.source_name || erp.source_name || '');
+  setManualField('confidence', ((quality.coverage || {}).confidence) || '');
+  const valuationValue = valuation.value || {};
+  const erpValue = erp.value || {};
+  setManualField('pe', valuationValue.PE_TTM);
+  setManualField('pe_percentile_5y', valuationValue.PE_TTM_percentile_5y);
+  setManualField('pe_percentile_10y', valuationValue.PE_TTM_percentile_10y);
+  setManualField('pb', valuationValue.PB);
+  setManualField('pb_percentile_5y', valuationValue.PB_percentile_5y);
+  setManualField('pb_percentile_10y', valuationValue.PB_percentile_10y);
+  setManualField('ps', valuationValue.PS_TTM);
+  setManualField('ps_percentile_5y', valuationValue.PS_TTM_percentile_5y);
+  setManualField('ps_percentile_10y', valuationValue.PS_TTM_percentile_10y);
+  setManualField('erp', erpValue.manual_erp);
+  setManualField('erp_percentile_5y', erpValue.manual_erp_percentile_5y);
+  setManualField('erp_percentile_10y', erpValue.manual_erp_percentile_10y);
+}
+
+const initialManualPayload = parseJson(data.initialManualData, parseJson(data.manualTemplate, {}));
+applyManualPayloadToForm(initialManualPayload);
 
 function currentModels() {
   const selected = document.querySelector('input[name="modelMode"]:checked');
@@ -887,28 +939,46 @@ function pathValue(id) {
 function modeCommand(mode, models) {
   const dataPath = pathValue('dataJsonPath');
   const runDir = pathValue('runDirPath') || 'output/analysis/vnext/<run_id>';
+  const modules = Array.from(document.querySelectorAll('input[name="workbenchModule"]:checked')).map(node => node.value).join(',') || 'price_technical';
   const base = ['python3 src/main.py', `--models ${models}`];
-  if (dataPath) base.push(`--data-json ${dataPath}`);
-  if (document.getElementById('skipLegacyReport').checked) base.push('--skip-report');
+  const full = ['python3 src/console_run_all.py', `--models ${models}`, `--workbench-modules ${modules}`];
+  if (dataDate.value) {
+    base.push(`--date ${dataDate.value}`);
+    full.push(`--date ${dataDate.value}`);
+  }
+  if (dataPath) {
+    base.push(`--data-json ${dataPath}`);
+    full.push(`--data-json ${dataPath}`);
+  }
+  if (document.getElementById('skipLegacyReport').checked) {
+    base.push('--skip-report');
+    full.push('--skip-legacy-report');
+  }
   if (document.getElementById('disableCharts').checked && !document.getElementById('enableLegacyCharts').checked) base.push('--disable-charts');
-  if (document.getElementById('enableLegacyCharts').checked) base.push('--enable-legacy-charts');
-  if (document.getElementById('enableNews').checked) base.push('--enable-news');
+  if (document.getElementById('enableLegacyCharts').checked) {
+    base.push('--enable-legacy-charts');
+    full.push('--enable-legacy-charts');
+  }
+  if (document.getElementById('enableNews').checked) {
+    base.push('--enable-news');
+    full.push('--enable-news');
+  }
   if (mode === 'native_brief') {
     return `python3 src/agent_analysis/vnext_reporter.py --run-dir ${runDir} --template brief`;
   }
   if (mode === 'workbench_only') {
-    return `python3 src/interactive_chart_workbench.py --run-dir ${runDir} --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity`;
+    return `python3 src/interactive_chart_workbench.py --run-dir ${runDir} --modules ${modules}`;
   }
   if (mode === 'visual_check') {
     return `python3 src/report_visual_regression.py --brief-html output/reports/<brief.html> --workbench-html output/reports/<workbench.html> --console-html output/reports/vnext_research_console.html --output-dir output/reports/visual_regression/<run_id>`;
   }
   if (mode === 'analyze_existing') {
-    return dataPath ? base.concat(['--skip-report']).join(' ') : '# 请先填写“已有数据 JSON”，再基于同源数据进入 vNext 五层分析。';
+    return dataPath ? full.join(' ') : '# 请先填写“已有数据 JSON”，再基于同源数据进入 vNext 五层分析。';
   }
   if (mode === 'collect_data') {
     return '# 只采集数据需要后续拆出 collector-only CLI 或本地 control service；当前 vNext CLI 仍以完整 run 产生同源数据。\\n' + base.join(' ');
   }
-  return base.join(' ');
+  return full.join(' ');
 }
 
 function numberOrNull(value) {
@@ -918,12 +988,11 @@ function numberOrNull(value) {
 }
 
 function buildManualPayload() {
-  const payload = JSON.parse(data.manualTemplate);
+  const payload = parseJson(data.manualTemplate, {});
   payload.active = true;
   const fields = {};
   document.querySelectorAll('[data-manual-field]').forEach(input => {
     const raw = input.value.trim();
-    if (!raw) return;
     fields[input.dataset.manualField] = input.type === 'number' ? numberOrNull(raw) : raw;
   });
   if (document.getElementById('trustBbBrowser').checked && !fields.source) {
@@ -935,7 +1004,7 @@ function buildManualPayload() {
       usage_boundary: 'Manual confirmation source only; not an automatic L4 main-chain source.'
     };
   }
-  if (fields.date) payload.date = fields.date;
+  payload.date = fields.date || dataDate.value || payload.date || '';
   const valuation = payload.metrics.get_ndx_pe_and_earnings_yield;
   const gap = payload.metrics.get_equity_risk_premium;
   const erp = payload.metrics.get_damodaran_us_implied_erp;
@@ -948,24 +1017,18 @@ function buildManualPayload() {
     }
   };
   [valuation, gap, erp].forEach(setMetricSource);
-  if (fields.pe !== undefined) valuation.value.PE_TTM = fields.pe;
-  if (fields.pb !== undefined) valuation.value.PB = fields.pb;
-  if (fields.ps !== undefined) valuation.value.PS_TTM = fields.ps;
-  if (fields.pe_percentile_5y !== undefined) valuation.value.PE_TTM_percentile_5y = fields.pe_percentile_5y;
-  if (fields.pe_percentile_10y !== undefined) valuation.value.PE_TTM_percentile_10y = fields.pe_percentile_10y;
-  if (fields.pb_percentile_5y !== undefined) valuation.value.PB_percentile_5y = fields.pb_percentile_5y;
-  if (fields.pb_percentile_10y !== undefined) valuation.value.PB_percentile_10y = fields.pb_percentile_10y;
-  if (fields.ps_percentile_5y !== undefined) valuation.value.PS_TTM_percentile_5y = fields.ps_percentile_5y;
-  if (fields.ps_percentile_10y !== undefined) valuation.value.PS_TTM_percentile_10y = fields.ps_percentile_10y;
-  if (fields.erp !== undefined) {
-    erp.value.manual_erp = fields.erp;
-  }
-  if (fields.erp_percentile_5y !== undefined) {
-    erp.value.manual_erp_percentile_5y = fields.erp_percentile_5y;
-  }
-  if (fields.erp_percentile_10y !== undefined) {
-    erp.value.manual_erp_percentile_10y = fields.erp_percentile_10y;
-  }
+  valuation.value.PE_TTM = fields.pe;
+  valuation.value.PB = fields.pb;
+  valuation.value.PS_TTM = fields.ps;
+  valuation.value.PE_TTM_percentile_5y = fields.pe_percentile_5y;
+  valuation.value.PE_TTM_percentile_10y = fields.pe_percentile_10y;
+  valuation.value.PB_percentile_5y = fields.pb_percentile_5y;
+  valuation.value.PB_percentile_10y = fields.pb_percentile_10y;
+  valuation.value.PS_TTM_percentile_5y = fields.ps_percentile_5y;
+  valuation.value.PS_TTM_percentile_10y = fields.ps_percentile_10y;
+  erp.value.manual_erp = fields.erp;
+  erp.value.manual_erp_percentile_5y = fields.erp_percentile_5y;
+  erp.value.manual_erp_percentile_10y = fields.erp_percentile_10y;
   return payload;
 }
 
@@ -991,7 +1054,7 @@ function syncManualPreview() {
   const payload = buildManualPayload();
   const warnings = validateManualPayload(payload);
   manualJson.value = JSON.stringify(payload, null, 2);
-  validation.textContent = warnings.length ? warnings.join('；') : '人工数据预览已同步，空字段不会覆盖。';
+  validation.textContent = warnings.length ? warnings.join('；') : '人工数据预览已同步，空值会清除对应人工覆盖。';
   validation.classList.toggle('is-warning', Boolean(warnings.length));
 }
 
@@ -1005,7 +1068,7 @@ function buildCommand() {
   browserCommandPreview.textContent = `python3 src/browser_sidecar.py --source trendonify_valuation --output output/browser_sidecar/trendonify_ndx_valuation.json${document.getElementById('trustBbBrowser').checked ? ' --trusted' : ''}`;
 }
 
-document.querySelectorAll('input[name="modelMode"], input[name="runMode"], #customModels, #dataJsonPath, #runDirPath, #skipLegacyReport, #disableCharts, #enableLegacyCharts, #enableNews, #trustBbBrowser, #l5Preset, input[name="workbenchModule"]')
+document.querySelectorAll('input[name="modelMode"], input[name="runMode"], #customModels, #dataJsonPath, #runDirPath, #skipLegacyReport, #disableCharts, #enableLegacyCharts, #enableNews, #trustBbBrowser, input[name="workbenchModule"]')
   .forEach((node) => node.addEventListener('change', buildCommand));
 document.getElementById('trustBbBrowser').addEventListener('change', syncManualPreview);
 document.querySelectorAll('#customModels, #dataJsonPath, #runDirPath').forEach((node) => node.addEventListener('input', buildCommand));
@@ -1017,7 +1080,36 @@ dataDate.addEventListener('change', () => {
 });
 
 document.getElementById('buildCommand').addEventListener('click', buildCommand);
+async function saveManualData(statusNode) {
+  syncManualPreview();
+  try {
+    const response = await fetch(`${controlOrigin}/manual-data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ manual_json: manualJson.value }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    if (statusNode) {
+      statusNode.textContent = `人工数据已保存：${result.path || data.manualPath}`;
+      statusNode.className = 'run-status is-good';
+    }
+    return true;
+  } catch (error) {
+    if (statusNode) {
+      statusNode.textContent = '未连接 control service，已保留页面预览；运行时会再次尝试保存。';
+      statusNode.className = 'run-status is-warning';
+    }
+    return false;
+  }
+}
+
 async function submitControlCommand(command, statusNode) {
+  if (!command || command.startsWith('#')) {
+    statusNode.textContent = command || '没有可运行命令。';
+    statusNode.className = 'run-status is-warning';
+    return null;
+  }
   statusNode.textContent = '正在尝试连接本机 vNext control service...';
   statusNode.className = 'run-status';
   try {
@@ -1027,7 +1119,7 @@ async function submitControlCommand(command, statusNode) {
       statusNode.classList.add('is-warning');
       return null;
     }
-    const response = await fetch('http://127.0.0.1:8765/run', {
+    const response = await fetch(`${controlOrigin}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1037,14 +1129,14 @@ async function submitControlCommand(command, statusNode) {
         manual_json: manualJson.value,
       }),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.message || `HTTP ${response.status}`);
     const job = result.job || {};
     statusNode.textContent = `${result.message || '已提交运行。'} job_id=${job.job_id || ''}`;
     statusNode.classList.add('is-good');
     return job.job_id || null;
   } catch (error) {
-    statusNode.textContent = '未检测到本机 control service，因此没有执行命令。请先启动受控服务，或使用下方命令手动运行。';
+    statusNode.textContent = `没有执行命令：${error.message || '未检测到本机 control service。请先启动受控服务。'}`;
     statusNode.classList.add('is-warning');
     return null;
   }
@@ -1058,7 +1150,7 @@ async function refreshJob(jobId, statusNode) {
   }
   let result;
   try {
-    const response = await fetch(`http://127.0.0.1:8765/status/${encodeURIComponent(jobId)}`);
+    const response = await fetch(`${controlOrigin}/status/${encodeURIComponent(jobId)}`);
     result = await response.json();
   } catch (error) {
     statusNode.textContent = '无法连接 control service，状态刷新失败。';
@@ -1093,7 +1185,7 @@ document.getElementById('cancelJob').addEventListener('click', async () => {
     runStatus.classList.add('is-warning');
     return;
   }
-  await fetch(`http://127.0.0.1:8765/cancel/${encodeURIComponent(activeJobId)}`, { method: 'POST' });
+  await fetch(`${controlOrigin}/cancel/${encodeURIComponent(activeJobId)}`, { method: 'POST' });
   refreshJob(activeJobId, runStatus);
 });
 document.getElementById('runBrowserSidecar').addEventListener('click', async () => {
@@ -1105,12 +1197,12 @@ document.getElementById('openBrowserSidecar').addEventListener('click', () => {
   window.open(`file://${data.browserSidecarPath}`, '_blank');
 });
 document.getElementById('resetManual').addEventListener('click', () => {
-  manualJson.value = data.manualTemplate;
-  document.querySelectorAll('[data-manual-field]').forEach(input => { input.value = ''; });
-  document.querySelector('[data-manual-field="date"]').value = dataDate.value;
+  applyManualPayloadToForm(parseJson(data.manualTemplate, {}));
   syncManualPreview();
 });
-document.getElementById('downloadManual').addEventListener('click', () => {
+document.getElementById('downloadManual').addEventListener('click', async () => {
+  const saved = await saveManualData(runStatus);
+  if (saved) return;
   const blob = new Blob([manualJson.value], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -1119,8 +1211,22 @@ document.getElementById('downloadManual').addEventListener('click', () => {
   link.click();
   URL.revokeObjectURL(url);
 });
-syncManualPreview();
-buildCommand();
+async function loadManualDataFromService() {
+  try {
+    const response = await fetch(`${controlOrigin}/manual-data`);
+    const result = await response.json();
+    if (response.ok && result.ok && result.manual_data) {
+      applyManualPayloadToForm(result.manual_data);
+      validation.textContent = `已载入上次人工数据：${result.path || data.manualPath}`;
+    }
+  } catch (error) {
+    // Static file fallback: embedded data from generation time is already applied.
+  }
+}
+loadManualDataFromService().finally(() => {
+  syncManualPreview();
+  buildCommand();
+});
 """
 
 

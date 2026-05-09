@@ -15,8 +15,12 @@ from urllib.parse import urlparse
 
 try:
     from .config import path_config
+    from .manual_data import get_manual_data_local_path, load_manual_data, save_manual_data
+    from .research_console import ResearchConsoleGenerator
 except ImportError:
     from config import path_config
+    from manual_data import get_manual_data_local_path, load_manual_data, save_manual_data
+    from research_console import ResearchConsoleGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +63,15 @@ ALLOWED_ENTRYPOINTS = {
         "--no-rss": "flag",
         "--max-events-per-source": "value",
         "--lookback-days": "value",
+    },
+    "src/console_run_all.py": {
+        "--date": "value",
+        "--data-json": "path",
+        "--models": "value",
+        "--workbench-modules": "value",
+        "--skip-legacy-report": "flag",
+        "--enable-legacy-charts": "flag",
+        "--enable-news": "flag",
     },
 }
 
@@ -247,6 +260,23 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: Dict[s
     handler.wfile.write(body)
 
 
+def _html_response(handler: BaseHTTPRequestHandler, status: int, body_text: str) -> None:
+    body = body_text.encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "text/html; charset=utf-8")
+    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _save_manual_json(raw_manual_json: str) -> Dict[str, Any]:
+    if not raw_manual_json:
+        raise ValueError("manual_json is empty.")
+    payload = json.loads(raw_manual_json)
+    return save_manual_data(payload)
+
+
 class ControlServiceHandler(BaseHTTPRequestHandler):
     store = JobStore()
 
@@ -254,10 +284,30 @@ class ControlServiceHandler(BaseHTTPRequestHandler):
         _json_response(self, 200, {"ok": True})
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path == "/health":
+        parsed = urlparse(self.path)
+        if parsed.path in {"", "/", "/console"}:
+            try:
+                _html_response(self, 200, ResearchConsoleGenerator()._render())
+            except Exception as exc:
+                _json_response(self, 500, {"ok": False, "message": str(exc)})
+            return
+        if parsed.path == "/health":
             _json_response(self, 200, {"ok": True, "service": "vnext_control_service"})
             return
-        parsed = urlparse(self.path)
+        if parsed.path == "/manual-data":
+            try:
+                _json_response(
+                    self,
+                    200,
+                    {
+                        "ok": True,
+                        "path": get_manual_data_local_path(),
+                        "manual_data": load_manual_data(),
+                    },
+                )
+            except Exception as exc:
+                _json_response(self, 500, {"ok": False, "message": str(exc)})
+            return
         if parsed.path.startswith("/status/"):
             job_id = parsed.path.rsplit("/", 1)[-1]
             try:
@@ -271,6 +321,20 @@ class ControlServiceHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/manual-data":
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8")
+            try:
+                payload = json.loads(raw or "{}")
+                manual_data = _save_manual_json(str(payload.get("manual_json", "")))
+                _json_response(
+                    self,
+                    200,
+                    {"ok": True, "path": get_manual_data_local_path(), "manual_data": manual_data},
+                )
+            except Exception as exc:
+                _json_response(self, 400, {"ok": False, "message": str(exc)})
+            return
         if parsed.path.startswith("/cancel/"):
             job_id = parsed.path.rsplit("/", 1)[-1]
             try:
@@ -289,6 +353,9 @@ class ControlServiceHandler(BaseHTTPRequestHandler):
             payload = json.loads(raw or "{}")
             if not payload.get("confirmed"):
                 raise ValueError("Run request must include confirmed=true after an explicit user confirmation.")
+            manual_json = str(payload.get("manual_json", "") or "")
+            if manual_json:
+                _save_manual_json(manual_json)
             command = str(payload.get("command", "")).strip()
             args = validate_command(command)
             job = self.store.create_job(args)

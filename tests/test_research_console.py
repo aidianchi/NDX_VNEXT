@@ -20,7 +20,7 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path):
 
     assert "NDX vNext 研究控制台" in html
     assert "运行对象与日期" in html
-    assert "人工 / Wind 数据" in html
+    assert "人工数据与数据源校准" in html
     assert "当前 PE" in html
     assert "PE 10Y 分位" in html
     assert "ERP 5Y 分位" in html
@@ -38,20 +38,21 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path):
     assert "deepseek-v4-flash" in html
     assert "deepseek-v4-pro" in html
     assert "自定义顺序" in html
-    assert "数据源 / 功能开关" in html
-    assert "旧版 HTML 仅保留兼容入口" in html
+    assert "数据源选择" in html
     assert "不生成旧版 HTML" in html
-    assert "旧版 HTML 是过渡期兼容产物" in html
+    assert "默认只生成 vNext artifacts、native brief 和 workbench" in html
     assert "生成官方事件底账" in html
     assert "--enable-news" in html
-    assert "Trendonify 暂缓" in html
-    assert "L5 默认预设" in html
-    assert "输出与工作台" in html
+    assert "bb-browser 只作为显式 sidecar" in html
+    assert "运行完整报告" in html
     assert "运行日志 / 健康 / 安全" in html
     assert "一键运行安全方案" in html
-    assert "运行按钮会调用本机 127.0.0.1 的 vNext control service" in html
+    assert "它会先保存人工数据，再串联生成报告" in html
     assert 'id="runNow"' in html
-    assert "fetch('http://127.0.0.1:8765/run'" in html
+    assert "const controlOrigin" in html
+    assert "fetch(`${controlOrigin}/run`" in html
+    assert "fetch(`${controlOrigin}/manual-data`" in html
+    assert "src/console_run_all.py" in html
     assert "control service" in html
     assert "news_event_ledger" not in html
     assert "数据源健康" in html
@@ -66,7 +67,7 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path):
     assert "流动性" in html
     assert "--modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity" in html
     assert "打开最新报告" in html
-    assert "保存人工模板" in html
+    assert "保存人工数据" in html
     assert "vnext_research_ui_brief_20260505.html" in html
     assert "manual_data.local.json" in html
     assert "runCommandPreview" in html
@@ -78,4 +79,5 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path):
     assert "&quot;" not in console_data.group(1)
     parsed = json.loads(console_data.group(1))
     assert "manualTemplate" in parsed
+    assert "initialManualData" in parsed
     assert "manual_data.local.json" in parsed["manualPath"]

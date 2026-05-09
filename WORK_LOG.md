@@ -6,6 +6,25 @@
 
 ## 2026-05-09
 
+### 产品化研究控制台启动与完整运行闭环
+
+完成内容：
+
+- 新增 `open_research_console.command` 和 `src/open_research_console.py`：双击或运行 Python 启动器即可生成控制台、启动本地 control service，并打开 `http://127.0.0.1:8765`。
+- `src/control_service.py` 的根地址 `/` 和 `/console` 现在直接返回研究控制台，不再让用户看到 `{"ok": false, "message": "Not found"}`；新增 `/manual-data` GET/POST，用于读取和保存 `config/manual_data.local.json`。
+- 新增 `src/console_run_all.py`：控制台“运行完整报告”会保存人工数据，执行 vNext 主链，生成 native brief，并生成 interactive workbench；运行摘要写入 run 目录和 `output/logs/control_service/latest_console_run.json`。
+- 控制台把“人工数据”和“数据源选择”合并为“人工数据与数据源校准”：上次保存的人工 PE/PB/PS/ERP 与分位会自动回填，官方事件底账和 bb-browser 信任选择与人工校准放在同一区域。
+- 控制台运行命令现在携带分析日期、模型、数据 JSON、workbench modules 和 legacy 开关；默认主路径从单步 `src/main.py` 改为完整产品流 `src/console_run_all.py`。
+- README 增加明确开启方式：双击 `open_research_console.command`，或命令行运行 `python src/open_research_console.py`，或手动启动 service 后访问 `http://127.0.0.1:8765`。
+
+验证结果：
+
+- `python3 -m py_compile src/control_service.py src/research_console.py src/console_run_all.py src/open_research_console.py`：通过。
+- `python3 -m pytest -q tests/test_research_console.py tests/test_control_service.py`：6 passed。
+- 临时启动 `python3 src/control_service.py --port 8766`：`GET /` 返回控制台 HTML，`GET /manual-data` 返回当前人工数据 JSON；验证后已关闭临时服务。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_research_ui_brief_20260505_20260506_075229.html --workbench-html output/reports/vnext_interactive_charts_20260506.html --console-html output/reports/vnext_research_console.html --output-dir output/reports/visual_regression/20260509_console_product_flow`：通过。
+- `python3 -m pytest -q`：118 passed，6 warnings。
+
 ### 完成 NEXT_STEPS P2：用 Impeccable shape/craft 打磨控制台与 brief
 
 完成内容：
