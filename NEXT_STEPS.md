@@ -11,11 +11,6 @@
 
 | 优先级 | 类别 | 待办 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
-| P1 | 核心系统 | control service 增加任务状态轮询、取消和运行前确认 | 当前本地服务已经能受控启动命令，但用户还需要看见任务是否还在跑、能否中止、失败在哪里 | 增加 `/status/<job_id>`、`/cancel/<job_id>`；控制台显示任务状态、日志路径和失败原因；保留命令白名单 |
-| P1 | 数据基础 | 扩展新闻事件底账的来源治理 | MVP 已有官方源，但还需要稳定的来源分级、去重、时间窗口和事件类型，避免新闻变成噪音 | 每条事件有 source tier、event_type、published_at、symbols/layers、去重 id、source_errors；新闻仍不进入 L1-L5 runtime context |
-| P1 | 核心系统 | 设计事件底账如何被 Bridge/Thesis 可选消费 | 新闻不应污染五层分析，但可以作为催化剂和解释背景进入跨层综合 | 新增 `event_ref`，与 `evidence_ref` 分离；Bridge/Thesis 只能写“解释/触发/观察”，不能写“证明” |
-| P1 | 数据基础 | 用真实 run 验证 `HY CCC & Lower - BB OAS` | 该指标能补 L2 尾部信用压力，但 FRED/ICE 数据有可用窗口和许可边界 | 最新真实 run 中指标成功；artifact 有 data_quality；workbench 波动信用模块显示对应序列 |
-| P2 | 数据基础 | 把 Trendonify / `bb-browser` 估值百分位做成隔离 sidecar | 直连 Trendonify 仍会 403，但真实浏览器可通过页面文本拿到 PE / Forward PE 及多窗口百分位；需要把这种能力放在人工确认或 sidecar，而不是默认主数据链 | 新增可复现 sidecar 命令或受控脚本；输出 source tier、抓取时间、页面 URL、失败模式；主链仍不自动依赖浏览器绕过 |
 | P2 | 输出体验 | 用 `$impeccable` 对控制台和 brief 做 shape，再进入 polish/craft | `PRODUCT.md` / `DESIGN.md` 已补齐，可以开始真正的审美、排版和交互优化 | 先确认 shape brief，再改 UI；桌面/移动视觉回归通过；不再只做局部 CSS 微调 |
 | P2 | 核心系统 | L4 prompt 专用摘要 | 1M 上下文模型能容忍约 18 万字符，但当前 L4 重复塞长序列，成本、速度和注意力效率不理想 | 长序列留在 artifact，prompt 只保留 latest/start/end/count/percentile/关键拐点；L4 prompt chars 明显下降 |
 
@@ -37,8 +32,13 @@
 - `bb-browser` 已确认安装并可用，但本轮 Invesco 官方 JSON 端点可直接稳定访问，暂不把 `bb-browser` 接入主数据链；它仍保留为 P2 人工调研/sidecar 试验项。
 - 控制台人工 ERP 输入新增 5Y / 10Y 分位，并写入独立 Manual/Wind ERP reference；不再把 ERP 输入混入 NDX 简式收益差距。
 - Trendonify 研究更新：直连 requests 与 Jina Reader 仍返回 Cloudflare 验证页；`bb-browser` 启动 daemon 后可用真实浏览器拿到页面文本。实测 2026-05-08 页面：Trailing PE 38.07、10Y percentile 100；Forward PE 23.73、5Y percentile 40、10Y percentile 57.5、20Y percentile 71.2。Parser 已能结构化 1Y/5Y/10Y/20Y/since-inception 多窗口百分位。
+- control service 补齐 `/status/<job_id>`、`/cancel/<job_id>` 和运行前确认；控制台新增状态刷新、取消任务、日志尾部和失败原因展示。
+- 新闻事件底账升级到 `news_event_ledger_v2`：每条事件有 `source_tier`、`event_type`、`published_at`、`symbols`、`layers`、`dedupe_id`，并按时间窗口去重；事件仍不进入 L1-L5 runtime context。
+- AnalysisPacket / Bridge / Thesis 新增 `event_ref` 通道，与 `evidence_ref` 分离；Bridge/Thesis 只能把事件写成解释、触发或观察背景，不能写成证明。
+- 真实数据 run 验证 `HY CCC & Lower - BB OAS`：`output/analysis/vnext/20260509_134942/analysis_packet.json` 中该指标成功，最新值 7.44，`data_quality` 完整；同 run 的 `chart_time_series.json` 有 `HY_QUALITY_SPREAD` 786 行，波动信用 workbench 已生成 `output/reports/vnext_interactive_charts_20260509_hy_quality.html`。
+- Trendonify / `bb-browser` 已实现隔离 sidecar：`src/browser_sidecar.py` 输出 `output/browser_sidecar/trendonify_ndx_valuation.json`，控制台有“信任 bb-browser 来源”勾选框、页面跳转、单独拿数据按钮和输出入口；主 L4 requests 链仍不自动启动浏览器。
 - 补齐 `PRODUCT.md` 和 `DESIGN.md`，`$impeccable` context loader 已确认可读取。
-- 全量测试：`python3 -m pytest -q`，114 passed。
+- 全量测试：`python3 -m pytest -q`，117 passed。
 
 ### 2026-05-07
 
@@ -65,7 +65,7 @@
 ## 暂缓或只观察
 
 - OpenBB：暂缓整个平台接入。当前只学习它的 provider metadata、coverage discovery 和数据治理思路。
-- Trendonify：已验证真实浏览器 sidecar 可读，但主链仍不硬绕 403，不静默退回 yfinance；下一步只做隔离 sidecar 和来源治理。
+- Trendonify：真实浏览器 sidecar 已落地；主链仍不硬绕 403，不静默退回 yfinance。后续只观察采集稳定性、来源信任流程和是否需要人工一键导入。
 - 正式前端框架化：在 brief / console / workbench 信息架构稳定前继续保持 self-contained HTML。
 - 新闻 LLM 解读：当前只做官方事件底账，不做泛新闻情绪和摘要。
 - 交易执行、组合建议、自动下单：不属于 vNext 当前范围。

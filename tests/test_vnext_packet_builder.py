@@ -101,6 +101,34 @@ def test_packet_builder_groups_data_and_generates_candidate_links():
     assert "L3_L5" in link_types
 
 
+def test_packet_builder_keeps_event_refs_separate_from_layer_data():
+    builder = AnalysisPacketBuilder()
+    event_ledger = {
+        "events": [
+            {
+                "event_id": "event:abc123",
+                "dedupe_id": "abc123",
+                "source_id": "federal_reserve_press_all",
+                "source_name": "Federal Reserve Press Releases",
+                "source_tier": "official_macro",
+                "event_type": "policy_or_financial_conditions",
+                "title": "Federal Reserve issues FOMC statement",
+                "url": "https://www.federalreserve.gov/example.htm",
+                "published_at": "Fri, 08 May 2026 18:00:00 GMT",
+                "layers": ["L1", "L2", "L4"],
+                "symbols": [],
+                "confidence": "high",
+            }
+        ]
+    }
+
+    packet = builder.build(_mock_data_json(), manual_overrides={"active": False, "metrics": {}}, event_ledger=event_ledger)
+
+    assert "event:abc123" in packet.event_refs
+    assert packet.event_refs["event:abc123"]["usage_boundary"].startswith("event_ref only")
+    assert "event:abc123" not in packet.raw_data["L1"]
+
+
 def test_l4_state_uses_real_percentile_not_yfinance_current_pe_alone():
     data = _mock_data_json()
     for indicator in data["indicators"]:

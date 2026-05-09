@@ -927,16 +927,20 @@ def _parse_trendonify_historical_percentiles(text: str) -> Dict[str, Dict[str, A
     """Extract Trendonify's published comparison-table percentiles without inferring missing values."""
     period_keys = {
         "1 year": "1y",
+        "1 years": "1y",
         "5 year": "5y",
+        "5 years": "5y",
         "10 year": "10y",
+        "10 years": "10y",
         "20 year": "20y",
+        "20 years": "20y",
     }
     percentiles: Dict[str, Dict[str, Any]] = {}
     row_pattern = re.compile(
-        r"(?im)^\s*(1\s+Year|5\s+Year|10\s+Year|20\s+Year|Since\s+[A-Za-z]+\s+[0-9]{4})"
+        r"(?im)^\s*(1\s+Years?|5\s+Years?|10\s+Years?|20\s+Years?|Since\s+[A-Za-z]+\s+[0-9]{4})"
         r"\s+([0-9]+(?:\.[0-9]+)?)"
         r"\s+([0-9]+(?:\.[0-9]+)?)"
-        r"\s+([A-Za-z][A-Za-z -]*)(?:\s*$|\n)",
+        r"\s*%?\s+([A-Za-z][A-Za-z -]*)(?:\s*$|\n)",
     )
     for match in row_pattern.finditer(text):
         label = re.sub(r"\s+", " ", match.group(1).strip()).lower()

@@ -324,6 +324,7 @@ def test_governance_input_preserves_thesis_support_chain_evidence_outside_confli
         {
             "chain_description": "Earnings yield is the thesis support evidence.",
             "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+            "event_refs": [],
             "weight": 0.35,
         }
     ]

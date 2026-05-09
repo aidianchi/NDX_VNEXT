@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
-from urllib.parse import quote
 from xml.etree import ElementTree
 
 import requests
@@ -84,14 +85,17 @@ HIGH_RELEVANCE_KEYWORDS = [
 @dataclass
 class NewsEvent:
     event_id: str
+    dedupe_id: str
     source_id: str
     source_name: str
+    source_tier: str
     authority_tier: str
     event_type: str
     title: str
     url: str
     published_at: str
     relevance_tags: List[str]
+    layers: List[str]
     symbols: List[str]
     confidence: str
     notes: str
@@ -99,14 +103,17 @@ class NewsEvent:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "event_id": self.event_id,
+            "dedupe_id": self.dedupe_id,
             "source_id": self.source_id,
             "source_name": self.source_name,
+            "source_tier": self.source_tier,
             "authority_tier": self.authority_tier,
             "event_type": self.event_type,
             "title": self.title,
             "url": self.url,
             "published_at": self.published_at,
             "relevance_tags": self.relevance_tags,
+            "layers": self.layers,
             "symbols": self.symbols,
             "confidence": self.confidence,
             "notes": self.notes,
@@ -115,6 +122,40 @@ class NewsEvent:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _parse_event_datetime(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    text = value.strip()
+    try:
+        parsed = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        parsed = None
+    if parsed is None:
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _dedupe_id(source_id: str, title: str, url: str, published_at: str) -> str:
+    published_date = ""
+    parsed = _parse_event_datetime(published_at)
+    if parsed is not None:
+        published_date = parsed.date().isoformat()
+    key = "|".join(
+        [
+            source_id.strip().lower(),
+            " ".join(title.strip().lower().split()),
+            url.strip().lower(),
+            published_date,
+        ]
+    )
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 
 def _default_fetch_text(url: str, headers: Dict[str, str], timeout: int) -> str:
@@ -167,10 +208,17 @@ def _parse_rss_items(xml_text: str) -> List[Dict[str, str]]:
 class NewsEventLedgerBuilder:
     """Build an independent event ledger; never mutates L1-L5 runtime context."""
 
-    def __init__(self, fetch_text: FetchText = _default_fetch_text, max_events_per_source: int = 8, timeout: int = 12) -> None:
+    def __init__(
+        self,
+        fetch_text: FetchText = _default_fetch_text,
+        max_events_per_source: int = 8,
+        timeout: int = 12,
+        lookback_days: int = 45,
+    ) -> None:
         self.fetch_text = fetch_text
         self.max_events_per_source = max_events_per_source
         self.timeout = timeout
+        self.lookback_days = lookback_days
 
     def build(self, output_path: str | Path, include_sec: bool = True, include_rss: bool = True) -> Dict[str, Any]:
         events: List[NewsEvent] = []
@@ -183,13 +231,21 @@ class NewsEventLedgerBuilder:
             sec_events, sec_errors = self._collect_sec_events()
             events.extend(sec_events)
             source_errors.extend(sec_errors)
+        events = self._dedupe_and_window(events)
 
         payload = {
-            "schema_version": "news_event_ledger_v1",
+            "schema_version": "news_event_ledger_v2",
             "generated_at_utc": _utc_now_iso(),
             "policy": {
                 "runtime_context_rule": "This sidecar is not injected into L1-L5 layer-local prompts.",
-                "usage_rule": "Bridge/Thesis may cite event_ref only as catalyst/background, never as numeric indicator evidence.",
+                "usage_rule": "Bridge/Thesis may cite event_ref only as catalyst/background/observation, never as numeric indicator evidence or proof.",
+                "event_ref_rule": "event_ref is intentionally separate from evidence_ref.",
+            },
+            "governance": {
+                "source_tiers": ["official_macro", "official_filing"],
+                "dedupe_key": "source_id + normalized title + url + published date",
+                "lookback_days": self.lookback_days,
+                "event_fields": ["source_tier", "event_type", "published_at", "symbols", "layers", "dedupe_id", "source_errors"],
             },
             "sources": {
                 "rss": [source["source_id"] for source in OFFICIAL_RSS_SOURCES] if include_rss else [],
@@ -202,6 +258,20 @@ class NewsEventLedgerBuilder:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return payload
+
+    def _dedupe_and_window(self, events: List[NewsEvent]) -> List[NewsEvent]:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max(0, self.lookback_days))
+        deduped: Dict[str, NewsEvent] = {}
+        for event in events:
+            parsed = _parse_event_datetime(event.published_at)
+            if parsed is not None and self.lookback_days > 0 and parsed < cutoff:
+                continue
+            deduped.setdefault(event.dedupe_id, event)
+        return sorted(
+            deduped.values(),
+            key=lambda item: _parse_event_datetime(item.published_at) or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -221,17 +291,21 @@ class NewsEventLedgerBuilder:
                         continue
                     title_l = title.lower()
                     confidence = "high" if any(keyword in title_l for keyword in HIGH_RELEVANCE_KEYWORDS) else "medium"
+                    dedupe_id = _dedupe_id(source["source_id"], title, item.get("url", ""), item.get("published_at", ""))
                     events.append(
                         NewsEvent(
-                            event_id=f"{source['source_id']}:{quote(title[:120])}",
+                            event_id=f"event:{dedupe_id}",
+                            dedupe_id=dedupe_id,
                             source_id=source["source_id"],
                             source_name=source["source_name"],
+                            source_tier="official_macro",
                             authority_tier=source["authority_tier"],
                             event_type=source["event_type"],
                             title=title,
                             url=item.get("url", ""),
                             published_at=item.get("published_at", ""),
                             relevance_tags=list(source["relevance_tags"]),
+                            layers=list(source["relevance_tags"]),
                             symbols=[],
                             confidence=confidence,
                             notes="Official RSS item; treat as catalyst/background only.",
@@ -264,17 +338,22 @@ class NewsEventLedgerBuilder:
                     accession_compact = accession.replace("-", "")
                     document = primary_documents[idx]
                     filing_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_compact}/{document}"
+                    title = f"{symbol} {form} filed {filing_dates[idx]}"
+                    dedupe_id = _dedupe_id("sec_submissions", title, filing_url, filing_dates[idx])
                     events.append(
                         NewsEvent(
-                            event_id=f"sec:{symbol}:{accession}",
+                            event_id=f"event:{dedupe_id}",
+                            dedupe_id=dedupe_id,
                             source_id="sec_submissions",
                             source_name="SEC EDGAR Company Submissions",
+                            source_tier="official_filing",
                             authority_tier="official_filing",
                             event_type="issuer_filing",
-                            title=f"{symbol} {form} filed {filing_dates[idx]}",
+                            title=title,
                             url=filing_url,
                             published_at=filing_dates[idx],
                             relevance_tags=["L3", "L4"],
+                            layers=["L3", "L4"],
                             symbols=[symbol],
                             confidence="high",
                             notes="Official issuer filing for M7 constituent; not a numeric indicator.",
@@ -295,13 +374,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-sec", action="store_true", help="Skip SEC company submissions.")
     parser.add_argument("--no-rss", action="store_true", help="Skip official macro RSS feeds.")
     parser.add_argument("--max-events-per-source", type=int, default=8)
+    parser.add_argument("--lookback-days", type=int, default=45)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    payload = NewsEventLedgerBuilder(max_events_per_source=args.max_events_per_source).build(
+    payload = NewsEventLedgerBuilder(max_events_per_source=args.max_events_per_source, lookback_days=args.lookback_days).build(
         args.output,
         include_sec=not args.no_sec,
         include_rss=not args.no_rss,

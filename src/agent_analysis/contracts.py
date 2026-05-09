@@ -411,6 +411,10 @@ class CrossLayerClaim(BaseModel):
         description="因果机制解释（第一性原理）",
         max_length=300
     )
+    event_refs: List[str] = Field(
+        default_factory=list,
+        description="可选事件引用；只能作为催化剂、背景或观察，不能替代 evidence_refs"
+    )
 
 
 class Conflict(BaseModel):
@@ -451,6 +455,7 @@ class TypedConflict(BaseModel):
     implication: str = Field(..., description="对 NDX 判断的影响")
     involved_layers: List[Layer] = Field(default_factory=list, description="涉及层级")
     evidence_refs: List[str] = Field(default_factory=list, description="支撑该冲突的 evidence refs")
+    event_refs: List[str] = Field(default_factory=list, description="可选事件 refs，仅作解释/触发/观察背景")
     falsifiers: List[str] = Field(default_factory=list, description="会削弱或推翻该冲突的证据")
     status: Literal["unresolved", "confirmed", "weakened"] = Field(
         "unresolved",
@@ -466,6 +471,7 @@ class ResonanceChain(BaseModel):
     description: str = Field(..., description="共振描述")
     involved_layers: List[Layer] = Field(default_factory=list, description="涉及层级")
     evidence_refs: List[str] = Field(default_factory=list, description="证据引用")
+    event_refs: List[str] = Field(default_factory=list, description="可选事件 refs，仅作解释/触发/观察背景")
     confirming_indicators: List[str] = Field(default_factory=list, description="确认该共振链的指标或观察点")
     mechanism: str = Field("", description="共振成立的机制")
     implication: str = Field("", description="对 NDX 的含义")
@@ -482,6 +488,7 @@ class TransmissionPath(BaseModel):
     target_layer: Layer = Field(..., description="传导终点层级")
     mechanism: str = Field(..., description="传导机制")
     evidence_refs: List[str] = Field(default_factory=list, description="证据引用")
+    event_refs: List[str] = Field(default_factory=list, description="可选事件 refs，仅作解释/触发/观察背景")
     implication: str = Field("", description="对 NDX 的含义")
     confidence: Confidence = Field(Confidence.MEDIUM, description="置信度")
     lag_hint: Optional[str] = Field(None, description="传导可能的时间滞后")
@@ -559,6 +566,11 @@ class BridgeMemo(BaseModel):
         description="关键不确定性因素"
     )
 
+    event_refs: List[str] = Field(
+        default_factory=list,
+        description="Bridge 选择保留的事件引用；与 evidence_refs 分离，只能作为背景或催化剂"
+    )
+
 
 class LayerSynthesisItem(BaseModel):
     """Thesis 输入用的压缩层级摘要。"""
@@ -587,6 +599,7 @@ class BridgeSynthesisItem(BaseModel):
     resonance_chains: List[Dict[str, Any]] = Field(default_factory=list, description="Bridge v2 resonance chains")
     transmission_paths: List[Dict[str, Any]] = Field(default_factory=list, description="Bridge v2 transmission paths")
     unresolved_questions: List[str] = Field(default_factory=list, description="Bridge v2 unresolved questions")
+    event_refs: List[str] = Field(default_factory=list, description="Bridge 使用的事件引用")
     implication_for_ndx: str = Field("", description="对 NDX 的综合影响")
     key_uncertainties: List[str] = Field(default_factory=list, description="关键不确定性")
 
@@ -619,6 +632,10 @@ class SynthesisPacket(BaseModel):
         default_factory=dict,
         description="可追溯证据索引，键形如 L1.get_10y_real_rate"
     )
+    event_index: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="可选事件索引，键形如 event:<dedupe_id>；不得作为数值证据"
+    )
     synthesis_guidance: List[str] = Field(
         default_factory=list,
         description="给 Thesis 的约束：只能整合，不得重做指标分析或抹平冲突"
@@ -641,6 +658,10 @@ class KeySupportChain(BaseModel):
     evidence_refs: List[str] = Field(
         ...,
         description="证据引用，如 ['L3.breadth_expansion', 'L5.trend_strength']"
+    )
+    event_refs: List[str] = Field(
+        default_factory=list,
+        description="可选事件引用；只能说明催化剂/背景/观察，不能替代 evidence_refs"
     )
     weight: float = Field(
         ...,
@@ -870,6 +891,11 @@ class GovernanceInputPacket(BaseModel):
         description="与高严重度冲突和 Thesis 支撑链相关的 evidence_index 子集"
     )
 
+    key_event_refs: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="与高严重度冲突和 Thesis 支撑链相关的 event_index 子集；不能作为数值证据"
+    )
+
     # ── 已知数据缺口（尤其是 L3 广度缺失） ──
     known_data_gaps: List[str] = Field(default_factory=list, description="已知数据缺口")
 
@@ -1047,6 +1073,11 @@ class AnalysisPacket(BaseModel):
     candidate_cross_layer_links: List[CandidateCrossLayerLink] = Field(
         default_factory=list,
         description="候选跨层关系，供 Bridge Agent 参考"
+    )
+
+    event_refs: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="独立事件底账索引；Bridge/Thesis 可选使用，L1-L5 不接收"
     )
 
     # 人工覆盖

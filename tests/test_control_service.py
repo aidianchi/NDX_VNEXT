@@ -25,3 +25,12 @@ def test_control_service_rejects_unlisted_entrypoint():
 def test_control_service_rejects_unsafe_path():
     with pytest.raises(ValueError):
         validate_command("python3 src/agent_analysis/vnext_reporter.py --run-dir ../../secret --template brief")
+
+
+def test_control_service_allows_browser_sidecar_command():
+    args = validate_command(
+        "python3 src/browser_sidecar.py --source trendonify_valuation --output output/browser_sidecar/trendonify_ndx_valuation.json --trusted"
+    )
+
+    assert args[:2] == ["python3", "src/browser_sidecar.py"]
+    assert "--trusted" in args

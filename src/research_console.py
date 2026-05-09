@@ -72,6 +72,12 @@ class ResearchConsoleGenerator:
             return []
         return sorted(visual_root.glob("**/visual_regression_summary.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:4]
 
+    def _latest_browser_sidecars(self) -> List[Path]:
+        sidecar_root = Path(path_config.output_dir) / "browser_sidecar"
+        if not sidecar_root.exists():
+            return []
+        return sorted(sidecar_root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:4]
+
     def _links(self, paths: List[Path], empty_text: str) -> str:
         if not paths:
             return f'<span class="empty-link">{_escape(empty_text)}</span>'
@@ -89,6 +95,7 @@ class ResearchConsoleGenerator:
         workbenches = self._latest_workbenches()
         runs = self._latest_runs()
         visual_summaries = self._latest_visual_summaries()
+        browser_sidecars = self._latest_browser_sidecars()
         latest_report = reports[0] if reports else None
         latest_workbench = workbenches[0] if workbenches else None
         latest_href = latest_report.resolve().as_uri() if latest_report else "#"
@@ -100,6 +107,7 @@ class ResearchConsoleGenerator:
                 "manualPath": manual_path,
                 "latestReport": str(latest_report or ""),
                 "latestRun": str(runs[0] if runs else ""),
+                "browserSidecarPath": str((Path(path_config.output_dir) / "browser_sidecar" / "trendonify_ndx_valuation.json")),
             },
             ensure_ascii=False,
         )
@@ -238,10 +246,24 @@ class ResearchConsoleGenerator:
           <label><input id="skipLegacyReport" type="checkbox" checked> 不生成旧版 HTML</label>
           <label><input id="disableCharts" type="checkbox" checked> 不生成旧版 charts</label>
           <label><input id="enableNews" type="checkbox"> 生成官方事件底账</label>
-          <label><input id="enableTrendonify" type="checkbox" disabled> Trendonify 暂缓</label>
+          <label><input id="trustBbBrowser" type="checkbox"> 信任 bb-browser 来源</label>
           <label><input id="enableLegacyCharts" type="checkbox"> 临时启用旧版 charts</label>
         </div>
-        <p class="legacy-note">旧版 HTML 是过渡期兼容产物：线性长页、审计跳转弱、审美已过时。vNext 默认入口应是 native brief 和 workbench。</p>
+        <p class="legacy-note">旧版 HTML 是过渡期兼容产物。Trendonify 暂缓进入主数据链；如勾选信任 bb-browser，它只作为人工确认来源写入模板来源标记。</p>
+        <div class="browser-sidecar">
+          <h3>bb-browser 估值 sidecar</h3>
+          <div class="browser-actions">
+            <a href="https://trendonify.com/united-states/stock-market/nasdaq-100/pe-ratio">查看 PE 页</a>
+            <a href="https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio">查看 Forward PE 页</a>
+            {self._links(browser_sidecars, '还没有 browser sidecar JSON。')}
+          </div>
+          <pre id="browserCommandPreview">python3 src/browser_sidecar.py --source trendonify_valuation --output output/browser_sidecar/trendonify_ndx_valuation.json</pre>
+          <div class="button-row">
+            <button type="button" id="runBrowserSidecar">单独拿数据</button>
+            <button type="button" id="openBrowserSidecar">打开输出位置</button>
+          </div>
+          <p id="browserStatus" class="run-status">bb-browser 结果必须人工查看和确认；不会自动进入 L1-L5。</p>
+        </div>
         <div class="module-picker" aria-label="交互工作台模块">
           <h3>交互工作台模块</h3>
           <label><input type="checkbox" name="workbenchModule" value="price_technical" checked> 价格技术</label>
@@ -272,8 +294,11 @@ class ResearchConsoleGenerator:
         <div class="run-actions">
           <button class="command-button" type="button" id="buildCommand">生成运行命令</button>
           <button class="run-now-button" type="button" id="runNow">运行</button>
+          <button type="button" id="refreshJob">刷新状态</button>
+          <button type="button" id="cancelJob">取消任务</button>
         </div>
         <p id="runStatus" class="run-status">运行按钮会调用本机 127.0.0.1 的 vNext control service；未启动服务时不会执行任何命令。</p>
+        <pre id="jobStatusPreview">尚无任务。</pre>
         <pre id="runCommandPreview">python3 src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts</pre>
         <pre id="workbenchCommandPreview">python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/&lt;run_id&gt; --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity</pre>
         <div class="artifact-grid">
@@ -309,7 +334,7 @@ class ResearchConsoleGenerator:
           <div><b>Manual/Wind</b><span class="watch">可选高信任输入</span></div>
           <div><b>Damodaran ERPbymonth.xlsx</b><span class="good">官方月度优先</span></div>
           <div><b>WorldPERatio</b><span class="good">相对位置辅助</span></div>
-          <div><b>Trendonify</b><span class="watch">暂缓，不静默 fallback</span></div>
+          <div><b>Trendonify / bb-browser</b><span class="watch">隔离 sidecar，人工信任</span></div>
           <div><b>LLM diagnostics</b><span class="good">run 内写入诊断</span></div>
         </div>
         <div class="safety-box">
@@ -695,6 +720,27 @@ pre {
   line-height: 1.65;
   font-size: 13px;
 }
+.browser-sidecar {
+  margin-top: 16px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 12px;
+  background: #fffefa;
+}
+.browser-sidecar h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+.browser-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.browser-actions a {
+  color: var(--accent);
+  font-size: 13px;
+}
 """
 
     def _js(self) -> str:
@@ -706,6 +752,11 @@ const preview = document.getElementById('runCommandPreview');
 const workbenchPreview = document.getElementById('workbenchCommandPreview');
 const validation = document.getElementById('manualValidation');
 const runStatus = document.getElementById('runStatus');
+const jobStatusPreview = document.getElementById('jobStatusPreview');
+const browserStatus = document.getElementById('browserStatus');
+const browserCommandPreview = document.getElementById('browserCommandPreview');
+let activeJobId = '';
+let activeBrowserJobId = '';
 
 dataDate.value = new Date().toISOString().slice(0, 10);
 document.querySelector('[data-manual-field="date"]').value = dataDate.value;
@@ -769,6 +820,15 @@ function buildManualPayload() {
     if (!raw) return;
     fields[input.dataset.manualField] = input.type === 'number' ? numberOrNull(raw) : raw;
   });
+  if (document.getElementById('trustBbBrowser').checked && !fields.source) {
+    fields.source = 'bb-browser / Trendonify sidecar (user trusted)';
+    payload.browser_sidecar = {
+      source: 'trendonify_ndx_valuation',
+      output_path: data.browserSidecarPath,
+      user_trusted: true,
+      usage_boundary: 'Manual confirmation source only; not an automatic L4 main-chain source.'
+    };
+  }
   if (fields.date) payload.date = fields.date;
   const valuation = payload.metrics.get_ndx_pe_and_earnings_yield;
   const gap = payload.metrics.get_equity_risk_premium;
@@ -836,10 +896,12 @@ function buildCommand() {
   const modules = Array.from(document.querySelectorAll('input[name="workbenchModule"]:checked')).map(node => node.value);
   const runDir = pathValue('runDirPath') || 'output/analysis/vnext/<run_id>';
   workbenchPreview.textContent = `python3 src/interactive_chart_workbench.py --run-dir ${runDir} --modules ${modules.join(',') || 'price_technical'}`;
+  browserCommandPreview.textContent = `python3 src/browser_sidecar.py --source trendonify_valuation --output output/browser_sidecar/trendonify_ndx_valuation.json${document.getElementById('trustBbBrowser').checked ? ' --trusted' : ''}`;
 }
 
-document.querySelectorAll('input[name="modelMode"], input[name="runMode"], #customModels, #dataJsonPath, #runDirPath, #skipLegacyReport, #disableCharts, #enableLegacyCharts, #enableNews, #l5Preset, input[name="workbenchModule"]')
+document.querySelectorAll('input[name="modelMode"], input[name="runMode"], #customModels, #dataJsonPath, #runDirPath, #skipLegacyReport, #disableCharts, #enableLegacyCharts, #enableNews, #trustBbBrowser, #l5Preset, input[name="workbenchModule"]')
   .forEach((node) => node.addEventListener('change', buildCommand));
+document.getElementById('trustBbBrowser').addEventListener('change', syncManualPreview);
 document.querySelectorAll('#customModels, #dataJsonPath, #runDirPath').forEach((node) => node.addEventListener('input', buildCommand));
 document.querySelectorAll('[data-manual-field]').forEach((node) => node.addEventListener('input', syncManualPreview));
 dataDate.addEventListener('change', () => {
@@ -849,29 +911,92 @@ dataDate.addEventListener('change', () => {
 });
 
 document.getElementById('buildCommand').addEventListener('click', buildCommand);
-document.getElementById('runNow').addEventListener('click', async () => {
-  buildCommand();
-  const command = preview.textContent.trim();
-  runStatus.textContent = '正在尝试连接本机 vNext control service...';
-  runStatus.className = 'run-status';
+async function submitControlCommand(command, statusNode) {
+  statusNode.textContent = '正在尝试连接本机 vNext control service...';
+  statusNode.className = 'run-status';
   try {
+    const confirmed = window.confirm('确认通过本机 control service 执行这条白名单命令？');
+    if (!confirmed) {
+      statusNode.textContent = '已取消，未执行命令。';
+      statusNode.classList.add('is-warning');
+      return null;
+    }
     const response = await fetch('http://127.0.0.1:8765/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         command,
+        confirmed: true,
         workbench_command: workbenchPreview.textContent.trim(),
         manual_json: manualJson.value,
       }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const result = await response.json();
-    runStatus.textContent = result.message || '已提交运行。请在服务日志里查看进度。';
-    runStatus.classList.add('is-good');
+    const job = result.job || {};
+    statusNode.textContent = `${result.message || '已提交运行。'} job_id=${job.job_id || ''}`;
+    statusNode.classList.add('is-good');
+    return job.job_id || null;
   } catch (error) {
-    runStatus.textContent = '未检测到本机 control service，因此没有执行命令。下一步需要启动受控服务，或使用下方命令手动运行。';
-    runStatus.classList.add('is-warning');
+    statusNode.textContent = '未检测到本机 control service，因此没有执行命令。请先启动受控服务，或使用下方命令手动运行。';
+    statusNode.classList.add('is-warning');
+    return null;
   }
+}
+
+async function refreshJob(jobId, statusNode) {
+  if (!jobId) {
+    statusNode.textContent = '尚无可刷新的任务。';
+    statusNode.classList.add('is-warning');
+    return;
+  }
+  let result;
+  try {
+    const response = await fetch(`http://127.0.0.1:8765/status/${encodeURIComponent(jobId)}`);
+    result = await response.json();
+  } catch (error) {
+    statusNode.textContent = '无法连接 control service，状态刷新失败。';
+    statusNode.className = 'run-status is-warning';
+    return;
+  }
+  const job = result.job || {};
+  jobStatusPreview.textContent = JSON.stringify({
+    job_id: job.job_id,
+    status: job.status,
+    exit_code: job.exit_code,
+    log_path: job.log_path,
+    failure_reason: job.failure_reason,
+    log_tail: job.log_tail
+  }, null, 2);
+  statusNode.textContent = `任务状态：${job.status || 'unknown'}；日志：${job.log_path || '无'}`;
+  statusNode.className = 'run-status';
+  if (job.status === 'completed') statusNode.classList.add('is-good');
+  if (job.status === 'failed' || job.status === 'canceled') statusNode.classList.add('is-warning');
+}
+
+document.getElementById('runNow').addEventListener('click', async () => {
+  buildCommand();
+  const command = preview.textContent.trim();
+  activeJobId = await submitControlCommand(command, runStatus) || activeJobId;
+  if (activeJobId) refreshJob(activeJobId, runStatus);
+});
+document.getElementById('refreshJob').addEventListener('click', () => refreshJob(activeJobId, runStatus));
+document.getElementById('cancelJob').addEventListener('click', async () => {
+  if (!activeJobId) {
+    runStatus.textContent = '尚无可取消的任务。';
+    runStatus.classList.add('is-warning');
+    return;
+  }
+  await fetch(`http://127.0.0.1:8765/cancel/${encodeURIComponent(activeJobId)}`, { method: 'POST' });
+  refreshJob(activeJobId, runStatus);
+});
+document.getElementById('runBrowserSidecar').addEventListener('click', async () => {
+  buildCommand();
+  activeBrowserJobId = await submitControlCommand(browserCommandPreview.textContent.trim(), browserStatus) || activeBrowserJobId;
+  if (activeBrowserJobId) refreshJob(activeBrowserJobId, browserStatus);
+});
+document.getElementById('openBrowserSidecar').addEventListener('click', () => {
+  window.open(`file://${data.browserSidecarPath}`, '_blank');
 });
 document.getElementById('resetManual').addEventListener('click', () => {
   manualJson.value = data.manualTemplate;

@@ -6,6 +6,33 @@
 
 ## 2026-05-09
 
+### 完成所有 P1：运行控制、事件底账治理、event_ref、HY 真实验证与 bb-browser sidecar
+
+完成内容：
+
+- `control_service` 增加 `/status/<job_id>` 与 `/cancel/<job_id>`，任务状态持久化到 `output/logs/control_service/*.json`，状态响应包含日志路径、日志尾部、退出码和失败原因；`/run` 现在要求显式 `confirmed=true`，继续保留命令白名单。
+- 研究控制台新增运行状态刷新、取消任务、日志/失败原因展示；运行前会弹出确认。控制台还新增 `bb-browser` 估值 sidecar 区：可跳转 Trendonify PE / Forward PE 页面，可通过 control service 单独拿数据，可勾选“信任 bb-browser 来源”并把来源标记写入人工模板。
+- 新增 `src/browser_sidecar.py`：只采集明确允许的 Trendonify NDX Trailing PE 与 Forward PE 页面，输出 `schema_version=browser_sidecar_v1`、source tier、采集时间、URL、解析字段、页面摘要、失败模式和 `user_trusted` 标记；主 L4 requests 链仍不自动调用浏览器。
+- `browser_sidecar` 真实 smoke：输出 `output/browser_sidecar/trendonify_ndx_valuation.json`，两页均可用。Trailing PE 38.07，1Y/5Y/10Y/20Y 分位均为 100；Forward PE 23.73，1Y 分位 33.3、5Y 分位 40、10Y 分位 57.5、20Y 分位 71.2。
+- 新闻事件底账升级为 `news_event_ledger_v2`：新增 `source_tier`、`layers`、`dedupe_id`，保留 `event_type`、`published_at`、`symbols` 和 `source_errors`，并增加 45 天时间窗口与去重治理；新闻仍不注入 L1-L5 prompt。
+- `AnalysisPacket` 新增独立 `event_refs`；Bridge payload 可选接收事件索引；`SynthesisPacket` 新增 `event_index`；Bridge / Thesis / governance 合约新增 `event_refs` 字段和约束。`event_ref` 与 `evidence_ref` 分离，只能写成解释、触发或观察背景，不能写成证明。
+- 真实数据 run 验证 `HY CCC & Lower - BB OAS`：`output/analysis/vnext/20260509_134942/analysis_packet.json` 中 `get_hy_quality_spread_bp` 成功，最新数据日 2026-05-07，值 7.44，CCC OAS 9.15、BB OAS 1.71，`data_quality` 包含官方源、公式、覆盖 786 个共同观测和 fallback chain。
+- 同一 run 的 `chart_time_series.json` 已包含 `HY_QUALITY_SPREAD`，786 行，覆盖 2023-05-09 至 2026-05-07；生成波动信用 workbench：`output/reports/vnext_interactive_charts_20260509_hy_quality.html`，HTML 内嵌该序列。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_control_service.py tests/test_news_event_ledger.py tests/test_browser_sidecar.py tests/test_vnext_packet_builder.py tests/test_bridge_v2.py tests/test_research_console.py`：20 passed。
+- `python3 -m py_compile src/control_service.py src/news_event_ledger.py src/browser_sidecar.py src/research_console.py src/main.py src/agent_analysis/contracts.py src/agent_analysis/packet_builder.py src/agent_analysis/orchestrator.py`：通过。
+- `python3 src/research_console.py`：重新生成 `output/reports/vnext_research_console.html`。
+- `python3 src/browser_sidecar.py --source trendonify_valuation --output output/browser_sidecar/trendonify_ndx_valuation.json --trusted --wait-seconds 10 --timeout 60`：2 pages，0 errors。
+- `python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/20260509_134942 --modules volatility_credit --output output/reports/vnext_interactive_charts_20260509_hy_quality.html`：通过。
+- `python3 -m pytest -q`：117 passed，6 warnings。
+
+剩余观察：
+
+- 2026-05-09 真实 run 的数据采集、事件底账、analysis packet 与 chart time-series 已完成；模型阶段因 DeepSeek 长响应期间多次 `APIConnectionError` 被手动中止，未生成完整 `run_summary.json`。本轮 HY P1 验证依赖已生成的真实数据 artifacts，而不是完整模型报告。
+- `bb-browser` sidecar 仍是人工确认/sidecar 路径；即使勾选“信任”，也只是给人工模板打来源标记，不会让 L4 主链静默绕过 Cloudflare。
+
 ### 增强人工 ERP 分位与 Trendonify / bb-browser 估值百分位研究
 
 完成内容：

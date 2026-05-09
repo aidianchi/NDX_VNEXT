@@ -256,6 +256,7 @@ class VNextOrchestrator:
                 "context_brief": _model_dump(context_brief),
                 "candidate_cross_layer_links": [_model_dump(link) for link in packet.candidate_cross_layer_links],
                 "layer_cards": [_model_dump(card) for card in layer_cards],
+                "event_refs": packet.event_refs,
             },
             validator=self._validate_bridge_memo_v2,
         )
@@ -373,6 +374,7 @@ class VNextOrchestrator:
                     resonance_chains=[_model_dump(chain) for chain in memo.resonance_chains],
                     transmission_paths=[_model_dump(path) for path in memo.transmission_paths],
                     unresolved_questions=memo.unresolved_questions,
+                    event_refs=list(dict.fromkeys(getattr(memo, "event_refs", []) or [])),
                     implication_for_ndx=memo.implication_for_ndx,
                     key_uncertainties=memo.key_uncertainties,
                 )
@@ -392,11 +394,13 @@ class VNextOrchestrator:
             high_severity_typed_conflicts=high_typed_conflicts,
             objective_firewall_summary=objective_firewall,
             evidence_index=evidence_index,
+            event_index=packet.event_refs,
             synthesis_guidance=[
                 "必须消费 objective_firewall_summary：若 object_clear、authority_clear、cross_layer_verified 任一为 false，主结论必须降置信度并保留警示。",
                 "Thesis 只能整合 synthesis_packet，不得重新分析原始指标。",
                 "必须保留 high_severity_conflicts，不能为了叙事流畅而抹平张力。",
                 "所有 key_support_chains 的 evidence_refs 必须来自 evidence_index 或 bridge_summaries。",
+                "event_refs 与 evidence_refs 分离：事件只能写成解释/触发/观察背景，不能用来证明估值、广度、利率或趋势结论。",
             ],
         )
 
@@ -500,18 +504,27 @@ class VNextOrchestrator:
 
         # ── Key evidence refs: high-severity conflicts plus Thesis support chains ──
         all_evidence_refs: set = set()
+        all_event_refs: set = set()
         for conflict in synthesis_packet.high_severity_typed_conflicts:
             refs = getattr(conflict, "evidence_refs", []) if hasattr(conflict, "evidence_refs") else conflict.get("evidence_refs", [])
             all_evidence_refs.update(refs)
+            event_refs = getattr(conflict, "event_refs", []) if hasattr(conflict, "event_refs") else conflict.get("event_refs", [])
+            all_event_refs.update(event_refs)
 
         thesis_key_support_chains = [_model_dump(chain) for chain in thesis.key_support_chains]
         for chain in thesis.key_support_chains:
             all_evidence_refs.update(chain.evidence_refs)
+            all_event_refs.update(getattr(chain, "event_refs", []) or [])
 
         key_evidence_refs: Dict[str, Dict[str, Any]] = {}
         for ref in sorted(all_evidence_refs):
             if ref in synthesis_packet.evidence_index:
                 key_evidence_refs[ref] = synthesis_packet.evidence_index[ref]
+
+        key_event_refs: Dict[str, Dict[str, Any]] = {}
+        for ref in sorted(all_event_refs):
+            if ref in synthesis_packet.event_index:
+                key_event_refs[ref] = synthesis_packet.event_index[ref]
 
         # ── Known data gaps: collect from layer cards, schema, and bridge ──
         known_data_gaps: List[str] = []
@@ -581,6 +594,7 @@ class VNextOrchestrator:
             schema_missing_fields=list(schema_missing),
             must_preserve_risks=must_preserve_risks,
             key_evidence_refs=key_evidence_refs,
+            key_event_refs=key_event_refs,
             known_data_gaps=list(dict.fromkeys(known_data_gaps)),  # 去重
             unresolved_questions=list(dict.fromkeys(unresolved_questions)),  # 去重
             synthesis_guidance=list(synthesis_packet.synthesis_guidance) if synthesis_packet.synthesis_guidance else [],
@@ -1102,11 +1116,12 @@ class VNextOrchestrator:
         )
         bridge_contract += (
             "\nBridge v2 新增字段必须尽量原生填写：\n"
-            "- typed_conflicts: 结构化冲突地图，包含 conflict_id、conflict_type、severity、confidence、description、mechanism、implication、involved_layers、evidence_refs、falsifiers。\n"
-            "- resonance_chains: 跨层共振链，必须包含 involved_layers、evidence_refs、mechanism、confirming_indicators、falsifiers、implication；没有证据或确认指标时降低 confidence。\n"
-            "- transmission_paths: 跨层传导路径，说明压力或支撑如何从 source_layer 传到 target_layer。\n"
+            "- typed_conflicts: 结构化冲突地图，包含 conflict_id、conflict_type、severity、confidence、description、mechanism、implication、involved_layers、evidence_refs、event_refs、falsifiers。\n"
+            "- resonance_chains: 跨层共振链，必须包含 involved_layers、evidence_refs、event_refs、mechanism、confirming_indicators、falsifiers、implication；没有证据或确认指标时降低 confidence。\n"
+            "- transmission_paths: 跨层传导路径，说明压力或支撑如何从 source_layer 传到 target_layer，可选 event_refs 只能表示催化剂或背景。\n"
             "- unresolved_questions: 仍需 Thesis/Critic/Risk 保留的问题。\n"
             "旧字段 conflicts 仍要填写，用于兼容；typed_conflicts 是更高优先级的 Bridge v2 产物。\n"
+            "如果输入包含 event_refs，Bridge 可以引用 event_ref 解释触发/背景/观察，但不得把事件写成 evidence_ref，也不得说事件“证明”某个数值指标结论。\n"
         )
         return f"{bridge_contract}\n\n{prompt_body}"
 
@@ -1123,6 +1138,8 @@ class VNextOrchestrator:
             "\n必须读取 synthesis_packet.objective_firewall_summary，检查投资对象、指标发言权、跨层验证和最强反证。"
             "如果 objective_firewall_summary 的 object_clear、authority_clear 或 cross_layer_verified 为 false，"
             "不得给出强结论，必须降低 confidence 并在 dependencies/retained_conflicts 中保留相应边界。"
+            "如果使用 synthesis_packet.event_index，只能把 event_refs 写成催化剂、背景或观察事项；"
+            "不得让 event_refs 替代 key_support_chains[].evidence_refs。"
         )
         return f"{thesis_contract}\n\n{prompt_body}"
 
@@ -1421,7 +1438,7 @@ class VNextOrchestrator:
         normalized["description"] = str(normalized.get("description") or "")
         normalized["mechanism"] = str(normalized.get("mechanism") or "")
         normalized["implication"] = str(normalized.get("implication") or normalized["description"])
-        for key in ("involved_layers", "evidence_refs", "falsifiers"):
+        for key in ("involved_layers", "evidence_refs", "event_refs", "falsifiers"):
             value = normalized.get(key)
             if value is None:
                 normalized[key] = []
@@ -1440,7 +1457,7 @@ class VNextOrchestrator:
         normalized["confidence"] = self._normalize_confidence(normalized.get("confidence"))
         if not normalized.get("involved_layers") and normalized.get("layers"):
             normalized["involved_layers"] = normalized.get("layers")
-        for key in ("involved_layers", "evidence_refs", "confirming_indicators", "falsifiers"):
+        for key in ("involved_layers", "evidence_refs", "event_refs", "confirming_indicators", "falsifiers"):
             value = normalized.get(key)
             if value is None:
                 normalized[key] = []
@@ -1461,6 +1478,11 @@ class VNextOrchestrator:
             normalized["evidence_refs"] = []
         elif not isinstance(value, list):
             normalized["evidence_refs"] = [str(value)]
+        value = normalized.get("event_refs")
+        if value is None:
+            normalized["event_refs"] = []
+        elif not isinstance(value, list):
+            normalized["event_refs"] = [str(value)]
         return normalized
 
     def _normalize_confidence(self, confidence: Any) -> str:

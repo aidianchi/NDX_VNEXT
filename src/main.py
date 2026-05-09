@@ -120,13 +120,20 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
 
     run_dir = build_run_dir(backtest_date)
     news_event_ledger_path = ""
+    news_event_ledger_payload = None
     if args.enable_news:
         news_event_ledger_path = os.path.join(run_dir, "news_event_ledger.json")
-        NewsEventLedgerBuilder().build(news_event_ledger_path)
+        news_event_ledger_payload = NewsEventLedgerBuilder().build(news_event_ledger_path)
 
     integrity_report = DataIntegrity().run(data_json)
     builder = AnalysisPacketBuilder()
-    packet = builder.build(data_json, output_path=os.path.join(run_dir, "analysis_packet.json"))
+    packet = builder.build(
+        data_json,
+        event_ledger=news_event_ledger_payload,
+        event_ledger_path=news_event_ledger_path or None,
+        context={"news_event_ledger_path": news_event_ledger_path} if news_event_ledger_path else None,
+        output_path=os.path.join(run_dir, "analysis_packet.json"),
+    )
     chart_time_series_path = write_chart_time_series_artifact(run_dir, analysis_packet=packet)
 
     orchestrator = VNextOrchestrator(available_models=available_models, output_dir=run_dir)

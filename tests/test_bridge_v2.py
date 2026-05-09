@@ -37,6 +37,7 @@ def test_bridge_memo_accepts_v2_typed_map_fields():
                 implication="NDX 估值需要盈利强度或利率回落确认。",
                 involved_layers=["L1", "L4"],
                 evidence_refs=["L1.get_10y_real_rate", "L4.get_ndx_pe_and_earnings_yield"],
+                event_refs=["event:fomc"],
                 falsifiers=["盈利上修足以抵消折现率压力。"],
             )
         ],
@@ -46,6 +47,7 @@ def test_bridge_memo_accepts_v2_typed_map_fields():
                 description="风险偏好和价格趋势同向。",
                 involved_layers=["L2", "L5"],
                 evidence_refs=["L2.get_vix", "L5.get_qqq_technical_indicators"],
+                event_refs=["event:vix_context"],
                 confirming_indicators=["get_vix", "get_qqq_technical_indicators"],
                 mechanism="波动回落降低持仓压力，趋势更容易延续。",
                 implication="短线执行环境改善。",
@@ -60,6 +62,7 @@ def test_bridge_memo_accepts_v2_typed_map_fields():
                 target_layer="L4",
                 mechanism="真实利率通过折现率传导到估值倍数。",
                 evidence_refs=["L1.get_10y_real_rate", "L4.get_equity_risk_premium"],
+                event_refs=["event:rates_context"],
                 implication="估值安全边际变薄。",
                 confidence="medium",
             )
@@ -69,6 +72,7 @@ def test_bridge_memo_accepts_v2_typed_map_fields():
     )
 
     assert memo.typed_conflicts[0].severity == ConflictSeverity.HIGH
+    assert memo.typed_conflicts[0].event_refs == ["event:fomc"]
     assert memo.resonance_chains[0].involved_layers[0] == "L2"
     assert memo.resonance_chains[0].confirming_indicators == ["get_vix", "get_qqq_technical_indicators"]
     assert memo.resonance_chains[0].falsifiers == ["波动重新上行且价格跌破关键均线。"]
@@ -109,7 +113,17 @@ def test_synthesis_packet_carries_bridge_v2_typed_map(tmp_path: Path):
         output_dir=str(tmp_path),
         llm_engine=object(),
     )
-    packet = AnalysisPacket(meta={"data_date": "2026-04-24"}, raw_data={})
+    packet = AnalysisPacket(
+        meta={"data_date": "2026-04-24"},
+        raw_data={},
+        event_refs={
+            "event:fomc": {
+                "event_id": "event:fomc",
+                "title": "FOMC statement",
+                "usage_boundary": "event_ref only",
+            }
+        },
+    )
     context = ContextBrief(data_summary="data", task_description="task")
     layer_cards = [
         LayerCard(
@@ -142,11 +156,13 @@ def test_synthesis_packet_carries_bridge_v2_typed_map(tmp_path: Path):
                 implication="估值压缩风险需要保留。",
                 involved_layers=["L1", "L4"],
                 evidence_refs=["L1.get_10y_real_rate", "L4.get_ndx_pe_and_earnings_yield"],
+                event_refs=["event:fomc"],
             )
         ],
         resonance_chains=[],
         transmission_paths=[],
         unresolved_questions=["盈利能否抵消？"],
+        event_refs=["event:fomc"],
         implication_for_ndx="需要保留冲突。",
     )
 
@@ -155,6 +171,8 @@ def test_synthesis_packet_carries_bridge_v2_typed_map(tmp_path: Path):
 
     assert isinstance(summary, BridgeSynthesisItem)
     assert summary.typed_conflicts[0]["conflict_id"] == "L1_restrictive_vs_L4_expensive"
+    assert summary.event_refs == ["event:fomc"]
+    assert packet_out.event_index["event:fomc"]["title"] == "FOMC statement"
     assert packet_out.high_severity_typed_conflicts[0].conflict_id == "L1_restrictive_vs_L4_expensive"
 
 
@@ -173,6 +191,7 @@ def test_bridge_prompt_requests_v2_typed_map(tmp_path: Path):
     assert "falsifiers" in prompt
     assert "transmission_paths" in prompt
     assert "unresolved_questions" in prompt
+    assert "event_refs" in prompt
 
 
 def test_bridge_validator_requires_complete_resonance_chain_fields(tmp_path: Path):

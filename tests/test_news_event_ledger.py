@@ -36,7 +36,15 @@ def test_news_event_ledger_builds_official_sidecar_without_layer_injection(tmp_p
     payload = NewsEventLedgerBuilder(fetch_text=fake_fetch, max_events_per_source=1).build(output)
 
     assert output.exists()
-    assert payload["schema_version"] == "news_event_ledger_v1"
+    assert payload["schema_version"] == "news_event_ledger_v2"
     assert "not injected into L1-L5" in payload["policy"]["runtime_context_rule"]
+    assert payload["governance"]["lookback_days"] == 45
     assert any(event["source_id"] == "federal_reserve_press_all" for event in payload["events"])
     assert any(event["source_id"] == "sec_submissions" and event["symbols"] == ["AAPL"] for event in payload["events"])
+    for event in payload["events"]:
+        assert event["event_id"].startswith("event:")
+        assert event["dedupe_id"]
+        assert event["source_tier"] in {"official_macro", "official_filing"}
+        assert event["event_type"]
+        assert event["published_at"]
+        assert isinstance(event["layers"], list)

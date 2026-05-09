@@ -188,6 +188,8 @@ class AnalysisPacketBuilder:
         *,
         manual_overrides: Optional[Dict[str, Any]] = None,
         context: Optional[Dict[str, Any]] = None,
+        event_ledger: Optional[Dict[str, Any]] = None,
+        event_ledger_path: Optional[str] = None,
         output_path: Optional[str] = None,
     ) -> AnalysisPacket:
         manual_overrides = deepcopy(manual_overrides if manual_overrides is not None else load_manual_data())
@@ -197,11 +199,13 @@ class AnalysisPacketBuilder:
             for layer in LAYER_NAMES
         }
         candidate_links = self._build_candidate_links(facts_by_layer)
+        event_refs = self._build_event_refs(event_ledger=event_ledger, event_ledger_path=event_ledger_path)
         packet = AnalysisPacket(
             meta=self._build_meta(data_json, manual_overrides, grouped_raw_data),
             raw_data=grouped_raw_data,
             facts_by_layer=facts_by_layer,
             candidate_cross_layer_links=candidate_links,
+            event_refs=event_refs,
             manual_overrides=manual_overrides,
             context=self._build_context(data_json, facts_by_layer, context),
         )
@@ -217,6 +221,47 @@ class AnalysisPacketBuilder:
             handle.write("\n")
         logger.info("Analysis packet saved to %s", path)
         return str(path)
+
+    def _build_event_refs(
+        self,
+        *,
+        event_ledger: Optional[Dict[str, Any]] = None,
+        event_ledger_path: Optional[str] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        payload = event_ledger
+        if payload is None and event_ledger_path:
+            path = Path(event_ledger_path)
+            if path.exists():
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    logger.warning("Failed to parse event ledger: %s", path)
+                    payload = None
+        if not isinstance(payload, dict):
+            return {}
+        refs: Dict[str, Dict[str, Any]] = {}
+        for event in payload.get("events", []):
+            if not isinstance(event, dict):
+                continue
+            event_id = str(event.get("event_id") or "").strip()
+            if not event_id:
+                continue
+            refs[event_id] = {
+                "event_id": event_id,
+                "dedupe_id": event.get("dedupe_id"),
+                "source_id": event.get("source_id"),
+                "source_name": event.get("source_name"),
+                "source_tier": event.get("source_tier") or event.get("authority_tier"),
+                "event_type": event.get("event_type"),
+                "title": event.get("title"),
+                "url": event.get("url"),
+                "published_at": event.get("published_at"),
+                "layers": event.get("layers") or event.get("relevance_tags") or [],
+                "symbols": event.get("symbols") or [],
+                "confidence": event.get("confidence"),
+                "usage_boundary": "event_ref only: catalyst/background/observation, not numeric proof",
+            }
+        return refs
 
     def default_output_path(self, data_date: str) -> str:
         return str(Path(path_config.analysis_dir) / f"analysis_packet_{data_date}.json")
