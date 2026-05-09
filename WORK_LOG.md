@@ -6,6 +6,24 @@
 
 ## 2026-05-09
 
+### 清理历史输出样本，保留输出体验优化基线
+
+完成内容：
+
+- 清理 `output/reports/` 中 2026-04-23、2026-05-02、2026-05-06 生成的历史 brief / redesign / workbench 样本，只保留当前输出体验继续优化需要的入口：
+  - `output/reports/vnext_research_console.html`
+  - `output/reports/vnext_research_ui_brief_20260502.html`
+  - `output/reports/vnext_interactive_charts_20260509_hy_quality.html`
+- 删除旧视觉回归截图目录 `output/reports/visual_regression/`，避免后续 polish 时把历史截图误当当前设计基线。
+- 清理旧 vNext run 目录，只保留完整可复用 run `output/analysis/vnext/20260506_075229` 和 P1 数据验证 run `output/analysis/vnext/20260509_134942`。
+- 清理旧数据快照，只保留最新 `output/data/data_collected_v9_live.json`；保留 `output/browser_sidecar/trendonify_ndx_valuation.json` 作为当前 bb-browser sidecar smoke 结果。
+- 删除仓库内 `.DS_Store`，并重新生成 `output/reports/vnext_research_console.html`，让控制台链接列表反映清理后的干净输出目录。
+
+验证结果：
+
+- `find . -name '.DS_Store' -print`：无输出。
+- `output/` 体积从约 39M 降到约 17M。
+
 ### 完成所有 P1：运行控制、事件底账治理、event_ref、HY 真实验证与 bb-browser sidecar
 
 完成内容：
