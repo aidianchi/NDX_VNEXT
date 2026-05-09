@@ -79,6 +79,9 @@ def _scan_static_overflow_risk(html_path: Path, viewport: Viewport) -> dict:
         return {"status": "failed", "issues": [{"kind": "html_read_error", "detail": str(exc)[:200]}]}
 
     for match in re.finditer(r"(?<![-\w])(?:min-)?width\s*:\s*(\d{3,5})px", html_text, flags=re.IGNORECASE):
+        prefix = html_text[max(0, match.start() - 96) : match.start()]
+        if re.search(r"@media[^{]*$", prefix, flags=re.IGNORECASE):
+            continue
         width = int(match.group(1))
         if width > viewport.width:
             issues.append(
@@ -108,11 +111,15 @@ def build_default_targets(
     output_dir: str | Path,
     *,
     viewports: Optional[List[Viewport]] = None,
+    console_html: Optional[str | Path] = None,
 ) -> List[ReportTarget]:
     output = Path(output_dir)
     selected_viewports = viewports or DEFAULT_VIEWPORTS
     targets: List[ReportTarget] = []
-    for name, html_path in [("brief", Path(brief_html)), ("workbench", Path(workbench_html))]:
+    html_targets = [("brief", Path(brief_html)), ("workbench", Path(workbench_html))]
+    if console_html:
+        html_targets.append(("console", Path(console_html)))
+    for name, html_path in html_targets:
         for viewport in selected_viewports:
             targets.append(
                 ReportTarget(
@@ -135,13 +142,16 @@ def _output_for_viewport(target: ReportTarget, viewport: Viewport) -> Path:
 
 
 def _capture_command(chrome_path: str, target: ReportTarget, viewport: Viewport, output_path: Path) -> List[str]:
+    # macOS Chrome headless keeps a roughly 500px minimum layout viewport.
+    # Capturing a narrower screenshot crops that layout instead of testing it.
+    capture_width = max(viewport.width, 500)
     return [
         chrome_path,
         "--headless=new",
         "--hide-scrollbars",
         "--disable-gpu",
         "--no-first-run",
-        f"--window-size={viewport.width},{viewport.height}",
+        f"--window-size={capture_width},{viewport.height}",
         f"--screenshot={output_path}",
         _file_url(target.html_path),
     ]
@@ -209,6 +219,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Capture vNext report visual regression screenshots.")
     parser.add_argument("--brief-html", required=True)
     parser.add_argument("--workbench-html", required=True)
+    parser.add_argument("--console-html", help="Optional research console HTML to include in desktop/mobile captures.")
     parser.add_argument("--output-dir", default="output/reports/visual_regression")
     parser.add_argument("--chrome-path")
     return parser.parse_args()
@@ -216,7 +227,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    targets = build_default_targets(args.brief_html, args.workbench_html, args.output_dir)
+    targets = build_default_targets(
+        args.brief_html,
+        args.workbench_html,
+        args.output_dir,
+        console_html=args.console_html,
+    )
     summary = run_visual_regression(targets, chrome_path=args.chrome_path)
     print(summary)
     return 0

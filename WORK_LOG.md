@@ -6,6 +6,34 @@
 
 ## 2026-05-09
 
+### 完成 NEXT_STEPS P2：用 Impeccable shape/craft 打磨控制台与 brief
+
+完成内容：
+
+- 按 `$impeccable` 流程读取 `PRODUCT.md` / `DESIGN.md`，确认本轮是 product register。shape 结论：控制台是“运行仪器”，brief 是“可审计长文”；采用浅色纸面、克制 OKLCH、清晰规则线和少量状态色，不走深色终端、SaaS 卡片堆叠或纯铁锈单色系。
+- 对 Claude 排版报告做取舍：采纳“编辑室/仪器面板分工”“sticky 阅读导航”“引用视觉语法”“避免类别反射”；不采纳“控制台改成阶段向导隐藏复杂度”和“风险/良好都用同一铁锈明度表达”，因为 vNext 需要一屏复跑审阅和清晰状态语义。
+- 控制台新增流程锚点：设定对象、校准输入、生成命令、审计边界；运行区和人工输入区权重提升，面板不再被网格强行拉成等高，移动端强制单列，避免 span grid 造成窄屏裁切。
+- 控制台视觉系统改为 OKLCH tokens，去掉旧版/sidecar 警示的彩色侧边条，改用完整边界和轻色底；补齐按钮 hover/focus、输入断行、长路径/命令预览的窄屏保护。
+- brief 默认 `slate_v2` 改成更适合连续阅读的形态：桌面 brief 使用左侧 sticky 章节导航、右侧正文；风险、冲突和边界卡从彩色侧边条改为完整边界和语义底色；证据引用 chip 加入小型视觉语法，长文和长 ref 增加断行保护。
+- `src/report_visual_regression.py` 支持可选 `--console-html`，把研究控制台纳入同一轮桌面/移动截图回归；同时修正静态扫描对 `@media (min-width: ...)` 的误报，并处理 macOS Chrome headless 窄屏截图会裁掉 500px 最小布局视口的问题。
+- 重新生成：
+  - `output/reports/vnext_research_console.html`
+  - `output/reports/vnext_research_ui_brief_20260505_20260506_075229.html`
+  - `output/reports/vnext_interactive_charts_20260506.html`
+  - `output/reports/visual_regression/20260509_p2_console_brief_full_run/`
+
+验证结果：
+
+- `node /Users/aidianchi/.agents/skills/impeccable/scripts/load-context.mjs`：`hasProduct=true`，`hasDesign=true`，`register=product`。
+- `python3 -m pytest -q tests/test_research_console.py tests/test_vnext_reporter.py tests/test_report_visual_regression.py tests/test_control_service.py`：15 passed。
+- `python3 -m pytest -q`：117 passed，6 warnings。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_research_ui_brief_20260505_20260506_075229.html --workbench-html output/reports/vnext_interactive_charts_20260506.html --console-html output/reports/vnext_research_console.html --output-dir output/reports/visual_regression/20260509_p2_console_brief_full_run`：passed，brief / workbench / console 的 desktop 和 mobile captures 均 ok，layout checks 均 ok。
+
+剩余观察：
+
+- 本轮完成控制台和 brief 的 shape/craft/polish，不处理 workbench 的进一步视觉重构；workbench 只作为视觉回归配套目标继续验证。
+- 2026-05-09 数据验证 run 缺少最终裁决 artifacts，因此 brief craft 使用更完整的 `output/analysis/vnext/20260506_075229` 作为长文排版验证对象；2026-05-09 run 仍保留为 HY 真实数据验证对象。
+
 ### 清理历史输出样本，保留输出体验优化基线
 
 完成内容：

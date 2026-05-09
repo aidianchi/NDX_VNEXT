@@ -137,8 +137,15 @@ class ResearchConsoleGenerator:
       </aside>
     </section>
 
+    <nav class="workflow-rail" aria-label="研究控制台流程">
+      <a href="#setup-panel"><b>01</b><span>设定对象</span></a>
+      <a href="#manual-panel"><b>02</b><span>校准输入</span></a>
+      <a href="#run-panel"><b>03</b><span>生成命令</span></a>
+      <a href="#health-panel"><b>04</b><span>审计边界</span></a>
+    </nav>
+
     <section class="control-grid">
-      <article class="panel">
+      <article class="panel setup-panel" id="setup-panel">
         <div class="panel-head">
           <span>01</span>
           <div>
@@ -154,7 +161,7 @@ class ResearchConsoleGenerator:
         </div>
       </article>
 
-      <article class="panel manual-panel">
+      <article class="panel manual-panel" id="manual-panel">
         <div class="panel-head">
           <span>02</span>
           <div>
@@ -210,7 +217,7 @@ class ResearchConsoleGenerator:
         <p class="path-note">目标文件：{_escape(manual_path)}</p>
       </article>
 
-      <article class="panel">
+      <article class="panel model-panel">
         <div class="panel-head">
           <span>03</span>
           <div>
@@ -234,7 +241,7 @@ class ResearchConsoleGenerator:
         </div>
       </article>
 
-      <article class="panel">
+      <article class="panel source-panel">
         <div class="panel-head">
           <span>04</span>
           <div>
@@ -283,7 +290,7 @@ class ResearchConsoleGenerator:
         </label>
       </article>
 
-      <article class="panel run-panel">
+      <article class="panel run-panel" id="run-panel">
         <div class="panel-head">
           <span>05</span>
           <div>
@@ -321,7 +328,7 @@ class ResearchConsoleGenerator:
         </div>
       </article>
 
-      <article class="panel health-panel">
+      <article class="panel health-panel" id="health-panel">
         <div class="panel-head">
           <span>06</span>
           <div>
@@ -353,15 +360,19 @@ class ResearchConsoleGenerator:
     def _css(self) -> str:
         return """
 :root {
-  --paper: #f3f2ee;
-  --raised: #fbfaf7;
-  --ink: #171714;
-  --soft: #4b4841;
-  --muted: #777166;
-  --rule: #d6d0c3;
-  --accent: #9a3412;
-  --good: #17633a;
-  --watch: #9a5b12;
+  --paper: oklch(0.967 0.008 86);
+  --paper-quiet: oklch(0.94 0.012 86);
+  --raised: oklch(0.992 0.005 86);
+  --ink: oklch(0.19 0.014 80);
+  --soft: oklch(0.37 0.018 80);
+  --muted: oklch(0.50 0.018 80);
+  --rule: oklch(0.82 0.014 82);
+  --rule-strong: oklch(0.66 0.018 82);
+  --accent: oklch(0.51 0.14 31);
+  --accent-strong: oklch(0.42 0.13 31);
+  --good: oklch(0.45 0.11 150);
+  --watch: oklch(0.58 0.12 76);
+  --risk: oklch(0.50 0.15 28);
   --radius: 8px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --sans: Avenir Next, Helvetica Neue, PingFang SC, system-ui, sans-serif;
@@ -370,24 +381,33 @@ class ResearchConsoleGenerator:
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  background: var(--paper);
+  background:
+    linear-gradient(180deg, var(--raised) 0, var(--paper) 420px, var(--paper) 100%);
   color: var(--ink);
   font-family: var(--sans);
+  overflow-x: hidden;
+}
+p, li, h1, h2, h3, label, strong, span, a {
+  overflow-wrap: anywhere;
+}
+p {
+  word-break: break-word;
 }
 .console-shell {
-  width: min(1180px, calc(100% - 32px));
+  width: min(1240px, calc(100% - 32px));
   margin: 0 auto;
-  padding: 28px 0 80px;
+  padding: 24px 0 80px;
 }
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
-  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: 32px;
   align-items: end;
-  padding: 32px 0 24px;
+  padding: 28px 0 22px;
   border-top: 2px solid var(--ink);
   border-bottom: 1px solid var(--rule);
 }
+.hero > * { min-width: 0; }
 @media (max-width: 780px) { .hero { grid-template-columns: 1fr; } }
 .eyebrow {
   margin: 0 0 8px;
@@ -398,13 +418,16 @@ body {
 }
 h1 {
   margin: 0 0 10px;
-  font: 650 clamp(34px, 7vw, 76px)/.95 var(--serif);
+  font: 650 58px/.98 var(--serif);
 }
+@media (max-width: 780px) { h1 { font-size: 38px; line-height: 1.04; } }
 .hero p:last-child {
-  max-width: 680px;
+  max-width: 70ch;
   color: var(--soft);
   font-size: 16px;
   line-height: 1.7;
+  line-break: anywhere;
+  word-break: break-all;
 }
 .status-card,
 .panel {
@@ -413,7 +436,8 @@ h1 {
   border-radius: var(--radius);
 }
 .status-card {
-  padding: 18px 20px;
+  padding: 18px 20px 20px;
+  box-shadow: 0 1px 0 color-mix(in oklch, var(--ink) 7%, transparent);
 }
 .status-card span {
   color: var(--muted);
@@ -438,6 +462,13 @@ button {
   text-decoration: none;
   font: 700 13px var(--sans);
   cursor: pointer;
+  min-height: 38px;
+  transition: background-color 160ms ease-out, border-color 160ms ease-out, color 160ms ease-out, transform 160ms ease-out;
+}
+.primary-link:hover,
+.secondary-link:hover,
+button:hover {
+  transform: translateY(-1px);
 }
 .secondary-link {
   background: transparent;
@@ -449,24 +480,85 @@ button {
   flex-wrap: wrap;
   gap: 8px;
 }
+.workflow-rail {
+  position: sticky;
+  top: 10px;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin: 16px 0 18px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: color-mix(in oklch, var(--raised) 92%, transparent);
+  backdrop-filter: blur(10px);
+}
+.workflow-rail a {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 48px;
+  padding: 10px 14px;
+  color: var(--soft);
+  text-decoration: none;
+  border-right: 1px solid var(--rule);
+}
+.workflow-rail a:last-child { border-right: 0; }
+.workflow-rail b {
+  font: 700 11px var(--mono);
+  color: var(--accent);
+}
+.workflow-rail span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 700 13px var(--sans);
+}
+.workflow-rail a:hover {
+  background: var(--paper-quiet);
+  color: var(--ink);
+}
+@media (max-width: 760px) {
+  .workflow-rail {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .workflow-rail a:nth-child(2) { border-right: 0; }
+  .workflow-rail a:nth-child(-n + 2) { border-bottom: 1px solid var(--rule); }
+}
 .control-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr) minmax(300px, .85fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
   margin-top: 18px;
+  align-items: start;
 }
+.setup-panel,
+.model-panel,
+.source-panel { grid-column: span 1; }
+.manual-panel { grid-column: 1 / -1; }
 .run-panel { grid-column: span 2; }
-.health-panel { grid-row: span 2; }
 @media (max-width: 1080px) {
-  .control-grid { grid-template-columns: 1fr 1fr; }
+  .control-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .manual-panel,
   .run-panel,
   .health-panel { grid-column: 1 / -1; }
 }
 @media (max-width: 760px) {
-  .control-grid { grid-template-columns: 1fr; }
+  .control-grid { grid-template-columns: minmax(0, 1fr); }
+  .control-grid > * {
+    grid-column: 1 / 2;
+    grid-row: auto;
+  }
 }
 .panel {
-  padding: 18px 20px;
+  padding: 18px 20px 20px;
+  scroll-margin-top: 92px;
+}
+.run-panel {
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--accent) 8%, var(--raised)), var(--raised) 35%);
 }
 .panel-head {
   display: flex;
@@ -480,7 +572,7 @@ button {
   width: 34px;
   height: 34px;
   border: 1px solid var(--ink);
-  border-radius: 50%;
+  border-radius: 4px;
   font: 700 12px var(--mono);
 }
 h2 {
@@ -509,10 +601,18 @@ textarea {
   width: 100%;
   border: 1px solid var(--rule);
   border-radius: 4px;
-  background: #fffefa;
+  background: oklch(0.987 0.006 86);
   color: var(--ink);
   padding: 9px 10px;
   font: 12px var(--mono);
+  min-height: 38px;
+  min-width: 0;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: 2px solid color-mix(in oklch, var(--accent) 62%, transparent);
+  outline-offset: 1px;
 }
 .field-grid,
 .manual-form {
@@ -531,7 +631,7 @@ textarea {
   gap: 8px;
   border: 1px solid var(--rule);
   border-radius: 4px;
-  background: #fffefa;
+  background: oklch(0.987 0.006 86);
   padding: 10px;
   margin: 0;
 }
@@ -554,7 +654,7 @@ textarea {
 .advanced-json {
   margin-top: 12px;
   border: 1px solid var(--rule);
-  background: #fffefa;
+  background: oklch(0.987 0.006 86);
   border-radius: 4px;
   padding: 8px;
 }
@@ -586,7 +686,11 @@ textarea {
 .run-now-button {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fffefa;
+  color: var(--raised);
+}
+.run-now-button:hover {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
 }
 .run-status {
   margin: 10px 0 0;
@@ -615,7 +719,7 @@ textarea {
   gap: 8px;
   border: 1px solid var(--rule);
   border-radius: 4px;
-  background: #fffefa;
+  background: oklch(0.987 0.006 86);
   padding: 10px 12px;
   margin: 0;
 }
@@ -661,8 +765,10 @@ h3 {
 .watch { color: var(--watch); }
 .legacy-note {
   margin: 10px 0 0;
-  border-left: 3px solid var(--watch);
-  padding-left: 10px;
+  border: 1px solid color-mix(in oklch, var(--watch) 42%, var(--rule));
+  border-radius: 4px;
+  padding: 10px 12px;
+  background: color-mix(in oklch, var(--watch) 10%, var(--raised));
   color: var(--soft);
   font-size: 12px;
   line-height: 1.6;
@@ -671,8 +777,8 @@ pre {
   overflow: auto;
   border: 1px solid var(--rule);
   border-radius: 4px;
-  background: #20201c;
-  color: #f5f1e7;
+  background: oklch(0.22 0.014 80);
+  color: oklch(0.94 0.012 86);
   padding: 12px;
   font: 12px/1.55 var(--mono);
 }
@@ -698,7 +804,7 @@ pre {
   border: 1px solid var(--rule);
   border-radius: 4px;
   color: var(--ink);
-  background: #fffefa;
+  background: oklch(0.987 0.006 86);
   padding: 6px 8px;
   font: 12px var(--mono);
   text-decoration: none;
@@ -712,7 +818,7 @@ pre {
   border: 1px solid var(--rule);
   border-radius: 4px;
   padding: 12px;
-  background: #fffefa;
+  background: oklch(0.987 0.006 86);
 }
 .safety-box p {
   margin: 0;
@@ -725,7 +831,7 @@ pre {
   border: 1px solid var(--rule);
   border-radius: 6px;
   padding: 12px;
-  background: #fffefa;
+  background: oklch(0.987 0.006 86);
 }
 .browser-sidecar h3 {
   margin: 0 0 10px;
@@ -794,7 +900,7 @@ function modeCommand(mode, models) {
     return `python3 src/interactive_chart_workbench.py --run-dir ${runDir} --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity`;
   }
   if (mode === 'visual_check') {
-    return `python3 src/report_visual_regression.py --brief-html output/reports/<brief.html> --workbench-html output/reports/<workbench.html> --output-dir output/reports/visual_regression/<run_id>`;
+    return `python3 src/report_visual_regression.py --brief-html output/reports/<brief.html> --workbench-html output/reports/<workbench.html> --console-html output/reports/vnext_research_console.html --output-dir output/reports/visual_regression/<run_id>`;
   }
   if (mode === 'analyze_existing') {
     return dataPath ? base.concat(['--skip-report']).join(' ') : '# 请先填写“已有数据 JSON”，再基于同源数据进入 vNext 五层分析。';

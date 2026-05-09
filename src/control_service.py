@@ -43,6 +43,7 @@ ALLOWED_ENTRYPOINTS = {
     "src/report_visual_regression.py": {
         "--brief-html": "path",
         "--workbench-html": "path",
+        "--console-html": "path",
         "--output-dir": "path",
     },
     "src/browser_sidecar.py": {

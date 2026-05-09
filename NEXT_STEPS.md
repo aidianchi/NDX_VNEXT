@@ -11,7 +11,6 @@
 
 | 优先级 | 类别 | 待办 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
-| P2 | 输出体验 | 用 `$impeccable` 对控制台和 brief 做 shape，再进入 polish/craft | `PRODUCT.md` / `DESIGN.md` 已补齐，可以开始真正的审美、排版和交互优化 | 先确认 shape brief，再改 UI；桌面/移动视觉回归通过；不再只做局部 CSS 微调 |
 | P2 | 核心系统 | L4 prompt 专用摘要 | 1M 上下文模型能容忍约 18 万字符，但当前 L4 重复塞长序列，成本、速度和注意力效率不理想 | 长序列留在 artifact，prompt 只保留 latest/start/end/count/percentile/关键拐点；L4 prompt chars 明显下降 |
 
 ---
@@ -22,6 +21,7 @@
 
 ### 2026-05-09
 
+- 用 `$impeccable` 对控制台和 brief 完成 shape/craft/polish：控制台改成“运行仪器”层级，brief 改成左侧 sticky 导航 + 右侧长文阅读，默认样式切到 OKLCH token，去掉彩色侧边条惯性，并把 console 纳入桌面/移动视觉回归。
 - 新增本地 `control_service` MVP：提供 `/health` 和 `/run`，只接受白名单命令，日志写入 `output/logs/control_service/`。
 - 修复研究控制台“运行”按钮脚本初始化问题，重新生成 `output/reports/vnext_research_console.html`。
 - 新增官方新闻/事件 sidecar：`src/news_event_ledger.py` 生成独立 `news_event_ledger.json`，当前接入 Federal Reserve、BLS、BEA 官方 RSS 与 M7 SEC submissions。
