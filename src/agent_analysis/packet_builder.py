@@ -48,6 +48,7 @@ LAYER_FUNCTIONS = {
         "get_vxn",
         "get_hy_oas_bp",
         "get_ig_oas_bp",
+        "get_hy_quality_spread_bp",
         "get_hyg_momentum",
         "get_xly_xlp_ratio",
         "get_crowdedness_dashboard",
@@ -58,12 +59,14 @@ LAYER_FUNCTIONS = {
         "get_advance_decline_line",
         "get_percent_above_ma",
         "get_qqq_qqew_ratio",
+        "get_qqq_top10_concentration",
         "get_m7_fundamentals",
         "get_new_highs_lows",
         "get_mcclellan_oscillator_nasdaq_or_nyse",
     },
     "L4": {
         "get_ndx_pe_and_earnings_yield",
+        "get_ndx_forward_earnings_quality",
         "get_equity_risk_premium",
         "get_damodaran_us_implied_erp",
     },
@@ -469,8 +472,14 @@ class AnalysisPacketBuilder:
         if layer == "L2":
             vix = self._metric_level(metrics, "get_vix", "level")
             hy_oas = self._metric_level(metrics, "get_hy_oas_bp", "level")
+            hy_quality_spread = self._metric_level(metrics, "get_hy_quality_spread_bp", "level")
             fear_greed = self._metric_level(metrics, "get_cnn_fear_greed_index", "score")
-            if (vix is not None and vix >= 25) or (hy_oas is not None and hy_oas >= 500) or (fear_greed is not None and fear_greed <= 30):
+            if (
+                (vix is not None and vix >= 25)
+                or (hy_oas is not None and hy_oas >= 500)
+                or (hy_quality_spread is not None and hy_quality_spread >= 700)
+                or (fear_greed is not None and fear_greed <= 30)
+            ):
                 return "risk_off"
             if (vix is not None and vix <= 15) or (fear_greed is not None and fear_greed >= 70):
                 return "risk_on"
@@ -478,6 +487,7 @@ class AnalysisPacketBuilder:
 
         if layer == "L3":
             breadth_ratio_pct = self._metric_level(metrics, "get_qqq_qqew_ratio", "percentile_10y", "percentile_1y", "percentile")
+            top10_weight = self._metric_level(metrics, "get_qqq_top10_concentration", "top10_weight_pct")
             ad_line_trend = self._metric_text(metrics, "get_advance_decline_line", "trend", "direction")
             pct_above = self._metric_level(
                 metrics,
@@ -489,7 +499,11 @@ class AnalysisPacketBuilder:
                 "percent_above_200d",
                 "percent_200ma",
             )
-            if ad_line_trend in {"falling", "declining", "deteriorating"} or (breadth_ratio_pct is not None and breadth_ratio_pct >= 80):
+            if (
+                ad_line_trend in {"falling", "declining", "deteriorating"}
+                or (breadth_ratio_pct is not None and breadth_ratio_pct >= 80)
+                or (top10_weight is not None and top10_weight >= 50)
+            ):
                 return "deteriorating"
             if pct_above is not None and pct_above >= 60:
                 return "healthy"

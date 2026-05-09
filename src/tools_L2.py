@@ -165,6 +165,75 @@ def get_qqq_qqew_ratio(end_date: str = None) -> Dict[str, Any]:
         return {"name": "QQQ/QQEW Ratio", "value": None, "notes": f"Error: {str(e)}"}
 
 
+def get_hy_quality_spread_bp(end_date: str = None) -> Dict[str, Any]:
+    """低质高收益债相对高质高收益债的信用压力差。"""
+    ccc_series = get_fred_series("BAMLH0A3HYC", end_date=end_date)
+    bb_series = get_fred_series("BAMLH0A1HYBB", end_date=end_date)
+    if ccc_series is None or bb_series is None or len(ccc_series) < 20 or len(bb_series) < 20:
+        return {
+            "name": "HY CCC & Lower minus BB OAS",
+            "series_id": "BAMLH0A3HYC-BAMLH0A1HYBB",
+            "value": None,
+            "unit": "basis points",
+            "source_name": "FRED / ICE BofA",
+            "source_tier": "official_provider",
+            "notes": "数据不足，无法计算低质高收益债相对 BB 的信用分层压力。",
+        }
+
+    ccc = ccc_series[["date", "value"]].rename(columns={"value": "ccc_oas"})
+    bb = bb_series[["date", "value"]].rename(columns={"value": "bb_oas"})
+    aligned = pd.merge(ccc, bb, on="date", how="inner").dropna()
+    if len(aligned) < 20:
+        return {
+            "name": "HY CCC & Lower minus BB OAS",
+            "series_id": "BAMLH0A3HYC-BAMLH0A1HYBB",
+            "value": None,
+            "unit": "basis points",
+            "source_name": "FRED / ICE BofA",
+            "source_tier": "official_provider",
+            "notes": "CCC & Lower 和 BB OAS 共同日期不足，无法计算分层利差。",
+        }
+
+    spread_series = aligned.copy()
+    spread_series["value"] = spread_series["ccc_oas"] - spread_series["bb_oas"]
+    analysis = analyze_series_ma_trend(spread_series[["date", "value"]], short_period=5, long_period=20)
+    stats = calculate_long_term_stats(spread_series[["date", "value"]], analysis["level"])
+    latest = aligned.iloc[-1]
+    analysis.update(
+        {
+            "ccc_oas": round(float(latest["ccc_oas"]), 2),
+            "bb_oas": round(float(latest["bb_oas"]), 2),
+            "relativity": stats,
+        }
+    )
+    return {
+        "name": "HY CCC & Lower minus BB OAS",
+        "series_id": "BAMLH0A3HYC-BAMLH0A1HYBB",
+        "value": analysis,
+        "unit": "basis points",
+        "source_name": "FRED / ICE BofA",
+        "source_tier": "official_provider",
+        "data_quality": {
+            "source_tier": "official_provider",
+            "data_date": analysis.get("date"),
+            "collected_at_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "update_frequency": "daily market close",
+            "formula": "ICE BofA CCC & Lower US High Yield OAS minus ICE BofA BB US High Yield OAS",
+            "coverage": {
+                "series": ["BAMLH0A3HYC", "BAMLH0A1HYBB"],
+                "common_observations": int(len(spread_series)),
+            },
+            "anomalies": [],
+            "fallback_chain": ["FRED / ICE BofA", "unavailable"],
+            "source_disagreement": {},
+        },
+        "notes": (
+            "低质高收益债相对 BB 的分层压力。FRED 可得口径是 CCC & Lower，"
+            "不是精确 CCC+；应与 HY OAS、IG OAS 和 VIX 联合阅读。"
+        ),
+    }
+
+
 def _extract_component_close_prices(data: pd.DataFrame) -> pd.DataFrame:
     if data is None or data.empty:
         return pd.DataFrame()
@@ -693,4 +762,3 @@ def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
 # =====================================================
 # 第三层：核心公司健康度（修复版）
 # =====================================================
-

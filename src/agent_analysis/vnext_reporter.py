@@ -1401,8 +1401,10 @@ class VNextReportGenerator:
             "get_crowdedness_dashboard": self._crowdedness_visual,
             "get_percent_above_ma": self._percent_above_ma_visual,
             "get_new_highs_lows": self._new_highs_lows_visual,
+            "get_qqq_top10_concentration": self._top10_concentration_visual,
             "get_m7_fundamentals": self._m7_fundamentals_visual,
             "get_ndx_pe_and_earnings_yield": self._valuation_indicator_visual,
+            "get_ndx_forward_earnings_quality": self._forward_earnings_quality_visual,
             "get_damodaran_us_implied_erp": self._damodaran_indicator_visual,
             "get_equity_risk_premium": self._yield_gap_indicator_visual,
             "get_qqq_technical_indicators": self._technical_snapshot_visual,
@@ -1626,6 +1628,39 @@ class VNextReportGenerator:
 """
         return self._wrap_indicator_visual(ref, "new-highs-lows", "New highs versus lows", body)
 
+    def _top10_concentration_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        top10 = _safe_number(value.get("top10_weight_pct"))
+        m7 = _safe_number(value.get("m7_weight_pct"))
+        equal = _safe_number(value.get("equal_weight_top10_baseline_pct"))
+        excess = _safe_number(value.get("top10_excess_vs_equal_weight_pct_points"))
+        holdings = []
+        for item in _as_list(value.get("top10_holdings"))[:10]:
+            if isinstance(item, dict):
+                holdings.append(
+                    f"<li><b>{_escape(item.get('ticker', ''))}</b><span>{_fmt_number(item.get('weight_pct'), suffix='%', digits=2)}</span></li>"
+                )
+        spread = value.get("market_cap_vs_equal_weight") if isinstance(value.get("market_cap_vs_equal_weight"), dict) else {}
+        windows = spread.get("windows") if isinstance(spread.get("windows"), dict) else {}
+        spread_rows = []
+        for label in ["1m", "3m", "6m"]:
+            window = windows.get(label)
+            if isinstance(window, dict):
+                spread_rows.append(
+                    f"<span><b>{_escape(label)} QQQ-QQEW</b>{_fmt_number(window.get('market_cap_minus_equal_weight_pct'), suffix='%', digits=2)}</span>"
+                )
+        body = f"""
+<div class="metric-strip">
+  <span><b>Top10</b>{_fmt_number(top10, suffix='%', digits=2)}</span>
+  <span><b>M7</b>{_fmt_number(m7, suffix='%', digits=2)}</span>
+  <span><b>Equal-weight Top10</b>{_fmt_number(equal, suffix='%', digits=2)}</span>
+  <span><b>Excess vs equal</b>{_fmt_number(excess, suffix='ppt', digits=2)}</span>
+</div>
+<ul class="mini-source-list">{"".join(holdings)}</ul>
+<div class="metric-strip">{"".join(spread_rows)}</div>
+<p class="chart-footnote">effective_date={_escape(value.get('effective_date') or '')}; current holdings official, change history may be proxy.</p>
+"""
+        return self._wrap_indicator_visual(ref, "top10-concentration", "Top10 concentration anchor", body, details=True, open_by_default=True)
+
     def _m7_fundamentals_visual(self, ref: str, value: Dict[str, Any]) -> str:
         companies = []
         for ticker, payload in value.items():
@@ -1667,6 +1702,30 @@ class VNextReportGenerator:
                 )
         body = f'<div class="metric-strip">{metrics}</div><ul class="mini-source-list">{"".join(sources)}</ul>'
         return self._wrap_indicator_visual(ref, "valuation-sources", "Valuation cross-check", body)
+
+    def _forward_earnings_quality_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        ndx = value.get("ndx") if isinstance(value.get("ndx"), dict) else {}
+        m7 = value.get("m7") if isinstance(value.get("m7"), dict) else {}
+        revisions = m7.get("eps_revisions") if isinstance(m7.get("eps_revisions"), dict) else {}
+        rows = [
+            ("NDX Forward EY", ndx.get("forward_earnings_yield_pct"), "%"),
+            ("NDX Fwd EPS growth proxy", ndx.get("forward_eps_growth_proxy_pct"), "%"),
+            ("NDX operating margin", ndx.get("weighted_operating_margin_pct"), "%"),
+            ("M7 30D EPS revision", revisions.get("weighted_next_year_eps_revision_30d_pct"), "%"),
+            ("M7 revision direction", revisions.get("revision_direction_30d"), ""),
+        ]
+        metrics = "".join(
+            f"<span><b>{_escape(label)}</b>{_escape(str(metric)) if isinstance(metric, str) else _fmt_number(metric, suffix=suffix, digits=2)}</span>"
+            for label, metric, suffix in rows
+        )
+        members = []
+        for ticker, item in (revisions.get("members") or {}).items():
+            if isinstance(item, dict) and not item.get("error"):
+                members.append(
+                    f"<li><b>{_escape(ticker)}</b><span>{_fmt_number(item.get('revision_30d_pct'), suffix='%', digits=2)}</span><small>{_escape(item.get('revision_direction_30d', ''))}</small></li>"
+                )
+        body = f'<div class="metric-strip">{metrics}</div><ul class="mini-source-list">{"".join(members[:7])}</ul>'
+        return self._wrap_indicator_visual(ref, "forward-earnings-quality", "Forward earnings quality", body, details=True, open_by_default=True)
 
     def _damodaran_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
         rows = [

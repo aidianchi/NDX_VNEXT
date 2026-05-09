@@ -15,6 +15,7 @@ try:
     from .chart_time_series_artifacts import write_chart_time_series_artifact
     from .config import MODEL_CONFIGS, path_config
     from .core import DataCollector, DataIntegrity, ReportGenerator
+    from .news_event_ledger import NewsEventLedgerBuilder
 except ImportError:
     from agent_analysis import adapt_vnext_to_legacy
     from agent_analysis.orchestrator import VNextOrchestrator
@@ -23,6 +24,7 @@ except ImportError:
     from chart_time_series_artifacts import write_chart_time_series_artifact
     from config import MODEL_CONFIGS, path_config
     from core import DataCollector, DataIntegrity, ReportGenerator
+    from news_event_ledger import NewsEventLedgerBuilder
 
 
 DEFAULT_MODEL_PRIORITY = [
@@ -40,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--date", type=str, help="Backtest date in YYYY-MM-DD format.")
     parser.add_argument("--data-json", type=str, help="Use an existing collector output JSON.")
     parser.add_argument("--models", type=str, help="Comma-separated model priority override.")
+    parser.add_argument("--enable-news", action="store_true", help="Write an independent official news/event sidecar artifact.")
     parser.add_argument("--skip-report", action="store_true", help="Stop after logic_json generation.")
     chart_group = parser.add_mutually_exclusive_group()
     chart_group.add_argument(
@@ -116,6 +119,11 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         data_json = collector.run(backtest_date=backtest_date)
 
     run_dir = build_run_dir(backtest_date)
+    news_event_ledger_path = ""
+    if args.enable_news:
+        news_event_ledger_path = os.path.join(run_dir, "news_event_ledger.json")
+        NewsEventLedgerBuilder().build(news_event_ledger_path)
+
     integrity_report = DataIntegrity().run(data_json)
     builder = AnalysisPacketBuilder()
     packet = builder.build(data_json, output_path=os.path.join(run_dir, "analysis_packet.json"))
@@ -152,6 +160,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "logic_json": logic_path,
         "report_path": report_path,
         "chart_time_series": chart_time_series_path,
+        "news_event_ledger": news_event_ledger_path,
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
         "approval_status": _enum_value(getattr(artifacts["final_adjudication"], "approval_status", "")),
         "models": available_models,

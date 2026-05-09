@@ -1,4 +1,6 @@
+import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -21,6 +23,9 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path):
     assert "人工 / Wind 数据" in html
     assert "当前 PE" in html
     assert "PE 10Y 分位" in html
+    assert "ERP 5Y 分位" in html
+    assert "ERP 10Y 分位" in html
+    assert "manual_erp_percentile_10y" in html
     assert "当前 PB" in html
     assert "PB 10Y 分位" in html
     assert "高级 JSON 预览" in html
@@ -37,7 +42,8 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path):
     assert "旧版 HTML 仅保留兼容入口" in html
     assert "不生成旧版 HTML" in html
     assert "旧版 HTML 是过渡期兼容产物" in html
-    assert "新闻源预留" in html
+    assert "生成官方事件底账" in html
+    assert "--enable-news" in html
     assert "Trendonify 暂缓" in html
     assert "L5 默认预设" in html
     assert "输出与工作台" in html
@@ -47,6 +53,7 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path):
     assert 'id="runNow"' in html
     assert "fetch('http://127.0.0.1:8765/run'" in html
     assert "control service" in html
+    assert "news_event_ledger" not in html
     assert "数据源健康" in html
     assert "WorldPERatio" in html
     assert "Damodaran ERPbymonth.xlsx" in html
@@ -65,3 +72,10 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path):
     assert "runCommandPreview" in html
     assert "workbenchCommandPreview" in html
     assert "buildManualPayload" in html
+
+    console_data = re.search(r'<script type="application/json" id="console-data">(.*?)</script>', html, re.S)
+    assert console_data is not None
+    assert "&quot;" not in console_data.group(1)
+    parsed = json.loads(console_data.group(1))
+    assert "manualTemplate" in parsed
+    assert "manual_data.local.json" in parsed["manualPath"]

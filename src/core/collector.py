@@ -46,15 +46,15 @@ class DataCollector:
             
             # 第二层：市场风险偏好 (Market Risk Appetite)
             # 核心问题：市场参与者的主观情绪是倾向风险还是规避风险？
-            2: ["get_vix", "get_vxn", "get_hy_oas_bp", "get_ig_oas_bp", "get_hyg_momentum", "get_xly_xlp_ratio", "get_crowdedness_dashboard", "get_vxn_vix_ratio", "get_cnn_fear_greed_index"],
+            2: ["get_vix", "get_vxn", "get_hy_oas_bp", "get_ig_oas_bp", "get_hy_quality_spread_bp", "get_hyg_momentum", "get_xly_xlp_ratio", "get_crowdedness_dashboard", "get_vxn_vix_ratio", "get_cnn_fear_greed_index"],
             
             # 第三层：指数内部健康度 (Index Internal Health)
             # 核心问题：趋势是由广泛参与驱动还是由少数领导者支撑？
-            3: ["get_advance_decline_line", "get_percent_above_ma", "get_qqq_qqew_ratio", "get_m7_fundamentals", "get_new_highs_lows", "get_mcclellan_oscillator_nasdaq_or_nyse"],
+            3: ["get_advance_decline_line", "get_percent_above_ma", "get_qqq_qqew_ratio", "get_qqq_top10_concentration", "get_m7_fundamentals", "get_new_highs_lows", "get_mcclellan_oscillator_nasdaq_or_nyse"],
             
             # 第四层：指数基本面估值 (Index Fundamental Valuation)
             # 核心问题：当前价格相对于其内在价值和无风险资产，是否具有吸引力？
-            4: ["get_ndx_pe_and_earnings_yield", "get_equity_risk_premium", "get_damodaran_us_implied_erp"],
+            4: ["get_ndx_pe_and_earnings_yield", "get_ndx_forward_earnings_quality", "get_equity_risk_premium", "get_damodaran_us_implied_erp"],
             
             # 第五层：价格趋势与波动率 (Price Trend & Volatility) - V6.0完整版
             # 核心问题：价格的路径、动能和波动状态如何？
@@ -77,6 +77,8 @@ class DataCollector:
     # 回测时不支持历史数据的函数列表
     BACKTEST_UNSUPPORTED_FUNCTIONS = [
         "get_m7_fundamentals",  # yfinance.info只返回最新财报，不支持历史查询
+        "get_qqq_top10_concentration",  # Invesco endpoint only exposes current holdings in this path
+        "get_ndx_forward_earnings_quality",  # yfinance fundamentals / EPS trend are latest-only
     ]
 
     def _collect_single_indicator(self, func_name: str, end_date: Optional[str] = None) -> dict:
@@ -193,52 +195,10 @@ class DataCollector:
             "indicators": indicators
         }
         
-        # --- 【新增】联网新闻采集（可选，非侵入性）---
+        # News/events are intentionally handled as a sidecar artifact by src/main.py.
+        # They must not be mixed into the L1-L5 numeric indicator payload.
         if enable_news:
-            try:
-                logging.info("\n" + "=" * 60)
-                logging.info("[可选功能] 联网新闻采集已启用")
-                logging.info("=" * 60)
-                
-                try:
-                    from ..news_collector import NewsManager
-                    from ..news_manager import NewsCacheManager, NewsIntegrator
-                except ImportError:
-                    from news_collector import NewsManager
-                    from news_manager import NewsCacheManager, NewsIntegrator
-                
-                # 检查缓存
-                cache_mgr = NewsCacheManager(cache_hours=6)
-                
-                if cache_mgr.is_cache_valid():
-                    # 使用缓存
-                    news_data = cache_mgr.load_cache()
-                    logging.info("✓ 使用缓存的新闻数据")
-                else:
-                    # 重新采集
-                    # 注意：use_nlp=False 使用简单关键词（默认）
-                    # 若要启用FinBERT，需先安装: pip install transformers torch
-                    news_mgr = NewsManager(use_nlp=False)
-                    grouped_news = news_mgr.collect_all()
-                    
-                    # 转换为可序列化格式
-                    news_data = {}
-                    for layer, items in grouped_news.items():
-                        news_data[layer] = [item.to_dict() for item in items]
-                    
-                    # 保存缓存
-                    cache_mgr.save_cache(news_data)
-                
-                # 整合新闻到数据JSON
-                integrator = NewsIntegrator()
-                data_json = integrator.integrate_with_data(data_json, news_data)
-                
-                logging.info("✓ 新闻数据已成功整合到分析框架")
-                
-            except Exception as e:
-                logging.warning(f"新闻采集失败（不影响核心流程）: {e}")
-                logging.warning("将继续使用纯数值数据进行分析")
-        # --- 【新增结束】---
+            logging.info("新闻开关已启用；事件底账将由 main.py 独立写入 news_event_ledger.json。")
         
         # 安全地生成文件名，防止路径注入
         if backtest_date:

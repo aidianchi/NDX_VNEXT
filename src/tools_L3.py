@@ -218,6 +218,225 @@ def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
     logging.info(f"静态后备列表包含 {len(NDX100_COMPONENTS_FALLBACK)} 只成分股")
     return NDX100_COMPONENTS_FALLBACK
 
+
+INVESCO_QQQ_HOLDINGS_URL = (
+    "https://dng-api.invesco.com/cache/v1/accounts/en_US/shareclasses/QQQ/"
+    "holdings/fund?idType=ticker&interval=monthly&productType=ETF"
+)
+INVESCO_QQQ_HOLDINGS_PAGE = "https://www.invesco.com/qqq-etf/en/about.html#top-10-holdings"
+
+
+def _fetch_invesco_qqq_holdings() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    try:
+        response = requests.get(
+            INVESCO_QQQ_HOLDINGS_URL,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; ndx-vnext/1.0)",
+                "Accept": "application/json",
+                "Referer": "https://www.invesco.com/qqq-etf/en/about.html",
+            },
+            timeout=12,
+            proxies=get_requests_proxies(),
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict) or not isinstance(data.get("holdings"), list):
+            return None, "Invesco holdings response missing holdings list"
+        return data, None
+    except Exception as exc:
+        return None, str(exc)[:160]
+
+
+def _normalize_qqq_holding(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    ticker = str(row.get("ticker") or "").strip().upper()
+    weight = row.get("percentageOfTotalNetAssets")
+    try:
+        weight_pct = float(weight)
+    except Exception:
+        return None
+    if not ticker or weight_pct <= 0:
+        return None
+    return {
+        "ticker": ticker,
+        "issuer_name": row.get("issuerName"),
+        "weight_pct": round(weight_pct, 4),
+        "units": row.get("units"),
+        "security_type": row.get("securityTypeName"),
+    }
+
+
+def _concentration_weight_change_proxy(
+    holdings: List[Dict[str, Any]],
+    effective_date: datetime,
+    lookback_days: int,
+) -> Optional[Dict[str, Any]]:
+    if not YF_AVAILABLE or not holdings:
+        return None
+    tickers = [item["ticker"] for item in holdings[:10] if item.get("ticker")]
+    if not tickers:
+        return None
+    start_date = effective_date - timedelta(days=lookback_days + 14)
+    try:
+        prices = cached_yf_download(
+            tickers,
+            start=start_date,
+            end=effective_date + timedelta(days=1),
+            interval="1d",
+            progress=False,
+            auto_adjust=True,
+        )
+        if isinstance(prices.columns, pd.MultiIndex):
+            close = prices["Close"] if "Close" in prices.columns.get_level_values(0) else prices["Adj Close"]
+        else:
+            close_col = "Close" if "Close" in prices.columns else "Adj Close"
+            close = prices[[close_col]].rename(columns={close_col: tickers[0]})
+        close = close.dropna(how="all")
+        if len(close) < 3:
+            return None
+        latest = close.iloc[-1]
+        prior = close.iloc[0]
+        current_weights = {item["ticker"]: float(item["weight_pct"]) for item in holdings[:10]}
+        prior_weights = {}
+        for ticker, current_weight in current_weights.items():
+            latest_price = latest.get(ticker)
+            prior_price = prior.get(ticker)
+            if latest_price and prior_price and latest_price > 0 and prior_price > 0:
+                prior_weights[ticker] = current_weight / (float(latest_price) / float(prior_price))
+        if not prior_weights:
+            return None
+        current_top10 = sum(current_weights.values())
+        prior_top10 = sum(prior_weights.values())
+        scale = 100.0 / (prior_top10 + (100.0 - current_top10)) if prior_top10 > 0 else None
+        prior_top10_normalized = prior_top10 * scale if scale else None
+        if prior_top10_normalized is None:
+            return None
+        return {
+            "lookback_days": lookback_days,
+            "current_top10_weight_pct": round(current_top10, 2),
+            "prior_top10_weight_proxy_pct": round(prior_top10_normalized, 2),
+            "change_pct_points": round(current_top10 - prior_top10_normalized, 2),
+            "methodology": "Proxy: reverse current top-10 QQQ weights by constituent price returns; not official historical weights.",
+        }
+    except Exception:
+        return None
+
+
+def _qqq_equal_weight_performance_spread(effective_date: datetime) -> Dict[str, Any]:
+    if not YF_AVAILABLE:
+        return {"availability": "unavailable", "reason": "yfinance unavailable"}
+    start_date = effective_date - timedelta(days=220)
+    try:
+        qqq = clean_yfinance_dataframe(
+            cached_yf_download("QQQ", start=start_date, end=effective_date + timedelta(days=1), progress=False, auto_adjust=True)
+        )
+        qqew = clean_yfinance_dataframe(
+            cached_yf_download("QQEW", start=start_date, end=effective_date + timedelta(days=1), progress=False, auto_adjust=True)
+        )
+        if qqq.empty or qqew.empty or "close" not in qqq.columns or "close" not in qqew.columns:
+            return {"availability": "unavailable", "reason": "QQQ/QQEW close series unavailable"}
+        df = pd.concat([qqq["close"].rename("qqq"), qqew["close"].rename("qqew")], axis=1).dropna()
+        if len(df) < 22:
+            return {"availability": "unavailable", "reason": "insufficient common QQQ/QQEW history"}
+        out: Dict[str, Any] = {"availability": "available", "source_name": "yfinance daily close", "windows": {}}
+        for label, rows in [("1m", 21), ("3m", 63), ("6m", 126)]:
+            if len(df) <= rows:
+                continue
+            latest = df.iloc[-1]
+            prior = df.iloc[-rows - 1]
+            qqq_return = float(latest["qqq"] / prior["qqq"] - 1) * 100
+            qqew_return = float(latest["qqew"] / prior["qqew"] - 1) * 100
+            out["windows"][label] = {
+                "qqq_return_pct": round(qqq_return, 2),
+                "qqew_return_pct": round(qqew_return, 2),
+                "market_cap_minus_equal_weight_pct": round(qqq_return - qqew_return, 2),
+                "ratio_change_pct": round(float((latest["qqq"] / latest["qqew"]) / (prior["qqq"] / prior["qqew"]) - 1) * 100, 2),
+            }
+        return out
+    except Exception as exc:
+        return {"availability": "unavailable", "reason": str(exc)[:120]}
+
+
+def get_qqq_top10_concentration(end_date: str = None) -> Dict[str, Any]:
+    """QQQ official holdings anchor for Top10 concentration and cap-weighted vs equal-weight spread."""
+    effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
+    payload, error = _fetch_invesco_qqq_holdings()
+    if payload is None:
+        return {
+            "name": "QQQ Top10 Concentration",
+            "series_id": "INVESCO_QQQ_HOLDINGS",
+            "value": None,
+            "unit": "percent",
+            "source_name": "Invesco QQQ official holdings API",
+            "source_url": INVESCO_QQQ_HOLDINGS_PAGE,
+            "source_tier": "official_provider",
+            "notes": f"Invesco holdings unavailable: {error}",
+        }
+
+    holdings = [
+        normalized
+        for normalized in (_normalize_qqq_holding(row) for row in payload.get("holdings", []))
+        if normalized is not None
+    ]
+    holdings.sort(key=lambda item: item["weight_pct"], reverse=True)
+    top10 = holdings[:10]
+    total_holdings = int(payload.get("totalNumberOfHoldings") or len(holdings))
+    top10_weight = sum(item["weight_pct"] for item in top10)
+    top5_weight = sum(item["weight_pct"] for item in holdings[:5])
+    top3_weight = sum(item["weight_pct"] for item in holdings[:3])
+    alphabet_adjusted_m7 = set(M7_TICKERS) | {"GOOG"}
+    m7_weight = sum(item["weight_pct"] for item in holdings if item["ticker"] in alphabet_adjusted_m7)
+    equal_weight_top10 = (10 / total_holdings * 100) if total_holdings else None
+    effective = payload.get("effectiveBusinessDate") or payload.get("effectiveDate") or effective_date.strftime("%Y-%m-%d")
+    try:
+        concentration_date = datetime.strptime(effective, "%Y-%m-%d")
+    except Exception:
+        concentration_date = effective_date
+
+    changes = [
+        item
+        for item in [
+            _concentration_weight_change_proxy(top10, concentration_date, 21),
+            _concentration_weight_change_proxy(top10, concentration_date, 63),
+        ]
+        if item is not None
+    ]
+    value = {
+        "effective_date": effective,
+        "total_holdings": total_holdings,
+        "top10_weight_pct": round(top10_weight, 2),
+        "top5_weight_pct": round(top5_weight, 2),
+        "top3_weight_pct": round(top3_weight, 2),
+        "largest_weight_pct": top10[0]["weight_pct"] if top10 else None,
+        "m7_weight_pct": round(m7_weight, 2),
+        "equal_weight_top10_baseline_pct": round(equal_weight_top10, 2) if equal_weight_top10 is not None else None,
+        "top10_excess_vs_equal_weight_pct_points": round(top10_weight - equal_weight_top10, 2) if equal_weight_top10 is not None else None,
+        "top10_holdings": top10,
+        "concentration_change_proxy": changes,
+        "market_cap_vs_equal_weight": _qqq_equal_weight_performance_spread(concentration_date),
+        "source_boundary": "Official current QQQ holdings from Invesco; historical concentration change is a price-return proxy, not official historical holdings.",
+    }
+    return {
+        "name": "QQQ Top10 Concentration",
+        "series_id": "INVESCO_QQQ_HOLDINGS",
+        "value": value,
+        "unit": "percent",
+        "date": effective,
+        "source_name": "Invesco QQQ official holdings API",
+        "source_url": INVESCO_QQQ_HOLDINGS_PAGE,
+        "source_tier": "official_provider",
+        "data_quality": {
+            "source_tier": "official_provider",
+            "data_date": effective,
+            "collected_at_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "update_frequency": "daily/monthly as published by Invesco endpoint",
+            "formula": "Top-N concentration = sum of Invesco percentageOfTotalNetAssets; QQQ vs QQEW spread from daily close total returns.",
+            "coverage": {"holdings_reported": len(holdings), "total_holdings": total_holdings},
+            "anomalies": [] if len(top10) == 10 else ["fewer_than_10_holdings_parsed"],
+            "fallback_chain": ["official_provider/Invesco", "proxy/yfinance", "unavailable"],
+        },
+        "notes": "官方 QQQ 持仓用于头部权重锚；QQQ/QQEW 表现差异只作为市值加权相对等权的价格代理。",
+    }
+
 # =====================================================
 # V5.1 高级辅助函数
 # =====================================================
@@ -453,4 +672,3 @@ def get_m7_fundamentals(end_date: str = None) -> Dict[str, Any]:
 # =====================================================
 # 第四层：指数基本面与拥挤度（修复版）
 # =====================================================
-

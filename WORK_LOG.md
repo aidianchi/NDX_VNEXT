@@ -4,6 +4,89 @@
 
 ---
 
+## 2026-05-09
+
+### 增强人工 ERP 分位与 Trendonify / bb-browser 估值百分位研究
+
+完成内容：
+
+- 研究控制台的人工 / Wind 数据区新增 ERP 5Y 分位和 ERP 10Y 分位，写入 `get_damodaran_us_implied_erp.value.manual_erp_percentile_5y/10y`。
+- 调整控制台人工 ERP 写入边界：ERP 输入只作为 Manual/Wind ERP reference，不再同步写入 `get_equity_risk_premium` 的简式收益差距，避免把外部 ERP 和 NDX yield gap 混在一起。
+- `DEFAULT_MANUAL_DATA` 补齐 PE / Forward PE / PB / PS 的 10Y 分位字段，以及 ERP reference 的 5Y / 10Y 分位字段。
+- 增强 Trendonify parser：除 `Valuation Percentile Rank` 的 10Y 主分位外，额外解析 Historical P/E Comparison 表中的 1Y / 5Y / 10Y / 20Y / since-inception median、percentile 和 valuation label。
+- Trendonify 可行性结论：普通 `requests` 浏览器头、Jina Reader 文本代理都仍返回 Cloudflare 验证页；`bb-browser daemon start` 后可用真实浏览器打开页面并通过 `document.body.innerText` 读取公开文本，适合作为隔离 sidecar / 人工调研辅助，不适合作为默认主数据链。
+- `bb-browser` 真实页面 smoke：2026-05-08 Trendonify Trailing PE 页面显示 PE 38.07、10Y percentile 100；Forward PE 页面显示 Forward PE 23.73、5Y percentile 40、10Y percentile 57.5、20Y percentile 71.2。
+- 自动 PE/PB/PS 百分位来源初筛：
+  - Trendonify：当前最有价值，覆盖 NDX PE / Forward PE 及多窗口分位，但有 Cloudflare，建议 sidecar。
+  - WorldPERatio：可自动读取 NDX PE、均值和标准差区间，但不是 percentile。
+  - Koyfin：有历史 percentile rank 概念，偏登录/付费，适合人工或未来授权 connector，不宜伪装成公开自动源。
+  - FinanceCharts：能看到 NDX 成分股 PE/PB/PS rank，偏横截面 rank，不是指数自身历史 PE/PB/PS percentile。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_l4_external_valuation_sources.py tests/test_research_console.py tests/test_manual_data_template.py`：12 passed。
+- `python3 -m py_compile src/tools_L4.py src/research_console.py src/manual_data.py`：通过。
+- `python3 src/research_console.py`：重新生成 `output/reports/vnext_research_console.html`。
+- `python3 -m pytest -q`：114 passed，6 warnings。
+
+剩余观察：
+
+- 下一步若接入 `bb-browser`，应做成显式 sidecar：输出 URL、采集时间、页面文本摘要、解析字段、失败模式和人工确认标记；不得让 L4 主链在无提示情况下启动浏览器或绕过 Cloudflare。
+- PB / PS 的可靠指数历史百分位仍未找到公开稳定自动源；当前更现实路径是 licensed/manual 或未来从成分股历史基本面构建自有指数级时间序列。
+
+### 完成 NEXT_STEPS P0：L3 官方权重锚与 L4 forward earnings 质量
+
+完成内容：
+
+- 新增 L3 指标 `get_qqq_top10_concentration`：读取 Invesco QQQ 官方持仓 JSON，输出 Top10 / Top5 / Top3 / M7 权重、Top10 相对等权基准的超额权重、官方 `effective_date`、持仓来源和数据质量。
+- 同一指标补充 QQQ 相对 QQEW 的 1M/3M/6M 表现差，用来明确区分“多数成分参与弱”和“头部权重股推动强”；集中度历史变化只作为价格回推 proxy，明确不伪装成官方历史权重。
+- 新增 L4 指标 `get_ndx_forward_earnings_quality`：基于 yfinance 成分股模型输出 forward earnings yield、Forward EPS 增长代理、盈利/收入增长、利润率质量；M7 额外读取 next-year EPS trend，给出 30 日分析师修正方向。
+- `get_ndx_pe_and_earnings_yield` 同步暴露 ForwardEarningsProxyUSD、ForwardEPSGrowthProxyPct、WeightedProfitMarginPct / GrossMargin / OperatingMargin 等字段，让既有估值指标也能带上未来盈利和 margin 质量。
+- 更新 `TOOLS_REGISTRY`、DataCollector、packet builder、manual data 模板、IndicatorCanon、L3/L4 prompts 和 native brief 指标视觉，保证 v2 artifacts 与 brief 能直接消费新数据，不经过 legacy adapter。
+- 检查已安装的 `bb-browser`：CLI 可用，支持 `fetch`、页面快照和登录态浏览器操作；本轮 Invesco 官方 JSON 端点可直接访问，因此没有把 `bb-browser` 接入主数据链。它仍适合后续 P2 隔离调研/sidecar 试验，不能绕过数据治理。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_l3_top10_concentration.py tests/test_l4_forward_earnings_quality.py tests/test_vnext_packet_builder.py tests/test_l4_external_valuation_sources.py`：17 passed。
+- `python3 -m py_compile src/tools_L3.py src/tools_L4.py src/tools.py src/core/collector.py src/agent_analysis/packet_builder.py src/agent_analysis/vnext_reporter.py src/agent_analysis/deep_research_canon.py src/manual_data.py`：通过。
+- `python3 -m pytest -q`：114 passed。
+- 工具注册检查：`get_qqq_top10_concentration` 与 `get_ndx_forward_earnings_quality` 均已进入 `TOOLS_REGISTRY`。
+- 真实 L3 smoke：Invesco QQQ 官方接口返回 `effective_date=2026-05-07`，Top10 权重 46.91%，M7 权重 40.16%，QQQ 近 1M 相对 QQEW 超额 4.68pct。
+
+剩余观察：
+
+- L4 全成分股 forward quality 仍依赖 yfinance 最新基本面和 M7 EPS trend，属于 component_model / proxy，不是官方 NDX aggregate EPS revision；若未来有 Wind/manual 高信任源，应优先覆盖。
+- `bb-browser` 可以作为反爬或登录态页面的人工调研辅助，但不得直接进入主指标链。
+
+### 完成本地运行服务、官方事件底账、L2 信用分层利差与 Impeccable 上下文
+
+完成内容：
+
+- 新增本地 `vNext control service` MVP：`src/control_service.py` 提供 `/health` 和 `/run`，只接受项目白名单 Python 命令，运行日志写入 `output/logs/control_service/`，避免静态 HTML 任意执行本地命令。
+- 修复研究控制台“运行”按钮脚本初始化问题：`console-data` 改为可被 `JSON.parse` 正确读取的安全嵌入格式，避免按钮监听没有挂上。
+- 控制台新增官方事件底账开关：勾选后命令追加 `--enable-news`，由主流水线写入独立 `news_event_ledger.json`。
+- 新增 `src/news_event_ledger.py`：MVP 采集 Federal Reserve / BLS / BEA 官方 RSS 与 M7 SEC submissions，输出独立 sidecar artifact；不写入 L1-L5 runtime context。
+- 移除旧 collector 内部新闻整合路径：新闻不再混入 `data_json["indicators"]`，保持数值指标与事件背景分离。
+- 新增 L2 指标 `get_hy_quality_spread_bp`：计算 FRED / ICE BofA `BAMLH0A3HYC - BAMLH0A1HYBB`，即 CCC & Lower 高收益 OAS 减 BB 高收益 OAS。
+- 将该指标纳入 `TOOLS_REGISTRY`、DataCollector L2、packet builder L2、IndicatorCanon、L2 prompt 和 workbench 波动信用模块。
+- 补齐 `$impeccable` 所需 `PRODUCT.md` 与 `DESIGN.md`，并通过 context loader 确认 product/design 上下文可读取。register 明确为 `product`。
+- 重新生成 `output/reports/vnext_research_console.html`。
+
+验证结果：
+
+- `python3 -m py_compile src/control_service.py src/news_event_ledger.py src/main.py src/tools_L2.py src/chart_time_series_artifacts.py src/research_console.py`：通过。
+- `python3 -m pytest -q tests/test_control_service.py tests/test_news_event_ledger.py tests/test_l2_credit_quality.py tests/test_main_cli.py tests/test_research_console.py tests/test_chart_time_series_artifacts.py tests/test_deep_research_canon.py`：24 passed。
+- `python3 -m pytest -q`：110 passed。
+- `python3 src/news_event_ledger.py --output /tmp/news_event_ledger_test.json --no-sec --max-events-per-source 1`：生成 1 条官方 RSS 事件。
+- `node /Users/aidianchi/.agents/skills/impeccable/scripts/load-context.mjs`：`hasProduct=true`，`hasDesign=true`。
+
+剩余观察：
+
+- `control_service` 现在是本机 MVP，还没有浏览器侧二次确认弹窗、任务取消、运行状态轮询和历史任务 UI。
+- 新闻事件底账当前只做权威来源访问与结构化，不做摘要、情绪、LLM 解读，也不进入 Bridge/Thesis。
+- L4 prompt 约 18 万字符在 1M 上下文模型中可接受，但仍有重复和成本问题；后续应做 prompt 专用摘要，而不是把完整月度序列重复塞入 manifest 与 raw payload。
+- OpenBB 本轮按用户判断暂缓，不纳入主链路。
+
 ## 2026-05-07
 
 ### 修复 workbench 对齐、模块切换读数和 QQQ 数据窗口

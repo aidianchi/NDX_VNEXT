@@ -32,8 +32,8 @@ WORKBENCH_MODULES: Dict[str, Dict[str, Any]] = {
         "title": "波动信用",
         "question": "价格强势是否被波动率或信用风险提前否定？",
         "layer_tags": ["L2", "L5"],
-        "function_ids": ["get_vix", "get_vxn", "get_vxn_vix_ratio", "get_hy_oas_bp", "get_ig_oas_bp", "get_hyg_momentum"],
-        "series": ["VIX", "VXN", "VXN_VIX_RATIO", "HY_OAS", "IG_OAS", "HYG", "QQQ_OHLCV"],
+        "function_ids": ["get_vix", "get_vxn", "get_vxn_vix_ratio", "get_hy_oas_bp", "get_ig_oas_bp", "get_hy_quality_spread_bp", "get_hyg_momentum"],
+        "series": ["VIX", "VXN", "VXN_VIX_RATIO", "HY_OAS", "IG_OAS", "HY_QUALITY_SPREAD", "HYG", "QQQ_OHLCV"],
     },
     "rates_valuation": {
         "title": "利率估值",
@@ -73,6 +73,7 @@ SUPPLEMENTAL_SERIES_META: Dict[str, Dict[str, Any]] = {
     "VXN_VIX_RATIO": {"label": "VXN/VIX", "provider": "calculated", "frequency": "daily", "layer": "L2", "function_id": "get_vxn_vix_ratio"},
     "HY_OAS": {"label": "HY OAS", "provider": "FRED", "frequency": "daily", "layer": "L2", "function_id": "get_hy_oas_bp"},
     "IG_OAS": {"label": "IG OAS", "provider": "FRED", "frequency": "daily", "layer": "L2", "function_id": "get_ig_oas_bp"},
+    "HY_QUALITY_SPREAD": {"label": "CCC & Lower - BB OAS", "provider": "FRED / ICE BofA calculated", "frequency": "daily", "layer": "L2", "function_id": "get_hy_quality_spread_bp"},
     "HYG": {"label": "HYG", "provider": "yfinance", "frequency": "daily", "layer": "L2", "function_id": "get_hyg_momentum"},
     "US10Y": {"label": "10Y Treasury", "provider": "FRED", "frequency": "daily", "layer": "L1", "function_id": "get_10y_treasury"},
     "US10Y_REAL": {"label": "10Y Real Rate", "provider": "FRED", "frequency": "daily", "layer": "L1", "function_id": "get_10y_real_rate"},
@@ -563,11 +564,25 @@ def _default_supplemental_fetchers() -> Dict[str, Fetcher]:
         frame["value"] = frame["value"].pct_change(12) * 100
         return frame.dropna(subset=["value"])[["date", "value"]]
 
+    def hy_quality_spread(lookback_days: int) -> Any:
+        ccc = get_fred_series("BAMLH0A3HYC", days=lookback_days)
+        bb = get_fred_series("BAMLH0A1HYBB", days=lookback_days)
+        if ccc is None or bb is None or getattr(ccc, "empty", False) or getattr(bb, "empty", False):
+            return []
+        aligned = ccc[["date", "value"]].rename(columns={"value": "ccc_oas"}).merge(
+            bb[["date", "value"]].rename(columns={"value": "bb_oas"}),
+            on="date",
+            how="inner",
+        )
+        aligned["value"] = aligned["ccc_oas"] - aligned["bb_oas"]
+        return aligned[["date", "value"]]
+
     return {
         "VIX": yf_series("^VIX"),
         "VXN": yf_series("^VXN"),
         "HY_OAS": fred("BAMLH0A0HYM2"),
         "IG_OAS": fred("BAMLC0A0CM"),
+        "HY_QUALITY_SPREAD": hy_quality_spread,
         "HYG": yf_series("HYG"),
         "US10Y": fred("DGS10"),
         "US10Y_REAL": fred("DFII10"),

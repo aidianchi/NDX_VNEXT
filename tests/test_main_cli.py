@@ -20,3 +20,11 @@ def test_main_can_enable_legacy_charts_explicitly(monkeypatch):
     args = parse_args()
 
     assert args.disable_charts is False
+
+
+def test_main_accepts_independent_news_sidecar_flag(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--enable-news"])
+
+    args = parse_args()
+
+    assert args.enable_news is True

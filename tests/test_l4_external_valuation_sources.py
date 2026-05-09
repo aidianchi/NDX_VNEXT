@@ -16,6 +16,17 @@ def test_trendonify_pe_parser_extracts_value_percentile_and_date():
         <h2>Valuation Percentile Rank</h2>
         <div>86.4%</div>
       </section>
+      <section>
+        <h2>Historical P/E Comparison</h2>
+        <table>
+          <tr><th>Time Period</th><th>Median PE Ratio</th><th>Percentile Rank</th><th>Valuation</th></tr>
+          <tr><td>1 Year</td><td>33.1</td><td>52.4</td><td>Fair Value</td></tr>
+          <tr><td>5 Year</td><td>30.2</td><td>74.1</td><td>Overvalued</td></tr>
+          <tr><td>10 Year</td><td>26.9</td><td>86.4</td><td>Expensive</td></tr>
+          <tr><td>20 Year</td><td>22.4</td><td>92.5</td><td>Expensive</td></tr>
+          <tr><td>Since May 1990</td><td>21.2</td><td>88.8</td><td>Expensive</td></tr>
+        </table>
+      </section>
     </body></html>
     """
 
@@ -26,6 +37,12 @@ def test_trendonify_pe_parser_extracts_value_percentile_and_date():
     assert parsed["value"] == 34.12
     assert parsed["percentile_10y"] == 86.4
     assert parsed["historical_percentile"] == 86.4
+    assert parsed["historical_percentiles"]["1y"]["percentile"] == 52.4
+    assert parsed["historical_percentiles"]["5y"]["percentile"] == 74.1
+    assert parsed["historical_percentiles"]["20y"]["median_pe"] == 22.4
+    assert parsed["percentile_5y"] == 74.1
+    assert parsed["percentile_20y"] == 92.5
+    assert parsed["percentile_since_inception"] == 88.8
     assert parsed["data_date"] == "May 01, 2026"
     assert parsed["availability"] == "available"
 
@@ -40,6 +57,15 @@ def test_trendonify_forward_pe_parser_extracts_value_percentile_and_date():
         <h2>Valuation Percentile Rank</h2>
         <div>71.5%</div>
       </section>
+      <section>
+        <h2>Historical P/E Comparison</h2>
+        <p>TIME PERIOD MEDIAN PE RATIO PERCENTILE RANK VALUATION</p>
+        <p>1 Year 25.33 16.7 Attractive</p>
+        <p>5 Year 24.92 35 Undervalued</p>
+        <p>10 Year 22.6 71.5 Overvalued</p>
+        <p>20 Year 20.27 71.2 Overvalued</p>
+        <p>Since Jun 2002 21.23 64.9 Overvalued</p>
+      </section>
     </body></html>
     """
 
@@ -50,6 +76,9 @@ def test_trendonify_forward_pe_parser_extracts_value_percentile_and_date():
     assert parsed["value"] == 24.8
     assert parsed["percentile_10y"] == 71.5
     assert parsed["historical_percentile"] == 71.5
+    assert parsed["historical_percentiles"]["1y"]["valuation"] == "Attractive"
+    assert parsed["historical_percentiles"]["5y"]["percentile"] == 35.0
+    assert parsed["historical_percentiles"]["since_inception"]["percentile"] == 64.9
     assert parsed["data_date"] == "May 01, 2026"
     assert parsed["availability"] == "available"
 

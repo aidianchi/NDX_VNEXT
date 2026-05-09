@@ -98,6 +98,7 @@ def test_chart_time_series_artifact_adds_workbench_modules_and_research_series()
             "VXN": lambda lookback_days: _value_frame([22.0, 23.0]),
             "HY_OAS": lambda lookback_days: _value_frame([2.8, 2.7]),
             "IG_OAS": lambda lookback_days: _value_frame([0.81, 0.8]),
+            "HY_QUALITY_SPREAD": lambda lookback_days: _value_frame([6.1, 6.2]),
             "US10Y": lambda lookback_days: _value_frame([4.4, 4.35]),
             "US10Y_REAL": lambda lookback_days: _value_frame([2.1, 2.05]),
             "US10Y_BREAKEVEN": lambda lookback_days: _value_frame([2.3, 2.28]),
@@ -126,8 +127,10 @@ def test_chart_time_series_artifact_adds_workbench_modules_and_research_series()
 
     assert payload["workbench_modules"]["price_technical"]["layer_tags"] == ["L5"]
     assert "VIX" in payload["workbench_modules"]["volatility_credit"]["series"]
+    assert "HY_QUALITY_SPREAD" in payload["workbench_modules"]["volatility_credit"]["series"]
     assert "DAMODARAN_ERP_MONTHLY" in payload["workbench_modules"]["rates_valuation"]["series"]
     assert payload["series"]["VIX"]["rows"][1] == {"time": "2026-05-02", "value": 18.2}
+    assert payload["series"]["HY_QUALITY_SPREAD"]["rows"][1]["value"] == 6.2
     assert payload["series"]["DAMODARAN_ERP_MONTHLY"]["rows"][1]["value"] == 4.24
     latest_qqq = payload["series"]["QQQ_OHLCV"]["rows"][-1]
     assert payload["series"]["QQQ_OHLCV"]["lookback_days"] == DEFAULT_CHART_LOOKBACK_DAYS

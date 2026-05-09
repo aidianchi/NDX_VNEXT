@@ -524,6 +524,52 @@ def calculate_weighted_metrics(df: pd.DataFrame) -> Dict[str, Any]:
         if total_forward_earnings > 0:
             metrics["weighted_forward_pe"] = round(covered_cap / total_forward_earnings, 2)
             metrics["weighted_forward_earnings_yield"] = round(total_forward_earnings / covered_cap * 100, 2)
+            metrics["forward_earnings_proxy_usd"] = round(total_forward_earnings, 2)
+            metrics["forward_earnings_coverage_market_cap_usd"] = round(covered_cap, 2)
+
+    if "forward_eps" in working.columns and "trailing_eps" in working.columns:
+        eps_frame = working.assign(
+            _forward_eps=working["forward_eps"].map(_safe_float),
+            _trailing_eps=working["trailing_eps"].map(_safe_float),
+        )
+        valid_eps = eps_frame[
+            (eps_frame["market_cap"] > 0)
+            & (eps_frame["_forward_eps"] > 0)
+            & (eps_frame["_trailing_eps"] > 0)
+        ].copy()
+        eps_excluded = [
+            {"ticker": row.get("ticker"), "metric": "forward_eps_growth_proxy", "reason": "missing_forward_or_trailing_eps"}
+            for _, row in eps_frame.loc[~eps_frame.index.isin(valid_eps.index)].iterrows()
+        ]
+        _metric_coverage("forward_eps_growth_proxy", valid_eps, eps_excluded)
+        if not valid_eps.empty:
+            weights = valid_eps["market_cap"] / valid_eps["market_cap"].sum()
+            growth = (valid_eps["_forward_eps"] / valid_eps["_trailing_eps"] - 1.0) * 100.0
+            metrics["weighted_forward_eps_growth_proxy_pct"] = round(float(np.average(growth, weights=weights)), 2)
+
+    for source_column, metric_key, output_key in [
+        ("earnings_growth", "earnings_growth", "weighted_earnings_growth_pct"),
+        ("revenue_growth", "revenue_growth", "weighted_revenue_growth_pct"),
+        ("profit_margin", "profit_margin", "weighted_profit_margin_pct"),
+        ("gross_margin", "gross_margin", "weighted_gross_margin_pct"),
+        ("operating_margin", "operating_margin", "weighted_operating_margin_pct"),
+    ]:
+        if source_column not in working.columns:
+            continue
+        values = working[source_column].map(_safe_float)
+        frame = working.assign(_metric=values)
+        valid_metric = frame[(frame["market_cap"] > 0) & frame["_metric"].notna()].copy()
+        metric_excluded = [
+            {"ticker": row.get("ticker"), "metric": metric_key, "reason": f"missing_{source_column}"}
+            for _, row in frame.loc[~frame.index.isin(valid_metric.index)].iterrows()
+        ]
+        _metric_coverage(metric_key, valid_metric, metric_excluded)
+        if not valid_metric.empty:
+            weights = valid_metric["market_cap"] / valid_metric["market_cap"].sum()
+            number = float(np.average(valid_metric["_metric"], weights=weights))
+            if abs(number) <= 1.0:
+                number *= 100.0
+            metrics[output_key] = round(number, 2)
 
     fcf_values = working["fcf"].map(_safe_float) if "fcf" in working.columns else pd.Series([None] * len(working))
     if fcf_values.isna().all() and "fcf_yield" in working.columns:
@@ -610,9 +656,17 @@ def get_ndx_components_data_yf_v5(end_date: str = None) -> Tuple[pd.DataFrame, D
             data_list.append({
                 'ticker': ticker,
                 'market_cap': market_cap,
+                'current_price': info.get('currentPrice') or info.get('regularMarketPrice'),
+                'forward_eps': info.get('forwardEps'),
+                'trailing_eps': info.get('trailingEps'),
                 'forward_pe': info.get('forwardPE'),
                 'trailing_pe': info.get('trailingPE'),
                 'price_to_book': info.get('priceToBook'),
+                'earnings_growth': info.get('earningsGrowth') or info.get('earningsQuarterlyGrowth'),
+                'revenue_growth': info.get('revenueGrowth'),
+                'profit_margin': info.get('profitMargins'),
+                'gross_margin': info.get('grossMargins'),
+                'operating_margin': info.get('operatingMargins'),
                 # 自由现金流与FCF收益率（V5新增）
                 'fcf': info.get('freeCashflow'),
                 'fcf_yield': (info.get('freeCashflow') / market_cap) * 100 if info.get('freeCashflow') else None,
@@ -835,13 +889,16 @@ def _parse_trendonify_ndx_pe(html: str, *, forward: bool = False) -> Dict[str, A
     metric = "ndx_forward_pe" if forward else "ndx_trailing_pe"
     value = _first_number(rf"{re.escape(title)}\s*\n\s*([0-9]+(?:\.[0-9]+)?)", text)
     data_date = _first_date(r"Last Updated:\s*([A-Za-z]+\s+[0-9]{2},\s+[0-9]{4})", text)
-    percentile = _first_number(r"Valuation Percentile Rank\s*\n\s*([0-9]+(?:\.[0-9]+)?)\s*%?", text)
+    percentile = _first_number(r"Valuation\s+Percentile\s+Rank\s*([0-9]+(?:\.[0-9]+)?)\s*%?", text)
+    historical_percentiles = _parse_trendonify_historical_percentiles(text)
+    if percentile is None:
+        percentile = historical_percentiles.get("10y", {}).get("percentile")
     url = (
         "https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
         if forward
         else "https://trendonify.com/united-states/stock-market/nasdaq-100/pe-ratio"
     )
-    return _valuation_source_result(
+    result = _valuation_source_result(
         source_id="trendonify_forward_pe" if forward else "trendonify_pe",
         source_name="Trendonify",
         source_url=url,
@@ -853,6 +910,46 @@ def _parse_trendonify_ndx_pe(html: str, *, forward: bool = False) -> Dict[str, A
         methodology="QQQ-derived third-party estimate with explicit valuation percentile rank when available",
         formula=f"Published {title}; percentile only from explicit Valuation Percentile Rank",
     )
+    if historical_percentiles:
+        result["historical_percentiles"] = historical_percentiles
+        result["percentile_1y"] = historical_percentiles.get("1y", {}).get("percentile")
+        result["percentile_5y"] = historical_percentiles.get("5y", {}).get("percentile")
+        result["percentile_20y"] = historical_percentiles.get("20y", {}).get("percentile")
+        result["percentile_since_inception"] = historical_percentiles.get("since_inception", {}).get("percentile")
+        result["methodology"] = (
+            f"{result['methodology']}; historical comparison table includes "
+            "1Y/5Y/10Y/20Y/since-inception percentiles when published"
+        )
+    return result
+
+
+def _parse_trendonify_historical_percentiles(text: str) -> Dict[str, Dict[str, Any]]:
+    """Extract Trendonify's published comparison-table percentiles without inferring missing values."""
+    period_keys = {
+        "1 year": "1y",
+        "5 year": "5y",
+        "10 year": "10y",
+        "20 year": "20y",
+    }
+    percentiles: Dict[str, Dict[str, Any]] = {}
+    row_pattern = re.compile(
+        r"(?im)^\s*(1\s+Year|5\s+Year|10\s+Year|20\s+Year|Since\s+[A-Za-z]+\s+[0-9]{4})"
+        r"\s+([0-9]+(?:\.[0-9]+)?)"
+        r"\s+([0-9]+(?:\.[0-9]+)?)"
+        r"\s+([A-Za-z][A-Za-z -]*)(?:\s*$|\n)",
+    )
+    for match in row_pattern.finditer(text):
+        label = re.sub(r"\s+", " ", match.group(1).strip()).lower()
+        key = "since_inception" if label.startswith("since ") else period_keys.get(label)
+        if not key:
+            continue
+        percentiles[key] = {
+            "period": match.group(1).strip(),
+            "median_pe": _round_or_none(_safe_float(match.group(2))),
+            "percentile": _round_or_none(_safe_float(match.group(3))),
+            "valuation": match.group(4).strip(),
+        }
+    return percentiles
 
 
 def get_ndx_valuation_third_party_checks() -> List[Dict[str, Any]]:
@@ -1330,6 +1427,13 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
                     "ForwardPE": metrics.get('weighted_forward_pe'),
                     "EarningsYield": metrics.get('weighted_earnings_yield'),
                     "ForwardEarningsYield": metrics.get('weighted_forward_earnings_yield'),
+                    "ForwardEarningsProxyUSD": metrics.get('forward_earnings_proxy_usd'),
+                    "ForwardEPSGrowthProxyPct": metrics.get('weighted_forward_eps_growth_proxy_pct'),
+                    "WeightedEarningsGrowthPct": metrics.get('weighted_earnings_growth_pct'),
+                    "WeightedRevenueGrowthPct": metrics.get('weighted_revenue_growth_pct'),
+                    "WeightedProfitMarginPct": metrics.get('weighted_profit_margin_pct'),
+                    "WeightedGrossMarginPct": metrics.get('weighted_gross_margin_pct'),
+                    "WeightedOperatingMarginPct": metrics.get('weighted_operating_margin_pct'),
                     "FCFYield": metrics.get('weighted_fcf_yield'),
                     "PriceToBook": metrics.get('weighted_price_to_book'),
                     "Coverage": {
@@ -1355,6 +1459,176 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
     else:
         # yfinance不可用时直接降级到Alpha Vantage
         return get_ndx_pe_and_earnings_yield_av(end_date=effective_date.strftime("%Y-%m-%d"))
+
+
+def _direction_from_change(change_pct: Optional[float]) -> str:
+    if change_pct is None:
+        return "unavailable"
+    if change_pct >= 1.0:
+        return "upward"
+    if change_pct <= -1.0:
+        return "downward"
+    return "flat"
+
+
+def _m7_eps_revision_snapshot(market_caps: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+    market_caps = market_caps or {}
+    snapshots: Dict[str, Any] = {}
+    weighted_changes: List[Tuple[float, float]] = []
+    analyst_counts: List[int] = []
+    if not YF_AVAILABLE:
+        return {"availability": "unavailable", "reason": "yfinance unavailable", "members": snapshots}
+
+    for ticker in M7_TICKERS:
+        try:
+            stock = yf.Ticker(ticker)
+            trend = stock.get_eps_trend()
+            estimate = stock.get_earnings_estimate()
+            if trend is None or trend.empty or "+1y" not in trend.index:
+                raise Exception("missing +1y eps trend")
+            row = trend.loc["+1y"]
+            current = _safe_float(row.get("current"))
+            days_30 = _safe_float(row.get("30daysAgo"))
+            days_90 = _safe_float(row.get("90daysAgo"))
+            change_30 = ((current / days_30 - 1) * 100) if current and days_30 else None
+            change_90 = ((current / days_90 - 1) * 100) if current and days_90 else None
+            analyst_count = None
+            if estimate is not None and not estimate.empty and "+1y" in estimate.index:
+                analyst_count = estimate.loc["+1y"].get("numberOfAnalysts")
+                try:
+                    analyst_counts.append(int(analyst_count))
+                except Exception:
+                    pass
+            weight = float(market_caps.get(ticker) or 0.0)
+            if weight > 0 and change_30 is not None:
+                weighted_changes.append((weight, change_30))
+            snapshots[ticker] = {
+                "next_year_eps_current": _round_or_none(current),
+                "next_year_eps_30d_ago": _round_or_none(days_30),
+                "next_year_eps_90d_ago": _round_or_none(days_90),
+                "revision_30d_pct": _round_or_none(change_30),
+                "revision_90d_pct": _round_or_none(change_90),
+                "revision_direction_30d": _direction_from_change(change_30),
+                "next_year_analyst_count": int(analyst_count) if analyst_count is not None and not pd.isna(analyst_count) else None,
+                "source": "yfinance eps_trend / earnings_estimate",
+            }
+            time.sleep(0.05)
+        except Exception as exc:
+            snapshots[ticker] = {"error": str(exc)[:80], "source": "yfinance eps_trend"}
+
+    weighted_revision = None
+    if weighted_changes:
+        total_weight = sum(weight for weight, _ in weighted_changes)
+        weighted_revision = sum(weight * change for weight, change in weighted_changes) / total_weight if total_weight else None
+    available = [item for item in snapshots.values() if isinstance(item, dict) and not item.get("error")]
+    return {
+        "availability": "available" if available else "unavailable",
+        "coverage": {"available_members": len(available), "total_members": len(M7_TICKERS)},
+        "weighted_next_year_eps_revision_30d_pct": _round_or_none(weighted_revision),
+        "revision_direction_30d": _direction_from_change(weighted_revision),
+        "median_next_year_analyst_count": int(np.median(analyst_counts)) if analyst_counts else None,
+        "members": snapshots,
+        "methodology": "M7 representative analyst revision proxy from yfinance EPS trend: +1y current estimate vs 30 days ago, market-cap weighted when caps are available.",
+    }
+
+
+def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
+    """Forward earnings, analyst revision and margin-quality proxy for NDX/M7 valuation support."""
+    effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
+    date_str = effective_date.strftime("%Y-%m-%d")
+    if not YF_AVAILABLE:
+        return {
+            "name": "NDX Forward Earnings Quality",
+            "series_id": "NDX_FORWARD_EARNINGS_QUALITY",
+            "value": None,
+            "unit": "mixed",
+            "source_tier": SOURCE_TIER_UNAVAILABLE,
+            "source_name": "yfinance",
+            "notes": "yfinance unavailable; forward earnings quality cannot be collected.",
+        }
+
+    try:
+        df, stats = get_ndx_components_data_yf_v5(end_date=date_str)
+        if df.empty:
+            raise Exception(f"no valid component data: {stats.get('error', 'unknown')}")
+        metrics = calculate_weighted_metrics(df)
+        market_caps = {
+            str(row["ticker"]).upper(): float(row["market_cap"])
+            for _, row in df.iterrows()
+            if str(row.get("ticker", "")).upper() in M7_TICKERS and _safe_float(row.get("market_cap"))
+        }
+        m7_revisions = _m7_eps_revision_snapshot(market_caps)
+        m7_frame = df[df["ticker"].isin(M7_TICKERS)].copy() if "ticker" in df.columns else pd.DataFrame()
+        m7_metrics = calculate_weighted_metrics(m7_frame) if not m7_frame.empty else {}
+        coverage_pct = stats.get("coverage", 0) * 100
+        value = {
+            "data_date": date_str,
+            "ndx": {
+                "weighted_forward_pe": metrics.get("weighted_forward_pe"),
+                "forward_earnings_yield_pct": metrics.get("weighted_forward_earnings_yield"),
+                "forward_earnings_proxy_usd": metrics.get("forward_earnings_proxy_usd"),
+                "forward_eps_growth_proxy_pct": metrics.get("weighted_forward_eps_growth_proxy_pct"),
+                "weighted_earnings_growth_pct": metrics.get("weighted_earnings_growth_pct"),
+                "weighted_revenue_growth_pct": metrics.get("weighted_revenue_growth_pct"),
+                "weighted_profit_margin_pct": metrics.get("weighted_profit_margin_pct"),
+                "weighted_gross_margin_pct": metrics.get("weighted_gross_margin_pct"),
+                "weighted_operating_margin_pct": metrics.get("weighted_operating_margin_pct"),
+                "coverage": metrics.get("coverage", {}),
+            },
+            "m7": {
+                "weighted_forward_pe": m7_metrics.get("weighted_forward_pe"),
+                "forward_earnings_yield_pct": m7_metrics.get("weighted_forward_earnings_yield"),
+                "forward_eps_growth_proxy_pct": m7_metrics.get("weighted_forward_eps_growth_proxy_pct"),
+                "weighted_profit_margin_pct": m7_metrics.get("weighted_profit_margin_pct"),
+                "weighted_gross_margin_pct": m7_metrics.get("weighted_gross_margin_pct"),
+                "weighted_operating_margin_pct": m7_metrics.get("weighted_operating_margin_pct"),
+                "eps_revisions": m7_revisions,
+            },
+            "source_boundary": (
+                "NDX forward earnings and margin quality are component-model proxies from latest yfinance fundamentals. "
+                "M7 EPS revisions use yfinance analyst EPS trend, not an official Nasdaq aggregate revision series."
+            ),
+        }
+        return {
+            "name": "NDX Forward Earnings Quality",
+            "series_id": "NDX_FORWARD_EARNINGS_QUALITY",
+            "value": value,
+            "unit": "ratio/percent/mixed",
+            "date": date_str,
+            "source_tier": SOURCE_TIER_COMPONENT_MODEL,
+            "source_name": "yfinance component model + M7 EPS trend",
+            "data_quality": _quality_block(
+                source_tier=SOURCE_TIER_COMPONENT_MODEL,
+                data_date=date_str,
+                update_frequency="latest component fundamentals; EPS trend refreshed when yfinance updates",
+                formula=(
+                    "Forward earnings yield = covered forward earnings / covered market cap; "
+                    "margin quality = market-cap weighted profit/gross/operating margins; "
+                    "M7 revisions = +1y EPS current estimate vs 30 days ago."
+                ),
+                coverage={
+                    "component_coverage_pct": round(coverage_pct, 2),
+                    "components_successful": stats.get("successful"),
+                    "total_tickers": stats.get("total_tickers"),
+                    "metric_coverage": metrics.get("coverage", {}),
+                    "m7_revision_coverage": m7_revisions.get("coverage", {}),
+                },
+                anomalies=metrics.get("anomalies", []),
+                fallback_chain=[SOURCE_TIER_LICENSED_MANUAL, SOURCE_TIER_COMPONENT_MODEL, SOURCE_TIER_PROXY, SOURCE_TIER_UNAVAILABLE],
+                source_disagreement={"official_ndx_revision_series": "not available in automated source; use manual/Wind if supplied"},
+            ),
+            "notes": "补充 Forward EPS、盈利修正和利润率质量代理，避免 L4 只看当前 PE/ERP。",
+        }
+    except Exception as exc:
+        return {
+            "name": "NDX Forward Earnings Quality",
+            "series_id": "NDX_FORWARD_EARNINGS_QUALITY",
+            "value": None,
+            "unit": "mixed",
+            "source_tier": SOURCE_TIER_UNAVAILABLE,
+            "source_name": "yfinance component model + M7 EPS trend",
+            "notes": f"Forward earnings quality unavailable: {str(exc)[:120]}",
+        }
 
 
 def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:

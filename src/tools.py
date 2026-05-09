@@ -86,6 +86,7 @@ TOOLS_REGISTRY = {
     "get_10y2y_spread_bp": get_10y2y_spread_bp,
     "get_hy_oas_bp": get_hy_oas_bp,
     "get_ig_oas_bp": get_ig_oas_bp,
+    "get_hy_quality_spread_bp": get_hy_quality_spread_bp,
     "get_10y_real_rate": get_10y_real_rate,
     "get_10y_treasury": get_10y_treasury,
     "get_10y_breakeven": get_10y_breakeven,
@@ -106,10 +107,12 @@ TOOLS_REGISTRY = {
     "get_cnn_fear_greed_index": get_cnn_fear_greed_index,
 
     # Layer 3
+    "get_qqq_top10_concentration": get_qqq_top10_concentration,
     "get_m7_fundamentals": get_m7_fundamentals,
 
     # Layer 4
     "get_ndx_pe_and_earnings_yield": get_ndx_pe_and_earnings_yield,
+    "get_ndx_forward_earnings_quality": get_ndx_forward_earnings_quality,
     "get_equity_risk_premium": get_equity_risk_premium,
     "get_damodaran_us_implied_erp": get_damodaran_us_implied_erp,
     "get_crowdedness_dashboard": get_crowdedness_dashboard,

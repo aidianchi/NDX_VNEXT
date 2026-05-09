@@ -29,6 +29,7 @@ L2 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 - `get_vxn_vix_ratio`: 科技波动率相对大盘波动率。识别科技股是否有特异性压力。
 - `get_hy_oas_bp`: 高收益债 OAS。信用市场对风险补偿的定价，优先级最高之一。
 - `get_ig_oas_bp`: 投资级 OAS。判断压力是否从低质量信用扩散到高质量信用。
+- `get_hy_quality_spread_bp`: CCC & Lower 减 BB 高收益债 OAS。判断低质信用是否相对高质 HY 更快恶化。
 - `get_hyg_momentum`: 高收益债 ETF 动量。信用风险在交易价格中的确认。
 - `get_xly_xlp_ratio`: 可选消费/必需消费。真实经济风险偏好和消费者进攻/防御切换。
 - `get_crowdedness_dashboard`: 仓位拥挤、期权偏斜、put/call、short interest 等脆弱性指标。

@@ -54,5 +54,7 @@ def test_manual_erp_reference_is_separate_from_simple_yield_gap():
     simple_gap_metric = manual_data.DEFAULT_MANUAL_DATA["metrics"]["get_equity_risk_premium"]
 
     assert "manual_erp" in erp_metric["value"]
+    assert "manual_erp_percentile_5y" in erp_metric["value"]
+    assert "manual_erp_percentile_10y" in erp_metric["value"]
     assert "manual_erp" not in simple_gap_metric["value"]
     assert "not NDX simple yield gap" in erp_metric["notes"]

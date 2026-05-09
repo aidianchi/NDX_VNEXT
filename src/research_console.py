@@ -19,6 +19,17 @@ def _escape(value: Any) -> str:
     return html.escape(str(value or ""), quote=True)
 
 
+def _safe_script_json(value: str) -> str:
+    """Keep embedded JSON parseable inside a raw script tag."""
+    return (
+        value.replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
 class ResearchConsoleGenerator:
     """Generate a self-contained first-screen control console for vNext runs."""
 
@@ -154,7 +165,12 @@ class ResearchConsoleGenerator:
               <option value="low">low</option>
             </select>
           </label>
-          <label>ERP % <input data-manual-field="erp" type="number" step="0.01"></label>
+          <fieldset class="metric-pair">
+            <legend>ERP</legend>
+            <label>ERP % <input data-manual-field="erp" type="number" step="0.01"></label>
+            <label>ERP 5Y 分位 <input data-manual-field="erp_percentile_5y" type="number" step="0.1" min="0" max="100"></label>
+            <label>ERP 10Y 分位 <input data-manual-field="erp_percentile_10y" type="number" step="0.1" min="0" max="100"></label>
+          </fieldset>
           <fieldset class="metric-pair">
             <legend>PE</legend>
             <label>当前 PE <input data-manual-field="pe" type="number" step="0.01" min="0"></label>
@@ -221,7 +237,7 @@ class ResearchConsoleGenerator:
         <div class="toggle-line">
           <label><input id="skipLegacyReport" type="checkbox" checked> 不生成旧版 HTML</label>
           <label><input id="disableCharts" type="checkbox" checked> 不生成旧版 charts</label>
-          <label><input id="enableNews" type="checkbox"> 新闻源预留</label>
+          <label><input id="enableNews" type="checkbox"> 生成官方事件底账</label>
           <label><input id="enableTrendonify" type="checkbox" disabled> Trendonify 暂缓</label>
           <label><input id="enableLegacyCharts" type="checkbox"> 临时启用旧版 charts</label>
         </div>
@@ -285,7 +301,7 @@ class ResearchConsoleGenerator:
           <span>06</span>
           <div>
             <h2>运行日志 / 健康 / 安全</h2>
-            <p>一键运行要等本地 control service 有清楚权限边界后再开放。</p>
+            <p>一键运行通过本地 control service 执行白名单命令；新闻只生成独立事件底账，不进入 L1-L5 输入上下文。</p>
           </div>
         </div>
         <div class="health-list" aria-label="数据源健康">
@@ -298,12 +314,12 @@ class ResearchConsoleGenerator:
         </div>
         <div class="safety-box">
           <h3>一键运行安全方案</h3>
-          <p>推荐下一阶段采用轻量本地 control service：命令 allowlist、显式确认弹窗、逐步日志、失败恢复和只写入项目白名单路径。当前 HTML 继续只做配置、预览和下载。</p>
+          <p>本地 control service 只接受项目白名单命令，日志写入 output/logs/control_service。静态页面仍不能绕过服务直接执行本地任务。</p>
         </div>
       </article>
     </section>
   </main>
-  <script type="application/json" id="console-data">{_escape(payload)}</script>
+  <script type="application/json" id="console-data">{_safe_script_json(payload)}</script>
   <script>{self._js()}</script>
 </body>
 </html>
@@ -719,6 +735,7 @@ function modeCommand(mode, models) {
   if (document.getElementById('skipLegacyReport').checked) base.push('--skip-report');
   if (document.getElementById('disableCharts').checked && !document.getElementById('enableLegacyCharts').checked) base.push('--disable-charts');
   if (document.getElementById('enableLegacyCharts').checked) base.push('--enable-legacy-charts');
+  if (document.getElementById('enableNews').checked) base.push('--enable-news');
   if (mode === 'native_brief') {
     return `python3 src/agent_analysis/vnext_reporter.py --run-dir ${runDir} --template brief`;
   }
@@ -776,8 +793,12 @@ function buildManualPayload() {
   if (fields.ps_percentile_10y !== undefined) valuation.value.PS_TTM_percentile_10y = fields.ps_percentile_10y;
   if (fields.erp !== undefined) {
     erp.value.manual_erp = fields.erp;
-    gap.value.level = fields.erp;
-    gap.value.yield_type = 'manual_erp_reference';
+  }
+  if (fields.erp_percentile_5y !== undefined) {
+    erp.value.manual_erp_percentile_5y = fields.erp_percentile_5y;
+  }
+  if (fields.erp_percentile_10y !== undefined) {
+    erp.value.manual_erp_percentile_10y = fields.erp_percentile_10y;
   }
   return payload;
 }
@@ -787,6 +808,10 @@ function validateManualPayload(payload) {
   const valuation = payload.metrics.get_ndx_pe_and_earnings_yield.value;
   ['PE_TTM_percentile_5y', 'PE_TTM_percentile_10y', 'PB_percentile_5y', 'PB_percentile_10y', 'PS_TTM_percentile_5y', 'PS_TTM_percentile_10y'].forEach(key => {
     const value = valuation[key];
+    if (value !== undefined && value !== null && (value < 0 || value > 100)) warnings.push(`${key} 应在 0-100`);
+  });
+  ['manual_erp_percentile_5y', 'manual_erp_percentile_10y'].forEach(key => {
+    const value = payload.metrics.get_damodaran_us_implied_erp.value[key];
     if (value !== undefined && value !== null && (value < 0 || value > 100)) warnings.push(`${key} 应在 0-100`);
   });
   ['PE_TTM', 'PB', 'PS_TTM'].forEach(key => {
