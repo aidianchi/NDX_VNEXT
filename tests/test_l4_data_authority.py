@@ -308,6 +308,33 @@ def test_damodaran_getter_prefers_excel_and_marks_it_official(monkeypatch):
     assert html_called["value"] is False
 
 
+def test_damodaran_cache_rejects_tiny_stub_workbooks(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools_L4.path_config, "cache_dir", str(tmp_path))
+    url = "https://pages.stern.nyu.edu/~adamodar/pc/implprem/ERPbymonth.xlsx"
+    cache_path = tools_L4._damodaran_cache_path(url)
+    tiny_workbook = _minimal_xlsx([["Date", "ERP"], ["2026-05-01", 0.042]])
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    with open(cache_path, "wb") as handle:
+        handle.write(tiny_workbook)
+
+    fetched = b"PK\x03\x04" + (b"x" * 5000)
+    fetch_calls = {"count": 0}
+
+    def fake_fetch_bytes(fetch_url, timeout=12):
+        fetch_calls["count"] += 1
+        assert fetch_url == url
+        return fetched, None
+
+    monkeypatch.setattr(tools_L4, "_fetch_bytes", fake_fetch_bytes)
+
+    content, error = tools_L4._fetch_bytes_cached(url)
+
+    assert error is None
+    assert content == fetched
+    assert fetch_calls["count"] == 1
+    assert os.path.getsize(cache_path) == len(fetched)
+
+
 def test_damodaran_getter_uses_latest_monthly_row_not_after_target_date(monkeypatch):
     monthly_bytes = _minimal_xlsx(
         [

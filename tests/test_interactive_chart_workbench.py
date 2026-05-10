@@ -170,6 +170,11 @@ def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(t
     assert "setVisibleTimeRangeAll" in html
     assert "updateRange(365)" in html
     assert "setCrosshairPosition" in html
+    assert "let syncLocked = false" in html
+    assert "syncLocked = true;\nchart.timeScale().fitContent();" in html
+    assert "function unregisterChart(chart)" in html
+    assert "unregisterChart(moduleCharts[moduleKey]);" in html
+    assert "syncedCharts.forEach(item => item.timeScale().fitContent())" not in html
     assert 'data-price-module-only' in html
     assert 'id="summaryValueB"' in html
     assert "VIX" in html

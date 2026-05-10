@@ -58,3 +58,13 @@ def test_manual_erp_reference_is_separate_from_simple_yield_gap():
     assert "manual_erp_percentile_10y" in erp_metric["value"]
     assert "manual_erp" not in simple_gap_metric["value"]
     assert "not NDX simple yield gap" in erp_metric["notes"]
+
+
+def test_manual_erp_description_fields_do_not_trigger_override():
+    metric = json.loads(json.dumps(manual_data.DEFAULT_MANUAL_DATA["metrics"]["get_damodaran_us_implied_erp"]))
+    metric["value"] = {
+        "scope": "manual/Wind ERP reference; specify scope when used",
+        "not_ndx_valuation_warning": "Manual ERP reference is not NDX PE percentile.",
+    }
+
+    assert manual_data.has_meaningful_manual_override(metric) is False

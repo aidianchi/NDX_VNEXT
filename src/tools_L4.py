@@ -783,13 +783,35 @@ def _damodaran_cache_path(url: str) -> str:
     return os.path.join(_damodaran_cache_dir(), safe_name)
 
 
-def _read_cache(path: str) -> Optional[bytes]:
+def _is_valid_damodaran_cache_payload(url: str, content: bytes) -> bool:
+    if not content:
+        return False
+    lower_url = url.lower()
+    if lower_url.endswith(".xlsx"):
+        if not content.startswith(b"PK\x03\x04"):
+            return False
+        # The official Damodaran workbooks are materially larger than a stub
+        # workbook. Tiny ZIP-valid files are usually synthetic test fixtures or
+        # upstream placeholder/error payloads and should not poison the 24h cache.
+        if "erpbymonth.xlsx" in lower_url or re.search(r"/erp[a-z]+\d{2}\.xlsx$", lower_url):
+            return len(content) >= 4096
+    return True
+
+
+def _read_cache(path: str, url: str) -> Optional[bytes]:
     try:
         mtime = os.path.getmtime(path)
         if time.time() - mtime > DAMODARAN_CACHE_TTL_SECONDS:
             return None
         with open(path, "rb") as f:
-            return f.read()
+            content = f.read()
+        if not _is_valid_damodaran_cache_payload(url, content):
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+            return None
+        return content
     except Exception:
         return None
 
@@ -804,11 +826,11 @@ def _write_cache(path: str, content: bytes) -> None:
 
 def _fetch_bytes_cached(url: str, timeout: int = 12) -> Tuple[Optional[bytes], Optional[str]]:
     cache_path = _damodaran_cache_path(url)
-    cached = _read_cache(cache_path)
+    cached = _read_cache(cache_path, url)
     if cached is not None:
         return cached, None
     content, error = _fetch_bytes(url, timeout=timeout)
-    if content is not None:
+    if content is not None and _is_valid_damodaran_cache_payload(url, content):
         _write_cache(cache_path, content)
     return content, error
 

@@ -6,6 +6,21 @@
 
 ## 2026-05-10
 
+### AI 复核补丁：Workbench 时间轴收口与 Damodaran 缓存防污染
+
+分支：`claude/20260510-debug-run-issues`
+
+完成内容：
+
+- **Workbench 时间轴收口**：复核发现 Claude 报告称已移除子图/module 独立 `fitContent()`，但代码中仍残留。补丁后初始化和模块重绘都不再各自 `fitContent()`，统一由主价格图时间轴决定全局范围。
+- **模块图重绘清理**：`renderModuleChart()` 在归一化/双轴切换时会创建新图表，但旧图表仍留在同步列表中。新增 `moduleCharts` 与 `unregisterChart()`，重绘前清除旧实例，避免幽灵图表继续参与时间轴和 crosshair 同步。
+- **Damodaran 缓存防污染**：复核发现本地 1-2KB 的 stub `.xlsx` 会被 24h 缓存信任，导致新 run 仍可能只得到极短 `monthly_series`。新增缓存 payload 校验，官方月度/当月 xlsx 过小或非 ZIP-xlsx 时自动丢弃并重新抓取。
+- **测试补强**：新增 Workbench JS 断言、Damodaran 坏缓存剔除测试、manual ERP 描述字段不触发 override 测试。
+
+验证结果：
+
+- 直接绕过坏缓存后重新抓取 Damodaran 官方文件：`ERPbymonth.xlsx` 约 46KB、`ERPMay26.xlsx` 约 1.46MB，解析出 120 条月度序列，最新 `data_date=2026-05-01`。
+
 ### 20260510_193710 Run Debug: Damodaran ERP 缓存、图表对齐、Crosshair、Reviser Prompt 修复
 
 分支：`claude/20260510-debug-run-issues`

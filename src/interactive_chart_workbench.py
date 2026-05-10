@@ -944,6 +944,7 @@ const chartEntries = [];
 const indicatorSeries = {};
 const panelShells = {};
 const moduleSeriesData = {};
+const moduleCharts = {};
 let syncLocked = false;
 let syncingRange = false;
 let syncingCrosshair = false;
@@ -1029,6 +1030,17 @@ function createBaseChart(target, height, key = 'chart') {
   return chart;
 }
 
+function unregisterChart(chart) {
+  if (!chart) return;
+  const syncedIndex = syncedCharts.indexOf(chart);
+  if (syncedIndex >= 0) syncedCharts.splice(syncedIndex, 1);
+  const entryIndex = chartEntries.findIndex(item => item.chart === chart);
+  if (entryIndex >= 0) chartEntries.splice(entryIndex, 1);
+  if (typeof chart.remove === 'function') {
+    chart.remove();
+  }
+}
+
 const chart = createBaseChart(root, 640, 'price');
 chart.applyOptions({
   grid: { vertLines: { color: '#eeeeea' }, horzLines: { color: '#eeeeea' } },
@@ -1101,7 +1113,6 @@ function renderPanel(rootSelector, panelKey, config) {
       entry.primaryData = points(item.data);
     }
   });
-  panel.timeScale().fitContent();
 }
 
 renderPanel('[data-panel-root="volume"]', 'volume', [{ kind: 'histogram', data: payload.volume, color: 'rgba(75, 85, 99, .45)', priceFormat: { type: 'volume' } }]);
@@ -1135,10 +1146,13 @@ function renderModuleChart(moduleKey, colors) {
   const target = document.querySelector(`[data-module-chart="${moduleKey}"]`);
   const module = payload.modules[moduleKey];
   if (!target || !module) return;
+  unregisterChart(moduleCharts[moduleKey]);
+  delete moduleCharts[moduleKey];
   target.innerHTML = '';
   const normalize = Boolean(document.querySelector(`[data-module-normalize="${moduleKey}"]`)?.checked);
   const dualAxis = Boolean(document.querySelector(`[data-module-dual-axis="${moduleKey}"]`)?.checked);
   const moduleChart = createBaseChart(target, 460, moduleKey);
+  moduleCharts[moduleKey] = moduleChart;
   moduleChart.applyOptions({
     leftPriceScale: { visible: dualAxis, borderColor: '#d7d4cb' },
     rightPriceScale: { visible: true, borderColor: '#d7d4cb', minimumWidth: PRICE_SCALE_WIDTH },
@@ -1186,7 +1200,6 @@ function renderModuleChart(moduleKey, colors) {
       legend.appendChild(button);
     }
   });
-  moduleChart.timeScale().fitContent();
 }
 
 renderModuleChart('volatility_credit', ['#be4d25', '#7c3aed', '#b7791f', '#2563eb', '#18845b']);
@@ -1297,7 +1310,7 @@ function unifyTimeAxis() {
   if (range) {
     setRangeAll(range);
   } else {
-    syncedCharts.forEach(item => item.timeScale().fitContent());
+    chart.timeScale().fitContent();
   }
 }
 
