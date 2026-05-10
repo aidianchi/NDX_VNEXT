@@ -766,4 +766,4 @@ def test_vnext_reporter_default_output_keeps_run_id_when_data_date_repeats(tmp_p
 
     output = reporter._default_output_path(run_dir, reporter._load_artifacts(run_dir), "brief", "slate_v2")
 
-    assert output.name == "vnext_research_ui_brief_20260502_20260506_061216.html"
+    assert output.name == "vnext_brief_20260502_0000_20260506_0612.html"

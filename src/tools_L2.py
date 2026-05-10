@@ -9,7 +9,7 @@ try:
 except ImportError:
     from tools_common import *
 
-from typing import Iterable
+from typing import Iterable, Optional
 
 try:
     from .tools_L3 import get_ndx100_components
@@ -20,13 +20,17 @@ except ImportError:
 # 第2层函数
 # =====================================================
 
-def _get_ndx100_common_price_data(effective_date: datetime, lookback_days: int = 300) -> Tuple[List[str], pd.DataFrame]:
+def _get_ndx100_common_price_data(
+    effective_date: datetime,
+    lookback_days: int = 300,
+    historical_date: Optional[str] = None,
+) -> Tuple[List[str], pd.DataFrame]:
     """
     鍏变韩 NDX100 鎴愬垎鑲℃壒閲忚鎯呫€?
     鐩爣鏄 L2 鐨?breadth 鎸囨爣鍏变韩涓€娆′笅杞斤紝
     浣嗗悇鑷殑璁＄畻绐楀彛浠嶇劧鎸夊師鐗堥€昏緫鍒囩墖锛屼笉鏀瑰彉杈撳嚭鍙ｅ緞銆?
     """
-    ndx100_components = get_ndx100_components(end_date=effective_date.strftime("%Y-%m-%d"))
+    ndx100_components = get_ndx100_components(end_date=historical_date)
     common_start = effective_date - timedelta(days=lookback_days)
     data = cached_yf_download(
         ndx100_components,
@@ -316,7 +320,7 @@ def get_advance_decline_line(end_date: str = None) -> Dict[str, Any]:
 
     try:
         # 获取成分股列表
-        ndx100_components, data = _get_ndx100_common_price_data(effective_date)
+        ndx100_components, data = _get_ndx100_common_price_data(effective_date, historical_date=end_date)
 
         # 下载126天+20天缓冲的数据（确保有足够交易日）
         lookback_days = 126
@@ -419,7 +423,7 @@ def get_percent_above_ma(end_date: str = None) -> Dict[str, Any]:
 
     try:
         # **修改点**: 调用新的动态函数获取成分股
-        ndx100_components, data = _get_ndx100_common_price_data(effective_date)
+        ndx100_components, data = _get_ndx100_common_price_data(effective_date, historical_date=end_date)
 
         start_date = effective_date - timedelta(days=300) # 确保有足够数据计算200日均线
 
@@ -500,9 +504,9 @@ def get_new_highs_lows(end_date: str = None) -> Dict[str, Any]:
 
     try:
         try:
-            components, data = _get_ndx100_common_price_data(effective_date, lookback_days=420)
+            components, data = _get_ndx100_common_price_data(effective_date, lookback_days=420, historical_date=end_date)
         except TypeError:
-            components, data = _get_ndx100_common_price_data(effective_date)
+            components, data = _get_ndx100_common_price_data(effective_date, historical_date=end_date)
         close_prices = _extract_component_close_prices(data).dropna(axis=1, how="any")
         if close_prices.empty or len(close_prices) < 252:
             raise ValueError(f"Insufficient data for 52-week high/low calculation (days={len(close_prices)}).")
@@ -571,7 +575,7 @@ def get_mcclellan_oscillator_nasdaq_or_nyse(end_date: str = None) -> Dict[str, A
     effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
 
     try:
-        components, data = _get_ndx100_common_price_data(effective_date)
+        components, data = _get_ndx100_common_price_data(effective_date, historical_date=end_date)
         close_prices = _extract_component_close_prices(data).dropna(axis=1, how="any")
         if close_prices.empty or len(close_prices) < 40:
             raise ValueError(f"Insufficient data for McClellan calculation (days={len(close_prices)}).")

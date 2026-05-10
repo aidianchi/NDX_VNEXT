@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from control_service import validate_command
+from control_service import _python_bound_args, validate_command
 
 
 def test_control_service_allows_main_news_command():
@@ -52,3 +52,10 @@ def test_control_service_allows_full_console_flow_command():
 
     assert args[:2] == ["python3", "src/console_run_all.py"]
     assert "--workbench-modules" in args
+
+
+def test_control_service_binds_python_to_service_interpreter():
+    args = _python_bound_args(["python3", "src/main.py", "--models", "deepseek-v4-flash"])
+
+    assert args[0] == sys.executable
+    assert args[1:] == ["src/main.py", "--models", "deepseek-v4-flash"]

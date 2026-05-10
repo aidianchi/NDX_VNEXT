@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-05-10
+
+### 修复控制台运行环境、产物跳转、命名和实时数据链路
+
+完成内容：
+
+- 排查最新 control service run `20260510_001423_727`：LLM 主链完成，核心异常不是 DeepSeek，而是控制台任务用系统 `python3` 启动，实际落到 macOS Python 3.9，导致 `pandas_ta` 缺失；`.venv` 中 `pandas_ta` 与 `pandas_datareader` 均可用。
+- `src/control_service.py` 现在把白名单里的 `python/python3` 命令绑定为服务自身的 `sys.executable`，确保从 `start.command` / `open_research_console.command` 启动后，后续任务都跑在同一个虚拟环境。
+- `control_service` 新增 `/artifact?path=...` 和 `/latest-product`：控制台里的“打开最新报告 / workbench”和底部最新产物不再依赖浏览器从 `http://127.0.0.1` 跳 `file://`，而是由本地服务安全读取仓库内产物。
+- 控制台任务完成后会轮询状态；完整运行成功会自动打开最新 native brief，workbench-only 成功会自动打开 workbench。
+- 简化新产物命名：native brief 改为 `vnext_brief_<数据采集分钟>_<运行分钟>.html`，workbench 改为 `vnext_workbench_<数据采集分钟>_<运行分钟>.html`；旧命名仍可被控制台识别为历史产物。
+- `src/open_research_console.py` 的版本探针增加新 artifact 跳转标记；旧 control service 若仍占用端口，会被判定为过期并重启。
+- 修复 M2 YoY 只有水平没有分位：新增 `calculate_yoy_series()`，M2 的相对位置现在基于同比序列本身计算 1Y/10Y 分位。
+- 修复净流动性：WTREGEN 缓存存在百万美元/十亿美元混合口径，现逐点转换到十亿美元；`calculate_long_term_stats()` 强制数值化，避免 pandas/numpy object dtype 异常。
+- 修复默认实时模式误用历史成分股：L2 breadth、L4 component model、`get_equity_risk_premium` 不再把当前日期隐式传给 `get_ndx100_components(end_date=...)`；只有显式历史日期才使用历史成分。
+- `requirements.txt` 将 pandas 约束为 `<3.0.0`，因为 pandas-datareader 0.10.0 对 pandas 3 需要兼容补丁；当前代码仍保留窄兼容，但新装环境优先避免踩坑。
+
+验证结果：
+
+- `.venv/bin/python` 环境探针：`pandas_ta=True`，`pandas_datareader=True`。
+- `python src/main.py --collect-only` 真实采集：生成 `output/data/data_collected_v9_live.json`，39 个指标全部有值，0 缺失，0 错误。
+- 单点验证：`get_qqq_technical_indicators` 和 `get_adx_qqq` 成功，ADX 使用 `ta` 公式层；`get_net_liquidity_momentum` 成功输出 5830.96 十亿美元并带 5Y/10Y 分位。
+- `python src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20260510_001425 --template brief`：生成 `output/reports/vnext_brief_20260509_2215_20260510_0014.html`。
+- `python src/interactive_chart_workbench.py --run-dir output/analysis/vnext/20260510_001425 --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity`：生成 `output/reports/vnext_workbench_20260509_2215_20260510_0014.html`。
+- `./start.command`：打开 `http://127.0.0.1:8765`；`/artifact` 可直接服务新 brief HTML；当前只保留一个 8765 control service。
+- 定向测试：`python -m pytest tests/test_l3_breadth_data.py tests/test_l4_forward_earnings_quality.py tests/test_l1_m2_relativity.py tests/test_control_service.py tests/test_research_console.py tests/test_vnext_reporter.py -q`：28 passed。
+
+结论：
+
+- VPN/yfinance/DeepSeek 分开排查是正确方法，但这次“数据大量缺失”的主因不是 DeepSeek，而是控制台任务跑错 Python 环境，加上少数数据函数把实时模式误切成历史成分路径。
+- OpenBB 可以继续作为后续数据覆盖研究对象，但不应在本轮作为第一修复手段；当前主链自身已恢复到 39/39 指标可用。
+
 ## 2026-05-09
 
 ### 修复控制台分段验证与 yfinance 缺数下的 workbench 崩溃
@@ -15,12 +47,14 @@
 - `src/main.py` 新增 `--collect-only`，用于只采集市场数据 JSON，不进入 DeepSeek / vNext LLM 链路；便于 VPN 开关下把 yfinance 与 DeepSeek 分开排查。
 - `src/control_service.py` 白名单允许 `src/main.py --collect-only`。
 - `src/research_console.py` 自动填入最近的 `output/data/data_collected_v9_*.json`；“已有数据分析”改为只运行 `src/main.py --data-json ... --skip-report --disable-charts`，不再串联 native brief 和 workbench；“只采集数据”现在生成真正的 `--collect-only` 命令。
+- 修正控制台日期语义：普通“分析日期”不再自动触发 `--date`；只有显式勾选“历史日期 / 回测”时才把日期传给 `src/main.py` / `src/console_run_all.py`，避免把最新周末日期误当历史时点分析。
 - 保留上一轮 L2 韧性修复：`VXN/VIX` 上游缺数不再抛异常；Layer 自检覆盖字段可从实际 `indicator_analyses` 派生校正；LLM JSON 解析器可修复模型偶发的数组错括号和尾逗号。
 
 验证结果：
 
 - `python3 -m pytest tests/test_control_service.py tests/test_research_console.py tests/test_main_collect_only.py tests/test_interactive_chart_workbench.py tests/test_runtime_resilience.py -q`：15 passed。
 - `python3 src/research_console.py`：重新生成 `output/reports/vnext_research_console.html`。
+- `rg -n "historicalDateMode|--date|modeCommand" output/reports/vnext_research_console.html`：确认控制台只在历史回测开关勾选时拼接 `--date`。
 - `python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/20260509 --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity`：在 QQQ 仍被 yfinance 限流的情况下成功生成 `output/reports/vnext_interactive_charts_20260509.html`。
 - `python3 -m pytest -q`：124 passed，6 warnings。
 

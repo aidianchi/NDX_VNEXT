@@ -1,6 +1,6 @@
 # vNext 下一步
 
-更新日期：2026-05-09  
+更新日期：2026-05-10  
 阅读方式：本文件只放“接下来要做什么”和少量已完成快照。详细完成记录写入 `WORK_LOG.md`，按时间倒序。
 
 ---
@@ -19,9 +19,17 @@
 
 这里只保留最近完成事项的摘要，详细内容见 `WORK_LOG.md`。
 
+### 2026-05-10
+
+- 修复控制台运行环境：control service 会把白名单 `python3` 命令绑定为启动服务的虚拟环境解释器，避免 macOS 系统 Python 3.9 导致 `pandas_ta` 缺失。
+- 控制台产物跳转改为本地服务 `/artifact?path=...`，解决 `http://127.0.0.1` 页面无法可靠打开 `file://` HTML 的问题；完整运行完成后自动打开最新 native brief。
+- 新 brief/workbench 命名简化为 `vnext_brief_<数据采集分钟>_<运行分钟>.html` 和 `vnext_workbench_<数据采集分钟>_<运行分钟>.html`；控制台继续兼容旧文件名。
+- 修复 M2 YoY 分位、WTREGEN 单位混合缓存、净流动性 dtype 异常，以及默认实时模式误触发历史成分股路径的问题。
+- 真实 `--collect-only` 验证：`output/data/data_collected_v9_live.json` 中 39 个指标全部有值，0 缺失，0 错误。
+
 ### 2026-05-09
 
-- 修复控制台分段验证闭环：`src/main.py --collect-only` 支持只采集数据；控制台自动填入最近数据 JSON，“已有数据分析”改为只跑 vNext/LLM；workbench 在 yfinance 限流、L5 技术指标缺失时降级生成，不再因 `None.get()` 崩溃。
+- 修复控制台分段验证闭环：`src/main.py --collect-only` 支持只采集数据；控制台自动填入最近数据 JSON，“已有数据分析”改为只跑 vNext/LLM；普通分析日期不再自动触发回测，只有勾选“历史日期 / 回测”才传 `--date`；workbench 在 yfinance 限流、L5 技术指标缺失时降级生成，不再因 `None.get()` 崩溃。
 - 控制台完成产品化闭环：新增一键启动器 `open_research_console.command` / `src/open_research_console.py`，`control_service` 根地址直接服务控制台，控制台载入上次人工数据，保存人工数据后可一键运行完整报告，自动串联 vNext、native brief 和 workbench。
 - 用 `$impeccable` 对控制台和 brief 完成 shape/craft/polish：控制台改成“运行仪器”层级，brief 改成左侧 sticky 导航 + 右侧长文阅读，默认样式切到 OKLCH token，去掉彩色侧边条惯性，并把 console 纳入桌面/移动视觉回归。
 - 新增本地 `control_service` MVP：提供 `/health` 和 `/run`，只接受白名单命令，日志写入 `output/logs/control_service/`。

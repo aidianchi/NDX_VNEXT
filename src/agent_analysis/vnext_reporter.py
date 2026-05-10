@@ -5,7 +5,7 @@ import html
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -217,6 +217,38 @@ def _fmt_number(value: Any, *, suffix: str = "", digits: int = 2, fallback: str 
     if number is None:
         return fallback
     return f"{number:.{digits}f}{suffix}"
+
+
+def _minute_stamp(value: Any, *, assume_utc: bool = False) -> str:
+    """Return a compact local-time minute stamp for filenames."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if re.fullmatch(r"\d{8}_\d{4,6}", text):
+        return text[:13]
+    if re.fullmatch(r"\d{8}", text):
+        return f"{text}_0000"
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None and (assume_utc or "utc" in text.lower()):
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone()
+        return parsed.strftime("%Y%m%d_%H%M")
+    except ValueError:
+        cleaned = re.sub(r"[^0-9]+", "", text)
+        if len(cleaned) >= 12:
+            return f"{cleaned[:8]}_{cleaned[8:12]}"
+        if len(cleaned) >= 8:
+            return f"{cleaned[:8]}_0000"
+    return ""
+
+
+def _run_minute_stamp(run_path: Path) -> str:
+    match = re.search(r"(\d{8})_(\d{4})", run_path.name)
+    if match:
+        return f"{match.group(1)}_{match.group(2)}"
+    return _minute_stamp(run_path.name)
 
 
 def _json_for_script(payload: Any) -> str:
@@ -543,19 +575,15 @@ class VNextReportGenerator:
         return str(destination)
 
     def _default_output_path(self, run_path: Path, artifacts: Dict[str, Any], template: str, style: str) -> Path:
-        data_date = (
-            artifacts.get("synthesis_packet", {})
-            .get("packet_meta", {})
-            .get("data_date")
-        )
-        date_stamp = str(data_date).replace("-", "") if data_date else ""
-        run_stamp = str(run_path.name or "").strip()
-        if date_stamp and run_stamp and run_stamp != date_stamp:
-            stamp = f"{date_stamp}_{run_stamp}"
+        meta = artifacts.get("synthesis_packet", {}).get("packet_meta", {})
+        data_stamp = _minute_stamp(meta.get("collector_timestamp_utc"), assume_utc=True) or _minute_stamp(meta.get("data_date"))
+        run_stamp = _run_minute_stamp(run_path)
+        if data_stamp and run_stamp and data_stamp != run_stamp:
+            stamp = f"{data_stamp}_{run_stamp}"
         else:
-            stamp = str(data_date or run_path.name or datetime.now().strftime("%Y%m%d_%H%M%S")).replace("-", "")
+            stamp = data_stamp or run_stamp or datetime.now().strftime("%Y%m%d_%H%M")
         style_suffix = f"_{style}" if style != "slate_v2" else ""
-        return self.reports_dir / f"vnext_research_ui_{template}_{stamp}{style_suffix}.html"
+        return self.reports_dir / f"vnext_{template}_{stamp}{style_suffix}.html"
 
     def _normalize_style(self, style: str) -> str:
         style = str(style or "slate_v2").strip().lower()

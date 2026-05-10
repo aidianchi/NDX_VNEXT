@@ -378,11 +378,16 @@ def get_fed_funds_rate(end_date: str = None) -> Dict[str, Any]:
 def get_m2_yoy(end_date: str = None) -> Dict[str, Any]:
     """获取M2货币供应量年同比增速 (保留月度动量特性)"""
     yoy, date = calculate_yoy_change("M2SL", lookback_days=800, end_date=end_date)
+    yoy_history = calculate_yoy_series("M2SL", lookback_days=5475, end_date=end_date)
+    relativity = None
+    if yoy_history is not None and not yoy_history.empty:
+        analysis = analyze_series_momentum_relativity(yoy_history)
+        relativity = analysis.get("relativity")
     return {
         "name": "M2 YoY Growth", "series_id": "M2SL",
-        "value": {"level": yoy, "date": date, "momentum": "monthly", "relativity": None},
+        "value": {"level": yoy, "date": date, "momentum": "monthly", "relativity": relativity},
         "unit": "percent", "source_name": "FRED",
-        "notes": "M2 Money Supply Year-over-Year Growth (monthly momentum)."
+        "notes": "M2 Money Supply Year-over-Year Growth (monthly momentum); relativity is calculated on the YoY series itself."
     }
 
 
@@ -404,13 +409,12 @@ def _fetch_walcl_history(start_date: Optional[Any] = None) -> pd.DataFrame:
 def _fetch_tga_history(start_date: Optional[Any] = None) -> pd.DataFrame:
     """
     原子化获取财政部现金账户 WTREGEN，单位十亿美元。
-    注意：FRED API返回的WTREGEN单位已经是十亿美元，不需要转换。
+    注意：FRED WTREGEN 原始值是百万美元，需除以1000转换为十亿美元。
     """
     df = _fetch_fred_series("WTREGEN", start_date=start_date)
     if df.empty:
         return df
-    # WTREGEN在FRED中单位已经是十亿美元，不需要转换
-    # 典型值范围：几百到几千十亿美元，不应该>10,000
+    df["value"] = pd.to_numeric(df["value"], errors="coerce") / 1000.0
     return df
 
 
@@ -515,13 +519,10 @@ def _build_net_liquidity_series() -> Tuple[pd.DataFrame, pd.Series, pd.Series, p
                 return series
         
         elif series_id in ["WTREGEN", "RRPONTSYD"]:
-            # WTREGEN和RRPONTSYD在FRED中单位已经是十亿美元
-            # 正常范围：几百到几千十亿美元
+            # WTREGEN 原始口径可能是百万美元；RRPONTSYD 通常已经是十亿美元。
             if max_val > 10_000:
-                # 异常大值
-                logging.error(f"{series_id}数据异常：最大值={max_val:.2f}，超出合理范围（应<10,000十亿美元）")
-                # 可能是百万美元误标，需要除以1000
-                return series / 1000.0
+                logging.warning(f"{series_id}检测到百万美元口径或混合缓存（最大值={max_val:.2f}），逐点转换为十亿美元")
+                return series.where(series <= 10_000, series / 1000.0)
             elif max_val < 10:
                 # 异常小值
                 logging.error(f"{series_id}数据异常：最大值={max_val:.2f}，远低于合理范围（应在几百到几千十亿美元）")
@@ -538,9 +539,14 @@ def _build_net_liquidity_series() -> Tuple[pd.DataFrame, pd.Series, pd.Series, p
         logging.error("净流动性组件数据缺失，无法构建序列")
         return pd.DataFrame(), pd.Series(dtype=float), pd.Series(dtype=float), pd.Series(dtype=float)
 
-    walcl_s = walcl_df.set_index("date")["value"].resample("D").ffill()
-    tga_s = tga_df.set_index("date")["value"].resample("D").ffill()
-    rrp_s = rrp_df.set_index("date")["value"].resample("D").ffill()
+    for frame in (walcl_df, tga_df, rrp_df):
+        frame["date"] = pd.to_datetime(frame["date"])
+        frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
+        frame.dropna(subset=["date", "value"], inplace=True)
+
+    walcl_s = walcl_df.set_index("date")["value"].astype(float).resample("D").ffill()
+    tga_s = tga_df.set_index("date")["value"].astype(float).resample("D").ffill()
+    rrp_s = rrp_df.set_index("date")["value"].astype(float).resample("D").ffill()
 
     # 再次保证单位一致：全部校正到十亿美元（兜底机制）
     walcl_s = _normalize_billions(walcl_s, "WALCL")

@@ -617,8 +617,8 @@ def get_ndx_components_data_yf_v5(end_date: str = None) -> Tuple[pd.DataFrame, D
     else:
         effective_date = datetime.now()
 
-    # **修改点**: 调用新的动态函数获取成分股
-    ndx100_components = get_ndx100_components(end_date=effective_date.strftime("%Y-%m-%d"))
+    # 只有显式历史日期才取历史成分股；实时模式优先当前官方/实时来源。
+    ndx100_components = get_ndx100_components(end_date=end_date)
 
     if not YF_AVAILABLE:
         return pd.DataFrame(), {"error": "yfinance not available", "successful": 0, "total_tickers": len(ndx100_components)}
@@ -1373,7 +1373,7 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
     # 优先使用yfinance完整成分股计算
     if YF_AVAILABLE:
         try:
-            df, stats = get_ndx_components_data_yf_v5(end_date=effective_date.strftime("%Y-%m-%d"))
+            df, stats = get_ndx_components_data_yf_v5(end_date=end_date)
             if df.empty:
                 raise Exception(f"无有效NDX成分股数据：{stats.get('error', 'Unknown')}")
 
@@ -1552,7 +1552,7 @@ def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
         }
 
     try:
-        df, stats = get_ndx_components_data_yf_v5(end_date=date_str)
+        df, stats = get_ndx_components_data_yf_v5(end_date=end_date)
         if df.empty:
             raise Exception(f"no valid component data: {stats.get('error', 'unknown')}")
         metrics = calculate_weighted_metrics(df)
@@ -1645,7 +1645,7 @@ def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:
     date_str = effective_date.strftime("%Y-%m-%d")
 
     # 获取NDX收益率数据
-    ndx_data = get_ndx_pe_and_earnings_yield(end_date=date_str)
+    ndx_data = get_ndx_pe_and_earnings_yield(end_date=end_date)
     if not ndx_data.get("value"):
         return {
             "name": "NDX Simple Yield Gap",

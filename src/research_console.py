@@ -44,16 +44,18 @@ class ResearchConsoleGenerator:
         return str(destination)
 
     def _latest_reports(self) -> List[Path]:
+        candidates = {path.resolve(): path for path in list(self.reports_dir.glob("vnext_*.html")) + list(self.reports_dir.glob("vnext_research_ui_*.html"))}
         reports = sorted(
-            self.reports_dir.glob("vnext_research_ui_*.html"),
+            candidates.values(),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
-        return reports[:6]
+        return [path for path in reports if "workbench" not in path.name and "console" not in path.name][:6]
 
     def _latest_workbenches(self) -> List[Path]:
+        candidates = {path.resolve(): path for path in list(self.reports_dir.glob("vnext_workbench_*.html")) + list(self.reports_dir.glob("vnext_interactive_charts_*.html"))}
         workbenches = sorted(
-            self.reports_dir.glob("vnext_interactive_charts_*.html"),
+            candidates.values(),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
@@ -87,7 +89,16 @@ class ResearchConsoleGenerator:
     def _links(self, paths: List[Path], empty_text: str) -> str:
         if not paths:
             return f'<span class="empty-link">{_escape(empty_text)}</span>'
-        return "".join(f'<a href="{_escape(path.resolve().as_uri())}">{_escape(path.name)}</a>' for path in paths)
+        return "".join(
+            f'<a href="{_escape(path.resolve().as_uri())}" data-artifact-path="{_escape(str(path.resolve()))}">{_escape(path.name)}</a>'
+            for path in paths
+        )
+
+    def _artifact_link_attrs(self, path: Optional[Path]) -> str:
+        if not path:
+            return 'href="#"'
+        resolved = path.resolve()
+        return f'href="{_escape(resolved.as_uri())}" data-artifact-path="{_escape(str(resolved))}"'
 
     def _manual_template_json(self) -> str:
         template = json.loads(json.dumps(DEFAULT_MANUAL_DATA, ensure_ascii=False))
@@ -125,6 +136,7 @@ class ResearchConsoleGenerator:
                 "initialManualData": initial_manual_data,
                 "manualPath": manual_path,
                 "latestReport": str(latest_report or ""),
+                "latestWorkbench": str(latest_workbench or ""),
                 "latestRun": str(runs[0] if runs else ""),
                 "latestDataJson": str(latest_data_json or ""),
                 "browserSidecarPath": str((Path(path_config.output_dir) / "browser_sidecar" / "trendonify_ndx_valuation.json")),
@@ -151,8 +163,8 @@ class ResearchConsoleGenerator:
         <span>默认路径</span>
         <strong>brief 报告</strong>
         <div class="status-actions">
-          <a class="primary-link" href="{_escape(latest_href)}">打开最新报告</a>
-          <a class="secondary-link" href="{_escape(latest_workbench_href)}">打开 workbench</a>
+          <a class="primary-link" {self._artifact_link_attrs(latest_report)}>打开最新报告</a>
+          <a class="secondary-link" {self._artifact_link_attrs(latest_workbench)}>打开 workbench</a>
         </div>
       </aside>
     </section>
@@ -176,6 +188,7 @@ class ResearchConsoleGenerator:
         <div class="field-grid">
           <label>标的 <input id="ticker" type="text" value="NDX / QQQ"></label>
           <label>分析日期 <input id="dataDate" type="date"></label>
+          <label class="checkbox-field"><input id="historicalDateMode" type="checkbox"> 历史日期 / 回测</label>
           <label>已有数据 JSON <input id="dataJsonPath" type="text" value="{_escape(str(latest_data_json or ''))}" placeholder="output/data/data_collected_YYYYMMDD_live.json"></label>
           <label>已有 run 目录 <input id="runDirPath" type="text" value="{_escape(str(runs[0]) if runs else '')}" placeholder="output/analysis/vnext/<run_id>"></label>
         </div>
@@ -634,6 +647,17 @@ textarea:focus {
 .manual-form label {
   margin: 0;
 }
+.field-grid .checkbox-field {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding-top: 20px;
+}
+.field-grid .checkbox-field input {
+  width: auto;
+}
 .metric-pair {
   grid-column: 1 / -1;
   display: grid;
@@ -884,7 +908,28 @@ const browserStatus = document.getElementById('browserStatus');
 const browserCommandPreview = document.getElementById('browserCommandPreview');
 let activeJobId = '';
 let activeBrowserJobId = '';
+let runPollTimer = null;
+let openedArtifactForJob = '';
 const controlOrigin = window.location.protocol.startsWith('http') ? window.location.origin : 'http://127.0.0.1:8765';
+
+function artifactUrl(path) {
+  if (!path) return '#';
+  if (window.location.protocol.startsWith('http')) {
+    return `${controlOrigin}/artifact?path=${encodeURIComponent(path)}`;
+  }
+  return path.startsWith('file://') ? path : `file://${path}`;
+}
+
+function wireArtifactLinks() {
+  document.querySelectorAll('[data-artifact-path]').forEach(link => {
+    const path = link.getAttribute('data-artifact-path') || '';
+    link.href = artifactUrl(path);
+    link.target = '_blank';
+    link.rel = 'noopener';
+  });
+}
+
+wireArtifactLinks();
 
 function parseJson(text, fallback) {
   try { return JSON.parse(text || ''); } catch (error) { return fallback; }
@@ -951,7 +996,7 @@ function modeCommand(mode, models) {
   const modules = Array.from(document.querySelectorAll('input[name="workbenchModule"]:checked')).map(node => node.value).join(',') || 'price_technical';
   const base = ['python3 src/main.py', `--models ${models}`];
   const full = ['python3 src/console_run_all.py', `--models ${models}`, `--workbench-modules ${modules}`];
-  if (dataDate.value) {
+  if (document.getElementById('historicalDateMode').checked && dataDate.value) {
     base.push(`--date ${dataDate.value}`);
     full.push(`--date ${dataDate.value}`);
   }
@@ -1077,7 +1122,7 @@ function buildCommand() {
   browserCommandPreview.textContent = `python3 src/browser_sidecar.py --source trendonify_valuation --output output/browser_sidecar/trendonify_ndx_valuation.json${document.getElementById('trustBbBrowser').checked ? ' --trusted' : ''}`;
 }
 
-document.querySelectorAll('input[name="modelMode"], input[name="runMode"], #customModels, #dataJsonPath, #runDirPath, #skipLegacyReport, #disableCharts, #enableLegacyCharts, #enableNews, #trustBbBrowser, input[name="workbenchModule"]')
+document.querySelectorAll('input[name="modelMode"], input[name="runMode"], #customModels, #dataJsonPath, #runDirPath, #historicalDateMode, #skipLegacyReport, #disableCharts, #enableLegacyCharts, #enableNews, #trustBbBrowser, input[name="workbenchModule"]')
   .forEach((node) => node.addEventListener('change', buildCommand));
 document.getElementById('trustBbBrowser').addEventListener('change', syncManualPreview);
 document.querySelectorAll('#customModels, #dataJsonPath, #runDirPath').forEach((node) => node.addEventListener('input', buildCommand));
@@ -1155,7 +1200,7 @@ async function refreshJob(jobId, statusNode) {
   if (!jobId) {
     statusNode.textContent = '尚无可刷新的任务。';
     statusNode.classList.add('is-warning');
-    return;
+    return null;
   }
   let result;
   try {
@@ -1164,7 +1209,7 @@ async function refreshJob(jobId, statusNode) {
   } catch (error) {
     statusNode.textContent = '无法连接 control service，状态刷新失败。';
     statusNode.className = 'run-status is-warning';
-    return;
+    return null;
   }
   const job = result.job || {};
   jobStatusPreview.textContent = JSON.stringify({
@@ -1179,13 +1224,47 @@ async function refreshJob(jobId, statusNode) {
   statusNode.className = 'run-status';
   if (job.status === 'completed') statusNode.classList.add('is-good');
   if (job.status === 'failed' || job.status === 'canceled') statusNode.classList.add('is-warning');
+  return job;
+}
+
+async function openLatestProductForMode(jobId) {
+  if (!jobId || openedArtifactForJob === jobId) return;
+  try {
+    const response = await fetch(`${controlOrigin}/latest-product`);
+    const result = await response.json();
+    const summary = result.summary || {};
+    const mode = selectedRunMode();
+    const preferred = mode === 'workbench_only' ? summary.workbench : (summary.native_brief || summary.report_path || summary.workbench);
+    if (!preferred) return;
+    openedArtifactForJob = jobId;
+    window.open(artifactUrl(preferred), '_blank', 'noopener');
+    runStatus.textContent = `${runStatus.textContent}；已自动打开 ${preferred.split('/').pop()}`;
+  } catch (error) {
+    runStatus.textContent = `${runStatus.textContent}；自动打开失败：${error.message || error}`;
+  }
+}
+
+function startJobAutoRefresh(jobId, statusNode) {
+  if (runPollTimer) window.clearInterval(runPollTimer);
+  runPollTimer = window.setInterval(async () => {
+    const job = await refreshJob(jobId, statusNode);
+    if (!job || !['completed', 'failed', 'canceled', 'unknown'].includes(job.status)) return;
+    window.clearInterval(runPollTimer);
+    runPollTimer = null;
+    if (statusNode === runStatus && job.status === 'completed') {
+      openLatestProductForMode(jobId);
+    }
+  }, 5000);
 }
 
 document.getElementById('runNow').addEventListener('click', async () => {
   buildCommand();
   const command = preview.textContent.trim();
   activeJobId = await submitControlCommand(command, runStatus) || activeJobId;
-  if (activeJobId) refreshJob(activeJobId, runStatus);
+  if (activeJobId) {
+    refreshJob(activeJobId, runStatus);
+    startJobAutoRefresh(activeJobId, runStatus);
+  }
 });
 document.getElementById('refreshJob').addEventListener('click', () => refreshJob(activeJobId, runStatus));
 document.getElementById('cancelJob').addEventListener('click', async () => {

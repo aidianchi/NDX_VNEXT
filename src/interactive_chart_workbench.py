@@ -4,7 +4,8 @@ import argparse
 import html
 import json
 import sys
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -55,6 +56,37 @@ def _json_for_script(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
 
 
+def _minute_stamp(value: Any, *, assume_utc: bool = False) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if re.fullmatch(r"\d{8}_\d{4,6}", text):
+        return text[:13]
+    if re.fullmatch(r"\d{8}", text):
+        return f"{text}_0000"
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None and assume_utc:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone()
+        return parsed.strftime("%Y%m%d_%H%M")
+    except ValueError:
+        cleaned = re.sub(r"[^0-9]+", "", text)
+        if len(cleaned) >= 12:
+            return f"{cleaned[:8]}_{cleaned[8:12]}"
+        if len(cleaned) >= 8:
+            return f"{cleaned[:8]}_0000"
+    return ""
+
+
+def _run_minute_stamp(run_path: Path) -> str:
+    match = re.search(r"(\d{8})_(\d{4})", run_path.name)
+    if match:
+        return f"{match.group(1)}_{match.group(2)}"
+    return _minute_stamp(run_path.name)
+
+
 class InteractiveChartWorkbenchGenerator:
     """Generate an experimental TradingView-style chart workbench.
 
@@ -91,14 +123,20 @@ class InteractiveChartWorkbenchGenerator:
         artifacts["_price_source_label"] = source_label
         rows = self._prepare_price_rows(raw_rows)
         html_text = self._render(run_path, artifacts, rows, selected_modules=modules)
-        destination = Path(output_path) if output_path else self._default_output_path(run_path)
+        destination = Path(output_path) if output_path else self._default_output_path(run_path, artifacts)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(html_text, encoding="utf-8")
         return str(destination)
 
-    def _default_output_path(self, run_path: Path) -> Path:
-        suffix = run_path.name.split("_", 1)[0] if run_path.name else datetime.now().strftime("%Y%m%d")
-        return self.reports_dir / f"vnext_interactive_charts_{suffix}.html"
+    def _default_output_path(self, run_path: Path, artifacts: Dict[str, Any]) -> Path:
+        meta = artifacts.get("analysis_packet", {}).get("meta", {})
+        data_stamp = _minute_stamp(meta.get("collector_timestamp_utc"), assume_utc=True) or _minute_stamp(meta.get("data_date"))
+        run_stamp = _run_minute_stamp(run_path)
+        if data_stamp and run_stamp and data_stamp != run_stamp:
+            stamp = f"{data_stamp}_{run_stamp}"
+        else:
+            stamp = data_stamp or run_stamp or datetime.now().strftime("%Y%m%d_%H%M")
+        return self.reports_dir / f"vnext_workbench_{stamp}.html"
 
     def _load_artifacts(self, run_path: Path) -> Dict[str, Any]:
         layer_cards: Dict[str, Any] = {}

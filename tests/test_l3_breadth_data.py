@@ -51,8 +51,9 @@ def test_l2_breadth_module_has_component_provider_imported():
 def test_new_highs_lows_requests_enough_history_for_52w_window(monkeypatch):
     requested = {}
 
-    def fake_price_data(effective_date, lookback_days=300):
+    def fake_price_data(effective_date, lookback_days=300, historical_date=None):
         requested["lookback_days"] = lookback_days
+        requested["historical_date"] = historical_date
         return ["AAA", "BBB", "CCC"], _price_panel()
 
     monkeypatch.setattr(tools_L2, "YF_AVAILABLE", True)
@@ -61,6 +62,7 @@ def test_new_highs_lows_requests_enough_history_for_52w_window(monkeypatch):
     result = tools_L2.get_new_highs_lows("2025-12-31")
 
     assert requested["lookback_days"] >= 370
+    assert requested["historical_date"] == "2025-12-31"
     assert result["source_tier"] == "component_model"
 
 
@@ -69,7 +71,7 @@ def test_new_highs_lows_calculates_component_breakout_counts(monkeypatch):
     monkeypatch.setattr(
         tools_L2,
         "_get_ndx100_common_price_data",
-        lambda effective_date: (["AAA", "BBB", "CCC"], _price_panel()),
+        lambda effective_date, **kwargs: (["AAA", "BBB", "CCC"], _price_panel()),
     )
 
     result = tools_L2.get_new_highs_lows("2025-12-31")
@@ -85,7 +87,7 @@ def test_new_highs_lows_reports_unavailable_when_52w_window_is_missing(monkeypat
     monkeypatch.setattr(
         tools_L2,
         "_get_ndx100_common_price_data",
-        lambda effective_date: (["AAA", "BBB", "CCC"], _short_price_panel()),
+        lambda effective_date, **kwargs: (["AAA", "BBB", "CCC"], _short_price_panel()),
     )
 
     result = tools_L2.get_new_highs_lows("2025-12-31")
@@ -99,7 +101,7 @@ def test_advance_decline_coverage_excludes_empty_components(monkeypatch):
     monkeypatch.setattr(
         tools_L2,
         "_get_ndx100_common_price_data",
-        lambda effective_date: (["AAA", "BBB", "CCC", "DDD"], _price_panel_with_empty_component()),
+        lambda effective_date, **kwargs: (["AAA", "BBB", "CCC", "DDD"], _price_panel_with_empty_component()),
     )
 
     result = tools_L2.get_advance_decline_line("2025-12-31")
@@ -115,7 +117,7 @@ def test_mcclellan_oscillator_uses_ad_series_when_available(monkeypatch):
     monkeypatch.setattr(
         tools_L2,
         "_get_ndx100_common_price_data",
-        lambda effective_date: (["AAA", "BBB", "CCC"], _price_panel()),
+        lambda effective_date, **kwargs: (["AAA", "BBB", "CCC"], _price_panel()),
     )
 
     result = tools_L2.get_mcclellan_oscillator_nasdaq_or_nyse("2025-12-31")
@@ -155,3 +157,20 @@ def test_l3_prompt_documents_breadth_priority_and_missing_data_boundary():
     assert "New Highs/Lows" in prompt
     assert "McClellan" in prompt
     assert "不能把缺失写成恶化" in prompt
+
+
+def test_realtime_breadth_does_not_request_historical_constituents(monkeypatch):
+    requested = {}
+
+    def fake_components(end_date=None):
+        requested["end_date"] = end_date
+        return ["AAA", "BBB", "CCC"]
+
+    monkeypatch.setattr(tools_L2, "get_ndx100_components", fake_components)
+    monkeypatch.setattr(tools_L2, "cached_yf_download", lambda *args, **kwargs: _price_panel())
+
+    components, data = tools_L2._get_ndx100_common_price_data(datetime(2026, 5, 10))
+
+    assert components == ["AAA", "BBB", "CCC"]
+    assert not data.empty
+    assert requested["end_date"] is None

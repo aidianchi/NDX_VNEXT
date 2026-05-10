@@ -26,6 +26,8 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
 
     assert "NDX vNext 研究控制台" in html
     assert "运行对象与日期" in html
+    assert "历史日期 / 回测" in html
+    assert 'id="historicalDateMode"' in html
     assert "人工数据与数据源校准" in html
     assert "当前 PE" in html
     assert "PE 10Y 分位" in html
@@ -61,6 +63,7 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     assert "src/console_run_all.py" in html
     assert "data_collected_v9_20260509.json" in html
     assert "base.concat(['--collect-only']).join(' ')" in html
+    assert "document.getElementById('historicalDateMode').checked && dataDate.value" in html
     assert "control service" in html
     assert "news_event_ledger" not in html
     assert "数据源健康" in html
@@ -75,6 +78,10 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     assert "流动性" in html
     assert "--modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity" in html
     assert "打开最新报告" in html
+    assert "data-artifact-path" in html
+    assert "function artifactUrl(path)" in html
+    assert "latest-product" in html
+    assert "startJobAutoRefresh" in html
     assert "保存人工数据" in html
     assert "vnext_research_ui_brief_20260505.html" in html
     assert "manual_data.local.json" in html

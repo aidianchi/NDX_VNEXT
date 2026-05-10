@@ -137,6 +137,14 @@ def calculate_long_term_stats(df: pd.DataFrame, current_value: float) -> dict:
         raise ValueError("DataFrame 必须包含 'date' 和 'value' 列。")
 
     df["date"] = pd.to_datetime(df["date"])
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    df = df.dropna(subset=["date", "value"])
+    if df.empty:
+        return {
+            "percentile_5y": np.nan,
+            "percentile_10y": np.nan,
+            "z_score_10y": np.nan,
+        }
     df = df.sort_values("date")
 
     now = pd.Timestamp(datetime.now().date())
@@ -218,4 +226,3 @@ def align_and_calculate_ratio(
     aligned.dropna(subset=["numerator", "denominator"], inplace=True)
     aligned.reset_index(drop=True, inplace=True)
     return aligned
-

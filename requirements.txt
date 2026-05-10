@@ -1,7 +1,7 @@
 ﻿# ndx_vnext bootstrap dependencies
 # Phase 1 target: data collection + vNext main cognitive chain + legacy report bridge
 
-pandas>=2.0.0
+pandas>=2.0.0,<3.0.0
 numpy>=1.24.0
 scipy>=1.11.0
 requests>=2.31.0

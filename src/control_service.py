@@ -3,15 +3,17 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import mimetypes
 import os
 import signal
 import shlex
 import subprocess
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 try:
     from .config import path_config
@@ -123,6 +125,37 @@ def validate_command(command: str) -> List[str]:
     return parts
 
 
+def _python_bound_args(args: Sequence[str]) -> List[str]:
+    """Run console-submitted python commands in the service interpreter.
+
+    The console intentionally displays portable `python3 ...` commands, but the
+    service is the trusted executor. Binding here prevents macOS from launching
+    system Python 3.9 when the service itself was started from `.venv`.
+    """
+    normalized = list(args)
+    if normalized and Path(normalized[0]).name in {"python", "python3"}:
+        normalized[0] = sys.executable
+    return normalized
+
+
+def _resolve_repo_path(value: str) -> Path:
+    if not value:
+        raise ValueError("Missing path.")
+    path = Path(value)
+    if not path.is_absolute():
+        path = _repo_root() / path
+    resolved = path.resolve()
+    resolved.relative_to(_repo_root())
+    return resolved
+
+
+def _read_latest_console_summary() -> Dict[str, Any]:
+    path = Path(path_config.logs_dir) / "control_service" / "latest_console_run.json"
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 class JobStore:
     def __init__(self, root: str | Path | None = None) -> None:
         self.root = Path(root or Path(path_config.logs_dir) / "control_service")
@@ -170,9 +203,10 @@ class JobStore:
     def create_job(self, args: Sequence[str]) -> Dict[str, Any]:
         job_id = time.strftime("%Y%m%d_%H%M%S") + f"_{int((time.time() % 1) * 1000):03d}"
         log_path = self._log_path(job_id)
+        actual_args = _python_bound_args(args)
         with open(log_path, "w", encoding="utf-8") as log:
             process = subprocess.Popen(
-                list(args),
+                actual_args,
                 cwd=str(_repo_root()),
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -183,7 +217,8 @@ class JobStore:
             "job_id": job_id,
             "pid": process.pid,
             "status": "running",
-            "command": list(args),
+            "command": actual_args,
+            "requested_command": list(args),
             "log_path": str(log_path),
             "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "exit_code": None,
@@ -271,6 +306,33 @@ def _html_response(handler: BaseHTTPRequestHandler, status: int, body_text: str)
     handler.wfile.write(body)
 
 
+def _bytes_response(handler: BaseHTTPRequestHandler, status: int, body: bytes, content_type: str) -> None:
+    handler.send_response(status)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _artifact_url(handler: BaseHTTPRequestHandler, path: str) -> str:
+    return f"http://{handler.headers.get('Host', '127.0.0.1:8765')}/artifact?path={quote(path)}"
+
+
+def _directory_listing(path: Path) -> str:
+    links = []
+    for child in sorted(path.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
+        href = f"/artifact?path={quote(str(child))}"
+        label = f"{child.name}/" if child.is_dir() else child.name
+        links.append(f'<li><a href="{href}">{label}</a></li>')
+    return (
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>vNext artifacts</title>"
+        "<style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:24px;}"
+        "a{color:#2563eb;}li{margin:8px 0;}</style></head><body>"
+        f"<h1>{path.name}</h1><ul>{''.join(links)}</ul></body></html>"
+    )
+
+
 def _save_manual_json(raw_manual_json: str) -> Dict[str, Any]:
     if not raw_manual_json:
         raise ValueError("manual_json is empty.")
@@ -294,6 +356,38 @@ class ControlServiceHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/health":
             _json_response(self, 200, {"ok": True, "service": "vnext_control_service"})
+            return
+        if parsed.path == "/latest-product":
+            try:
+                summary = _read_latest_console_summary()
+                payload = {"ok": True, "summary": summary}
+                for key in ["native_brief", "workbench", "report_path"]:
+                    if summary.get(key):
+                        payload[f"{key}_url"] = _artifact_url(self, str(summary[key]))
+                _json_response(self, 200, payload)
+            except Exception as exc:
+                _json_response(self, 500, {"ok": False, "message": str(exc)})
+            return
+        if parsed.path == "/artifact":
+            try:
+                raw_path = parse_qs(parsed.query).get("path", [""])[0]
+                artifact_path = _resolve_repo_path(raw_path)
+                if not artifact_path.exists():
+                    _json_response(self, 404, {"ok": False, "message": f"Artifact not found: {artifact_path}"})
+                    return
+                if artifact_path.is_dir():
+                    _html_response(self, 200, _directory_listing(artifact_path))
+                    return
+                content_type = mimetypes.guess_type(str(artifact_path))[0] or "application/octet-stream"
+                if artifact_path.suffix.lower() in {".html", ".htm"}:
+                    content_type = "text/html; charset=utf-8"
+                elif artifact_path.suffix.lower() == ".json":
+                    content_type = "application/json; charset=utf-8"
+                _bytes_response(self, 200, artifact_path.read_bytes(), content_type)
+            except ValueError as exc:
+                _json_response(self, 400, {"ok": False, "message": str(exc)})
+            except Exception as exc:
+                _json_response(self, 500, {"ok": False, "message": str(exc)})
             return
         if parsed.path == "/manual-data":
             try:

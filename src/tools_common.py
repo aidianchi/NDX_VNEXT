@@ -750,6 +750,46 @@ def calculate_yoy_change(series_id: str, lookback_days: int = 800, end_date: str
     except Exception:
         return None, None
 
+
+def calculate_yoy_series(series_id: str, lookback_days: int = 5475, end_date: str = None) -> pd.DataFrame:
+    """计算 FRED 序列的同比历史，用于对同比本身做分位。"""
+    if end_date:
+        effective_date = datetime.strptime(end_date, "%Y-%m-%d")
+    else:
+        effective_date = datetime.now()
+
+    try:
+        raw_days = lookback_days + 430
+        df = get_fred_series(series_id, days=raw_days, end_date=effective_date.strftime("%Y-%m-%d"))
+        if df is None or df.empty or len(df) < 24:
+            return pd.DataFrame(columns=["date", "value"])
+
+        work = df[["date", "value"]].copy()
+        work["date"] = pd.to_datetime(work["date"])
+        work["value"] = pd.to_numeric(work["value"], errors="coerce")
+        work = work.dropna(subset=["value"]).sort_values("date")
+        rows: List[Dict[str, Any]] = []
+        for _, row in work.iterrows():
+            year_ago_date = row["date"] - pd.DateOffset(years=1)
+            candidates = work[work["date"] <= row["date"]].copy()
+            candidates["days_from_year_ago"] = (candidates["date"] - year_ago_date).abs().dt.days
+            year_ago = candidates.nsmallest(1, "days_from_year_ago")
+            if year_ago.empty or float(year_ago.iloc[0]["days_from_year_ago"]) > 45:
+                continue
+            base = float(year_ago.iloc[0]["value"])
+            if base == 0:
+                continue
+            yoy = ((float(row["value"]) - base) / base) * 100
+            rows.append({"date": row["date"], "value": round(yoy, 4)})
+        if not rows:
+            return pd.DataFrame(columns=["date", "value"])
+        out = pd.DataFrame(rows)
+        start_cutoff = effective_date - timedelta(days=lookback_days)
+        return out[out["date"] >= start_cutoff][["date", "value"]]
+    except Exception as exc:
+        logging.warning(f"calculate_yoy_series failed for {series_id}: {exc}")
+        return pd.DataFrame(columns=["date", "value"])
+
 # =====================================================
 # 辅助函数：处理yfinance数据格式问题
 # =====================================================
@@ -792,4 +832,3 @@ def clean_yfinance_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 # =====================================================
 # 第一层：宏观环境指标 (已全部升级为V5.1)
 # =====================================================
-

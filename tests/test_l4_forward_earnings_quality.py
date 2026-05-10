@@ -98,3 +98,57 @@ def test_ndx_forward_earnings_quality_uses_component_and_m7_revision_proxies(mon
     assert value["ndx"]["weighted_operating_margin_pct"] == 34.9
     assert value["m7"]["eps_revisions"]["revision_direction_30d"] == "upward"
     assert result["data_quality"]["coverage"]["m7_revision_coverage"]["available_members"] == 2
+
+
+def test_realtime_forward_earnings_does_not_request_historical_constituents(monkeypatch):
+    requested = {}
+
+    def fake_components(end_date=None):
+        requested["end_date"] = end_date
+        return ["AAPL"]
+
+    class FakeTicker:
+        info = {
+            "marketCap": 100.0,
+            "trailingPE": 20.0,
+            "forwardPE": 18.0,
+            "forwardEps": 10.0,
+            "trailingEps": 9.0,
+            "profitMargins": 0.2,
+            "grossMargins": 0.5,
+            "operatingMargins": 0.3,
+        }
+
+    monkeypatch.setattr(tools_L4, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_L4, "get_ndx100_components", fake_components)
+    monkeypatch.setattr(tools_L4.yf, "Ticker", lambda ticker: FakeTicker())
+
+    df, stats = tools_L4.get_ndx_components_data_yf_v5()
+
+    assert requested["end_date"] is None
+    assert stats["successful"] == 1
+    assert df["ticker"].tolist() == ["AAPL"]
+
+
+def test_realtime_equity_risk_premium_keeps_valuation_in_realtime_mode(monkeypatch):
+    requested = {}
+
+    def fake_valuation(end_date=None):
+        requested["valuation_end_date"] = end_date
+        return {
+            "value": {"EarningsYield": 3.8},
+            "source_tier": tools_L4.SOURCE_TIER_COMPONENT_MODEL,
+            "data_quality": {"coverage": {}, "anomalies": [], "source_disagreement": {}},
+        }
+
+    monkeypatch.setattr(tools_L4, "get_ndx_pe_and_earnings_yield", fake_valuation)
+    monkeypatch.setattr(
+        tools_L4,
+        "get_10y_treasury",
+        lambda end_date=None: {"value": {"level": 4.4}},
+    )
+
+    result = tools_L4.get_equity_risk_premium()
+
+    assert requested["valuation_end_date"] is None
+    assert result["value"]["level"] == -0.6
