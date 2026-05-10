@@ -896,12 +896,10 @@ class VNextReportGenerator:
         return f"""
 <section class="panel chart-panel" id="charts">
   <div class="section-kicker">03 · 市场图谱</div>
-  <h2>图表先把证据摊开</h2>
-  <p class="section-note">这里不把图表当装饰。每张图只回答一个问题，并保留证据入口：估值在哪里、ERP 最新月度路径是什么、WorldPERatio 的标准差语境怎样、利率与估值压力是否同向。</p>
+  <h2>跨层压力与估值位置</h2>
+  <p class="section-note">估值相对位置尺和 L1-L4 利率估值压力图在此呈现。Damodaran ERP 月度路径和 WorldPERatio 窗口标签已并入 L4 层底稿的对应指标微图（估值交叉校验、Damodaran ERP 月度透镜）。</p>
   <div class="chart-board">
     {self._valuation_ruler_chart(artifacts)}
-    {self._damodaran_erp_chart(artifacts)}
-    {self._worldperatio_window_chart(artifacts)}
     {self._rate_valuation_pressure_chart(artifacts)}
   </div>
 </section>
@@ -964,105 +962,6 @@ class VNextReportGenerator:
     <span><b>FCF Yield</b>{_fmt_number(fcf_yield, suffix="%", digits=2)}</span>
   </div>
   <ul class="chart-source-list">{''.join(source_rows) or '<li>无外部估值源。</li>'}</ul>
-</article>
-"""
-
-    def _worldperatio_relative_position(self, artifacts: Dict[str, Any]) -> Dict[str, Any]:
-        value = self._metric_value(artifacts, "L4", "get_ndx_pe_and_earnings_yield")
-        for source in _as_list(value.get("ThirdPartyChecks")):
-            if isinstance(source, dict) and str(source.get("source_name", "")).lower() == "worldperatio":
-                relative = source.get("relative_position")
-                return relative if isinstance(relative, dict) else {}
-        return {}
-
-    def _worldperatio_window_chart(self, artifacts: Dict[str, Any]) -> str:
-        relative = self._worldperatio_relative_position(artifacts)
-        windows = relative.get("valuation_windows", {}) if isinstance(relative.get("valuation_windows"), dict) else {}
-        trend = relative.get("trend_context", {}) if isinstance(relative.get("trend_context"), dict) else {}
-        order = ["1y", "5y", "10y", "20y"]
-        rows = []
-        for key in order:
-            window = windows.get(key)
-            if not isinstance(window, dict):
-                continue
-            sigma = _safe_number(window.get("deviation_vs_mean_sigma"))
-            label = str(window.get("valuation_label") or "")
-            label_class = "bad" if "over" in label.lower() else ("good" if "under" in label.lower() else "watch")
-            rows.append(
-                f"""
-<tr>
-  <th>{_escape(key)}</th>
-  <td>{_fmt_number(window.get('average_pe'), digits=2)}x</td>
-  <td>{_fmt_number(window.get('std_dev'), digits=2)}</td>
-  <td>{_fmt_number(window.get('range_low'), digits=2)}x - {_fmt_number(window.get('range_high'), digits=2)}x</td>
-  <td>{_fmt_number(sigma, digits=2)}σ</td>
-  <td><span class="pill {label_class}">{_escape(label or 'N/A')}</span></td>
-</tr>
-"""
-            )
-        trend_html = f"""
-<div class="metric-strip">
-  <span><b>SMA50 margin</b>{_fmt_number(trend.get('sma50_margin_pct'), suffix='%', digits=1)}</span>
-  <span><b>SMA200 margin</b>{_fmt_number(trend.get('sma200_margin_pct'), suffix='%', digits=1)}</span>
-  <span><b>边界</b>std-dev context, not percentile</span>
-</div>
-"""
-        return f"""
-<article class="chart-card" data-chart-id="worldperatio-window-labels">
-  {self._chart_header("WorldPERatio 窗口标签", "均值、标准差、区间和标签可以辅助描述相对位置，但不是历史分位。", "L4.get_ndx_pe_and_earnings_yield")}
-  <div class="chart-table-wrap">
-    <table class="chart-table">
-      <thead><tr><th>窗口</th><th>均值 PE</th><th>标准差</th><th>区间</th><th>偏离</th><th>标签</th></tr></thead>
-      <tbody>{''.join(rows) or '<tr><td colspan="6">WorldPERatio 未提供结构化窗口语境。</td></tr>'}</tbody>
-    </table>
-  </div>
-  {trend_html}
-</article>
-"""
-
-    def _damodaran_erp_chart(self, artifacts: Dict[str, Any]) -> str:
-        value = self._metric_value(artifacts, "L4", "get_damodaran_us_implied_erp")
-        series = [row for row in _as_list(value.get("monthly_series")) if isinstance(row, dict)]
-        width, height, pad = 640, 260, 34
-        erp_path = _polyline_path(series, "erp_t12m_adjusted_payout", width=width, height=height, pad=pad)
-        treasury_path = _polyline_path(series, "us_10y_treasury_rate", width=width, height=height, pad=pad)
-        expected_path = _polyline_path(series, "expected_return", width=width, height=height, pad=pad)
-        latest = series[-1] if series else value
-        if erp_path:
-            svg = f"""
-<svg class="line-chart" viewBox="0 0 {width} {height}" role="img" aria-label="Damodaran ERP 月度时间序列">
-  <rect x="0" y="0" width="{width}" height="{height}" rx="6"></rect>
-  <line x1="{pad}" y1="{height-pad}" x2="{width-pad}" y2="{height-pad}"></line>
-  <line x1="{pad}" y1="{pad}" x2="{pad}" y2="{height-pad}"></line>
-  <path class="series-erp" d="{_escape(erp_path)}"></path>
-  <path class="series-rate" d="{_escape(treasury_path)}"></path>
-  <path class="series-return" d="{_escape(expected_path)}"></path>
-</svg>
-"""
-        else:
-            svg = '<div class="chart-empty">当前 artifact 没有月度序列；已展示单点官方读数。</div>'
-        lenses = [
-            ("T12M adjusted payout", value.get("erp_t12m_adjusted_payout", value.get("implied_erp_fcfe"))),
-            ("T12M cash yield", value.get("erp_t12m_cash_yield")),
-            ("10Y avg CF yield", value.get("erp_avg_cf_yield_10y")),
-            ("Net cash yield", value.get("erp_net_cash_yield")),
-            ("Normalized", value.get("erp_normalized_earnings_payout")),
-            ("US 10Y", value.get("us_10y_treasury_rate", value.get("tbond_rate"))),
-            ("Default spread", value.get("default_spread")),
-            ("Expected return", value.get("expected_return")),
-        ]
-        lens_html = "".join(
-            f"<span><b>{_escape(label)}</b>{_fmt_number(metric, suffix='%', digits=2)}</span>"
-            for label, metric in lenses
-        )
-        files = " / ".join(str(item) for item in [value.get("source_file"), value.get("current_calculator_source_file")] if item)
-        return f"""
-<article class="chart-card chart-card--wide" data-chart-id="damodaran-erp-series">
-  {self._chart_header("Damodaran ERP 月度路径", "优先展示 ERPbymonth.xlsx 的月度时间序列；当月计算表只补充 default spread 与 expected return。", "L4.get_damodaran_us_implied_erp")}
-  {svg}
-  <div class="chart-legend"><span class="series-erp">ERP T12M adjusted payout</span><span class="series-rate">US 10Y Treasury</span><span class="series-return">Expected return</span></div>
-  <div class="metric-strip">{lens_html}</div>
-  <p class="chart-footnote">data_date={_escape(value.get('data_date') or latest.get('data_date') or '')} · source={_escape(files or value.get('download_url') or '')}</p>
 </article>
 """
 
@@ -1723,13 +1622,54 @@ class VNextReportGenerator:
         ]
         metrics = "".join(f"<span><b>{_escape(label)}</b>{_fmt_number(metric, suffix=suffix, digits=2)}</span>" for label, metric, suffix in rows)
         sources = []
-        for source in _as_list(value.get("ThirdPartyChecks"))[:4]:
+        wp_relative = {}
+        for source in _as_list(value.get("ThirdPartyChecks"))[:5]:
             if isinstance(source, dict):
                 sources.append(
                     f"<li><b>{_escape(source.get('source_name', 'source'))}</b><span>{_fmt_number(source.get('value'), digits=2)}</span><small>{_escape(source.get('availability', ''))}</small></li>"
                 )
-        body = f'<div class="metric-strip">{metrics}</div><ul class="mini-source-list">{"".join(sources)}</ul>'
-        return self._wrap_indicator_visual(ref, "valuation-sources", "Valuation cross-check", body)
+                if str(source.get("source_name", "")).lower() == "worldperatio":
+                    wp_relative = source.get("relative_position", {}) if isinstance(source.get("relative_position"), dict) else {}
+        # WorldPERatio window table
+        wp_windows = wp_relative.get("valuation_windows", {}) if isinstance(wp_relative.get("valuation_windows"), dict) else {}
+        wp_trend = wp_relative.get("trend_context", {}) if isinstance(wp_relative.get("trend_context"), dict) else {}
+        wp_rows = []
+        for key in ["1y", "5y", "10y", "20y"]:
+            window = wp_windows.get(key)
+            if not isinstance(window, dict):
+                continue
+            sigma = _safe_number(window.get("deviation_vs_mean_sigma"))
+            label = str(window.get("valuation_label") or "")
+            label_class = "bad" if "over" in label.lower() else ("good" if "under" in label.lower() else "watch")
+            wp_rows.append(
+                f"""
+<tr>
+  <th>{_escape(key)}</th>
+  <td>{_fmt_number(window.get('average_pe'), digits=2)}x</td>
+  <td>{_fmt_number(window.get('std_dev'), digits=2)}</td>
+  <td>{_fmt_number(window.get('range_low'), digits=2)}x - {_fmt_number(window.get('range_high'), digits=2)}x</td>
+  <td>{_fmt_number(sigma, digits=2)}σ</td>
+  <td><span class="pill {label_class}">{_escape(label or 'N/A')}</span></td>
+</tr>
+"""
+            )
+        wp_table = ""
+        if wp_rows:
+            wp_table = f"""
+<div class="chart-table-wrap">
+  <table class="chart-table">
+    <thead><tr><th>窗口</th><th>均值 PE</th><th>标准差</th><th>区间</th><th>偏离</th><th>标签</th></tr></thead>
+    <tbody>{"".join(wp_rows)}</tbody>
+  </table>
+</div>
+<div class="metric-strip">
+  <span><b>SMA50 margin</b>{_fmt_number(wp_trend.get('sma50_margin_pct'), suffix='%', digits=1)}</span>
+  <span><b>SMA200 margin</b>{_fmt_number(wp_trend.get('sma200_margin_pct'), suffix='%', digits=1)}</span>
+  <span><b>语境</b>std-dev, not percentile</span>
+</div>
+"""
+        body = f'<div class="metric-strip">{metrics}</div><ul class="mini-source-list">{"".join(sources)}</ul>{wp_table}'
+        return self._wrap_indicator_visual(ref, "valuation-sources", "Valuation cross-check + WorldPERatio", body, details=True, open_by_default=True)
 
     def _forward_earnings_quality_visual(self, ref: str, value: Dict[str, Any]) -> str:
         ndx = value.get("ndx") if isinstance(value.get("ndx"), dict) else {}
@@ -1756,16 +1696,47 @@ class VNextReportGenerator:
         return self._wrap_indicator_visual(ref, "forward-earnings-quality", "Forward earnings quality", body, details=True, open_by_default=True)
 
     def _damodaran_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
-        rows = [
-            ("T12M payout ERP", value.get("erp_t12m_adjusted_payout", value.get("implied_erp_fcfe"))),
-            ("10Y Treasury", value.get("us_10y_treasury_rate", value.get("tbond_rate", value.get("t_bond_rate")))),
-            ("Expected return", value.get("expected_return")),
+        series = [row for row in _as_list(value.get("monthly_series")) if isinstance(row, dict)]
+        width, height, pad = 640, 260, 34
+        erp_path = _polyline_path(series, "erp_t12m_adjusted_payout", width=width, height=height, pad=pad)
+        treasury_path = _polyline_path(series, "us_10y_treasury_rate", width=width, height=height, pad=pad)
+        expected_path = _polyline_path(series, "expected_return", width=width, height=height, pad=pad)
+        if erp_path:
+            svg = f"""
+<svg class="line-chart" viewBox="0 0 {width} {height}" role="img" aria-label="Damodaran ERP 月度时间序列">
+  <rect x="0" y="0" width="{width}" height="{height}" rx="6"></rect>
+  <line x1="{pad}" y1="{height-pad}" x2="{width-pad}" y2="{height-pad}"></line>
+  <line x1="{pad}" y1="{pad}" x2="{pad}" y2="{height-pad}"></line>
+  <path class="series-erp" d="{_escape(erp_path)}"></path>
+  <path class="series-rate" d="{_escape(treasury_path)}"></path>
+  <path class="series-return" d="{_escape(expected_path)}"></path>
+</svg>
+<div class="chart-legend"><span class="series-erp">ERP T12M adjusted payout</span><span class="series-rate">US 10Y Treasury</span><span class="series-return">Expected return</span></div>
+"""
+        else:
+            svg = '<div class="chart-empty">暂无月度序列；仅展示单点官方读数。</div>'
+        lenses = [
+            ("T12M adjusted payout", value.get("erp_t12m_adjusted_payout", value.get("implied_erp_fcfe"))),
+            ("T12M cash yield", value.get("erp_t12m_cash_yield")),
+            ("10Y avg CF yield", value.get("erp_avg_cf_yield_10y")),
+            ("Net cash yield", value.get("erp_net_cash_yield")),
+            ("Normalized", value.get("erp_normalized_earnings_payout")),
+            ("US 10Y", value.get("us_10y_treasury_rate", value.get("tbond_rate", value.get("t_bond_rate")))),
             ("Default spread", value.get("default_spread")),
+            ("Expected return", value.get("expected_return")),
         ]
-        body = '<div class="metric-strip">' + "".join(
-            f"<span><b>{_escape(label)}</b>{_fmt_number(metric, suffix='%', digits=2)}</span>" for label, metric in rows
-        ) + "</div>"
-        return self._wrap_indicator_visual(ref, "damodaran-current", "Damodaran current ERP lens", body)
+        lens_html = "".join(
+            f"<span><b>{_escape(label)}</b>{_fmt_number(metric, suffix='%', digits=2)}</span>"
+            for label, metric in lenses
+        )
+        latest = series[-1] if series else value
+        files = " / ".join(str(item) for item in [value.get("source_file"), value.get("current_calculator_source_file")] if item)
+        body = f"""
+{svg}
+<div class="metric-strip">{lens_html}</div>
+<p class="chart-footnote">data_date={_escape(value.get('data_date') or latest.get('data_date') or '')} · source={_escape(files or value.get('download_url') or '')}</p>
+"""
+        return self._wrap_indicator_visual(ref, "damodaran-current", "Damodaran ERP monthly lens", body, details=True, open_by_default=True)
 
     def _yield_gap_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
         gap = _safe_number(value.get("level"))

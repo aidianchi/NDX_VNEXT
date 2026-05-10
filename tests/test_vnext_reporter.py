@@ -386,14 +386,14 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert 'data-resonance-chain="risk_off_resonance"' in html
     assert "市场图谱" in html
     assert "L4 估值相对位置尺" in html
-    assert "Damodaran ERP 月度路径" in html
-    assert "WorldPERatio 窗口标签" in html
+    assert "Damodaran ERP monthly lens" in html
+    assert "Valuation cross-check + WorldPERatio" in html
     assert "L1-L4 利率估值压力图" in html
     assert "ERPbymonth.xlsx" in html
     assert "ERPMay26.xlsx" in html
-    assert "data-chart-id=\"damodaran-erp-series\"" in html
-    assert "data-ref=\"L4.get_damodaran_us_implied_erp\"" in html
-    assert "std-dev context, not percentile" in html
+    assert "data-visual-type=\"damodaran-current\"" in html
+    assert "data-indicator-visual=\"L4.get_damodaran_us_implied_erp\"" in html
+    assert "std-dev, not percentile" in html
     assert "Overvalued" in html
     assert "function handleEvidenceHash" in html
     assert "window.addEventListener('hashchange', handleEvidenceHash)" in html
