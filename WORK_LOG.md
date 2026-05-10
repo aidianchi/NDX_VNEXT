@@ -6,6 +6,31 @@
 
 ## 2026-05-10
 
+### 20260510_193710 Run Debug: Damodaran ERP 缓存、图表对齐、Crosshair、Reviser Prompt 修复
+
+分支：`claude/20260510-debug-run-issues`
+
+完成内容：
+
+- **Damodaran ERP 月度序列为空（P0）**：根因是 `collector.py` 中手动覆盖逻辑会跳过 live `get_damodaran_us_implied_erp()`，导致 `monthly_series` 不生成。修复：Damodaran 总是调用 live 函数，手动值作为补充合并而非替换。
+- **Damodaran 文件本地缓存**：`tools_L4.py` 新增 `_fetch_bytes_cached()`，在 `data_cache/damodaran/` 下缓存 `ERPbymonth.xlsx` 和当月 calculator xlsx，TTL 24 小时。
+- **`has_meaningful_manual_override()` 误判**：`manual_data.py` 将 `"scope"`、`"not_ndx_valuation_warning"` 加入忽略键列表，避免纯描述性字符串触发手动覆盖。
+- **OBV 子图横轴未对齐（P1）**：根因是初始化时每个子图独立 `fitContent()` 导致 "last writer wins"。修复：初始化时 `syncLocked = false`，所有图表创建完成后统一设 `syncLocked = true`，由主图 `fitContent()` 单向传播。
+- **Crosshair 右侧读数不正确（P1）**：根因是 `priceReadoutHtml` 和 `syncCrosshair` 使用 `findPoint`（精确时间匹配），子图因指标预热期数据点数较少导致匹配失败。修复：全部替换为 `findPointAtOrBefore`。
+- **Reviser 校验失败（P2）**：`contracts.py` 中 `environment_assessment` 等字段有 `max_length=300`，但 prompt 未注明字符限制。修复：在两个 `reviser.md` 中添加长度约束和质量检查项。
+- **测试更新**：`tests/test_l4_data_authority.py` 中 4 个 monkeypatch 测试补上 `_fetch_bytes_cached` mock。
+
+验证结果：
+
+- `python -m pytest -q`：138 passed，164 warnings。
+
+剩余观察：
+
+- 市场图谱 section 的设计问题：用户怀疑已被各层微图替代，Damodaran ERP 和 WorldPERatio 似乎可并入 L4。待进一步确认布局调整方向。
+- WTREGEN 警告（log 中 million-dollar unit mixing）：待调查。
+
+---
+
 ### Bridge 阶段 JSON 容错升级 — event_refs 兜底与 DeepSeek /beta 校验
 
 分支：`claude/20260510-bridge-event-refs-resilience`（继续在同一分支上做方案 B）
