@@ -58,6 +58,11 @@ def test_deepseek_v4_calls_use_official_reasoning_parameters():
 
     assert result == '{"ok": true}'
     assert usage["total_tokens"] == 15
-    assert fake_client.chat.completions.kwargs["stream"] is False
-    assert fake_client.chat.completions.kwargs["reasoning_effort"] == "high"
-    assert fake_client.chat.completions.kwargs["extra_body"] == {"thinking": {"type": "enabled"}}
+    sent = fake_client.chat.completions.kwargs
+    assert sent["stream"] is False
+    assert sent["reasoning_effort"] == "high"
+    assert sent["extra_body"] == {"thinking": {"type": "enabled"}}
+    assert sent["response_format"] == {"type": "json_object"}
+    assert len(sent["messages"]) == 1
+    assert sent["messages"][0]["role"] == "user"
+    assert all("prefix" not in message for message in sent["messages"])

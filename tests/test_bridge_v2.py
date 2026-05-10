@@ -224,3 +224,137 @@ def test_bridge_validator_requires_complete_resonance_chain_fields(tmp_path: Pat
     assert "bridge.resonance_chains[soft_chain].confirming_indicators must not be empty." in errors
     assert "bridge.resonance_chains[soft_chain].mechanism is required." in errors
     assert "bridge.resonance_chains[soft_chain].falsifiers must not be empty." in errors
+
+
+def test_bridge_normalize_coerces_top_level_event_refs_to_list(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+
+    dict_payload = {
+        "bridge_type": "macro_valuation",
+        "layers_connected": ["L1", "L4"],
+        "implication_for_ndx": "需要保留冲突。",
+        "event_refs": {
+            "event:6479503280a4bf43": {"title": "BLS release"},
+            "event:f71e0fd17b6261c5": {"title": "NVDA 8-K"},
+        },
+    }
+    normalized_dict = orchestrator._normalize_payload("bridge", dict_payload)
+    assert isinstance(normalized_dict["event_refs"], list)
+    assert normalized_dict["event_refs"] == [
+        "event:6479503280a4bf43",
+        "event:f71e0fd17b6261c5",
+    ]
+    assert BridgeMemo.model_validate(normalized_dict).event_refs == [
+        "event:6479503280a4bf43",
+        "event:f71e0fd17b6261c5",
+    ]
+
+    string_payload = {
+        "bridge_type": "macro_valuation",
+        "layers_connected": ["L1", "L4"],
+        "implication_for_ndx": "需要保留冲突。",
+        "event_refs": "event:single",
+    }
+    normalized_str = orchestrator._normalize_payload("bridge", string_payload)
+    assert normalized_str["event_refs"] == ["event:single"]
+
+    list_of_dicts_payload = {
+        "bridge_type": "macro_valuation",
+        "layers_connected": ["L1", "L4"],
+        "implication_for_ndx": "需要保留冲突。",
+        "event_refs": [
+            {"event_id": "event:abc"},
+            {"id": "event:def"},
+        ],
+    }
+    normalized_lod = orchestrator._normalize_payload("bridge", list_of_dicts_payload)
+    assert normalized_lod["event_refs"] == ["event:abc", "event:def"]
+
+    none_payload = {
+        "bridge_type": "macro_valuation",
+        "layers_connected": ["L1", "L4"],
+        "implication_for_ndx": "需要保留冲突。",
+        "event_refs": None,
+    }
+    normalized_none = orchestrator._normalize_payload("bridge", none_payload)
+    assert normalized_none["event_refs"] == []
+
+
+def test_bridge_normalize_coerces_nested_event_refs_without_stringifying_dicts(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+
+    payload = {
+        "bridge_type": "macro_valuation",
+        "layers_connected": ["L1", "L4"],
+        "implication_for_ndx": "需要保留冲突。",
+        "typed_conflicts": [
+            {
+                "conflict_id": "C1",
+                "conflict_type": "macro_valuation",
+                "severity": "high",
+                "confidence": "high",
+                "description": "冲突描述",
+                "mechanism": "机制",
+                "implication": "含义",
+                "involved_layers": ["L1", "L4"],
+                "evidence_refs": ["L1.x"],
+                "event_refs": {"event:abc": {"title": "FOMC"}},
+                "falsifiers": ["利率回落"],
+            }
+        ],
+        "resonance_chains": [
+            {
+                "chain_id": "R1",
+                "description": "共振描述",
+                "mechanism": "机制",
+                "implication": "含义",
+                "confidence": "medium",
+                "involved_layers": ["L2", "L5"],
+                "evidence_refs": ["L2.x"],
+                "event_refs": [{"event_id": "event:def"}],
+                "confirming_indicators": ["L5.x"],
+                "falsifiers": ["风险偏好逆转"],
+            }
+        ],
+        "transmission_paths": [
+            {
+                "path_id": "T1",
+                "source_layer": "L1",
+                "target_layer": "L4",
+                "mechanism": "传导机制",
+                "implication": "传导含义",
+                "confidence": "medium",
+                "evidence_refs": ["L1.y"],
+                "event_refs": {"event:ghi": {"title": "CPI"}},
+            }
+        ],
+    }
+
+    normalized = orchestrator._normalize_payload("bridge", payload)
+
+    assert normalized["typed_conflicts"][0]["event_refs"] == ["event:abc"]
+    assert normalized["resonance_chains"][0]["event_refs"] == ["event:def"]
+    assert normalized["transmission_paths"][0]["event_refs"] == ["event:ghi"]
+    assert BridgeMemo.model_validate(normalized)
+
+
+def test_bridge_prompt_anchors_event_refs_as_string_list(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+
+    prompt = orchestrator._compose_bridge_prompt("body")
+
+    assert "BridgeMemo.event_refs" in prompt
+    assert "List[str]" in prompt
+    assert '["event:' in prompt

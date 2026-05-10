@@ -17,7 +17,7 @@ import logging
 import re
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # 尝试导入配置
 try:
@@ -44,7 +44,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-
 class LLMEngine:
     """可复用的 LLM 调用引擎（从 legacy analyzer 提取）"""
 
@@ -54,6 +53,7 @@ class LLMEngine:
         self.token_usage = {
             "total": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         }
+        self.service_beta_features: Dict[str, bool] = {}
         self.clients = self._initialize_clients()
 
     def _initialize_clients(self) -> Dict:
@@ -72,9 +72,13 @@ class LLMEngine:
                 continue
 
             if client_type == "openai_compatible":
+                base_url = get_base_url(service_name)
+                if service_name == "deepseek":
+                    base_url, beta_features_enabled = self._resolve_deepseek_base_url(base_url)
+                    self.service_beta_features[service_name] = beta_features_enabled
                 client_kwargs = {
                     "api_key": api_key,
-                    "base_url": get_base_url(service_name),
+                    "base_url": base_url,
                 }
                 extra_headers = get_extra_headers(service_name)
                 if extra_headers:
@@ -90,6 +94,24 @@ class LLMEngine:
                     logger.error(f"初始化 {service_name} 客户端时发生错误: {e}")
         return clients
 
+    @staticmethod
+    def _resolve_deepseek_base_url(base_url: Optional[str]) -> Tuple[Optional[str], bool]:
+        """Switch the default DeepSeek production URL to /beta so strict tool calls can
+        be enabled later. Custom or already-beta endpoints are kept as-is."""
+        if not base_url:
+            return base_url, False
+        normalized = base_url.rstrip("/")
+        if normalized == "https://api.deepseek.com":
+            return "https://api.deepseek.com/beta", True
+        if normalized == "https://api.deepseek.com/beta":
+            return base_url, True
+        return base_url, False
+
+    @staticmethod
+    def _promote_deepseek_base_url(base_url: Optional[str]) -> Optional[str]:
+        promoted, _enabled = LLMEngine._resolve_deepseek_base_url(base_url)
+        return promoted
+
     def _call_ai(self, prompt: str, model_key: str, stage: str = "") -> Tuple[Optional[str], Dict]:
         config = MODEL_CONFIGS[model_key]
         client_type = config["client"]
@@ -103,14 +125,16 @@ class LLMEngine:
                 return self._call_kimi_http(prompt, model_name, config["max_tokens"])
 
             if client_type == "openai_compatible" and service_name in self.clients:
+                use_json_output = service_name == "deepseek"
+                messages: List[Dict[str, Any]] = [{"role": "user", "content": prompt}]
                 kwargs = {
                     "model": model_name,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "temperature": 0.2,
                     "max_tokens": config["max_tokens"],
                     "stream": False,
                 }
-                if service_name == "deepseek":
+                if use_json_output:
                     kwargs["response_format"] = {"type": "json_object"}
                     if model_name.startswith("deepseek-v4-"):
                         kwargs["reasoning_effort"] = "high"

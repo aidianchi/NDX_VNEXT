@@ -51,6 +51,7 @@ output/
 
 # --- Logs and temporary files ---
 *.log
+ai_response_debug_*.txt
 *.tmp
 *.temp
 tmp/

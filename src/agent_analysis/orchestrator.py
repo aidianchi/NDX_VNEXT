@@ -723,13 +723,19 @@ class VNextOrchestrator:
                 continue
             parsed = self.llm_engine.extract_json(raw, stage_name)
             if not isinstance(parsed, dict):
-                last_error = f"{stage_name} did not return a parseable JSON object"
+                raw_text = str(raw or "")
+                tail = raw_text[-400:]
+                last_error = (
+                    f"{stage_name} did not return a parseable JSON object."
+                    f" 原始响应字符数: {len(raw_text)}."
+                    f" 响应末尾片段（用于定位 JSON 语法错误，请检查最后未闭合的数组、对象或字符串）：\n{tail}"
+                )
                 stage_record["errors"].append(
                     {
                         "attempt": attempt,
                         "kind": "parse_error",
-                        "message": last_error,
-                        "raw_excerpt": str(raw)[:500],
+                        "message": last_error[:1500],
+                        "raw_excerpt": raw_text[:500],
                     }
                 )
                 self._save_stage_diagnostics()
@@ -1126,6 +1132,11 @@ class VNextOrchestrator:
             "- unresolved_questions: 仍需 Thesis/Critic/Risk 保留的问题。\n"
             "旧字段 conflicts 仍要填写，用于兼容；typed_conflicts 是更高优先级的 Bridge v2 产物。\n"
             "如果输入包含 event_refs，Bridge 可以引用 event_ref 解释触发/背景/观察，但不得把事件写成 evidence_ref，也不得说事件“证明”某个数值指标结论。\n"
+            "\n## 顶层 BridgeMemo.event_refs 字段类型（强约束）\n"
+            "- BridgeMemo.event_refs 类型固定为 List[str]，只放事件 ID 字符串，例如：[\"event:6479503280a4bf43\", \"event:f71e0fd17b6261c5\"]。\n"
+            "- 输入里的 event_refs 是 Dict[event_id, 事件元数据]（标题、来源、时间），仅供你引用 ID；禁止把这种 dict 形态复制到输出。\n"
+            "- 不要写成 {\"event:xxx\": \"...\"} 之类的 dict、对象或映射；如果没有要保留的事件，请写 []。\n"
+            "- typed_conflicts/resonance_chains/transmission_paths 内部的 event_refs 同样是 List[str]。\n"
         )
         return f"{bridge_contract}\n\n{prompt_body}"
 
@@ -1273,6 +1284,7 @@ class VNextOrchestrator:
                     ]
                 if not isinstance(normalized.get("unresolved_questions"), list):
                     normalized["unresolved_questions"] = []
+                normalized["event_refs"] = self._coerce_event_refs_list(normalized.get("event_refs"))
             if stage_key == "reviser":
                 revised_thesis = normalized.get("revised_thesis")
                 if isinstance(revised_thesis, dict) and isinstance(revised_thesis.get("retained_conflicts"), list):
@@ -1442,12 +1454,13 @@ class VNextOrchestrator:
         normalized["description"] = str(normalized.get("description") or "")
         normalized["mechanism"] = str(normalized.get("mechanism") or "")
         normalized["implication"] = str(normalized.get("implication") or normalized["description"])
-        for key in ("involved_layers", "evidence_refs", "event_refs", "falsifiers"):
+        for key in ("involved_layers", "evidence_refs", "falsifiers"):
             value = normalized.get(key)
             if value is None:
                 normalized[key] = []
             elif not isinstance(value, list):
                 normalized[key] = [str(value)]
+        normalized["event_refs"] = self._coerce_event_refs_list(normalized.get("event_refs"))
         status = str(normalized.get("status") or "unresolved").lower()
         normalized["status"] = status if status in {"unresolved", "confirmed", "weakened"} else "unresolved"
         return normalized
@@ -1461,12 +1474,13 @@ class VNextOrchestrator:
         normalized["confidence"] = self._normalize_confidence(normalized.get("confidence"))
         if not normalized.get("involved_layers") and normalized.get("layers"):
             normalized["involved_layers"] = normalized.get("layers")
-        for key in ("involved_layers", "evidence_refs", "event_refs", "confirming_indicators", "falsifiers"):
+        for key in ("involved_layers", "evidence_refs", "confirming_indicators", "falsifiers"):
             value = normalized.get(key)
             if value is None:
                 normalized[key] = []
             elif not isinstance(value, list):
                 normalized[key] = [str(value)]
+        normalized["event_refs"] = self._coerce_event_refs_list(normalized.get("event_refs"))
         return normalized
 
     def _normalize_transmission_path(self, item: Dict[str, Any]) -> Dict[str, Any]:
@@ -1483,11 +1497,34 @@ class VNextOrchestrator:
         elif not isinstance(value, list):
             normalized["evidence_refs"] = [str(value)]
         value = normalized.get("event_refs")
-        if value is None:
-            normalized["event_refs"] = []
-        elif not isinstance(value, list):
-            normalized["event_refs"] = [str(value)]
+        normalized["event_refs"] = self._coerce_event_refs_list(value)
         return normalized
+
+    def _coerce_event_refs_list(self, value: Any) -> List[str]:
+        """BridgeMemo.event_refs must be List[str]; defend against AI mirroring the
+        dict-shaped AnalysisPacket.event_refs from the prompt input."""
+        if value is None:
+            return []
+        if isinstance(value, list):
+            coerced: List[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    coerced.append(item)
+                elif isinstance(item, dict):
+                    ref = (
+                        item.get("event_id")
+                        or item.get("id")
+                        or item.get("event_ref")
+                        or item.get("ref")
+                    )
+                    if ref:
+                        coerced.append(str(ref))
+                elif item is not None:
+                    coerced.append(str(item))
+            return coerced
+        if isinstance(value, dict):
+            return [str(key) for key in value.keys()]
+        return [str(value)]
 
     def _normalize_confidence(self, confidence: Any) -> str:
         if not isinstance(confidence, str):

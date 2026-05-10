@@ -6,6 +6,57 @@
 
 ## 2026-05-10
 
+### Bridge 阶段 JSON 容错升级 — event_refs 兜底与 DeepSeek /beta 校验
+
+分支：`claude/20260510-bridge-event-refs-resilience`（继续在同一分支上做方案 B）
+
+完成内容：
+
+- AI 审阅后补齐两个边界：子级 `typed_conflicts` / `resonance_chains` / `transmission_paths` 内部的 `event_refs` 现在也复用 `_coerce_event_refs_list`，避免 dict 被整段 stringify 后“过 schema 但丢语义”；真实 run 证明 DeepSeek 不允许 `response_format=json_object` 与 `prefix: true` 组合，因此当前 JSON 主链明确不发送 prefix。
+- 重新核对 DeepSeek 官方文档（`https://api-docs.deepseek.com/zh-cn/`，2026-05-10 抓取）：当前主力模型为 `deepseek-v4-flash` 与 `deepseek-v4-pro`；`deepseek-chat` 与 `deepseek-reasoner` 将于 2026/07/24 弃用，分别等价于 v4-flash 的非思考 / 思考模式。文档明确 v4 全系列同时支持 Json Output 与 Tool Calls，且思考模式与 Tool Calls / Strict Mode 兼容。
+- `src/agent_analysis/llm_engine.py` 新增 `_resolve_deepseek_base_url`：当 `get_base_url("deepseek")` 是默认生产值 `https://api.deepseek.com` 时升级为 `https://api.deepseek.com/beta`，为（未来的）strict function calling 做准备；显式 /beta 保持；自定义自托管 endpoint 不被重写。
+- `src/agent_analysis/llm_engine.py` 保留 `response_format={"type":"json_object"}` 作为当前 JSON 主链保护，并增加测试确保不与 prefix completion 组合。Claude 原报告中的 prefix 方案经真实 run 证伪后已撤回。
+- 新增 5 个 llm_engine 测试：`tests/test_vnext_llm_engine.py` 的 `test_deepseek_client_promotes_default_base_url_to_beta` / `test_deepseek_client_does_not_double_promote_explicit_beta` / `test_deepseek_client_respects_self_hosted_base_url` / `test_call_ai_uses_json_output_without_prefix_for_deepseek` / `test_call_ai_does_not_send_beta_prefix_to_custom_deepseek_endpoint`。更新已有的 `tests/test_deepseek_runtime_config.py::test_deepseek_v4_calls_use_official_reasoning_parameters`，确认 thinking 参数与 JSON Output 保留，且不发送 prefix。
+- 新增 AI 审阅报告 [docs/2026-05-10_BRIDGE_JSON_RESILIENCE_AI_AUDIT.md](docs/2026-05-10_BRIDGE_JSON_RESILIENCE_AI_AUDIT.md)：完整记录 bug → 系统性根因 → DeepSeek 官方约束工具链事实校核 → 本次实施（Fix 1+2+3 + 方案 B-1+B-2）→ 验证 → 仍存在的 8 类不稳定面 → 阶段 C/D/E 下一步建议 → 关键代码位置速查 → 审阅检查表，供其他 AI 审阅。
+
+验证结果：
+
+- 修改前：4 个新增 llm_engine 测试中 1 个按预期 fail（`/beta` 升级）；AI 审阅后追加并调整测试，覆盖 JSON Output 不发送 prefix 与自定义 endpoint 边界。
+- 修改后：`python -m pytest -q tests/test_vnext_llm_engine.py tests/test_deepseek_runtime_config.py tests/test_bridge_v2.py tests/test_vnext_orchestrator.py` 全绿。
+- `python -m pytest -q`：138 passed，164 warnings。
+- 真实 run 验证：`.venv/bin/python src/main.py --data-json output/data/data_collected_v9_live.json --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts` 成功生成 `output/analysis/vnext/20260510_191820/`；`llm_stage_diagnostics.json` 显示 bridge `status=ok`、`attempts=1`、`errors=[]`，最终 stance 为 `中性偏谨慎`，approval 为 `approved_with_reservations`。
+
+剩余观察：
+
+- 阶段 C（强约束）仍是根治路径：把 BridgeMemo 改造为 strict function calling tool。文档明确思考模式与 strict 兼容，但需要 contracts 层移除 `extra="allow"`、把 Optional 字段改为带默认值的 required、用 $ref/$def 复用枚举。建议先在 bridge stage 单点 PoC。
+- 阶段 E 基础设施清理：`.gitignore` 增加 `ai_response_debug_*.txt`（当前仓库根有两个未跟踪的 debug 文件）；思考模式下 `temperature: 0.2` 实际无效，建议条件化；`max_node_retries` 可考虑提到 3（缓存命中价格 1/10，重试成本接近零）。
+- 子级 normalize "过校验、坏语义" 地雷（U1）已处理；prompt 减负（U2）仍未处理，等真实 run 数据决定优先级。
+
+### Bridge 阶段 event_refs 类型容错与重试反馈强化
+
+分支：`claude/20260510-bridge-event-refs-resilience`
+
+完成内容：
+
+- 排查 `output/logs/control_service/20260510_132806_164.log`：bridge 阶段两次 attempt 不同错因导致 `RuntimeError: bridge failed after 2 attempts`。Attempt 1 是 `resonance_chains[0].falsifiers` 数组未闭合，`_light_repair_json` 修不了结构性破损；attempt 2 是 LLM 把顶层 `event_refs` 输出成 dict（模仿了 `AnalysisPacket.event_refs: Dict[str, Dict]` 输入形态），与 `BridgeMemo.event_refs: List[str]` 撞型。`llm_stage_diagnostics.json` 印证了两次错误属于不同 kind（parse_error → schema_validation_error）。
+- `src/agent_analysis/orchestrator.py::_normalize_payload` 在 bridge 分支末尾新增 `_coerce_event_refs_list` 兜底：dict→keys、list[dict]→提取 `event_id`/`id`/`event_ref`/`ref`、scalar→`[str(value)]`、None→`[]`。子级别 typed_conflicts/resonance_chains/transmission_paths 的 event_refs 已有归一化，本次只补顶层缺口，不动既有路径。
+- `src/agent_analysis/orchestrator.py::_run_stage` 的 parse_error 反馈从 "did not return a parseable JSON object" 升级为「错误描述 + 原始响应字符数 + 末尾 400 字符片段」，给下一轮 LLM 提供可定位的语法错误线索；`raw_excerpt` 仍只在 diagnostics 里保留 500 字符，不外泄。
+- `src/agent_analysis/orchestrator.py::_compose_bridge_prompt` 增加 "顶层 BridgeMemo.event_refs 字段类型（强约束）" 段落，显式说明 List[str] 类型 + 字符串 ID 数组示例，并指出输入 dict 形态不得复制到输出，杜绝 LLM 模仿输入格式。
+- 新增 3 个失败先行测试：`tests/test_bridge_v2.py` 的 `test_bridge_normalize_coerces_top_level_event_refs_to_list` 与 `test_bridge_prompt_anchors_event_refs_as_string_list`，`tests/test_vnext_orchestrator.py` 的 `test_run_stage_parse_error_feedback_includes_response_excerpt`。
+
+验证结果：
+
+- 修改前：3 个新测试均按预期 fail（normalize 留下 dict、prompt 缺锚点、last_error 不含响应末尾）。
+- 修改后：`python -m pytest -q tests/test_bridge_v2.py tests/test_vnext_orchestrator.py::test_run_stage_records_parse_retry_diagnostics tests/test_vnext_orchestrator.py::test_run_stage_parse_error_feedback_includes_response_excerpt` 全绿。
+- `python -m pytest -q`：132 passed，163 warnings。
+
+剩余观察：
+
+- 本次仅修补顶层 event_refs；L1-L5 隔离、bridge 高严重度冲突保留、legacy_adapter 边界均未触动。
+- 子级别 normalize 仍保留 `not isinstance(value, list) → [str(value)]` 行为：若 LLM 把 typed_conflicts/resonance_chains/transmission_paths 内部 event_refs 写成 dict，会 stringify 成单元素列表，能过 schema 但语义被毁。这是潜在的"过校验、坏语义"地雷，未在本轮处理；后续若发现下游 evidence 追溯失败，再单独修。
+- 重试反馈强化对所有 stage 生效（不只是 bridge），有助于其它 stage 在长 JSON 偶发语法错误时收敛；监控下次 run 的 `llm_stage_diagnostics.json`。
+- bridge prompt 长度此次基本不变（仅追加约 350 中文字符的强约束段落）；本次未做 prompt 减负（备选项 #4），避免一次性引入过多变量。
+
 ### 修复控制台运行环境、产物跳转、命名和实时数据链路
 
 完成内容：

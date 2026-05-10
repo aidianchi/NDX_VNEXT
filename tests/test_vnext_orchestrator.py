@@ -701,3 +701,59 @@ def test_run_stage_records_parse_retry_diagnostics(tmp_path: Path):
     assert "上一次返回未通过结构校验" in engine.prompts[1]
     assert diagnostics["stages"]["mini_stage"]["attempts"] == 2
     assert diagnostics["stages"]["mini_stage"]["errors"][0]["kind"] == "parse_error"
+
+
+class _ParseRetryWithTailEngine:
+    """First call returns a long broken JSON ending with a sentinel; second call is valid."""
+
+    SENTINEL = "BROKEN_TAIL_MARKER_FOR_TEST"
+
+    def __init__(self):
+        self.calls = 0
+        self.prompts = []
+        padding = "x" * 600
+        self.broken_payload = (
+            "{\n  \"value\": \"partial\",\n  \"more\": [\n    "
+            + padding
+            + "\n    \"unterminated string  // "
+            + self.SENTINEL
+        )
+
+    def call_with_fallback(self, prompt, stage_name=""):
+        self.calls += 1
+        self.prompts.append(prompt)
+        return self.broken_payload if self.calls == 1 else '{"value": "ok"}'
+
+    def extract_json(self, text, stage):
+        if text == self.broken_payload:
+            return None
+        return json.loads(text)
+
+    def get_token_report(self):
+        return {}
+
+
+def test_run_stage_parse_error_feedback_includes_response_excerpt(tmp_path: Path):
+    engine = _ParseRetryWithTailEngine()
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="mini",
+        stage_name="mini_stage",
+        model_cls=MiniStageModel,
+        payload={"example": "payload"},
+    )
+
+    assert result.value == "ok"
+    assert engine.calls == 2
+    second_prompt = engine.prompts[1]
+    assert "上一次返回未通过结构校验" in second_prompt
+    assert engine.SENTINEL in second_prompt, (
+        "Retry prompt should surface the tail of the broken response so the model "
+        "can locate the syntax error instead of regenerating blind."
+    )
+    assert "response length" in second_prompt.lower() or "原始响应字符数" in second_prompt
