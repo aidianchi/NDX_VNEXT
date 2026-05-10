@@ -26,8 +26,24 @@
 
 剩余观察：
 
-- 市场图谱 section 的设计问题：用户怀疑已被各层微图替代，Damodaran ERP 和 WorldPERatio 似乎可并入 L4。待进一步确认布局调整方向。
 - WTREGEN 警告（log 中 million-dollar unit mixing）：待调查。
+
+---
+
+### 市场图谱布局重构：Damodaran ERP 与 WorldPERatio 并入 L4
+
+分支：`claude/20260510-debug-run-issues`（同一分支）
+
+完成内容：
+
+- **`_damodaran_indicator_visual` 增强**：从 atlas 移入 SVG 月度线图（ERP T12M / 10Y Treasury / Expected return 三条路径）、8 项 ERP 透镜指标、data_date/source 脚注。L4 微图现在是 atlas 的超集。
+- **`_valuation_indicator_visual` 增强**：从 atlas 移入 WorldPERatio 窗口标签表（1y/5y/10y/20y 均值 PE、标准差、区间、偏离 σ、估值标签）及 SMA50/SMA200 趋势语境。
+- **Atlas section 精简**：移除 `_damodaran_erp_chart`、`_worldperatio_window_chart`、`_worldperatio_relative_position` 三个方法（~100 行）。Atlas 保留估值相对位置尺和 L1-L4 利率估值压力图两张图表。Section 描述更新为"跨层压力与估值位置"。
+- **测试更新**：`test_vnext_reporter.py` 中 5 个断言更新为新的 L4 微图标题和属性。
+
+验证结果：
+
+- `python -m pytest -q`：138 passed，164 warnings。
 
 ---
 
