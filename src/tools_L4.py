@@ -769,6 +769,50 @@ def get_ndx_pe_and_earnings_yield_av(end_date: str = None) -> Dict[str, Any]:
         }
 
 
+DAMODARAN_CACHE_TTL_SECONDS = 86400  # 24 hours
+
+
+def _damodaran_cache_dir() -> str:
+    cache_dir = os.path.join(path_config.cache_dir, "damodaran")
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+
+def _damodaran_cache_path(url: str) -> str:
+    safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", url.rsplit("/", 1)[-1]) if "/" in url else url
+    return os.path.join(_damodaran_cache_dir(), safe_name)
+
+
+def _read_cache(path: str) -> Optional[bytes]:
+    try:
+        mtime = os.path.getmtime(path)
+        if time.time() - mtime > DAMODARAN_CACHE_TTL_SECONDS:
+            return None
+        with open(path, "rb") as f:
+            return f.read()
+    except Exception:
+        return None
+
+
+def _write_cache(path: str, content: bytes) -> None:
+    try:
+        with open(path, "wb") as f:
+            f.write(content)
+    except Exception:
+        pass
+
+
+def _fetch_bytes_cached(url: str, timeout: int = 12) -> Tuple[Optional[bytes], Optional[str]]:
+    cache_path = _damodaran_cache_path(url)
+    cached = _read_cache(cache_path)
+    if cached is not None:
+        return cached, None
+    content, error = _fetch_bytes(url, timeout=timeout)
+    if content is not None:
+        _write_cache(cache_path, content)
+    return content, error
+
+
 def _fetch_text(url: str, timeout: int = 8) -> Tuple[Optional[str], Optional[str]]:
     try:
         response = requests.get(
@@ -1257,12 +1301,12 @@ def get_damodaran_us_implied_erp(end_date: str = None) -> Dict[str, Any]:
     retrieval_method = ""
     errors: List[str] = []
 
-    content, monthly_error = _fetch_bytes(monthly_url)
+    content, monthly_error = _fetch_bytes_cached(monthly_url)
     if content:
         try:
             parsed = _parse_damodaran_monthly_erp_excel(content, target_date=date_str)
             retrieval_method = "monthly_excel"
-            current_content, current_error = _fetch_bytes(current_url)
+            current_content, current_error = _fetch_bytes_cached(current_url)
             if current_content:
                 try:
                     current_parsed = _parse_damodaran_current_erp_calculator_excel(

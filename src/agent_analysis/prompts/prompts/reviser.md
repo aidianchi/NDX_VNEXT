@@ -33,10 +33,10 @@
     }
   ],
   "revised_thesis": {
-    "environment_assessment": "...",
-    "valuation_assessment": "...",
-    "timing_assessment": "...",
-    "main_thesis": "...",
+    "environment_assessment": "最多300字符，宏观环境评估：能不能涨？",
+    "valuation_assessment": "最多300字符，估值安全边际评估：贵不贵？",
+    "timing_assessment": "最多300字符，择时催化剂评估：为什么是现在？",
+    "main_thesis": "最多500字符，主论点",
     "key_support_chains": [...],
     "retained_conflicts": [...],
     "dependencies": [...],
@@ -149,11 +149,15 @@ revision_summary 应包含：
 - ✅ 显式说明拒绝了哪些批评及理由
 - ✅ 保留所有 high severity 冲突
 - ✅ 修订说明必须诚实（不夸大修订程度）
+- ✅ environment_assessment / valuation_assessment / timing_assessment 各最多300字符
+- ✅ main_thesis 最多500字符
 
 ## 质量检查
 
 - [ ] revision_summary 是否诚实说明修订内容？
 - [ ] accepted_critiques 是否列出所有采纳的批评？
+- [ ] environment_assessment / valuation_assessment / timing_assessment 是否各不超过300字符？
+- [ ] main_thesis 是否不超过500字符？
 - [ ] rejected_critiques 是否有充分理由？
 - [ ] revised_thesis 是否修复了数据引用错误？
 - [ ] revised_thesis 是否整合了风险警示？

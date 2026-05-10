@@ -288,6 +288,8 @@ _MEANINGFUL_VALUE_IGNORED_KEYS = {
     "components",
     "not_implied_erp_warning",
     "damodaran_reference",
+    "scope",
+    "not_ndx_valuation_warning",
 }
 
 

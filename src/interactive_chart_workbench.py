@@ -944,7 +944,7 @@ const chartEntries = [];
 const indicatorSeries = {};
 const panelShells = {};
 const moduleSeriesData = {};
-let syncLocked = true;
+let syncLocked = false;
 let syncingRange = false;
 let syncingCrosshair = false;
 const PRICE_SCALE_WIDTH = 112;
@@ -1208,7 +1208,8 @@ document.querySelectorAll('[data-module-normalize], [data-module-dual-axis]').fo
   });
 });
 
-syncedCharts.forEach(item => item.timeScale().fitContent());
+syncLocked = true;
+chart.timeScale().fitContent();
 
 function setIndicatorState(key, visible) {
   (indicatorSeries[key] || []).forEach(series => applySeriesVisible(series, visible));
@@ -1351,15 +1352,16 @@ function updateActiveModuleChrome(moduleKey = activeModuleKey()) {
 
 function priceReadoutHtml(time) {
   const candle = payload.candles.find(item => item.time === time) || {};
-  const volume = findPoint(payload.volume, time) || {};
+  const volume = findPointAtOrBefore(payload.volume, time) || {};
   const values = {
-    rsi: findPoint(payload.subpanels.rsi14, time),
-    atr: findPoint(payload.subpanels.atr14, time),
-    macd: findPoint(payload.subpanels.macd_histogram, time),
-    obv: findPoint(payload.subpanels.obv, time),
-    mfi: findPoint(payload.subpanels.mfi14, time),
-    cmf: findPoint(payload.subpanels.cmf20, time),
+    rsi: findPointAtOrBefore(payload.subpanels.rsi14, time),
+    atr: findPointAtOrBefore(payload.subpanels.atr14, time),
+    macd: findPointAtOrBefore(payload.subpanels.macd_histogram, time),
+    obv: findPointAtOrBefore(payload.subpanels.obv, time),
+    mfi: findPointAtOrBefore(payload.subpanels.mfi14, time),
+    cmf: findPointAtOrBefore(payload.subpanels.cmf20, time),
   };
+  const staleOf = (pt) => pt && pt.time !== time ? ` <small>(${pt.time})</small>` : '';
   return `
     <h3>${time}</h3>
     <dl>
@@ -1367,13 +1369,13 @@ function priceReadoutHtml(time) {
       <dt>High</dt><dd>${fmt(candle.high)}</dd>
       <dt>Low</dt><dd>${fmt(candle.low)}</dd>
       <dt>Close</dt><dd>${fmt(candle.close)}</dd>
-      <dt>Volume</dt><dd>${fmt(volume.value, 0)}</dd>
-      <dt>OBV</dt><dd>${fmt(values.obv?.value, 0)}</dd>
-      <dt>MACD hist</dt><dd>${fmt(values.macd?.value)}</dd>
-      <dt>RSI</dt><dd>${fmt(values.rsi?.value)}</dd>
-      <dt>ATR</dt><dd>${fmt(values.atr?.value)}</dd>
-      <dt>MFI</dt><dd>${fmt(values.mfi?.value)}</dd>
-      <dt>CMF</dt><dd>${fmt(values.cmf?.value, 4)}</dd>
+      <dt>Volume</dt><dd>${fmt(volume.value, 0)}${staleOf(volume)}</dd>
+      <dt>OBV</dt><dd>${fmt(values.obv?.value, 0)}${staleOf(values.obv)}</dd>
+      <dt>MACD hist</dt><dd>${fmt(values.macd?.value)}${staleOf(values.macd)}</dd>
+      <dt>RSI</dt><dd>${fmt(values.rsi?.value)}${staleOf(values.rsi)}</dd>
+      <dt>ATR</dt><dd>${fmt(values.atr?.value)}${staleOf(values.atr)}</dd>
+      <dt>MFI</dt><dd>${fmt(values.mfi?.value)}${staleOf(values.mfi)}</dd>
+      <dt>CMF</dt><dd>${fmt(values.cmf?.value, 4)}${staleOf(values.cmf)}</dd>
     </dl>
   `;
 }
@@ -1401,7 +1403,7 @@ function syncCrosshair(time, sourceEntry) {
   syncingCrosshair = true;
   chartEntries.forEach(entry => {
     if (entry === sourceEntry || !entry.primarySeries || !entry.chart || typeof entry.chart.setCrosshairPosition !== 'function') return;
-    const point = findPoint(entry.primaryData, time);
+    const point = findPointAtOrBefore(entry.primaryData, time);
     if (point && Number.isFinite(point.value)) {
       entry.chart.setCrosshairPosition(point.value, time, entry.primarySeries);
     }

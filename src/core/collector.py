@@ -158,7 +158,36 @@ class DataCollector:
                 # 检查2: manual_data.py是否被激活 (active: True)
                 # 检查3: 当前函数名是否在手动数据的metrics字典中
                 manual_metric = MANUAL_DATA.get("metrics", {}).get(func_name) if manual_data_available else None
-                if manual_data_available and MANUAL_DATA.get("active") and has_meaningful_manual_override(manual_metric):
+                manual_active = bool(manual_data_available and MANUAL_DATA.get("active") and has_meaningful_manual_override(manual_metric))
+
+                # Damodaran ERP: always call live function for monthly series, merge manual values as supplement
+                if func_name == "get_damodaran_us_implied_erp":
+                    result = self._collect_single_indicator(func_name, end_date=backtest_date)
+                    if manual_active and isinstance(manual_metric, dict):
+                        manual_value = manual_metric.get("value", {}) if isinstance(manual_metric.get("value"), dict) else {}
+                        live_value = result.get("value", {}) if isinstance(result.get("value"), dict) else {}
+                        merged_value = dict(live_value)
+                        for key in ("manual_erp", "manual_erp_percentile_5y", "manual_erp_percentile_10y"):
+                            if manual_value.get(key) is not None:
+                                merged_value[key] = manual_value[key]
+                        result["value"] = merged_value
+                        result["manual_override_used"] = True
+                        result["manual_override_note"] = "Manual ERP values merged into live Damodaran data; monthly series from live fetch"
+                        logging.info(f"  - 调用 {func_name}... ✔ (live Damodaran data merged with manual ERP overrides)")
+                    else:
+                        logging.info(f"  - 调用 {func_name}... ✔ (live Damodaran data)")
+                    indicator = {
+                        "layer": layer_num,
+                        "metric_name": result.get("name", func_name.replace("_", " ").title()),
+                        "function_id": func_name,
+                        "raw_data": result,
+                        "error": result.get("error"),
+                        "collection_timestamp_utc": datetime.utcnow().isoformat()
+                    }
+                    indicators.append(indicator)
+                    continue
+
+                if manual_active:
                     logging.info(f"  - 璋冪敤 {func_name}... 鉁?(manual override used)")
                     logging.info(f"  - 调用 {func_name}... ✔ (使用 'manual_data.py' 中的人工数据)")
                     indicator = {

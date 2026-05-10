@@ -280,6 +280,7 @@ def test_damodaran_getter_prefers_excel_and_marks_it_official(monkeypatch):
         return None, "unexpected url"
 
     monkeypatch.setattr(tools_L4, "_fetch_bytes", fake_fetch_bytes)
+    monkeypatch.setattr(tools_L4, "_fetch_bytes_cached", fake_fetch_bytes)
 
     def fake_fetch_text(url, timeout=8):
         html_called["value"] = True
@@ -337,6 +338,7 @@ def test_damodaran_getter_uses_latest_monthly_row_not_after_target_date(monkeypa
         return None, "not needed"
 
     monkeypatch.setattr(tools_L4, "_fetch_bytes", fake_fetch_bytes)
+    monkeypatch.setattr(tools_L4, "_fetch_bytes_cached", fake_fetch_bytes)
     monkeypatch.setattr(tools_L4, "_fetch_text", lambda url, timeout=8: (None, "not needed"))
 
     result = tools_L4.get_damodaran_us_implied_erp("2026-05-06")
@@ -354,6 +356,7 @@ def test_damodaran_getter_falls_back_to_html_when_excel_fails(monkeypatch):
     """
 
     monkeypatch.setattr(tools_L4, "_fetch_bytes", lambda url, timeout=12: (None, "excel failed"))
+    monkeypatch.setattr(tools_L4, "_fetch_bytes_cached", lambda url, timeout=12: (None, "excel failed"))
     monkeypatch.setattr(tools_L4, "_fetch_text", lambda url, timeout=8: (html, None))
 
     result = tools_L4.get_damodaran_us_implied_erp("2026-05-01")
@@ -366,6 +369,7 @@ def test_damodaran_getter_falls_back_to_html_when_excel_fails(monkeypatch):
 
 def test_damodaran_getter_returns_unavailable_when_excel_and_html_fail(monkeypatch):
     monkeypatch.setattr(tools_L4, "_fetch_bytes", lambda url, timeout=12: (None, "excel failed"))
+    monkeypatch.setattr(tools_L4, "_fetch_bytes_cached", lambda url, timeout=12: (None, "excel failed"))
     monkeypatch.setattr(tools_L4, "_fetch_text", lambda url, timeout=8: (None, "html failed"))
 
     result = tools_L4.get_damodaran_us_implied_erp("2026-05-01")
