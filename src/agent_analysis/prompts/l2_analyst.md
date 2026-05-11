@@ -89,6 +89,7 @@ L2 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 ## Output Discipline
 
 - 只返回 JSON。
+- `core_facts` 必须是对象数组；每个对象至少包含 `metric` 和 `value`，不得输出为纯文本字符串。
 - 每个 `analysis_required=true` 的指标必须有一条 `indicator_analyses`。
 - 不得把“低波动”直接等同于“低风险”。
 - 不得把“风险偏好强”直接等同于“市场健康”。

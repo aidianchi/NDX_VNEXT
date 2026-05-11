@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-05-11
+
+### Bridge 输入污染复核：L3 core_facts 字符串拆分修复
+
+完成内容：
+
+- 复核 [BRIDGE_INPUT_AUDIT_L3_COREFACTS_CONTAMINATION.md](BRIDGE_INPUT_AUDIT_L3_COREFACTS_CONTAMINATION.md)：确认 `_normalize_payload()` 在 `core_facts` 为字符串时会逐字符迭代，导致单字符 `CoreFact` 噪声污染 Bridge 输入；问题属于上游归一化缺陷，不是 Bridge 设计问题。
+- `src/agent_analysis/orchestrator.py` 在遍历前先规整 `core_facts`：字符串、bytes、单个 dict 或其他非 list 值都会包装为单元素列表，避免未来任何 L1-L5 输出同类格式偏差时被拆碎。
+- L1-L5 prompt 的 Output Discipline 补充 `core_facts` 对象数组约束，作为模型输出层辅助防线；代码兜底仍是主防线。
+- 新增两个 orchestrator 回归测试，覆盖 `core_facts` 纯文本字符串和单个对象 dict 两种异常形态。
+
+验证结果：
+
+- 修复前手动复现：`core_facts="QQQ/QQEW比率触及历史极值"` 被拆成 16 条单字符 fact。
+- 修复后手动复核：同一字符串归一化为 1 条 fact。
+- `python3 -m pytest tests/test_vnext_orchestrator.py::test_layer_payload_normalization_wraps_core_facts_string tests/test_vnext_orchestrator.py::test_layer_payload_normalization_wraps_single_core_fact_dict tests/test_vnext_orchestrator.py::test_layer_payload_normalization_backfills_indicator_evidence_refs -q`：3 passed。
+- `python3 -m pytest tests/test_vnext_orchestrator.py -q`：9 passed。
+- `python3 -m pytest -q`：142 passed，6 warnings。
+
 ## 2026-05-10
 
 ### AI 复核补丁：Workbench 时间轴收口与 Damodaran 缓存防污染

@@ -91,6 +91,7 @@ L1 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 ## Output Discipline
 
 - 只返回 JSON。
+- `core_facts` 必须是对象数组；每个对象至少包含 `metric` 和 `value`，不得输出为纯文本字符串。
 - 每个 `analysis_required=true` 的指标必须有一条 `indicator_analyses`。
 - 不得预测政策路径，只描述当前数据隐含的约束和条件。
 - 不得输出买卖建议。

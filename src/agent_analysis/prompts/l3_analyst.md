@@ -90,6 +90,7 @@ L3 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 ## Output Discipline
 
 - 只返回 JSON。
+- `core_facts` 必须是对象数组；每个对象至少包含 `metric` 和 `value`，不得输出为纯文本字符串。
 - 每个 `analysis_required=true` 的指标必须有一条 `indicator_analyses`。
 - 不得因为价格强就推断结构健康；价格趋势属于 L5。
 - 不得因为 M7 强就忽略集中风险。

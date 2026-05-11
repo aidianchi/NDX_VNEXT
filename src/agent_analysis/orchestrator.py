@@ -1228,8 +1228,12 @@ class VNextOrchestrator:
             for text_key in ("local_conclusion", "layer_synthesis", "internal_conflict_analysis", "notes"):
                 if normalized.get(text_key) is not None and not isinstance(normalized.get(text_key), str):
                     normalized[text_key] = json.dumps(normalized[text_key], ensure_ascii=False, default=str)
+            raw_core_facts = normalized.get("core_facts", []) or []
+            if isinstance(raw_core_facts, (str, bytes, dict)) or not isinstance(raw_core_facts, list):
+                raw_core_facts = [raw_core_facts]
+
             normalized_core_facts = []
-            for fact in normalized.get("core_facts", []) or []:
+            for fact in raw_core_facts:
                 if not isinstance(fact, dict):
                     text = str(fact)
                     normalized_core_facts.append({"metric": text[:80] or "core_fact", "value": text})

@@ -680,6 +680,57 @@ def test_layer_payload_normalization_backfills_indicator_evidence_refs(tmp_path:
     assert normalized["indicator_analyses"][0]["evidence_refs"] == ["L3.get_advance_decline_line"]
 
 
+def test_layer_payload_normalization_wraps_core_facts_string(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    fact_text = "QQQ/QQEW比率触及历史极值，Top10权重偏高，广度确认不足。"
+    normalized = orchestrator._normalize_payload(
+        "l3_analyst",
+        {
+            "layer": "L3",
+            "confidence": "medium",
+            "core_facts": fact_text,
+        },
+    )
+
+    assert normalized["core_facts"] == [
+        {
+            "metric": fact_text[:80],
+            "value": fact_text,
+        }
+    ]
+
+
+def test_layer_payload_normalization_wraps_single_core_fact_dict(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    normalized = orchestrator._normalize_payload(
+        "l3_analyst",
+        {
+            "layer": "L3",
+            "confidence": "medium",
+            "core_facts": {"metric": "QQQ/QQEW", "value": "extreme", "trend": "bullish"},
+        },
+    )
+
+    assert normalized["core_facts"] == [
+        {
+            "metric": "QQQ/QQEW",
+            "value": "extreme",
+            "trend": "rising",
+            "magnitude": None,
+        }
+    ]
+
+
 def test_run_stage_records_parse_retry_diagnostics(tmp_path: Path):
     engine = ParseRetryFakeLLMEngine()
     orchestrator = VNextOrchestrator(

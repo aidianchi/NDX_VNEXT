@@ -95,6 +95,7 @@ L5 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 ## Output Discipline
 
 - 只返回 JSON。
+- `core_facts` 必须是对象数组；每个对象至少包含 `metric` 和 `value`，不得输出为纯文本字符串。
 - 每个 `analysis_required=true` 的指标必须有一条 `indicator_analyses`。
 - 不得因为趋势强给出买入建议；最终裁决不在本层。
 - 必须把“趋势有效”和“短期过热”分开处理，不得互相抵消。
