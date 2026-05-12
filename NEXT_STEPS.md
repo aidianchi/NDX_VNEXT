@@ -19,6 +19,14 @@
 
 这里只保留最近完成事项的摘要，详细内容见 `WORK_LOG.md`。
 
+### 2026-05-12
+
+- L4 外部估值源稳定收口：Damodaran 官网月度 `ERPbymonth.xlsx` 优先并验证 120 条月度序列；WorldPERatio 当前页面 Last 1Y/5Y/10Y/20Y 标准差窗口可结构化解析且不冒充 historical percentile；Trendonify 继续走用户信任的 `bb-browser` sidecar，不把 requests 403 硬修成主链路。
+- Trusted Trendonify sidecar 支持合并进 `ThirdPartyChecks`，并带 `browser_sidecar` 元数据；刷新遇到 Cloudflare/空页面时按 page_type 保留旧可用值，避免污染。
+- manual/Wind PE 仍作为主值时，collector 会附加 live `ThirdPartyChecks` 作为审计交叉校验；Damodaran live monthly 不再被 manual ERP 覆盖。
+- 研究控制台主入口从“视觉回归”改为“查看日志”，优先服务复跑和排障；视觉回归保留为开发验证脚本。
+- 验证：`python3 -m pytest -q` 为 154 passed；`--collect-only` 真实采集成功，`output/data/data_collected_v9_live.json` 中包含 WorldPERatio、Trendonify trailing/forward 与 Damodaran monthly。
+
 ### 2026-05-10
 
 - 修复控制台运行环境：control service 会把白名单 `python3` 命令绑定为启动服务的虚拟环境解释器，避免 macOS 系统 Python 3.9 导致 `pandas_ta` 缺失。

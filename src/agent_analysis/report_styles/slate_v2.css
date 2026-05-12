@@ -657,6 +657,57 @@ p, li {
 .chart-source-list span,
 .chart-source-list small { color: var(--muted); }
 .chart-source-list strong { font-size: 12px; }
+.news-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 720px) {
+  .news-grid { grid-template-columns: 1fr; }
+}
+.news-card {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-raised);
+  padding: 14px 16px;
+  display: grid;
+  gap: 10px;
+}
+.news-date {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.news-card h3 {
+  margin: 0 0 6px;
+  font: 650 15px/1.35 var(--sans);
+}
+.news-card h3 a {
+  color: var(--ink);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.news-card p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.news-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.news-tags span {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-chip);
+  background: var(--paper);
+  color: var(--muted);
+  padding: 3px 6px;
+  font: 600 11px/1.2 var(--sans);
+}
 .line-chart {
   width: 100%;
   height: auto;
@@ -790,6 +841,9 @@ p, li {
 .state-pill {
   font-family: var(--mono);
   font-size: 11px;
+  max-width: 220px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .pill::before, .state-pill::before {
   content: "";
@@ -1218,6 +1272,7 @@ details ul { font-size: 13px; padding-left: 18px; margin: 6px 0; }
   border-radius: var(--radius);
   padding: 16px 18px;
   position: relative;
+  min-width: 0;
 }
 .indicator-card.target {
   outline: 2px solid var(--accent);
@@ -1249,6 +1304,7 @@ details ul { font-size: 13px; padding-left: 18px; margin: 6px 0; }
   font-size: 11px;
   font-weight: 500;
   color: var(--accent);
+  overflow-wrap: anywhere;
 }
 .reading {
   font-family: var(--mono);
@@ -1569,6 +1625,7 @@ details ul { font-size: 13px; padding-left: 18px; margin: 6px 0; }
   height: 12px;
   border: 1px solid var(--rule);
   background: linear-gradient(90deg, rgba(185,28,28,.18) 0 50%, rgba(21,128,61,.18) 50% 100%);
+  overflow: hidden;
 }
 .diverging-bar::before {
   content: "";

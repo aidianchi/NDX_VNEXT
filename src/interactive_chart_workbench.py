@@ -976,17 +976,54 @@ function points(rows) {
 }
 
 function findPoint(rows, time) {
-  return (rows || []).find(item => item.time === time);
+  const key = timeKey(time);
+  return (rows || []).find(item => item.time === key);
 }
 
 function findPointAtOrBefore(rows, time) {
-  const exact = findPoint(rows, time);
+  const key = timeKey(time);
+  const exact = findPoint(rows, key);
   if (exact) return exact;
   const clean = rows || [];
   for (let index = clean.length - 1; index >= 0; index -= 1) {
-    if (clean[index].time <= time) return clean[index];
+    if (clean[index].time <= key) return clean[index];
   }
   return null;
+}
+
+function timeKey(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && Number.isFinite(value.year) && Number.isFinite(value.month) && Number.isFinite(value.day)) {
+    const month = String(value.month).padStart(2, '0');
+    const day = String(value.day).padStart(2, '0');
+    return `${value.year}-${month}-${day}`;
+  }
+  return String(value);
+}
+
+function latestTimeForModule(moduleKey = activeModuleKey()) {
+  if (moduleKey === 'price_technical') {
+    const latest = payload.candles[payload.candles.length - 1];
+    return latest ? latest.time : '';
+  }
+  const rows = moduleSeriesData[moduleKey] || [];
+  const latest = rows.reduce((candidate, item) => {
+    const point = (item.rows || [])[item.rows.length - 1];
+    if (!point || !point.time) return candidate;
+    return !candidate || point.time > candidate ? point.time : candidate;
+  }, '');
+  return latest || (payload.candles[payload.candles.length - 1]?.time || '');
+}
+
+function timeFromCrosshair(param, entry) {
+  const explicit = timeKey(param && param.time);
+  if (explicit) return explicit;
+  if (param && Number.isFinite(param.logical) && entry && Array.isArray(entry.primaryData) && entry.primaryData.length) {
+    const index = Math.max(0, Math.min(entry.primaryData.length - 1, Math.round(param.logical)));
+    return entry.primaryData[index]?.time || '';
+  }
+  return latestTimeForModule(entry && entry.key ? entry.key : activeModuleKey());
 }
 
 function addIndicator(key, series) {
@@ -1340,6 +1377,11 @@ function activeModuleKey() {
 
 function defaultReadoutHtml(moduleKey = activeModuleKey()) {
   const summary = payload.moduleSummaries[moduleKey] || {};
+  const latest = latestTimeForModule(moduleKey);
+  const hasRows = moduleKey === 'price_technical' || Boolean((moduleSeriesData[moduleKey] || []).length);
+  if (latest && hasRows) {
+    return readoutHtml(latest, moduleKey, true);
+  }
   if (moduleKey === 'price_technical') {
     return '<h3>Crosshair</h3><p>把鼠标移到图上查看 OHLC、成交量和均线读数。</p>';
   }
@@ -1363,27 +1405,54 @@ function updateActiveModuleChrome(moduleKey = activeModuleKey()) {
   readout.innerHTML = defaultReadoutHtml(moduleKey);
 }
 
-function priceReadoutHtml(time) {
-  const candle = payload.candles.find(item => item.time === time) || {};
-  const volume = findPointAtOrBefore(payload.volume, time) || {};
-  const values = {
-    rsi: findPointAtOrBefore(payload.subpanels.rsi14, time),
-    atr: findPointAtOrBefore(payload.subpanels.atr14, time),
-    macd: findPointAtOrBefore(payload.subpanels.macd_histogram, time),
-    obv: findPointAtOrBefore(payload.subpanels.obv, time),
-    mfi: findPointAtOrBefore(payload.subpanels.mfi14, time),
-    cmf: findPointAtOrBefore(payload.subpanels.cmf20, time),
+function priceReadoutHtml(time, isLatest = false) {
+  const key = timeKey(time) || latestTimeForModule('price_technical');
+  const candle = payload.candles.find(item => item.time === key) || {};
+  const volume = findPointAtOrBefore(payload.volume, key) || {};
+  const ma = {
+    ma5: findPointAtOrBefore(payload.ma.ma5, key),
+    ma20: findPointAtOrBefore(payload.ma.ma20, key),
+    ma60: findPointAtOrBefore(payload.ma.ma60, key),
+    ma200: findPointAtOrBefore(payload.ma.ma200, key),
   };
-  const staleOf = (pt) => pt && pt.time !== time ? ` <small>(${pt.time})</small>` : '';
+  const bands = {
+    bbUpper: findPointAtOrBefore(payload.bands.bb_upper, key),
+    bbLower: findPointAtOrBefore(payload.bands.bb_lower, key),
+    donchianUpper: findPointAtOrBefore(payload.bands.donchian_upper, key),
+    donchianLower: findPointAtOrBefore(payload.bands.donchian_lower, key),
+    vwap20: findPointAtOrBefore(payload.bands.vwap20, key),
+  };
+  const values = {
+    rsi: findPointAtOrBefore(payload.subpanels.rsi14, key),
+    atr: findPointAtOrBefore(payload.subpanels.atr14, key),
+    macdLine: findPointAtOrBefore(payload.subpanels.macd, key),
+    macdSignal: findPointAtOrBefore(payload.subpanels.macd_signal, key),
+    macd: findPointAtOrBefore(payload.subpanels.macd_histogram, key),
+    obv: findPointAtOrBefore(payload.subpanels.obv, key),
+    mfi: findPointAtOrBefore(payload.subpanels.mfi14, key),
+    cmf: findPointAtOrBefore(payload.subpanels.cmf20, key),
+  };
+  const staleOf = (pt) => pt && pt.time !== key ? ` <small>(${pt.time})</small>` : '';
   return `
-    <h3>${time}</h3>
+    <h3>${isLatest ? 'Latest · ' : ''}${key}</h3>
     <dl>
       <dt>Open</dt><dd>${fmt(candle.open)}</dd>
       <dt>High</dt><dd>${fmt(candle.high)}</dd>
       <dt>Low</dt><dd>${fmt(candle.low)}</dd>
       <dt>Close</dt><dd>${fmt(candle.close)}</dd>
+      <dt>MA5</dt><dd>${fmt(ma.ma5?.value)}${staleOf(ma.ma5)}</dd>
+      <dt>MA20</dt><dd>${fmt(ma.ma20?.value)}${staleOf(ma.ma20)}</dd>
+      <dt>MA60</dt><dd>${fmt(ma.ma60?.value)}${staleOf(ma.ma60)}</dd>
+      <dt>MA200</dt><dd>${fmt(ma.ma200?.value)}${staleOf(ma.ma200)}</dd>
+      <dt>VWAP20</dt><dd>${fmt(bands.vwap20?.value)}${staleOf(bands.vwap20)}</dd>
+      <dt>BB upper</dt><dd>${fmt(bands.bbUpper?.value)}${staleOf(bands.bbUpper)}</dd>
+      <dt>BB lower</dt><dd>${fmt(bands.bbLower?.value)}${staleOf(bands.bbLower)}</dd>
+      <dt>Donchian H</dt><dd>${fmt(bands.donchianUpper?.value)}${staleOf(bands.donchianUpper)}</dd>
+      <dt>Donchian L</dt><dd>${fmt(bands.donchianLower?.value)}${staleOf(bands.donchianLower)}</dd>
       <dt>Volume</dt><dd>${fmt(volume.value, 0)}${staleOf(volume)}</dd>
       <dt>OBV</dt><dd>${fmt(values.obv?.value, 0)}${staleOf(values.obv)}</dd>
+      <dt>MACD</dt><dd>${fmt(values.macdLine?.value)}${staleOf(values.macdLine)}</dd>
+      <dt>Signal</dt><dd>${fmt(values.macdSignal?.value)}${staleOf(values.macdSignal)}</dd>
       <dt>MACD hist</dt><dd>${fmt(values.macd?.value)}${staleOf(values.macd)}</dd>
       <dt>RSI</dt><dd>${fmt(values.rsi?.value)}${staleOf(values.rsi)}</dd>
       <dt>ATR</dt><dd>${fmt(values.atr?.value)}${staleOf(values.atr)}</dd>
@@ -1393,22 +1462,26 @@ function priceReadoutHtml(time) {
   `;
 }
 
-function moduleReadoutHtml(time, moduleKey) {
+function moduleReadoutHtml(time, moduleKey, isLatest = false) {
+  const key = timeKey(time) || latestTimeForModule(moduleKey);
   const rows = moduleSeriesData[moduleKey] || [];
-  if (!rows.length) return defaultReadoutHtml(moduleKey);
+  if (!rows.length) {
+    const summary = payload.moduleSummaries[moduleKey] || {};
+    return `<h3>${summary.title || 'Crosshair'}</h3><p>该模块暂无可绘制序列，先查看上方模块摘要和证据层底稿。</p>`;
+  }
   const items = rows.map((item) => {
-    const point = findPointAtOrBefore(item.rows, time);
-    const stale = point && point.time !== time ? ` <small>${point.time}</small>` : '';
+    const point = findPointAtOrBefore(item.rows, key);
+    const stale = point && point.time !== key ? ` <small>${point.time}</small>` : '';
     return `<dt>${item.label}</dt><dd>${fmt(point?.value)}${stale}</dd>`;
   }).join('');
   return `
-    <h3>${time}</h3>
+    <h3>${isLatest ? 'Latest · ' : ''}${key}</h3>
     <dl>${items}</dl>
   `;
 }
 
-function readoutHtml(time, moduleKey = activeModuleKey()) {
-  return moduleKey === 'price_technical' ? priceReadoutHtml(time) : moduleReadoutHtml(time, moduleKey);
+function readoutHtml(time, moduleKey = activeModuleKey(), isLatest = false) {
+  return moduleKey === 'price_technical' ? priceReadoutHtml(time, isLatest) : moduleReadoutHtml(time, moduleKey, isLatest);
 }
 
 function syncCrosshair(time, sourceEntry) {
@@ -1425,13 +1498,14 @@ function syncCrosshair(time, sourceEntry) {
 }
 
 function handleCrosshair(param, entry) {
-  if (!param || !param.time || !param.seriesData) {
-    readout.innerHTML = defaultReadoutHtml(activeModuleKey());
+  const moduleKey = entry && entry.key ? entry.key : activeModuleKey();
+  const time = timeFromCrosshair(param, entry);
+  if (!time) {
+    readout.innerHTML = defaultReadoutHtml(moduleKey);
     return;
   }
-  const moduleKey = entry && entry.key ? entry.key : activeModuleKey();
-  readout.innerHTML = readoutHtml(param.time, moduleKey);
-  syncCrosshair(param.time, entry);
+  readout.innerHTML = readoutHtml(time, moduleKey);
+  syncCrosshair(time, entry);
 }
 
 chartEntries.forEach(entry => {

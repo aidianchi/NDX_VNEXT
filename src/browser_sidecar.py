@@ -145,7 +145,7 @@ def collect_trendonify_valuation_sidecar(
                     "source_tier": "browser_sidecar_public_page",
                     "requires_user_trust": True,
                     "user_trusted": trusted,
-                    "parse_status": "ok" if parsed.get("available") else "unavailable",
+                    "parse_status": "ok" if parsed.get("availability") == "available" or parsed.get("value") is not None else "unavailable",
                     "parsed": parsed,
                     "text_excerpt": page_text[:1800],
                     "bb_browser_steps": collected["commands"],
@@ -168,11 +168,66 @@ def collect_trendonify_valuation_sidecar(
         "policy": {
             "runtime_context_rule": "Browser sidecar output is not injected into L1-L5 layer-local prompts.",
             "usage_rule": "Use only after explicit user trust/confirmation; treat as third-party public-page valuation context.",
-            "main_chain_rule": "The main L4 requests path still records direct 403 as unavailable and does not silently invoke bb-browser.",
+            "main_chain_rule": "The main L4 requests path records direct 403, then may merge this file only when user_trusted=true.",
         },
         "pages": pages,
         "source_errors": source_errors,
     }
+
+
+def _has_available_trendonify_page(page: Dict[str, Any]) -> bool:
+    parsed = page.get("parsed") if isinstance(page, dict) else None
+    if not isinstance(parsed, dict):
+        return False
+    return parsed.get("availability") == "available" or parsed.get("value") is not None
+
+
+def has_available_trendonify_sidecar_payload(payload: Dict[str, Any]) -> bool:
+    for page in payload.get("pages", []):
+        if _has_available_trendonify_page(page):
+            return True
+    return False
+
+
+def merge_trendonify_sidecar_payload(existing: Optional[Dict[str, Any]], payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(existing, dict) or not existing.get("pages"):
+        return payload
+    existing_by_type = {
+        page.get("page_type"): page
+        for page in existing.get("pages", [])
+        if isinstance(page, dict) and page.get("page_type") and _has_available_trendonify_page(page)
+    }
+    preserved: List[str] = []
+    merged_pages: List[Dict[str, Any]] = []
+    seen = set()
+    for page in payload.get("pages", []):
+        if not isinstance(page, dict):
+            continue
+        page_type = page.get("page_type")
+        seen.add(page_type)
+        if _has_available_trendonify_page(page) or page_type not in existing_by_type:
+            merged_pages.append(page)
+            continue
+        old_page = dict(existing_by_type[page_type])
+        old_page["preserved_after_failed_refresh_at_utc"] = payload.get("generated_at_utc")
+        old_page["latest_failed_refresh"] = {
+            "generated_at_utc": payload.get("generated_at_utc"),
+            "parse_status": page.get("parse_status"),
+            "text_excerpt": page.get("text_excerpt"),
+        }
+        merged_pages.append(old_page)
+        preserved.append(str(page_type))
+
+    for page_type, page in existing_by_type.items():
+        if page_type not in seen:
+            merged_pages.append(page)
+            preserved.append(str(page_type))
+
+    merged = dict(payload)
+    merged["pages"] = merged_pages
+    if preserved:
+        merged["preserved_existing_page_types"] = sorted(set(preserved))
+    return merged
 
 
 def parse_args() -> argparse.Namespace:
@@ -200,6 +255,22 @@ def main() -> int:
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
+    existing_payload: Optional[Dict[str, Any]] = None
+    if output.exists():
+        try:
+            existing_payload = json.loads(output.read_text(encoding="utf-8"))
+        except Exception:
+            existing_payload = None
+        payload = merge_trendonify_sidecar_payload(existing_payload, payload)
+    if output.exists() and not has_available_trendonify_sidecar_payload(payload):
+        failed_output = output.with_suffix(".failed.json")
+        failed_output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        logger.warning(
+            "browser sidecar refresh had no available parsed values; preserved existing file: %s (failed payload: %s)",
+            output,
+            failed_output,
+        )
+        return 0
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     logger.info("browser sidecar written: %s (%s pages, %s errors)", output, len(payload["pages"]), len(payload["source_errors"]))
     return 0

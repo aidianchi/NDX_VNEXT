@@ -23,8 +23,10 @@ except ImportError:
     from tools_L3 import get_ndx100_components
 
 from io import BytesIO, StringIO
+import json
 import re
-from typing import Iterable
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
 from zipfile import ZipFile
 from xml.etree import ElementTree as ET
 
@@ -904,6 +906,58 @@ def _parse_worldperatio_relative_position(text: str, *, percentile_is_explicit: 
     windows: Dict[str, Dict[str, Any]] = {}
     for years in (1, 5, 10, 20):
         window_key = f"{years}y"
+        row_match = re.search(
+            rf"Last\s+{years}Y\s+"
+            r"([-+]?[0-9]+(?:\.[0-9]+)?)\s+"
+            r"([-+]?[0-9]+(?:\.[0-9]+)?)\s+"
+            r"\[\s*([-+]?[0-9]+(?:\.[0-9]+)?)\s*[·\s]+"
+            r"([-+]?[0-9]+(?:\.[0-9]+)?)\s*,\s*"
+            r"([-+]?[0-9]+(?:\.[0-9]+)?)\s*[·\s]+"
+            r"([-+]?[0-9]+(?:\.[0-9]+)?)\s*\]\s*"
+            r"([-+]?[0-9]+(?:\.[0-9]+)?)\s*σ\s*"
+            r"([A-Za-z][A-Za-z -]+)",
+            text,
+            flags=re.I | re.S,
+        )
+        if row_match:
+            windows[window_key] = {
+                "average_pe": _round_or_none(_safe_float(row_match.group(1))),
+                "std_dev": _round_or_none(_safe_float(row_match.group(2))),
+                "range_low": _round_or_none(_safe_float(row_match.group(4))),
+                "range_high": _round_or_none(_safe_float(row_match.group(5))),
+                "range_2std_low": _round_or_none(_safe_float(row_match.group(3))),
+                "range_2std_high": _round_or_none(_safe_float(row_match.group(6))),
+                "deviation_vs_mean_sigma": _round_or_none(_safe_float(row_match.group(7))),
+                "valuation_label": row_match.group(8).strip(),
+            }
+            continue
+
+        summary_match = re.search(
+            rf"{years}Y\s+Average:\s*([-+]?[0-9]+(?:\.[0-9]+)?).*?"
+            r"1\s+Std\s+Dev\s+range:\s*\[\s*([-+]?[0-9]+(?:\.[0-9]+)?)\s*,\s*([-+]?[0-9]+(?:\.[0-9]+)?)\s*\].*?"
+            r"2\s+Std\s+Dev\s+range:\s*\[\s*([-+]?[0-9]+(?:\.[0-9]+)?)\s*,\s*([-+]?[0-9]+(?:\.[0-9]+)?)\s*\]",
+            text,
+            flags=re.I | re.S,
+        )
+        if summary_match:
+            average = _safe_float(summary_match.group(1))
+            range_low = _safe_float(summary_match.group(2))
+            range_high = _safe_float(summary_match.group(3))
+            std_dev = None
+            if average is not None and range_high is not None:
+                std_dev = range_high - average
+            windows[window_key] = {
+                "average_pe": _round_or_none(average),
+                "std_dev": _round_or_none(std_dev),
+                "range_low": _round_or_none(range_low),
+                "range_high": _round_or_none(range_high),
+                "range_2std_low": _round_or_none(_safe_float(summary_match.group(4))),
+                "range_2std_high": _round_or_none(_safe_float(summary_match.group(5))),
+                "deviation_vs_mean_sigma": None,
+                "valuation_label": None,
+            }
+            continue
+
         block_match = re.search(
             rf"{years}\s+Year.*?(?=\n\s*(?:1|5|10|20)\s+Year|\n\s*(?:50|200)\s+Day|$)",
             text,
@@ -949,11 +1003,65 @@ def _parse_worldperatio_relative_position(text: str, *, percentile_is_explicit: 
     }
 
 
+def _trendonify_sidecar_default_path() -> Path:
+    return Path(path_config.output_dir) / "browser_sidecar" / "trendonify_ndx_valuation.json"
+
+
+def _trusted_trendonify_sidecar_sources(path: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Load user-trusted Trendonify browser sidecar values for L4 cross-checks.
+
+    Direct HTTP requests to Trendonify often return 403. The browser sidecar is
+    intentionally explicit and opt-in, but once the user marked it trusted it
+    should be visible in ThirdPartyChecks rather than stranded in output/.
+    """
+    sidecar_path = Path(path) if path else _trendonify_sidecar_default_path()
+    if not sidecar_path.exists():
+        return []
+    try:
+        payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if payload.get("source") != "trendonify_ndx_valuation":
+        return []
+
+    sources: List[Dict[str, Any]] = []
+    for page in payload.get("pages", []):
+        if not isinstance(page, dict) or not page.get("user_trusted"):
+            continue
+        parsed = page.get("parsed")
+        if not isinstance(parsed, dict):
+            continue
+        if parsed.get("availability") != "available" and parsed.get("value") is None:
+            continue
+        item = dict(parsed)
+        item["source_tier"] = SOURCE_TIER_THIRD_PARTY
+        item["browser_sidecar"] = {
+            "path": str(sidecar_path),
+            "page_type": page.get("page_type"),
+            "collected_at_utc": page.get("collected_at_utc") or payload.get("generated_at_utc"),
+            "user_trusted": True,
+            "collection_method": "bb-browser",
+        }
+        if page.get("preserved_after_failed_refresh_at_utc"):
+            item["browser_sidecar"]["preserved_after_failed_refresh_at_utc"] = page.get("preserved_after_failed_refresh_at_utc")
+        if page.get("latest_failed_refresh"):
+            item["browser_sidecar"]["latest_failed_refresh"] = page.get("latest_failed_refresh")
+        item["methodology"] = f"{item.get('methodology', '')}; user-trusted bb-browser sidecar".strip("; ")
+        item["availability"] = "available"
+        sources.append(item)
+    return sources
+
+
 def _parse_trendonify_ndx_pe(html: str, *, forward: bool = False) -> Dict[str, Any]:
     text = _html_text(html)
     title = "Nasdaq 100 Forward PE Ratio" if forward else "Nasdaq 100 PE Ratio"
     metric = "ndx_forward_pe" if forward else "ndx_trailing_pe"
     value = _first_number(rf"{re.escape(title)}\s*\n\s*([0-9]+(?:\.[0-9]+)?)", text)
+    if value is None:
+        value = _trendonify_value_after_label(
+            text,
+            ["Nasdaq 100 Forward PE Ratio", "Forward PE Ratio"] if forward else ["Nasdaq 100 PE Ratio", "PE Ratio"],
+        )
     data_date = _first_date(r"Last Updated:\s*([A-Za-z]+\s+[0-9]{2},\s+[0-9]{4})", text)
     percentile = _first_number(r"Valuation\s+Percentile\s+Rank\s*([0-9]+(?:\.[0-9]+)?)\s*%?", text)
     historical_percentiles = _parse_trendonify_historical_percentiles(text)
@@ -987,6 +1095,21 @@ def _parse_trendonify_ndx_pe(html: str, *, forward: bool = False) -> Dict[str, A
             "1Y/5Y/10Y/20Y/since-inception percentiles when published"
         )
     return result
+
+
+def _trendonify_value_after_label(text: str, labels: List[str]) -> Optional[float]:
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    lines = [line for line in lines if line]
+    normalized_labels = {label.lower() for label in labels}
+    numeric_pattern = re.compile(r"^([0-9]+(?:\.[0-9]+)?)$")
+    for idx, line in enumerate(lines):
+        if line.lower() not in normalized_labels:
+            continue
+        for candidate in lines[idx + 1 : idx + 5]:
+            match = numeric_pattern.match(candidate.replace(",", ""))
+            if match:
+                return _safe_float(match.group(1))
+    return None
 
 
 def _parse_trendonify_historical_percentiles(text: str) -> Dict[str, Dict[str, Any]]:
@@ -1064,6 +1187,12 @@ def get_ndx_valuation_third_party_checks() -> List[Dict[str, Any]]:
                     reason=str(exc)[:120],
                 )
             )
+    sidecar_sources = _trusted_trendonify_sidecar_sources()
+    if sidecar_sources:
+        by_id = {item.get("source_id"): item for item in checks if isinstance(item, dict)}
+        for item in sidecar_sources:
+            by_id[item.get("source_id")] = item
+        checks = [by_id.get(source_id, item) for source_id, _, _ in sources for item in [by_id.get(source_id)] if item]
     return checks
 
 

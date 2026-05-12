@@ -4,7 +4,56 @@
 
 ---
 
+## 2026-05-12
+
+### L4 外部估值源稳定收口：Damodaran、WorldPERatio、Trendonify sidecar
+
+完成内容：
+
+- **研究控制台入口微调**：控制台主流程选择不再把“视觉回归”作为用户入口，改为“查看日志”；产物区从 visual regression summary 改成 `output/logs/control_service` 最新日志/状态文件。视觉回归脚本仍保留给开发验 UI，但不占用日常复跑排障入口。
+- **Damodaran 根因确认并收口**：官网 `ERPbymonth.xlsx` 可下载，真实抓取约 46KB；不稳定主要来自坏缓存、manual 覆盖和 run 是否 live。当前 `get_damodaran_us_implied_erp("2026-05-11")` 优先使用 `monthly_excel`，`source_file=ERPbymonth.xlsx`，最新 `data_date=2026-05-01`，`monthly_series` 为 120 条。
+- **WorldPERatio parser 修复**：适配当前页面的 Last 1Y/5Y/10Y/20Y 表格，结构化 `average_pe`、`std_dev`、`range_low/range_high`、`deviation_vs_mean_sigma` 和 `valuation_label`。真实页面验证：2026-05-11 当前 PE 为 32.66；不把标准差区间或估值标签冒充 historical percentile。
+- **Trendonify 稳定路径明确**：普通 requests 仍不作为稳定主链路；`bb-browser` sidecar 是显式、用户信任后才合并的路径。`browser_sidecar.py` 修复 `parse_status` 判断，增强 Forward PE 文本解析，并在刷新遇到 Cloudflare/空页面时按 `page_type` 保留旧的可用 trusted page，避免刷新污染旧 sidecar。
+- **L4 合并逻辑增强**：`get_ndx_valuation_third_party_checks()` 会在 direct requests 后合并 `user_trusted=true` 的 Trendonify sidecar，并保留 `browser_sidecar` 采集时间、信任标记和失败刷新保留元数据。
+- **manual/Wind 覆盖边界修复**：当 `get_ndx_pe_and_earnings_yield` 使用 manual/Wind 主值时，collector 仍会轻量拉取 live third-party checks，写入 `value.ThirdPartyChecks` 和 `data_quality.source_disagreement`；manual 主值不被替换，第三方源只作为审计交叉校验。
+- **控制台刷新容错**：`console_run_all.py` 在用户信任 Trendonify sidecar 时会先尝试刷新；刷新失败或单页解析失败不会中断整条流水线，会保留已有可用 sidecar 或写入 failed payload 供审计。
+
+验证结果：
+
+- `python3 -m pytest tests/test_l4_external_valuation_sources.py tests/test_browser_sidecar.py -q`：10 passed。
+- `python3 -m pytest tests/test_l4_external_valuation_sources.py tests/test_l4_data_authority.py tests/test_browser_sidecar.py tests/test_vnext_reporter.py tests/test_console_run_all.py -q`：31 passed。
+- `python3 -m pytest -q`：154 passed，6 warnings。
+- 真实 WorldPERatio 页面验证：`value=32.66`，`data_date=11 May 2026`，1Y/5Y/10Y/20Y 窗口均解析成功，`historical_percentile=None`。
+- 真实 Damodaran 验证：`retrieval_method=monthly_excel`，`source_file=ERPbymonth.xlsx`，`data_date=2026-05-01`，`monthly_series=120`。
+- `bb-browser` sidecar 刷新验证：Forward PE 刷新为 23.8 / 2026-05-11 / 10Y percentile 58.3；Trailing PE 当前刷新遇到空/验证页，保留旧 trusted 值 38.07 / 2026-05-08，并写入 `preserved_after_failed_refresh_at_utc`。
+- `python3 src/main.py --collect-only --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts`：采集成功，`output/data/data_collected_v9_live.json` 中 `get_ndx_pe_and_earnings_yield.value.ThirdPartyChecks` 包含 `worldperatio_pe`、`trendonify_pe`、`trendonify_forward_pe`；Damodaran 月度序列为 120 条。
+- collect-only packet/brief：`output/analysis/vnext/20260512_215333_collect_only/analysis_packet.json`，`output/reports/vnext_brief_20260512_2153.html`。brief 中可检索 `WorldPERatio`、`Trendonify`、`browser_sidecar`、`ThirdPartyChecks`、`ERPbymonth.xlsx`，且不再出现“未接入 Trendonify 或 WorldPERatio”。
+
+真实运行观察：
+
+- `python3 src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts` 完成数据采集并写出 `output/analysis/vnext/20260512_211406/analysis_packet.json`，但 LLM 分析阶段因 DeepSeek flash/pro 多次 `APIConnectionError` / timeout，最终 `l1 received empty response` 失败；这属于模型连接稳定性问题，不是本轮三个数据源解析/合并失败。
+- 该失败 run 不能作为完整 vNext 叙事验收；数据源验收以 collect-only JSON、collect-only packet/brief、单源真实抓取和测试为准。
+
 ## 2026-05-11
+
+### 20260510_225944 报告自查：微图误导、空底稿文案与 Crosshair 读数修复
+
+完成内容：
+
+- 复核用户批注和 `20260510_225942_913.log`：确认本次 run 没有实际执行 live Damodaran / WorldPERatio / Trendonify 采集，报告中“已并入 L4 微图”的说法会误导读者。
+- 移除 brief 中 demo/模板说明式文案和“市场图谱”空图谱入口，改为官方事件底账占位；无新闻底账时明确说明事件不进入 L1-L5 数值证据。
+- L4 估值微图在没有 WorldPERatio/Trendonify 时改为中性标题，并显示 PE_TTM、PB 等主来源字段；人工/Wind ERP 不再冒充 Damodaran 官网月度序列。
+- 底稿数据质量区不再渲染裸 `[]` / `{}`；source value 摘要不再输出整块 dict。
+- 修复 L5 静态微图的横向溢出：MACD 与 VWAP 偏离条限制为半轴宽度，避免条形穿出卡片。
+- 修复价格技术 workbench crosshair：默认展示最新交易日读数，鼠标移动时兼容不同时间格式，并补齐 MA、Bollinger、Donchian、VWAP、MACD/Signal 等具体指标。
+
+验证结果：
+
+- `python3 -m pytest tests/test_interactive_chart_workbench.py tests/test_vnext_reporter.py tests/test_research_console.py -q`：13 passed，4 warnings。
+- 生成修复版 brief：`output/reports/vnext_brief_20260510_225944_reviewfix.html`。
+- 生成修复版 workbench：`output/reports/vnext_workbench_20260510_225944_reviewfix.html`。
+- `python3 src/report_visual_regression.py ...`：desktop/mobile brief 与 workbench 截图均 OK，布局扫描 passed。
+- 本地浏览器打开新 workbench：标题正常，控制台无 error/warning，读数区包含最新日期、MA20、VWAP20、Donchian 等具体指标。
 
 ### Bridge 输入污染复核：L3 core_facts 字符串拆分修复
 

@@ -4,19 +4,32 @@ import argparse
 import json
 import logging
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
 try:
     from .agent_analysis.vnext_reporter import VNextReportGenerator
+    from .browser_sidecar import (
+        collect_trendonify_valuation_sidecar,
+        has_available_trendonify_sidecar_payload,
+        merge_trendonify_sidecar_payload,
+    )
     from .config import path_config
     from .interactive_chart_workbench import InteractiveChartWorkbenchGenerator
     from .main import run_pipeline, setup_logging
+    from .manual_data import load_manual_data
 except ImportError:
     from agent_analysis.vnext_reporter import VNextReportGenerator
+    from browser_sidecar import (
+        collect_trendonify_valuation_sidecar,
+        has_available_trendonify_sidecar_payload,
+        merge_trendonify_sidecar_payload,
+    )
     from config import path_config
     from interactive_chart_workbench import InteractiveChartWorkbenchGenerator
     from main import run_pipeline, setup_logging
+    from manual_data import load_manual_data
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,9 +58,51 @@ def _write_json(path: str, payload: Dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def _maybe_refresh_trendonify_sidecar() -> str:
+    manual = load_manual_data()
+    sidecar = manual.get("browser_sidecar") if isinstance(manual, dict) else {}
+    if not isinstance(sidecar, dict) or sidecar.get("source") != "trendonify_ndx_valuation" or not sidecar.get("user_trusted"):
+        return ""
+    output_path = Path(sidecar.get("output_path") or (Path(path_config.output_dir) / "browser_sidecar" / "trendonify_ndx_valuation.json"))
+    logging.info("Trendonify trusted sidecar refresh started: %s", output_path)
+    try:
+        payload = collect_trendonify_valuation_sidecar(trusted=True)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_payload = None
+        if output_path.exists():
+            try:
+                existing_payload = json.loads(output_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing_payload = None
+            payload = merge_trendonify_sidecar_payload(existing_payload, payload)
+        if output_path.exists() and not has_available_trendonify_sidecar_payload(payload):
+            failed_output = output_path.with_suffix(".failed.json")
+            failed_output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            logging.warning(
+                "Trendonify trusted sidecar refresh produced no available parsed values; preserving existing sidecar: %s",
+                output_path,
+            )
+            return str(output_path)
+        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        logging.info(
+            "Trendonify trusted sidecar refresh complete: %s (%s pages, %s errors)",
+            output_path,
+            len(payload.get("pages", [])),
+            len(payload.get("source_errors", [])),
+        )
+        return str(output_path)
+    except Exception as exc:
+        logging.warning(
+            "Trendonify trusted sidecar refresh failed; continuing with existing sidecar if present: %s",
+            str(exc)[:300],
+        )
+        return str(output_path) if output_path.exists() else ""
+
+
 def main() -> int:
     args = parse_args()
     setup_logging()
+    trendonify_sidecar_path = _maybe_refresh_trendonify_sidecar()
 
     pipeline_args = SimpleNamespace(
         date=args.date,
@@ -71,6 +126,7 @@ def main() -> int:
         "native_brief": brief_path,
         "workbench": workbench_path,
         "manual_data_path": path_config.manual_data_local_path,
+        "trendonify_sidecar_path": trendonify_sidecar_path,
         "workbench_modules": _modules(args.workbench_modules),
     }
     run_summary_path = os.path.join(run_dir, "console_run_summary.json")

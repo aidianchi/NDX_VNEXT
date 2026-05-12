@@ -11,6 +11,7 @@ core.collector
 import os
 import json
 import logging
+from copy import deepcopy
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -73,6 +74,44 @@ class DataCollector:
                 "get_multi_scale_ma_position"    # V7.0新增：多尺度MA分析
             ]
         }
+
+    def _merge_manual_ndx_valuation_checks(self, manual_metric: Dict[str, Any]) -> Dict[str, Any]:
+        result = deepcopy(manual_metric)
+        try:
+            try:
+                from ..tools_L4 import get_ndx_valuation_third_party_checks
+            except ImportError:
+                from tools_L4 import get_ndx_valuation_third_party_checks
+            third_party_checks = get_ndx_valuation_third_party_checks()
+        except Exception as exc:
+            third_party_checks = []
+            result["third_party_checks_error"] = str(exc)[:150]
+
+        value = result.get("value") if isinstance(result.get("value"), dict) else {}
+        result["value"] = {**value, "ThirdPartyChecks": third_party_checks}
+
+        data_quality = result.get("data_quality") if isinstance(result.get("data_quality"), dict) else {}
+        source_disagreement = dict(data_quality.get("source_disagreement") or {})
+        for item in third_party_checks:
+            if not isinstance(item, dict):
+                continue
+            source_disagreement[item.get("source_id") or item.get("source") or item.get("source_name")] = {
+                "metric": item.get("metric"),
+                "value": item.get("value"),
+                "data_date": item.get("data_date"),
+                "percentile_10y": item.get("percentile_10y"),
+                "historical_percentile": item.get("historical_percentile"),
+                "source_tier": item.get("source_tier"),
+                "availability": item.get("availability"),
+                "unavailable_reason": item.get("unavailable_reason") or item.get("error"),
+                "browser_sidecar": item.get("browser_sidecar"),
+            }
+        data_quality["source_disagreement"] = source_disagreement
+        result["data_quality"] = data_quality
+        result["manual_override_note"] = (
+            "Manual valuation values remain primary; live third-party checks are attached for audit/cross-check only."
+        )
+        return result
 
     # 回测时不支持历史数据的函数列表
     BACKTEST_UNSUPPORTED_FUNCTIONS = [
@@ -190,11 +229,15 @@ class DataCollector:
                 if manual_active:
                     logging.info(f"  - 璋冪敤 {func_name}... 鉁?(manual override used)")
                     logging.info(f"  - 调用 {func_name}... ✔ (使用 'manual_data.py' 中的人工数据)")
+                    raw_data = manual_metric
+                    if func_name == "get_ndx_pe_and_earnings_yield" and isinstance(manual_metric, dict):
+                        raw_data = self._merge_manual_ndx_valuation_checks(manual_metric)
+                        logging.info(f"  - 调用 {func_name}... ✔ (manual valuation merged with live third-party checks)")
                     indicator = {
                         "layer": layer_num,
-                        "metric_name": manual_metric.get("name", func_name.replace("_", " ").title()),
+                        "metric_name": raw_data.get("name", func_name.replace("_", " ").title()),
                         "function_id": func_name,
-                        "raw_data": manual_metric, # 将整块手动数据存入raw_data
+                        "raw_data": raw_data,
                         "error": None,
                         "collection_timestamp_utc": datetime.utcnow().isoformat()
                     }

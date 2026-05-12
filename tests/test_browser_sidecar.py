@@ -5,7 +5,11 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from browser_sidecar import collect_trendonify_valuation_sidecar
+from browser_sidecar import (
+    collect_trendonify_valuation_sidecar,
+    has_available_trendonify_sidecar_payload,
+    merge_trendonify_sidecar_payload,
+)
 
 
 def test_trendonify_browser_sidecar_parses_multi_window_percentiles():
@@ -33,10 +37,51 @@ Since Jun 2002 21.24 63.5% Overvalued
     payload = collect_trendonify_valuation_sidecar(trusted=True, wait_seconds=0, runner=fake_runner)
 
     assert payload["schema_version"] == "browser_sidecar_v1"
-    assert payload["policy"]["main_chain_rule"].startswith("The main L4 requests path")
+    assert "user_trusted=true" in payload["policy"]["main_chain_rule"]
     assert len(payload["pages"]) == 2
     assert payload["pages"][0]["requires_user_trust"] is True
     assert payload["pages"][0]["user_trusted"] is True
     forward = next(page for page in payload["pages"] if page["page_type"] == "forward_pe")
+    assert forward["parse_status"] == "ok"
     assert forward["parsed"]["percentile_10y"] == 57.5
     assert forward["parsed"]["historical_percentiles"]["5y"]["percentile"] == 40.0
+
+
+def test_trendonify_sidecar_payload_available_guard():
+    assert has_available_trendonify_sidecar_payload({"pages": [{"parsed": {"availability": "unavailable", "value": None}}]}) is False
+    assert has_available_trendonify_sidecar_payload({"pages": [{"parsed": {"availability": "unavailable", "value": 23.73}}]}) is True
+
+
+def test_trendonify_sidecar_merge_preserves_existing_page_when_refresh_page_fails():
+    existing = {
+        "pages": [
+            {
+                "page_type": "trailing_pe",
+                "parse_status": "ok",
+                "parsed": {"availability": "available", "value": 38.07},
+            }
+        ]
+    }
+    refreshed = {
+        "generated_at_utc": "2026-05-12T13:00:00Z",
+        "pages": [
+            {
+                "page_type": "trailing_pe",
+                "parse_status": "unavailable",
+                "parsed": {"availability": "unavailable", "value": None},
+                "text_excerpt": "Cloudflare",
+            },
+            {
+                "page_type": "forward_pe",
+                "parse_status": "ok",
+                "parsed": {"availability": "available", "value": 23.8},
+            },
+        ],
+    }
+
+    merged = merge_trendonify_sidecar_payload(existing, refreshed)
+    by_type = {page["page_type"]: page for page in merged["pages"]}
+
+    assert by_type["trailing_pe"]["parsed"]["value"] == 38.07
+    assert by_type["trailing_pe"]["preserved_after_failed_refresh_at_utc"] == "2026-05-12T13:00:00Z"
+    assert by_type["forward_pe"]["parsed"]["value"] == 23.8

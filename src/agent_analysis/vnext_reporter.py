@@ -44,10 +44,10 @@ TEMPLATE_DESCRIPTIONS = {
 }
 
 TEMPLATE_ORDER = {
-    "cockpit": ["decision", "evidence", "charts", "conflicts", "layers", "governance", "audit"],
-    "brief": ["decision", "evidence", "charts", "risks", "conflicts", "layers", "governance", "audit"],
-    "atlas": ["evidence", "charts", "conflicts", "decision", "layers", "governance", "audit"],
-    "workbench": ["layers", "charts", "conflicts", "evidence", "decision", "governance", "audit"],
+    "cockpit": ["decision", "evidence", "news", "conflicts", "layers", "governance", "audit"],
+    "brief": ["decision", "evidence", "news", "risks", "conflicts", "layers", "governance", "audit"],
+    "atlas": ["evidence", "news", "conflicts", "decision", "layers", "governance", "audit"],
+    "workbench": ["layers", "news", "conflicts", "evidence", "decision", "governance", "audit"],
 }
 
 # ---------------------------------------------------------------------------
@@ -210,6 +210,16 @@ def _safe_number(value: Any) -> Optional[float]:
         return float(match.group(0))
     except ValueError:
         return None
+
+
+def _first_present(mapping: Dict[str, Any], *keys: str) -> Any:
+    if not isinstance(mapping, dict):
+        return None
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None:
+            return value
+    return None
 
 
 def _fmt_number(value: Any, *, suffix: str = "", digits: int = 2, fallback: str = "N/A") -> str:
@@ -618,6 +628,7 @@ class VNextReportGenerator:
             "risk_boundary_report": _load_json(run_path / "risk_boundary_report.json", {}),
             "schema_guard_report": _load_json(run_path / "schema_guard_report.json", {}),
             "context_brief": _load_json(run_path / "context_brief.json", {}),
+            "news_event_ledger": _load_json(run_path / "news_event_ledger.json", {}),
             "layers": layers,
             "bridges": bridges,
             "run_summary": _load_json(run_path / "run_summary.json", {}),
@@ -638,6 +649,7 @@ class VNextReportGenerator:
             "layers": artifacts["layers"],
             "bridges": artifacts["bridges"],
             "risk_boundary_report": artifacts["risk_boundary_report"],
+            "news_event_ledger": artifacts.get("news_event_ledger", {}),
             "critique": artifacts["critique"],
             "schema_guard_report": artifacts["schema_guard_report"],
         }
@@ -744,7 +756,7 @@ class VNextReportGenerator:
         renderers = {
             "decision": lambda: self._decision_section(final),
             "evidence": lambda: self._evidence_section(final),
-            "charts": lambda: self._charts_section(artifacts),
+            "news": lambda: self._news_section(artifacts),
             "risks": lambda: self._risks_section(artifacts),
             "conflicts": lambda: self._conflicts_section(artifacts),
             "layers": lambda: self._layers_section(artifacts),
@@ -754,20 +766,7 @@ class VNextReportGenerator:
         return "".join(renderers[key]() for key in TEMPLATE_ORDER[template])
 
     def _template_intro(self, template: str) -> str:
-        meta = TEMPLATE_DESCRIPTIONS[template]
-        alternatives = "".join(
-            f"<span>{_escape(key)} · {_escape(value['name'])}</span>"
-            for key, value in TEMPLATE_DESCRIPTIONS.items()
-        )
-        return f"""
-<section class="template-intro" aria-label="模板说明">
-  <div>
-    <b>{_escape(template)} · {_escape(meta['name'])}</b>
-    <p>{_escape(meta['description'])} 默认是阅读模式；点击证据可打开详情，审计材料保留在文末。</p>
-  </div>
-  <div class="template-legend">{alternatives}</div>
-</section>
-"""
+        return ""
 
     def _hero(self, final: Dict[str, Any], meta: Dict[str, Any], run_path: Path, template: str) -> str:
         confidence = final.get("confidence", "medium")
@@ -806,7 +805,7 @@ class VNextReportGenerator:
 <nav class="nav" aria-label="章节导航">
   <a href="#decision">判断</a>
   <a href="#evidence">依据</a>
-  <a href="#charts">图谱</a>
+  <a href="#news">新闻</a>
   <a href="#risks">风险</a>
   <a href="#conflicts">冲突</a>
   <a href="#layers">底稿</a>
@@ -905,6 +904,53 @@ class VNextReportGenerator:
 </section>
 """
 
+    def _news_section(self, artifacts: Dict[str, Any]) -> str:
+        ledger = artifacts.get("news_event_ledger", {})
+        events = [event for event in _as_list(ledger.get("events")) if isinstance(event, dict)]
+        rows = []
+        for event in events[:12]:
+            layers = ", ".join(str(item) for item in _as_list(event.get("layers")) if item)
+            symbols = ", ".join(str(item) for item in _as_list(event.get("symbols")) if item)
+            tags = []
+            if layers:
+                tags.append(f"<span>{_escape(layers)}</span>")
+            if symbols:
+                tags.append(f"<span>{_escape(symbols)}</span>")
+            tags.append(f"<span>{_escape(event.get('source_tier', 'source'))}</span>")
+            url = str(event.get("url") or "")
+            title = _escape(event.get("title") or event.get("event_id") or "未命名事件")
+            title_html = f'<a href="{_escape(url)}">{title}</a>' if url else title
+            rows.append(
+                f"""
+<article class="news-card">
+  <div>
+    <span class="news-date">{_escape(event.get('published_at', ''))}</span>
+    <h3>{title_html}</h3>
+    <p>{_escape(event.get('notes') or '官方来源事件；只作为背景和触发条件，不替代指标证据。')}</p>
+  </div>
+  <div class="news-tags">{''.join(tags)}</div>
+</article>
+"""
+            )
+        source_errors = [item for item in _as_list(ledger.get("source_errors")) if isinstance(item, dict)]
+        errors = "".join(
+            f"<li>{_escape(item.get('source_id', 'source'))}: {_escape(item.get('error', ''))}</li>"
+            for item in source_errors[:6]
+        )
+        empty = """
+<p class="chart-empty">本次 run 没有生成新闻事件底账。控制台可单独采集官方新闻数据；事件只作背景，不进入 L1-L5 数值证据。</p>
+"""
+        error_html = f"<details><summary>来源异常</summary><ul>{errors}</ul></details>" if errors else ""
+        return f"""
+<section class="panel news-panel" id="news">
+  <div class="section-kicker">03 · 新闻源</div>
+  <h2>官方事件底账</h2>
+  <p class="section-note">这里只展示官方宏观 RSS 与 M7 SEC filings。事件可以解释触发背景，但不能替代任何指标证据。</p>
+  <div class="news-grid">{''.join(rows) if rows else empty}</div>
+  {error_html}
+</section>
+"""
+
     def _chart_header(self, title: str, subtitle: str, ref: str) -> str:
         return f"""
   <header class="chart-card__head">
@@ -918,14 +964,15 @@ class VNextReportGenerator:
 
     def _valuation_ruler_chart(self, artifacts: Dict[str, Any]) -> str:
         value = self._metric_value(artifacts, "L4", "get_ndx_pe_and_earnings_yield")
-        pe = _safe_number(value.get("PE", value.get("TrailingPE")))
+        pe = _safe_number(_first_present(value, "PE", "TrailingPE", "PE_TTM", "pe_ttm"))
         forward_pe = _safe_number(value.get("ForwardPE"))
-        fcf_yield = _safe_number(value.get("FCFYield"))
+        fcf_yield = _safe_number(_first_present(value, "FCFYield", "FCF_Yield"))
         sources = [source for source in _as_list(value.get("ThirdPartyChecks")) if isinstance(source, dict)]
-        percentile = None
+        percentile = _safe_number(_first_present(value, "PE_TTM_percentile_10y", "PE_TTM_percentile_5y"))
         for source in sources:
-            percentile = _safe_number(source.get("historical_percentile", source.get("percentile_10y")))
-            if percentile is not None:
+            source_percentile = _safe_number(source.get("historical_percentile", source.get("percentile_10y")))
+            if source_percentile is not None:
+                percentile = source_percentile
                 break
         ticks = []
         if percentile is not None:
@@ -977,7 +1024,7 @@ class VNextReportGenerator:
         real_pct = _extract_percentile(real_reading)
         nominal_pct = _extract_percentile(nominal_reading)
         gap = _safe_number(l4_gap.get("level"))
-        pe = _safe_number(l4_val.get("PE", l4_val.get("TrailingPE")))
+        pe = _safe_number(_first_present(l4_val, "PE", "TrailingPE", "PE_TTM", "pe_ttm"))
         gap_pressure = None if gap is None else _clamp((0 - gap) / 4 * 100, 0, 100)
         pe_pressure = None if pe is None else _clamp((pe - 15) / 30 * 100, 0, 100)
         rows = [
@@ -1220,7 +1267,7 @@ class VNextReportGenerator:
 <section class="panel layers-panel" id="layers">
   <div class="section-kicker">06 · 五层底稿</div>
   <h2>先看摘要，再展开原生底稿</h2>
-  <p class="section-note">五张层级卡纵向常驻；点击卡头展开当层完整底稿，多张可同时展开。摘要永远可见，避免"跳走找不回"。</p>
+  <p class="section-note">这里保留每层的本层结论、层内冲突、跨层待验证问题、指标底稿和质量自检。它不是最终判断，而是 Bridge 与治理阶段可追溯的原始分析材料。</p>
   <div class="layer-summary-grid">{tiles}</div>
   <div class="layer-stack">{cards}</div>
 </section>
@@ -1614,11 +1661,11 @@ class VNextReportGenerator:
 
     def _valuation_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
         rows = [
-            ("PE", value.get("PE", value.get("TrailingPE")), "x"),
+            ("PE", _first_present(value, "PE", "TrailingPE", "PE_TTM"), "x"),
             ("Forward PE", value.get("ForwardPE"), "x"),
             ("Earnings Yield", value.get("EarningsYield"), "%"),
             ("FCF Yield", value.get("FCFYield"), "%"),
-            ("PB", value.get("PriceToBook"), "x"),
+            ("PB", _first_present(value, "PriceToBook", "PB"), "x"),
         ]
         metrics = "".join(f"<span><b>{_escape(label)}</b>{_fmt_number(metric, suffix=suffix, digits=2)}</span>" for label, metric, suffix in rows)
         sources = []
@@ -1668,8 +1715,13 @@ class VNextReportGenerator:
   <span><b>语境</b>std-dev, not percentile</span>
 </div>
 """
-        body = f'<div class="metric-strip">{metrics}</div><ul class="mini-source-list">{"".join(sources)}</ul>{wp_table}'
-        return self._wrap_indicator_visual(ref, "valuation-sources", "Valuation cross-check + WorldPERatio", body, details=True, open_by_default=True)
+        source_list = f'<ul class="mini-source-list">{"".join(sources)}</ul>' if sources else ""
+        title = "Valuation cross-check + WorldPERatio" if wp_rows else "Valuation reference values"
+        boundary = ""
+        if not sources:
+            boundary = '<p class="chart-footnote">本次估值微图只展示主来源字段；未接入 Trendonify 或 WorldPERatio 交叉校验。</p>'
+        body = f'<div class="metric-strip">{metrics}</div>{source_list}{wp_table}{boundary}'
+        return self._wrap_indicator_visual(ref, "valuation-sources", title, body, details=True, open_by_default=True)
 
     def _forward_earnings_quality_visual(self, ref: str, value: Dict[str, Any]) -> str:
         ndx = value.get("ndx") if isinstance(value.get("ndx"), dict) else {}
@@ -1697,6 +1749,24 @@ class VNextReportGenerator:
 
     def _damodaran_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
         series = [row for row in _as_list(value.get("monthly_series")) if isinstance(row, dict)]
+        manual_erp = _safe_number(value.get("manual_erp"))
+        is_manual_only = bool(manual_erp is not None and not series and not value.get("retrieval_method"))
+        if is_manual_only:
+            metrics = [
+                ("Manual ERP", manual_erp),
+                ("5Y percentile", value.get("manual_erp_percentile_5y")),
+                ("10Y percentile", value.get("manual_erp_percentile_10y")),
+            ]
+            metric_html = "".join(
+                f"<span><b>{_escape(label)}</b>{_fmt_number(metric, suffix='%' if 'ERP' in label or 'percentile' in label else '', digits=2)}</span>"
+                for label, metric in metrics
+                if _safe_number(metric) is not None
+            )
+            body = f"""
+<div class="metric-strip">{metric_html}</div>
+<p class="chart-footnote">人工/Wind ERP 是外部风险补偿参考，不是 Damodaran 官网月度序列，也不是 NDX 专属估值锚。分位越高通常表示相对历史补偿更厚，不能读成估值风险更高。</p>
+"""
+            return self._wrap_indicator_visual(ref, "manual-erp-reference", "Manual/Wind ERP reference", body, details=True, open_by_default=True)
         width, height, pad = 640, 260, 34
         erp_path = _polyline_path(series, "erp_t12m_adjusted_payout", width=width, height=height, pad=pad)
         treasury_path = _polyline_path(series, "us_10y_treasury_rate", width=width, height=height, pad=pad)
@@ -1714,7 +1784,7 @@ class VNextReportGenerator:
 <div class="chart-legend"><span class="series-erp">ERP T12M adjusted payout</span><span class="series-rate">US 10Y Treasury</span><span class="series-return">Expected return</span></div>
 """
         else:
-            svg = '<div class="chart-empty">暂无月度序列；仅展示单点官方读数。</div>'
+            svg = '<div class="chart-empty">本次没有可绘制的 Damodaran 月度序列。若预期应有官网数据，请检查采集阶段是否实际运行 live Damodaran 抓取。</div>'
         lenses = [
             ("T12M adjusted payout", value.get("erp_t12m_adjusted_payout", value.get("implied_erp_fcfe"))),
             ("T12M cash yield", value.get("erp_t12m_cash_yield")),
@@ -1810,6 +1880,7 @@ class VNextReportGenerator:
     def _macd_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
         histogram = _safe_number(value.get("histogram"))
         width = _clamp(abs(histogram or 0) / 5 * 100, 2, 100)
+        width = min(width, 50)
         direction = "positive" if (histogram or 0) >= 0 else "negative"
         body = f"""
 <div class="diverging-bar diverging-bar--{direction}"><i style="width:{width:.2f}%"></i></div>
@@ -1842,6 +1913,7 @@ class VNextReportGenerator:
             self._score_bar("CMF", cmf_score, value.get("cmf_status")),
         ]
         vwap_width = _clamp(abs(vwap_dev or 0) / 5 * 100, 2, 100)
+        vwap_width = min(vwap_width, 50)
         direction = "positive" if (vwap_dev or 0) >= 0 else "negative"
         rows.append(
             f"""
@@ -1922,6 +1994,28 @@ class VNextReportGenerator:
         fallback = data_quality.get("fallback_chain", [])
         disagreement = data_quality.get("source_disagreement", {})
         valuation_sources = self._valuation_source_rows(data_quality.get("valuation_sources", []))
+        coverage_html = ""
+        if isinstance(coverage, dict) and coverage:
+            coverage_html = f"""
+    <h5>覆盖率</h5>
+    <pre>{_escape(json.dumps(coverage, ensure_ascii=False, indent=2, default=str))}</pre>
+"""
+        elif coverage:
+            coverage_html = f"""
+    <h5>覆盖率</h5>
+    <p>{_escape(str(coverage))}</p>
+"""
+        anomaly_items = _as_list(anomalies)
+        if anomaly_items:
+            anomaly_html = "<ul>" + "".join(f"<li>{_escape(item)}</li>" for item in anomaly_items) + "</ul>"
+        else:
+            anomaly_html = "<p>无异常或缺口记录。</p>"
+        disagreement_html = ""
+        if isinstance(disagreement, dict) and disagreement:
+            disagreement_html = f"""
+    <h5>来源分歧</h5>
+    <pre>{_escape(json.dumps(disagreement, ensure_ascii=False, indent=2, default=str))}</pre>
+"""
         return f"""
   <div class="data-quality-box">
     <h5>来源等级</h5>
@@ -1930,15 +2024,13 @@ class VNextReportGenerator:
     <p>{_escape(data_quality.get('data_date', ''))} · {_escape(data_quality.get('collected_at_utc', ''))}</p>
     <h5>公式口径</h5>
     <p>{_escape(data_quality.get('formula', ''))}</p>
-    <h5>覆盖率</h5>
-    <pre>{_escape(json.dumps(coverage, ensure_ascii=False, indent=2, default=str))}</pre>
+    {coverage_html}
     {valuation_sources}
     <h5>异常与缺口</h5>
-    <pre>{_escape(json.dumps(anomalies, ensure_ascii=False, indent=2, default=str))}</pre>
+    {anomaly_html}
     <h5>备用路径</h5>
     <p>{_escape(' -> '.join(str(item) for item in _as_list(fallback)))}</p>
-    <h5>来源分歧</h5>
-    <pre>{_escape(json.dumps(disagreement, ensure_ascii=False, indent=2, default=str))}</pre>
+    {disagreement_html}
   </div>
 """
 
@@ -1951,7 +2043,7 @@ class VNextReportGenerator:
             percentile_text = "No Historical Percentile" if percentile is None else str(percentile)
             details = [
                 f"metric={source.get('metric', '')}",
-                f"value={source.get('value', '')}",
+                f"value={self._source_value_summary(source.get('value'))}",
                 f"percentile={percentile_text}",
                 f"date={source.get('data_date', '')}",
                 f"availability={source.get('availability', '')}",
@@ -1975,6 +2067,30 @@ class VNextReportGenerator:
     <h5>Valuation Sources</h5>
     <ul class="valuation-source-list">{''.join(rows)}</ul>
 """
+
+    def _source_value_summary(self, value: Any) -> str:
+        if not isinstance(value, dict):
+            return "" if value is None else str(value)
+        preferred = [
+            "PE_TTM",
+            "PE",
+            "TrailingPE",
+            "ForwardPE",
+            "PB",
+            "FCFYield",
+            "manual_erp",
+            "manual_erp_percentile_5y",
+            "manual_erp_percentile_10y",
+            "implied_erp_fcfe",
+            "erp_t12m_adjusted_payout",
+        ]
+        parts = []
+        for key in preferred:
+            if value.get(key) is not None:
+                parts.append(f"{key}={value.get(key)}")
+        if parts:
+            return "; ".join(parts[:5])
+        return f"{len(value)} fields"
 
     def _governance_section(self, artifacts: Dict[str, Any]) -> str:
         critique = artifacts.get("critique", {}) or {}

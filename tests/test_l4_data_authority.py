@@ -308,6 +308,60 @@ def test_damodaran_getter_prefers_excel_and_marks_it_official(monkeypatch):
     assert html_called["value"] is False
 
 
+def test_damodaran_getter_for_may_2026_keeps_monthly_series(monkeypatch):
+    header = [
+        "Date",
+        "S&P 500",
+        "T.Bond Rate",
+        "$ Riskfree Rate",
+        "ERP (T12 m with sustainable Payout)",
+        "ERP (T12m)",
+        "ERP (Smoothed)",
+        "ERP (Normalized)",
+        "ERP (Net Cash Yield)",
+        "Expected Return",
+    ]
+    rows = [header]
+    for idx, date in enumerate(pd.date_range("2023-12-01", periods=30, freq="MS")):
+        rows.append(
+            [
+                date.strftime("%Y-%m-%d"),
+                5000 + idx,
+                0.04,
+                0.038,
+                0.041,
+                0.042,
+                0.06,
+                0.037,
+                0.04,
+                0.083,
+            ]
+        )
+    monthly_bytes = _minimal_xlsx(rows)
+    calculator_bytes = _minimal_xlsx([["Label", "Value"], ["Default spread for Aa1", 0.0026]])
+
+    def fake_fetch_bytes(url, timeout=12):
+        if url.endswith("ERPbymonth.xlsx"):
+            return monthly_bytes, None
+        if url.endswith("ERPMay26.xlsx"):
+            return calculator_bytes, None
+        return None, "not needed"
+
+    monkeypatch.setattr(tools_L4, "_fetch_bytes", fake_fetch_bytes)
+    monkeypatch.setattr(tools_L4, "_fetch_bytes_cached", fake_fetch_bytes)
+    monkeypatch.setattr(tools_L4, "_fetch_text", lambda url, timeout=8: (None, "not needed"))
+
+    result = tools_L4.get_damodaran_us_implied_erp("2026-05-11")
+    value = result["value"]
+
+    assert value["retrieval_method"] == "monthly_excel"
+    assert value["source_file"] == "ERPbymonth.xlsx"
+    assert value["data_date"] == "2026-05-01"
+    assert value["data_date"] <= "2026-05-11"
+    assert len(value["monthly_series"]) >= 24
+    assert value["monthly_series"][-1]["data_date"] == "2026-05-01"
+
+
 def test_damodaran_cache_rejects_tiny_stub_workbooks(tmp_path, monkeypatch):
     monkeypatch.setattr(tools_L4.path_config, "cache_dir", str(tmp_path))
     url = "https://pages.stern.nyu.edu/~adamodar/pc/implprem/ERPbymonth.xlsx"

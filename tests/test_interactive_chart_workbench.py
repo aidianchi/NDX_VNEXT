@@ -83,6 +83,10 @@ def test_interactive_chart_workbench_generates_lightweight_chart_html(tmp_path: 
     assert "updateActiveModuleChrome" in html
     assert "moduleReadoutHtml" in html
     assert "findPointAtOrBefore" in html
+    assert "function timeKey(value)" in html
+    assert "Latest · " in html
+    assert "<dt>MA20</dt>" in html
+    assert "<dt>VWAP20</dt>" in html
 
 
 def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(tmp_path: Path):
@@ -170,6 +174,10 @@ def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(t
     assert "setVisibleTimeRangeAll" in html
     assert "updateRange(365)" in html
     assert "setCrosshairPosition" in html
+    assert "timeFromCrosshair" in html
+    assert "Donchian H" in html
+    assert "MACD</dt>" in html
+    assert "Signal</dt>" in html
     assert "let syncLocked = false" in html
     assert "syncLocked = true;\nchart.timeScale().fitContent();" in html
     assert "function unregisterChart(chart)" in html

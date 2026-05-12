@@ -17,9 +17,14 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     data_dir.mkdir()
     latest_data = data_dir / "data_collected_v9_20260509.json"
     latest_data.write_text("{}", encoding="utf-8")
+    logs_dir = tmp_path / "logs"
+    control_log_dir = logs_dir / "control_service"
+    control_log_dir.mkdir(parents=True)
+    (control_log_dir / "20260512_215333_001.log").write_text("run log", encoding="utf-8")
 
     import research_console
     monkeypatch.setattr(research_console.path_config, "data_dir", str(data_dir))
+    monkeypatch.setattr(research_console.path_config, "logs_dir", str(logs_dir))
     generator = ResearchConsoleGenerator(reports_dir=reports_dir)
     output = Path(generator.run(output_path=tmp_path / "console.html"))
     html = output.read_text(encoding="utf-8")
@@ -42,16 +47,24 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     assert "已有数据分析" in html
     assert "只生成 brief" in html
     assert "只生成 workbench" in html
-    assert "视觉回归" in html
+    assert "查看日志" in html
+    assert "最新日志" in html
+    assert "20260512_215333_001.log" in html
+    assert "output/logs/control_service/*.log" in html
+    assert "visual_check" not in html
     assert "deepseek-v4-flash" in html
     assert "deepseek-v4-pro" in html
     assert "自定义顺序" in html
     assert "数据源选择" in html
     assert "不生成旧版 HTML" in html
     assert "默认只生成 vNext artifacts、native brief 和 workbench" in html
-    assert "生成官方事件底账" in html
+    assert "运行时生成官方新闻底账" in html
     assert "--enable-news" in html
-    assert "bb-browser 只作为显式 sidecar" in html
+    assert "Trendonify sidecar 标记为信任" in html
+    assert "勾选只影响 sidecar 输出的信任标记" in html
+    assert "采集 Trendonify" in html
+    assert "采集新闻数据" in html
+    assert "src/news_event_ledger.py" in html
     assert "运行完整报告" in html
     assert "运行日志 / 健康 / 安全" in html
     assert "一键运行安全方案" in html
@@ -65,7 +78,7 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     assert "base.concat(['--collect-only']).join(' ')" in html
     assert "document.getElementById('historicalDateMode').checked && dataDate.value" in html
     assert "control service" in html
-    assert "news_event_ledger" not in html
+    assert "news_event_ledger.py" in html
     assert "数据源健康" in html
     assert "WorldPERatio" in html
     assert "Damodaran ERPbymonth.xlsx" in html

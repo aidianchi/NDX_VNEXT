@@ -74,11 +74,12 @@ class ResearchConsoleGenerator:
             return []
         return sorted(data_root.glob("data_collected_v9_*.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:5]
 
-    def _latest_visual_summaries(self) -> List[Path]:
-        visual_root = self.reports_dir / "visual_regression"
-        if not visual_root.exists():
+    def _latest_control_logs(self) -> List[Path]:
+        log_root = Path(path_config.logs_dir) / "control_service"
+        if not log_root.exists():
             return []
-        return sorted(visual_root.glob("**/visual_regression_summary.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:4]
+        candidates = list(log_root.glob("*.log")) + list(log_root.glob("*.json"))
+        return sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)[:5]
 
     def _latest_browser_sidecars(self) -> List[Path]:
         sidecar_root = Path(path_config.output_dir) / "browser_sidecar"
@@ -120,7 +121,7 @@ class ResearchConsoleGenerator:
         reports = self._latest_reports()
         workbenches = self._latest_workbenches()
         runs = self._latest_runs()
-        visual_summaries = self._latest_visual_summaries()
+        control_logs = self._latest_control_logs()
         browser_sidecars = self._latest_browser_sidecars()
         latest_report = reports[0] if reports else None
         latest_workbench = workbenches[0] if workbenches else None
@@ -250,25 +251,33 @@ class ResearchConsoleGenerator:
         <div class="source-calibration" aria-label="数据源校准">
           <div>
             <h3>数据源选择</h3>
-            <p>人工/Wind 是最高信任校准源；新闻和 bb-browser 只作为显式 sidecar 或人工确认来源。</p>
+            <p>人工/Wind 是最高信任校准源；Trendonify 和新闻只作为显式 sidecar 或人工确认来源。</p>
           </div>
           <div class="toggle-line">
-            <label><input id="enableNews" type="checkbox"> 生成官方事件底账</label>
-            <label><input id="trustBbBrowser" type="checkbox"> 信任 bb-browser 来源</label>
+            <label><input id="enableNews" type="checkbox"> 运行时生成官方新闻底账</label>
+            <label><input id="trustBbBrowser" type="checkbox"> Trendonify sidecar 标记为信任</label>
           </div>
           <div class="browser-sidecar">
-            <h3>bb-browser 估值 sidecar</h3>
+            <h3>Trendonify 估值 sidecar</h3>
             <div class="browser-actions">
               <a href="https://trendonify.com/united-states/stock-market/nasdaq-100/pe-ratio">查看 PE 页</a>
               <a href="https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio">查看 Forward PE 页</a>
               {self._links(browser_sidecars, '还没有 browser sidecar JSON。')}
             </div>
-            <pre id="browserCommandPreview">python3 src/browser_sidecar.py --source trendonify_valuation --output output/browser_sidecar/trendonify_ndx_valuation.json</pre>
+            <pre id="browserCommandPreview">python3 src/browser_sidecar.py --source trendonify_valuation --output output/browser_sidecar/trendonify_ndx_valuation.json --trusted</pre>
             <div class="button-row">
-              <button type="button" id="runBrowserSidecar">单独拿数据</button>
+              <button type="button" id="runBrowserSidecar">采集 Trendonify</button>
               <button type="button" id="openBrowserSidecar">打开输出位置</button>
             </div>
-            <p id="browserStatus" class="run-status">bb-browser 结果必须人工查看和确认；不会自动进入 L1-L5。</p>
+            <p id="browserStatus" class="run-status">勾选只影响 sidecar 输出的信任标记；采集需点击“采集 Trendonify”，结果不会静默进入 L1-L5。</p>
+          </div>
+          <div class="browser-sidecar">
+            <h3>官方新闻 sidecar</h3>
+            <pre id="newsCommandPreview">python3 src/news_event_ledger.py --output output/analysis/news_event_ledger.json</pre>
+            <div class="button-row">
+              <button type="button" id="runNewsLedger">采集新闻数据</button>
+            </div>
+            <p id="newsStatus" class="run-status">新闻底账只记录官方宏观 RSS 和 M7 SEC filings；作为背景，不替代指标证据。</p>
           </div>
         </div>
         <p class="path-note">目标文件：{_escape(manual_path)}</p>
@@ -279,7 +288,7 @@ class ResearchConsoleGenerator:
           <span>03</span>
           <div>
             <h2>模型与 vNext 流程</h2>
-            <p>按 vNext 当前架构组织：采集、五层分析、native brief、workbench 和视觉回归。</p>
+            <p>按 vNext 当前架构组织：采集、五层分析、native brief、workbench 和运行日志。</p>
           </div>
         </div>
         <div class="segmented" role="radiogroup" aria-label="模型策略">
@@ -294,7 +303,7 @@ class ResearchConsoleGenerator:
           <label><input type="radio" name="runMode" value="analyze_existing"> 已有数据分析</label>
           <label><input type="radio" name="runMode" value="native_brief"> 只生成 brief</label>
           <label><input type="radio" name="runMode" value="workbench_only"> 只生成 workbench</label>
-          <label><input type="radio" name="runMode" value="visual_check"> 视觉回归</label>
+          <label><input type="radio" name="runMode" value="logs_only"> 查看日志</label>
         </div>
       </article>
 
@@ -344,8 +353,8 @@ class ResearchConsoleGenerator:
             {self._links(runs, '还没有 vNext run 目录。')}
           </div>
           <div class="report-list">
-            <h3>视觉回归</h3>
-            {self._links(visual_summaries, '还没有 visual regression summary。')}
+            <h3>最新日志</h3>
+            {self._links(control_logs, '还没有 control service 日志。')}
           </div>
         </div>
       </article>
@@ -906,8 +915,11 @@ const runStatus = document.getElementById('runStatus');
 const jobStatusPreview = document.getElementById('jobStatusPreview');
 const browserStatus = document.getElementById('browserStatus');
 const browserCommandPreview = document.getElementById('browserCommandPreview');
+const newsStatus = document.getElementById('newsStatus');
+const newsCommandPreview = document.getElementById('newsCommandPreview');
 let activeJobId = '';
 let activeBrowserJobId = '';
+let activeNewsJobId = '';
 let runPollTimer = null;
 let openedArtifactForJob = '';
 const controlOrigin = window.location.protocol.startsWith('http') ? window.location.origin : 'http://127.0.0.1:8765';
@@ -1023,8 +1035,8 @@ function modeCommand(mode, models) {
   if (mode === 'workbench_only') {
     return `python3 src/interactive_chart_workbench.py --run-dir ${runDir} --modules ${modules}`;
   }
-  if (mode === 'visual_check') {
-    return `python3 src/report_visual_regression.py --brief-html output/reports/<brief.html> --workbench-html output/reports/<workbench.html> --console-html output/reports/vnext_research_console.html --output-dir output/reports/visual_regression/<run_id>`;
+  if (mode === 'logs_only') {
+    return '# 日志位置：output/logs/control_service/*.log；运行任务后，下方状态区会显示最新日志尾部。';
   }
   if (mode === 'analyze_existing') {
     return dataPath ? base.join(' ') : '# 请先填写“已有数据 JSON”，再基于同源数据进入 vNext 五层分析。';
@@ -1050,7 +1062,7 @@ function buildManualPayload() {
     fields[input.dataset.manualField] = input.type === 'number' ? numberOrNull(raw) : raw;
   });
   if (document.getElementById('trustBbBrowser').checked && !fields.source) {
-    fields.source = 'bb-browser / Trendonify sidecar (user trusted)';
+    fields.source = 'Trendonify sidecar (user trusted)';
     payload.browser_sidecar = {
       source: 'trendonify_ndx_valuation',
       output_path: data.browserSidecarPath,
@@ -1120,6 +1132,7 @@ function buildCommand() {
   const runDir = pathValue('runDirPath') || 'output/analysis/vnext/<run_id>';
   workbenchPreview.textContent = `python3 src/interactive_chart_workbench.py --run-dir ${runDir} --modules ${modules.join(',') || 'price_technical'}`;
   browserCommandPreview.textContent = `python3 src/browser_sidecar.py --source trendonify_valuation --output output/browser_sidecar/trendonify_ndx_valuation.json${document.getElementById('trustBbBrowser').checked ? ' --trusted' : ''}`;
+  newsCommandPreview.textContent = 'python3 src/news_event_ledger.py --output output/analysis/news_event_ledger.json';
 }
 
 document.querySelectorAll('input[name="modelMode"], input[name="runMode"], #customModels, #dataJsonPath, #runDirPath, #historicalDateMode, #skipLegacyReport, #disableCharts, #enableLegacyCharts, #enableNews, #trustBbBrowser, input[name="workbenchModule"]')
@@ -1280,6 +1293,11 @@ document.getElementById('runBrowserSidecar').addEventListener('click', async () 
   buildCommand();
   activeBrowserJobId = await submitControlCommand(browserCommandPreview.textContent.trim(), browserStatus) || activeBrowserJobId;
   if (activeBrowserJobId) refreshJob(activeBrowserJobId, browserStatus);
+});
+document.getElementById('runNewsLedger').addEventListener('click', async () => {
+  buildCommand();
+  activeNewsJobId = await submitControlCommand(newsCommandPreview.textContent.trim(), newsStatus) || activeNewsJobId;
+  if (activeNewsJobId) refreshJob(activeNewsJobId, newsStatus);
 });
 document.getElementById('openBrowserSidecar').addEventListener('click', () => {
   window.open(`file://${data.browserSidecarPath}`, '_blank');

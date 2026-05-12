@@ -287,11 +287,11 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
         PermissionType.PROXY,
         "美国大盘 implied ERP 参考锚是否提示整体权益风险补偿环境？",
         ["只作为美国市场风险补偿背景，帮助校验NDX简式收益差距所处的宏观估值语境。"],
-        ["它不是NDX专属估值，也不能替代成分股加权PE、FCF yield或简式收益差距。"],
+        ["它不是NDX专属估值，也不能替代成分股加权PE、FCF yield或简式收益差距。ERP分位方向不能读反：分位越高通常表示风险补偿相对历史越厚。"],
         ["get_equity_risk_premium", "get_ndx_pe_and_earnings_yield", "get_10y_treasury"],
         ["NDX自身盈利/现金流收益率与美国大盘 implied ERP 参考方向明显背离。"],
         "外部参考锚；用于背景校验，不直接决定NDX长期回报边界。",
-        "Damodaran implied ERP 是美国市场背景，不是 NDX 主锚。",
+        "Damodaran implied ERP 是美国市场背景，不是 NDX 主锚；高分位不是坏事，低分位才提示相对补偿偏薄。",
     ),
     "get_qqq_technical_indicators": _indicator(
         "get_qqq_technical_indicators",

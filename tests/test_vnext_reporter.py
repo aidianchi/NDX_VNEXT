@@ -356,8 +356,9 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
 
     # Structural assertions (present in every template)
     assert "NDX vNext Native Artifact UI" in html
-    assert "brief · 投研长文" in html
     assert "主论点证据链" in html
+    assert "新闻源" in html
+    assert "官方事件底账" in html
     assert "Layer Workbench" in html
     assert "evidence-L1-get_10y_real_rate" in html
     assert "L1_vs_L4" in html
@@ -384,11 +385,9 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert 'data-typed-conflict="real_rate_vs_valuation"' in html
     assert 'data-transmission-path="rates_to_valuation"' in html
     assert 'data-resonance-chain="risk_off_resonance"' in html
-    assert "市场图谱" in html
-    assert "L4 估值相对位置尺" in html
+    assert "市场图谱" not in html
     assert "Damodaran ERP monthly lens" in html
     assert "Valuation cross-check + WorldPERatio" in html
-    assert "L1-L4 利率估值压力图" in html
     assert "ERPbymonth.xlsx" in html
     assert "ERPMay26.xlsx" in html
     assert "data-visual-type=\"damodaran-current\"" in html
@@ -424,7 +423,6 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
 
     atlas_path = reporter.run(run_dir, template="atlas")
     atlas_html = Path(atlas_path).read_text(encoding="utf-8")
-    assert "atlas · 证据地图" in atlas_html
     assert "template-atlas" in atlas_html
 
 
@@ -754,6 +752,45 @@ def test_vnext_reporter_label_mapping():
     assert _label("high", "severity") == "高"
     assert _label("valuation_compression", "risk_flag") == "估值压缩"
     assert _label("unknown_key", "approval") == "unknown_key"
+
+
+def test_l4_manual_erp_visual_does_not_claim_damodaran_monthly(tmp_path: Path):
+    reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
+
+    html = reporter._damodaran_indicator_visual(
+        "L4.get_damodaran_us_implied_erp",
+        {
+            "manual_erp": 0.96,
+            "manual_erp_percentile_5y": 67.3,
+            "manual_erp_percentile_10y": 71.4,
+            "scope": "manual/Wind ERP reference",
+        },
+    )
+
+    assert "Manual/Wind ERP reference" in html
+    assert "人工/Wind ERP 是外部风险补偿参考" in html
+    assert "Damodaran ERP monthly lens" not in html
+    assert "暂无月度序列" not in html
+    assert "T12M adjusted payout" not in html
+
+
+def test_l4_valuation_visual_without_worldperatio_uses_neutral_title(tmp_path: Path):
+    reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
+
+    html = reporter._valuation_indicator_visual(
+        "L4.get_ndx_pe_and_earnings_yield",
+        {
+            "PE_TTM": 36.6,
+            "PB": 10.49,
+            "PE_TTM_percentile_10y": 88,
+        },
+    )
+
+    assert "Valuation reference values" in html
+    assert "Valuation cross-check + WorldPERatio" not in html
+    assert "PE</b>36.60x" in html
+    assert "PB</b>10.49x" in html
+    assert "未接入 Trendonify 或 WorldPERatio" in html
 
 
 def test_vnext_reporter_default_output_keeps_run_id_when_data_date_repeats(tmp_path: Path):

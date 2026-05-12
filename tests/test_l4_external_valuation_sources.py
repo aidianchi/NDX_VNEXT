@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -83,7 +84,9 @@ def test_trendonify_forward_pe_parser_extracts_value_percentile_and_date():
     assert parsed["availability"] == "available"
 
 
-def test_trendonify_403_returns_unavailable_without_yfinance_fallback(monkeypatch):
+def test_trendonify_403_returns_unavailable_without_yfinance_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools_L4.path_config, "output_dir", str(tmp_path))
+
     def fake_fetch(url, timeout=8):
         if "trendonify" in url:
             return None, "403 Forbidden"
@@ -99,6 +102,116 @@ def test_trendonify_403_returns_unavailable_without_yfinance_fallback(monkeypatc
     assert all(item["source_tier"] == "unavailable" for item in trendonify)
     assert all("403" in item["unavailable_reason"] for item in trendonify)
     assert all(item["value"] is None for item in trendonify)
+
+
+def test_trendonify_403_uses_user_trusted_browser_sidecar(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools_L4.path_config, "output_dir", str(tmp_path))
+    sidecar_path = tmp_path / "browser_sidecar" / "trendonify_ndx_valuation.json"
+    sidecar_path.parent.mkdir(parents=True)
+    sidecar_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "browser_sidecar_v1",
+                "source": "trendonify_ndx_valuation",
+                "generated_at_utc": "2026-05-11T12:00:00Z",
+                "pages": [
+                    {
+                        "page_type": "trailing_pe",
+                        "collected_at_utc": "2026-05-11T12:00:00Z",
+                        "user_trusted": True,
+                        "preserved_after_failed_refresh_at_utc": "2026-05-12T13:05:40Z",
+                        "latest_failed_refresh": {"parse_status": "unavailable"},
+                        "parsed": {
+                            "source_id": "trendonify_pe",
+                            "source_name": "Trendonify",
+                            "source_url": "https://trendonify.com/united-states/stock-market/nasdaq-100/pe-ratio",
+                            "source_tier": "third_party_estimate",
+                            "metric": "ndx_trailing_pe",
+                            "value": 38.07,
+                            "unit": "ratio",
+                            "percentile_10y": 100.0,
+                            "historical_percentile": 100.0,
+                            "availability": "available",
+                            "methodology": "Published PE",
+                        },
+                    },
+                    {
+                        "page_type": "forward_pe",
+                        "collected_at_utc": "2026-05-11T12:00:00Z",
+                        "user_trusted": True,
+                        "parsed": {
+                            "source_id": "trendonify_forward_pe",
+                            "source_name": "Trendonify",
+                            "source_url": "https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio",
+                            "source_tier": "third_party_estimate",
+                            "metric": "ndx_forward_pe",
+                            "value": 23.73,
+                            "unit": "ratio",
+                            "percentile_10y": 57.5,
+                            "historical_percentile": 57.5,
+                            "availability": "available",
+                            "methodology": "Published forward PE",
+                        },
+                    },
+                ],
+                "source_errors": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_fetch(url, timeout=8):
+        if "trendonify" in url:
+            return None, "403 Forbidden"
+        return None, "skip other source"
+
+    monkeypatch.setattr(tools_L4, "_fetch_text", fake_fetch)
+
+    checks = tools_L4.get_ndx_valuation_third_party_checks()
+    by_id = {item["source_id"]: item for item in checks}
+
+    assert by_id["trendonify_pe"]["availability"] == "available"
+    assert by_id["trendonify_pe"]["value"] == 38.07
+    assert by_id["trendonify_pe"]["historical_percentile"] == 100.0
+    assert by_id["trendonify_pe"]["browser_sidecar"]["user_trusted"] is True
+    assert by_id["trendonify_pe"]["browser_sidecar"]["preserved_after_failed_refresh_at_utc"] == "2026-05-12T13:05:40Z"
+    assert by_id["trendonify_forward_pe"]["value"] == 23.73
+
+
+def test_untrusted_trendonify_browser_sidecar_is_ignored(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools_L4.path_config, "output_dir", str(tmp_path))
+    sidecar_path = tmp_path / "browser_sidecar" / "trendonify_ndx_valuation.json"
+    sidecar_path.parent.mkdir(parents=True)
+    sidecar_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "browser_sidecar_v1",
+                "source": "trendonify_ndx_valuation",
+                "pages": [
+                    {
+                        "page_type": "trailing_pe",
+                        "user_trusted": False,
+                        "parsed": {
+                            "source_id": "trendonify_pe",
+                            "source_name": "Trendonify",
+                            "value": 38.07,
+                            "availability": "available",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(tools_L4, "_fetch_text", lambda url, timeout=8: (None, "403 Forbidden"))
+
+    checks = tools_L4.get_ndx_valuation_third_party_checks()
+    trendonify = [item for item in checks if item.get("source_id") == "trendonify_pe"][0]
+
+    assert trendonify["availability"] == "unavailable"
+    assert trendonify["value"] is None
 
 
 def test_worldperatio_parser_extracts_pe_date_and_methodology_without_fake_percentile():
@@ -169,6 +282,38 @@ def test_worldperatio_parser_structures_stddev_windows_and_trend_context():
     assert relative_position["trend_context"]["sma50_margin_pct"] == 3.4
     assert relative_position["trend_context"]["sma200_margin_pct"] == 12.6
     assert parsed["historical_percentile"] is None
+
+
+def test_worldperatio_parser_handles_current_last_periods_table():
+    html = """
+    <html><body>
+      <h1>Nasdaq 100 Index: current P/E Ratio</h1>
+      <div>P/E Ratio</div>
+      <div>32.54</div>
+      <p>11 May 2026</p>
+      <section>
+        <h2>Last Periods metrics</h2>
+        <p>Period Average P/E (μ) Std Dev (σ) Std Dev Range vs Current P/E Deviation vs μ Valuation</p>
+        <p>Last 1Y 33.16 0.74 [31.68 · 32.42 , 33.89 · 34.63] -0.84 σ Fair</p>
+        <p>Last 5Y 30.21 2.92 [24.38 · 27.30 , 33.13 · 36.04] +0.80 σ Fair</p>
+        <p>Last 10Y 26.95 4.03 [18.90 · 22.92 , 30.98 · 35.01] +1.39 σ Overvalued</p>
+        <p>Last 20Y 22.44 5.38 [11.69 · 17.07 , 27.82 · 33.19] +1.88 σ Overvalued</p>
+      </section>
+    </body></html>
+    """
+
+    parsed = tools_L4._parse_worldperatio_ndx_pe(html)
+    windows = parsed["relative_position"]["valuation_windows"]
+
+    assert parsed["value"] == 32.54
+    assert parsed["data_date"] == "11 May 2026"
+    assert windows["1y"]["average_pe"] == 33.16
+    assert windows["1y"]["std_dev"] == 0.74
+    assert windows["1y"]["range_low"] == 32.42
+    assert windows["1y"]["range_high"] == 33.89
+    assert windows["1y"]["range_2std_low"] == 31.68
+    assert windows["10y"]["deviation_vs_mean_sigma"] == 1.39
+    assert windows["10y"]["valuation_label"] == "Overvalued"
 
 
 def test_worldperatio_parser_only_uses_explicit_percentile_when_present():

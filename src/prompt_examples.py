@@ -588,7 +588,7 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
     ],
     "get_damodaran_us_implied_erp": [
         {
-            "context": "【月度优先】Damodaran 是美国市场 implied ERP 背景锚。ERPbymonth.xlsx 或当月 ERP<Month><YY>.xlsx 才能代表 monthly current ERP；histimpl.xls 只能作为 annual history fallback。",
+            "context": "【月度优先】Damodaran 是美国市场 implied ERP 背景锚。ERPbymonth.xlsx 或当月 ERP<Month><YY>.xlsx 才能代表 monthly current ERP；histimpl.xls 只能作为 annual history fallback。ERP 分位方向不能读反：分位越高通常表示风险补偿相对历史越厚，分位越低才表示相对补偿偏薄。",
             "input": {
                 "function_id": "get_damodaran_us_implied_erp",
                 "raw_data": {
@@ -607,7 +607,7 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
                     }
                 },
             },
-            "reasoning": "1. 这组数据来自Damodaran月度口径，可以代表当前美国市场风险补偿背景。2. 多个ERP口径回答不同现金流假设，不能只拿一个数字当作唯一真值。3. 它不是NDX专属估值，也不能替代NDX自身PE、Forward PE、PB或简式收益差距。4. 若只拿到histimpl.xls年度历史表，则应降级为年度背景，不写成最新月度ERP。",
+            "reasoning": "1. 这组数据来自Damodaran月度口径，可以代表当前美国市场风险补偿背景。2. 多个ERP口径回答不同现金流假设，不能只拿一个数字当作唯一真值。3. ERP分位越高通常说明相对历史补偿更厚，不能把高分位解释成估值风险更高。4. 它不是NDX专属估值，也不能替代NDX自身PE、Forward PE、PB或简式收益差距。5. 若只拿到histimpl.xls年度历史表，则应降级为年度背景，不写成最新月度ERP。",
             "output_narrative": "Damodaran 2026-05-01 月度数据给出的美国市场 implied ERP 约在多个口径之间分布，10年期美债、默认利差和调整后无风险利率共同说明风险补偿背景。它是美国大盘参考锚，不替代NDX自身估值分位或简式收益差距。"
         }
     ],
