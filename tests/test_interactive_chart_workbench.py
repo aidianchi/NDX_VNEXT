@@ -173,6 +173,8 @@ def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(t
     assert "subscribeVisibleLogicalRangeChange" in html
     assert "setVisibleTimeRangeAll" in html
     assert "updateRange(365)" in html
+    assert "if (!item.primaryData || !item.primaryData.length) return;" in html
+    assert "try {\n        timeScale.setVisibleRange({ from, to });" in html
     assert "setCrosshairPosition" in html
     assert "timeFromCrosshair" in html
     assert "Donchian H" in html
@@ -222,6 +224,44 @@ def test_interactive_chart_workbench_prefers_run_time_series_artifact(tmp_path: 
     assert "chart_time_series.json" in html
     assert "artifact 同源" in html
     assert '"time": "2026-05-04"' in html
+    assert '"close": 104.0' in html
+
+
+def test_interactive_chart_workbench_falls_back_to_latest_cached_price_rows(tmp_path: Path, monkeypatch):
+    run_root = tmp_path / "vnext"
+    run_dir = run_root / "20260513_191253"
+    cached_run = run_root / "20260512_215333_collect_only"
+    _write_json(run_dir / "layer_cards" / "L5.json", {"layer": "L5", "local_conclusion": "当前 run 价格序列为空。"})
+    _write_json(run_dir / "analysis_packet.json", {})
+    _write_json(
+        run_dir / "chart_time_series.json",
+        {"series": {"QQQ_OHLCV": {"source_file": "chart_time_series.json", "rows": []}}},
+    )
+    _write_json(
+        cached_run / "chart_time_series.json",
+        {
+            "series": {
+                "QQQ_OHLCV": {
+                    "source_file": "chart_time_series.json",
+                    "rows": [
+                        {"time": "2026-05-01", "open": 100, "high": 102, "low": 98, "close": 101, "volume": 1000},
+                        {"time": "2026-05-04", "open": 101, "high": 105, "low": 100, "close": 104, "volume": 1500},
+                    ],
+                }
+            }
+        },
+    )
+    generator = InteractiveChartWorkbenchGenerator(
+        reports_dir=str(tmp_path / "reports"),
+        bundle_js="window.LightweightCharts={createChart:function(){return {addSeries:function(){return {setData:function(){}}},timeScale:function(){return {fitContent:function(){}}},subscribeCrosshairMove:function(){},applyOptions:function(){}}},CandlestickSeries:function(){},LineSeries:function(){},HistogramSeries:function(){}};",
+    )
+    monkeypatch.setattr(generator, "_fetch_price_rows", lambda lookback_days: [])
+
+    report_path = generator.run(run_dir)
+    html = Path(report_path).read_text(encoding="utf-8")
+
+    assert "cached fallback: 20260512_215333_collect_only/chart_time_series.json" in html
+    assert '"candles": [{"time": "2026-05-01"' in html
     assert '"close": 104.0' in html
 
 

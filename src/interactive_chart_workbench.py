@@ -119,7 +119,11 @@ class InteractiveChartWorkbenchGenerator:
                 source_label = self._artifact_price_source(artifacts)
             else:
                 raw_rows = self._fetch_price_rows(lookback_days)
-                source_label = "generated at report time: QQQ OHLCV"
+                if raw_rows:
+                    source_label = "generated at report time: QQQ OHLCV"
+                else:
+                    raw_rows, fallback_source = self._latest_cached_price_rows(run_path)
+                    source_label = fallback_source or "QQQ OHLCV unavailable"
         artifacts["_price_source_label"] = source_label
         rows = self._prepare_price_rows(raw_rows)
         html_text = self._render(run_path, artifacts, rows, selected_modules=modules)
@@ -171,6 +175,26 @@ class InteractiveChartWorkbenchGenerator:
         if source_file and provider:
             return f"{source_file} · {provider}"
         return str(source_file or "chart_time_series.json")
+
+    def _latest_cached_price_rows(self, run_path: Path) -> tuple[List[Dict[str, Any]], str]:
+        root = run_path.parent
+        if not root.exists():
+            return [], ""
+        candidates = sorted(
+            root.glob("*/chart_time_series.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for path in candidates:
+            if path.parent == run_path:
+                continue
+            payload = _load_json(path, {})
+            series = payload.get("series", {}) if isinstance(payload, dict) else {}
+            qqq = series.get("QQQ_OHLCV", {}) if isinstance(series, dict) else {}
+            rows = qqq.get("rows", []) if isinstance(qqq, dict) else []
+            if isinstance(rows, list) and rows:
+                return rows, f"cached fallback: {path.parent.name}/chart_time_series.json · QQQ OHLCV"
+        return [], ""
 
     def _fetch_price_rows(self, lookback_days: int) -> List[Dict[str, Any]]:
         try:
@@ -1308,11 +1332,22 @@ function setRangeAll(range) {
 }
 
 function setVisibleTimeRangeAll(from, to) {
+  if (!from || !to) return;
   syncingRange = true;
   chartEntries.forEach(item => {
+    if (!item.primaryData || !item.primaryData.length) return;
     const timeScale = item.chart.timeScale();
     if (timeScale && typeof timeScale.setVisibleRange === 'function') {
-      timeScale.setVisibleRange({ from, to });
+      try {
+        timeScale.setVisibleRange({ from, to });
+      } catch (error) {
+        if (typeof timeScale.setVisibleLogicalRange !== 'function') return;
+        const fromIndex = payload.candles.findIndex(candle => candle.time === from);
+        const toIndex = payload.candles.findIndex(candle => candle.time === to);
+        if (fromIndex >= 0 && toIndex >= 0) {
+          timeScale.setVisibleLogicalRange({ from: fromIndex, to: toIndex });
+        }
+      }
     } else if (timeScale && typeof timeScale.setVisibleLogicalRange === 'function') {
       const fromIndex = payload.candles.findIndex(candle => candle.time === from);
       const toIndex = payload.candles.findIndex(candle => candle.time === to);
