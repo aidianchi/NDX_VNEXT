@@ -9,6 +9,7 @@ try:
 except ImportError:
     from tools_common import *
 
+from datetime import timezone
 from typing import Iterable, Optional
 
 try:
@@ -220,7 +221,7 @@ def get_hy_quality_spread_bp(end_date: str = None) -> Dict[str, Any]:
         "data_quality": {
             "source_tier": "official_provider",
             "data_date": analysis.get("date"),
-            "collected_at_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "collected_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "update_frequency": "daily market close",
             "formula": "ICE BofA CCC & Lower US High Yield OAS minus ICE BofA BB US High Yield OAS",
             "coverage": {
@@ -281,7 +282,7 @@ def _breadth_quality(
     return {
         "source_tier": "component_model",
         "data_date": data_date,
-        "collected_at_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "collected_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "update_frequency": "daily market close",
         "formula": formula,
         "coverage": coverage,

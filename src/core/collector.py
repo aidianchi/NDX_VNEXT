@@ -12,7 +12,7 @@ import os
 import json
 import logging
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 # 导入工具注册表
@@ -221,7 +221,7 @@ class DataCollector:
                         "function_id": func_name,
                         "raw_data": result,
                         "error": result.get("error"),
-                        "collection_timestamp_utc": datetime.utcnow().isoformat()
+                        "collection_timestamp_utc": datetime.now(timezone.utc).isoformat()
                     }
                     indicators.append(indicator)
                     continue
@@ -239,7 +239,7 @@ class DataCollector:
                         "function_id": func_name,
                         "raw_data": raw_data,
                         "error": None,
-                        "collection_timestamp_utc": datetime.utcnow().isoformat()
+                        "collection_timestamp_utc": datetime.now(timezone.utc).isoformat()
                     }
                     indicators.append(indicator)
                     # 使用 continue 结束当前函数的处理，直接进入下一个函数的循环
@@ -257,12 +257,12 @@ class DataCollector:
                     "function_id": func_name,
                     "raw_data": result,
                     "error": result.get("error"),
-                    "collection_timestamp_utc": datetime.utcnow().isoformat()
+                    "collection_timestamp_utc": datetime.now(timezone.utc).isoformat()
                 }
                 indicators.append(indicator)
 
         data_json = {
-            "timestamp_utc": datetime.utcnow().isoformat(),
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "backtest_date": backtest_date,
             "indicators": indicators
         }

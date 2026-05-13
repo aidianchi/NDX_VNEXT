@@ -15,7 +15,7 @@ NDX Agent vNext SubAgent 架构 - 数据契约模块
 - FinalAdjudication: "能不能涨、该不该买、何时买卖"的最终裁决
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -320,7 +320,7 @@ class LayerCard(BaseModel):
 
     layer: Layer = Field(..., description="所属层级")
     generated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(timezone.utc),
         description="生成时间戳"
     )
 
@@ -519,7 +519,7 @@ class BridgeMemo(BaseModel):
         description="连接的层级",
         min_length=2
     )
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # 跨层主张（支撑关系）
     cross_layer_claims: List[CrossLayerClaim] = Field(
@@ -614,7 +614,7 @@ class SynthesisPacket(BaseModel):
     """
     model_config = {"extra": "allow"}
 
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     packet_meta: Dict[str, Any] = Field(default_factory=dict, description="输入包元数据")
     context_summary: str = Field("", description="任务与数据摘要")
     layer_summaries: List[LayerSynthesisItem] = Field(default_factory=list, description="五层压缩摘要")
@@ -685,7 +685,7 @@ class ThesisDraft(BaseModel):
     """
     model_config = {"extra": "allow"}
 
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # 环境判断（L1-L3）
     environment_assessment: str = Field(
@@ -757,7 +757,7 @@ class Critique(BaseModel):
     这是"挑刺专家"的报告。
     专门攻击 thesis draft 的逻辑漏洞，尤其是跨层逻辑跳跃。
     """
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # 整体评估
     overall_assessment: str = Field(..., description="整体评估", max_length=200)
@@ -783,7 +783,7 @@ class RiskBoundaryReport(BaseModel):
     这是"风险哨兵"的巡逻报告。
     专门检查是否触及了五层框架的 13 种冲突矩阵（A-M）。
     """
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # 失效条件检查
     failure_conditions: List[Dict[str, Any]] = Field(
@@ -818,7 +818,7 @@ class SchemaGuardReport(BaseModel):
     这是"数据质检员"的报告。
     检查 JSON 结构是否正确、字段是否完整、数值引用是否一致。
     """
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     passed: bool = Field(..., description="是否通过校验")
 
     # 结构问题
@@ -925,7 +925,7 @@ class AnalysisRevised(BaseModel):
     这是"修订者"的成稿。
     吸收 critic、risk-sentinel、schema-guard 的反馈，但不抹平冲突。
     """
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # 修订说明
     revision_summary: str = Field(..., description="修订说明", max_length=500)
@@ -962,7 +962,7 @@ class FinalAdjudication(BaseModel):
     - 不能为了"形成结论"而抹平冲突（诚实性）
     - 必须明确保留的风险边界（完整性）
     """
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # 裁决状态
     approval_status: ApprovalStatus = Field(
@@ -1105,7 +1105,7 @@ class ContextBrief(BaseModel):
     这是 Context Loader 给后续 Agent 准备的"任务说明书"。
     总结分析包的核心内容，提炼关键信息。
     """
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # 数据概况
     data_summary: str = Field(..., description="数据概况", max_length=300)

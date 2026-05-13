@@ -9,6 +9,8 @@ try:
 except ImportError:
     from tools_common import *
 
+from datetime import timezone
+
 # =====================================================
 # 第3层函数
 # =====================================================
@@ -427,7 +429,7 @@ def get_qqq_top10_concentration(end_date: str = None) -> Dict[str, Any]:
         "data_quality": {
             "source_tier": "official_provider",
             "data_date": effective,
-            "collected_at_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "collected_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "update_frequency": "daily/monthly as published by Invesco endpoint",
             "formula": "Top-N concentration = sum of Invesco percentageOfTotalNetAssets; QQQ vs QQEW spread from daily close total returns.",
             "coverage": {"holdings_reported": len(holdings), "total_holdings": total_holdings},

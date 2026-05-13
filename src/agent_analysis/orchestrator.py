@@ -741,6 +741,12 @@ class VNextOrchestrator:
                 self._save_stage_diagnostics()
                 continue
             parsed = self._normalize_payload(stage_key, parsed)
+            # 强制覆盖 generated_at：防止 LLM 日期幻觉
+            # LLM 经常在 JSON 输出中编造 generated_at 值，覆盖掉 pydantic 的 default_factory
+            # 这里用代码实际运行时间强制覆盖，确保审计可追溯性
+            if hasattr(model_cls, "model_fields") and "generated_at" in model_cls.model_fields:
+                from datetime import datetime, timezone
+                parsed["generated_at"] = datetime.now(timezone.utc)
             try:
                 validated = model_cls.model_validate(parsed)
             except Exception as exc:
@@ -1042,10 +1048,13 @@ class VNextOrchestrator:
             return payload
         sanitized = dict(payload)
         layer = str(sanitized.get("layer") or stage_key[:2].upper())
-        sanitized["layer_raw_data"] = self._filter_layer_raw_data_for_prompt(
+        raw_data = self._filter_layer_raw_data_for_prompt(
             layer,
             sanitized.get("layer_raw_data", {}),
         )
+        if layer.upper() == "L4":
+            raw_data = self._summarize_l4_raw_data_for_prompt(raw_data)
+        sanitized["layer_raw_data"] = raw_data
         return sanitized
 
     def _compose_layer_prompt(self, stage_key: str, prompt_body: str, payload: Dict[str, Any]) -> str:
@@ -1175,6 +1184,62 @@ class VNextOrchestrator:
             if canon.layer.value == layer_value:
                 filtered[key] = payload
         return filtered
+
+    def _summarize_l4_raw_data_for_prompt(self, layer_raw_data: Dict[str, Any]) -> Dict[str, Any]:
+        """压缩 L4 prompt 中的长序列数据。
+
+        长序列（如 Damodaran monthly 120 条）留在 artifact，prompt 只保留
+        latest/start/end/count/percentile/关键拐点，显著降低 token 成本。
+        """
+        summarized: Dict[str, Any] = {}
+        for key, payload in layer_raw_data.items():
+            if not isinstance(payload, dict):
+                summarized[key] = payload
+                continue
+            value = payload.get("value")
+            if not isinstance(value, dict):
+                summarized[key] = payload
+                continue
+            new_value = dict(value)
+            for field_name, field_value in list(value.items()):
+                if isinstance(field_value, list) and len(field_value) > 10:
+                    new_value[field_name] = self._summarize_long_series(field_value)
+            summarized[key] = {**payload, "value": new_value}
+        return summarized
+
+    @staticmethod
+    def _summarize_long_series(series: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """对长序列列表计算统计摘要。"""
+        if not series:
+            return {"count": 0, "summary": "empty"}
+        count = len(series)
+        first = series[0]
+        last = series[-1]
+        # 对数值字段计算统计量
+        numeric_stats: Dict[str, Dict[str, Any]] = {}
+        if isinstance(first, dict):
+            for col in first.keys():
+                values = []
+                for item in series:
+                    if isinstance(item, dict) and col in item:
+                        v = item[col]
+                        if isinstance(v, (int, float)) and v is not None:
+                            values.append(v)
+                if values:
+                    numeric_stats[col] = {
+                        "min": round(min(values), 4),
+                        "max": round(max(values), 4),
+                        "mean": round(sum(values) / len(values), 4),
+                        "latest": round(values[-1], 4),
+                    }
+        return {
+            "count": count,
+            "period_start": first.get("data_date") if isinstance(first, dict) else None,
+            "period_end": last.get("data_date") if isinstance(last, dict) else None,
+            "latest_record": last if isinstance(last, dict) else None,
+            "numeric_summary": numeric_stats,
+            "note": "完整序列在 chart_time_series.json artifact 中可用。",
+        }
 
     def _layer_indicator_manifest(self, layer_raw_data: Any) -> List[Dict[str, Any]]:
         if not isinstance(layer_raw_data, dict):

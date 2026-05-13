@@ -263,6 +263,44 @@ def test_interactive_chart_workbench_falls_back_to_latest_cached_price_rows(tmp_
     assert "cached fallback: 20260512_215333_collect_only/chart_time_series.json" in html
     assert '"candles": [{"time": "2026-05-01"' in html
     assert '"close": 104.0' in html
+    assert "data-warning-banner" in html
+    assert "价格数据来自缓存回退" in html
+    assert "data-warning-warn" in html
+
+
+def test_interactive_chart_workbench_shows_empty_series_warnings(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    _write_json(run_dir / "layer_cards" / "L5.json", {"layer": "L5", "local_conclusion": "价格技术模块。"})
+    _write_json(run_dir / "analysis_packet.json", {})
+    rows = [
+        {"time": "2026-05-01", "open": 100, "high": 102, "low": 99, "close": 101, "volume": 1000, "ma5": 99, "ma20": 95, "ma60": 90, "ma200": 80},
+    ]
+    _write_json(
+        run_dir / "chart_time_series.json",
+        {
+            "schema_version": "vnext_chart_time_series_v1",
+            "workbench_modules": {
+                "price_technical": {"title": "价格技术", "series": ["QQQ_OHLCV", "VIX"], "layer_tags": ["L5"]},
+            },
+            "series": {
+                "QQQ_OHLCV": {"source_file": "chart_time_series.json", "rows": rows},
+                "VIX": {"rows": []},
+                "HYG": {"rows": []},
+            },
+        },
+    )
+    generator = InteractiveChartWorkbenchGenerator(
+        reports_dir=str(tmp_path / "reports"),
+        bundle_js="window.LightweightCharts={createChart:function(){return {addSeries:function(){return {setData:function(){}}},timeScale:function(){return {fitContent:function(){}}},subscribeCrosshairMove:function(){},applyOptions:function(){}}},CandlestickSeries:function(){},LineSeries:function(){},HistogramSeries:function(){}};",
+    )
+
+    report_path = generator.run(run_dir)
+    html = Path(report_path).read_text(encoding="utf-8")
+
+    assert "data-warning-banner" in html
+    assert "以下序列无数据" in html
+    assert "VIX" in html
+    assert "HYG" in html
 
 
 def test_interactive_chart_workbench_tolerates_missing_l5_indicator_values(tmp_path: Path):

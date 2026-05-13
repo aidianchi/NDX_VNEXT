@@ -297,6 +297,7 @@ class InteractiveChartWorkbenchGenerator:
         selected = selected_modules or list(all_modules)
         modules = {key: value for key, value in all_modules.items() if key in selected}
         series = chart_artifact.get("series", {}) if isinstance(chart_artifact.get("series"), dict) else {}
+        data_warnings = self._build_data_warnings(artifacts, series)
         return {
             "source": artifacts.get("_price_source_label") or "artifact + QQQ OHLCV",
             "modules": modules,
@@ -341,6 +342,7 @@ class InteractiveChartWorkbenchGenerator:
                 "mfi14": self._line_points(price_rows, "mfi14"),
                 "cmf20": self._line_points(price_rows, "cmf20"),
             },
+            "dataWarnings": data_warnings,
             "summary": {
                 "final_stance": artifacts.get("final", {}).get("final_stance"),
                 "l5_conclusion": l5_card.get("local_conclusion"),
@@ -351,6 +353,38 @@ class InteractiveChartWorkbenchGenerator:
                 "ma_order": ma_raw.get("ma_order"),
             },
         }
+
+    def _build_data_warnings(self, artifacts: Dict[str, Any], series: Dict[str, Any]) -> List[Dict[str, str]]:
+        """检测数据时效性和缺失问题，生成 workbench 顶部警告列表。"""
+        warnings: List[Dict[str, str]] = []
+        source_label = artifacts.get("_price_source_label", "")
+        if "cached fallback" in source_label:
+            cached_run = source_label.split("cached fallback: ")[-1].split(" · ")[0] if "cached fallback: " in source_label else ""
+            warnings.append({
+                "level": "warn",
+                "icon": "⚠",
+                "message": f"价格数据来自缓存回退（{cached_run}），非本次运行实时采集。",
+            })
+        elif "unavailable" in source_label:
+            warnings.append({
+                "level": "error",
+                "icon": "✕",
+                "message": "QQQ 价格数据当前不可用，图表无法渲染。",
+            })
+        empty_series_names = []
+        for name, data in series.items():
+            if not isinstance(data, dict):
+                continue
+            rows = data.get("rows", [])
+            if isinstance(rows, list) and len(rows) == 0:
+                empty_series_names.append(name)
+        if empty_series_names:
+            warnings.append({
+                "level": "warn",
+                "icon": "⚠",
+                "message": f"以下序列无数据：{', '.join(empty_series_names)}",
+            })
+        return warnings
 
     def _module_summaries(
         self,
@@ -458,6 +492,17 @@ class InteractiveChartWorkbenchGenerator:
             return bundle_path.read_text(encoding="utf-8")
         return ""
 
+    def _warning_banner_html(self, warnings: List[Dict[str, str]]) -> str:
+        if not warnings:
+            return ""
+        items = "\n".join(
+            f'      <div class="data-warning-item data-warning-{w["level"]}" role="alert">'
+            f'<span class="data-warning-icon">{w["icon"]}</span>'
+            f'<span class="data-warning-text">{_escape(w["message"])}</span></div>'
+            for w in warnings
+        )
+        return f'    <section class="data-warning-banner" aria-label="数据时效性警告">\n{items}\n    </section>\n'
+
     def _render(
         self,
         run_path: Path,
@@ -478,6 +523,7 @@ class InteractiveChartWorkbenchGenerator:
             if bundle
             else '<script src="https://unpkg.com/lightweight-charts@5.2.0/dist/lightweight-charts.standalone.production.js"></script>'
         )
+        warning_banner = self._warning_banner_html(payload.get("dataWarnings", []))
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -488,6 +534,7 @@ class InteractiveChartWorkbenchGenerator:
 </head>
 <body>
   <main class="shell">
+{warning_banner}
     <header class="topbar">
       <div>
         <p>NDX vNext</p>
@@ -661,6 +708,39 @@ body {
   width: min(1280px, calc(100vw - 32px));
   margin: 0 auto;
   padding: 28px 0 48px;
+}
+.data-warning-banner {
+  margin-bottom: 12px;
+}
+.data-warning-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+.data-warning-item:last-child {
+  margin-bottom: 0;
+}
+.data-warning-warn {
+  background: #fff8e6;
+  border: 1px solid #f0d78c;
+  color: #8a6d3b;
+}
+.data-warning-error {
+  background: #fde8e8;
+  border: 1px solid #f5a0a0;
+  color: #991b1b;
+}
+.data-warning-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+}
+.data-warning-text {
+  flex: 1;
 }
 .topbar {
   display: flex;

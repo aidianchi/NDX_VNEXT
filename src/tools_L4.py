@@ -9,6 +9,8 @@ try:
 except ImportError:
     from tools_common import *
 
+from datetime import timezone
+
 try:
     from .tools_L1 import get_10y_treasury
 except ImportError:
@@ -52,7 +54,7 @@ VALUATION_FALLBACK_CHAIN = [
 
 
 def _utc_timestamp() -> str:
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _safe_float(value: Any) -> Optional[float]:

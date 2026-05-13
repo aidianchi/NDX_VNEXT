@@ -1,8 +1,9 @@
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -754,6 +755,11 @@ def test_run_stage_records_parse_retry_diagnostics(tmp_path: Path):
     assert diagnostics["stages"]["mini_stage"]["errors"][0]["kind"] == "parse_error"
 
 
+class FakeModelWithGeneratedAt(BaseModel):
+    value: str
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class _ParseRetryWithTailEngine:
     """First call returns a long broken JSON ending with a sentinel; second call is valid."""
 
@@ -808,3 +814,107 @@ def test_run_stage_parse_error_feedback_includes_response_excerpt(tmp_path: Path
         "can locate the syntax error instead of regenerating blind."
     )
     assert "response length" in second_prompt.lower() or "原始响应字符数" in second_prompt
+
+
+def test_run_stage_overrides_llm_generated_at_hallucination(tmp_path: Path):
+    """LLM 经常在 JSON 输出中编造 generated_at 值。
+    _run_stage 必须在 model_validate 之前用代码实际运行时间强制覆盖，
+    确保审计可追溯性。"""
+    fake_hallucinated_date = "2025-03-31T00:00:00Z"
+    fake_response = json.dumps(
+        {"value": "ok", "generated_at": fake_hallucinated_date},
+        ensure_ascii=False,
+    )
+
+    class _Engine:
+        def call_with_fallback(self, prompt, stage_name=""):
+            return fake_response
+
+        def extract_json(self, text, stage):
+            return json.loads(text)
+
+        def get_token_report(self):
+            return {}
+
+    before = datetime.now(timezone.utc)
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=_Engine(),
+    )
+    result = orchestrator._run_stage(
+        stage_key="test",
+        stage_name="test_stage",
+        model_cls=FakeModelWithGeneratedAt,
+        payload={},
+    )
+    after = datetime.now(timezone.utc)
+
+    assert result.value == "ok"
+    assert isinstance(result.generated_at, datetime)
+    assert before <= result.generated_at <= after, (
+        f"generated_at 应为代码运行时间，但被 LLM 幻觉值覆盖: {result.generated_at}"
+    )
+    assert result.generated_at.isoformat() != fake_hallucinated_date, (
+        "generated_at 必须被强制覆盖，不能保留 LLM 编造的日期"
+    )
+
+
+def test_l4_prompt_summarizes_long_series(tmp_path: Path):
+    """L4 prompt 中的长序列（如 Damodaran monthly 120 条）必须被压缩为统计摘要，
+    以降低 token 成本并避免注意力分散。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    long_series = [
+        {"data_date": f"2020-{m:02d}-01", "erp": 5.0 + i * 0.1}
+        for i, m in enumerate(range(1, 13))
+    ]
+    raw_data = {
+        "get_damodaran_us_implied_erp": {
+            "function_id": "get_damodaran_us_implied_erp",
+            "value": {
+                "current_erp": 4.24,
+                "monthly_series": long_series,
+            },
+        },
+        "get_ndx_pe_and_earnings_yield": {
+            "function_id": "get_ndx_pe_and_earnings_yield",
+            "value": {"PE_TTM": 36.6},
+        },
+    }
+    summarized = orchestrator._summarize_l4_raw_data_for_prompt(raw_data)
+
+    damodaran = summarized["get_damodaran_us_implied_erp"]["value"]
+    assert "monthly_series" in damodaran
+    summary = damodaran["monthly_series"]
+    assert summary["count"] == 12
+    assert summary["period_start"] == "2020-01-01"
+    assert summary["period_end"] == "2020-12-01"
+    assert "numeric_summary" in summary
+    assert "erp" in summary["numeric_summary"]
+    erp_stats = summary["numeric_summary"]["erp"]
+    assert erp_stats["min"] == 5.0
+    assert erp_stats["max"] == 6.1
+    assert abs(erp_stats["mean"] - 5.55) < 0.01
+    # 标量字段保持不变
+    assert summarized["get_ndx_pe_and_earnings_yield"]["value"]["PE_TTM"] == 36.6
+
+
+def test_l4_prompt_leaves_short_lists_intact(tmp_path: Path):
+    """短列表（<=10 条）不应被摘要，保持原始内容。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    short_list = [{"data_date": f"2026-0{i}-01", "erp": 4.0 + i} for i in range(1, 4)]
+    raw_data = {
+        "get_test": {
+            "value": {"short_series": short_list},
+        },
+    }
+    summarized = orchestrator._summarize_l4_raw_data_for_prompt(raw_data)
+    assert summarized["get_test"]["value"]["short_series"] == short_list
