@@ -121,8 +121,12 @@ def main() -> int:
     workbench_path = InteractiveChartWorkbenchGenerator().run(run_dir, modules=_modules(args.workbench_modules))
     logging.info("Workbench generated: %s", workbench_path)
 
+    # report_path is legacy HTML report; when skipped, fall back to native_brief
+    # so API consumers never see an empty report_path.
+    report_path = summary.get("report_path") or brief_path
     console_summary = {
         **summary,
+        "report_path": report_path,
         "native_brief": brief_path,
         "workbench": workbench_path,
         "manual_data_path": path_config.manual_data_local_path,

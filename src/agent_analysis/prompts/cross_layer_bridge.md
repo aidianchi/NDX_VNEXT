@@ -197,3 +197,17 @@
   ]
 }
 ```
+
+## 事件引用 (event_refs)
+
+如果输入包含 `event_refs`（官方事件底账），Bridge 可以在以下场景中引用事件 ID：
+
+- **typed_conflicts[].event_refs**: 当某个冲突有明确的外部触发因素时引用。例如：美联储利率决议发布后，流动性收紧与估值偏高的冲突被放大。
+- **resonance_chains[].event_refs**: 当共振链有催化剂事件时引用。例如：CPI 数据超预期强化了 "宏观收紧 + 信用收缩" 的共振。
+- **transmission_paths[].event_refs**: 当传导路径有触发事件时引用。例如：地缘冲突事件触发了避险情绪，从 L2 传导到 L4。
+- **顶层 BridgeMemo.event_refs**: 汇总本 Bridge 中引用的所有事件 ID（去重）。
+
+**约束**：
+- event_refs 只能是事件 ID 字符串列表，例如 `["event:6479503280a4bf43"]`。
+- 事件只能解释触发/背景/观察，不能替代 evidence_refs 证明数值结论。
+- 如果没有与当前 Bridge 相关的事件，写 `[]`。

@@ -700,15 +700,41 @@ class VNextReportGenerator:
             if not isinstance(layer_raw, dict):
                 continue
             for item in card.get("indicator_analyses", []) or []:
-                if not isinstance(item, dict) or item.get("data_quality"):
+                if not isinstance(item, dict):
                     continue
                 function_id = item.get("function_id")
                 raw_item = layer_raw.get(function_id) if function_id else None
-                if isinstance(raw_item, dict) and isinstance(raw_item.get("data_quality"), dict):
-                    data_quality = dict(raw_item["data_quality"])
+                if not isinstance(raw_item, dict):
+                    continue
+
+                # Start from existing data_quality or empty dict
+                data_quality: Dict[str, Any] = (
+                    dict(item["data_quality"]) if isinstance(item.get("data_quality"), dict) else {}
+                )
+
+                # Inject collection timestamp from collector (most reliable source)
+                collected_at = raw_item.get("collection_timestamp_utc")
+                if collected_at:
+                    data_quality["collected_at_utc"] = collected_at
+
+                # Mark manual override
+                if raw_item.get("manual_override_used"):
+                    tier = str(data_quality.get("source_tier", "")).strip()
+                    data_quality["source_tier"] = f"{tier} · 手动输入" if tier else "手动输入"
+
+                # If item had no data_quality, also copy raw data_quality fields
+                if not item.get("data_quality") and isinstance(raw_item.get("data_quality"), dict):
+                    raw_dq = dict(raw_item["data_quality"])
+                    # Collector timestamp takes precedence over raw data_quality's collected_at
+                    if collected_at:
+                        raw_dq["collected_at_utc"] = collected_at
+                    raw_dq.update(data_quality)
+                    data_quality = raw_dq
                     valuation_sources = self._valuation_sources_from_raw(raw_item)
                     if valuation_sources:
                         data_quality["valuation_sources"] = valuation_sources
+
+                if data_quality:
                     item["data_quality"] = data_quality
 
     def _valuation_sources_from_raw(self, raw_item: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1961,12 +1987,14 @@ class VNextReportGenerator:
   </div>
 """
         visual = self._indicator_visual(layer, function_id, item, artifacts)
+        timestamp_chip = self._timestamp_chip(item.get("data_quality"))
         return f"""
 <article class="indicator-card" id="evidence-{_slug(ref)}" data-evidence-ref="{_escape(ref)}">
   <div class="indicator-top">
     <div>
       <span class="metric-ref">{_escape(ref)}</span>
       <h4>{_escape(item.get('metric', function_id))}</h4>
+      {timestamp_chip}
     </div>
     <span class="state-pill">{_escape(item.get('normalized_state', ''))}</span>
   </div>
@@ -2033,6 +2061,22 @@ class VNextReportGenerator:
     {disagreement_html}
   </div>
 """
+
+    def _timestamp_chip(self, data_quality: Any) -> str:
+        """Render a compact timestamp chip for indicator card header."""
+        if not isinstance(data_quality, dict):
+            return ""
+        collected_at = data_quality.get("collected_at_utc")
+        if not collected_at:
+            return ""
+        try:
+            parsed = datetime.fromisoformat(str(collected_at).replace("Z", "+00:00"))
+            formatted = parsed.strftime("%Y-%m-%d %H:%M UTC")
+        except ValueError:
+            formatted = str(collected_at)
+        source_tier = str(data_quality.get("source_tier", ""))
+        manual_badge = " · 手动输入" if "手动输入" in source_tier else ""
+        return f'<span class="timestamp-chip" title="指标数据采集时间">{formatted}{manual_badge}</span>'
 
     def _valuation_source_rows(self, sources: Any) -> str:
         rows = []

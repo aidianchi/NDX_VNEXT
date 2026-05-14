@@ -1306,6 +1306,19 @@ details ul { font-size: 13px; padding-left: 18px; margin: 6px 0; }
   color: var(--accent);
   overflow-wrap: anywhere;
 }
+.timestamp-chip {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--ink-muted);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-top: 4px;
+  letter-spacing: 0.02em;
+}
 .reading {
   font-family: var(--mono);
   font-size: 13px;

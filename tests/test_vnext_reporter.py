@@ -804,3 +804,148 @@ def test_vnext_reporter_default_output_keeps_run_id_when_data_date_repeats(tmp_p
     output = reporter._default_output_path(run_dir, reporter._load_artifacts(run_dir), "brief", "slate_v2")
 
     assert output.name == "vnext_brief_20260502_0000_20260506_0612.html"
+
+
+def test_enrich_indicator_data_quality_injects_collection_timestamp():
+    """collection_timestamp_utc from collector is injected into every indicator's data_quality."""
+    artifacts = {
+        "analysis_packet": {
+            "raw_data": {
+                "L1": {
+                    "get_fed_funds_rate": {
+                        "value": 5.25,
+                        "collection_timestamp_utc": "2026-05-13T19:12:34+00:00",
+                    },
+                    "get_vix": {
+                        "value": 18.0,
+                        "collection_timestamp_utc": "2026-05-13T19:12:35+00:00",
+                        "manual_override_used": True,
+                    },
+                }
+            }
+        },
+        "layers": {
+            "L1": {
+                "indicator_analyses": [
+                    {
+                        "function_id": "get_fed_funds_rate",
+                        "metric": "Fed Funds",
+                        "current_reading": "5.25%",
+                    },
+                    {
+                        "function_id": "get_vix",
+                        "metric": "VIX",
+                        "current_reading": "18.0",
+                    },
+                ]
+            }
+        },
+    }
+    reporter = VNextReportGenerator(reports_dir="/tmp")
+    reporter._enrich_indicator_data_quality(artifacts)
+
+    l1_items = artifacts["layers"]["L1"]["indicator_analyses"]
+    fed = l1_items[0]
+    vix = l1_items[1]
+
+    assert fed["data_quality"]["collected_at_utc"] == "2026-05-13T19:12:34+00:00"
+    assert vix["data_quality"]["collected_at_utc"] == "2026-05-13T19:12:35+00:00"
+    assert "手动输入" in vix["data_quality"]["source_tier"]
+
+
+def test_timestamp_chip_formatting():
+    """_timestamp_chip renders a friendly UTC timestamp."""
+    reporter = VNextReportGenerator(reports_dir="/tmp")
+
+    # Standard ISO timestamp
+    chip = reporter._timestamp_chip({"collected_at_utc": "2026-05-13T19:12:34+00:00"})
+    assert "2026-05-13 19:12 UTC" in chip
+    assert "timestamp-chip" in chip
+
+    # Z-suffix timestamp
+    chip_z = reporter._timestamp_chip({"collected_at_utc": "2026-05-13T19:12:34Z"})
+    assert "2026-05-13 19:12 UTC" in chip_z
+
+    # Manual override badge
+    chip_manual = reporter._timestamp_chip({
+        "collected_at_utc": "2026-05-13T19:12:34Z",
+        "source_tier": "official · 手动输入",
+    })
+    assert "手动输入" in chip_manual
+
+    # Missing timestamp
+    chip_empty = reporter._timestamp_chip({})
+    assert chip_empty == ""
+
+
+def test_timestamp_chip_appears_in_brief_html(tmp_path: Path):
+    """Timestamp chip is rendered in the final brief HTML for each indicator."""
+    run_dir = tmp_path / "run"
+    _write_json(
+        run_dir / "final_adjudication.json",
+        {
+            "approval_status": "approved_with_reservations",
+            "final_stance": "中性偏谨慎",
+            "confidence": "medium",
+            "must_preserve_risks": ["估值压缩风险"],
+            "adjudicator_notes": "保留核心冲突。",
+            "evidence_refs": [],
+        },
+    )
+    _write_json(
+        run_dir / "synthesis_packet.json",
+        {"packet_meta": {"data_date": "2026-05-13", "indicator_total": 1, "indicator_successful": 1}},
+    )
+    _write_json(
+        run_dir / "layer_cards" / "L1.json",
+        {
+            "layer": "L1",
+            "local_conclusion": "宏观偏紧。",
+            "confidence": "medium",
+            "indicator_analyses": [
+                {
+                    "function_id": "get_fed_funds_rate",
+                    "metric": "Fed Funds",
+                    "current_reading": "5.25%",
+                    "normalized_state": "restrictive",
+                    "narrative": "实际利率压制成长股估值。",
+                    "reasoning_process": "实际利率上升 -> 折现率上升 -> 估值承压。",
+                }
+            ],
+        },
+    )
+    for layer in ["L2", "L3", "L4", "L5"]:
+        _write_json(
+            run_dir / "layer_cards" / f"{layer}.json",
+            {
+                "layer": layer,
+                "local_conclusion": f"{layer} placeholder",
+                "confidence": "medium",
+                "indicator_analyses": [],
+            },
+        )
+    _write_json(
+        run_dir / "analysis_packet.json",
+        {
+            "raw_data": {
+                "L1": {
+                    "get_fed_funds_rate": {
+                        "value": 5.25,
+                        "collection_timestamp_utc": "2026-05-13T19:12:34+00:00",
+                    }
+                }
+            }
+        },
+    )
+    _write_json(run_dir / "bridge_memos" / "bridge_0.json", {"bridge_type": "test", "cross_layer_claims": [], "conflicts": []})
+    _write_json(run_dir / "critique.json", {"overall_assessment": "", "cross_layer_issues": []})
+    _write_json(run_dir / "risk_boundary_report.json", {"failure_conditions": [], "must_preserve_risks": []})
+    _write_json(run_dir / "schema_guard_report.json", {"passed": True})
+
+    reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
+    report_path = reporter.run(run_dir)
+    html = Path(report_path).read_text(encoding="utf-8")
+
+    # Timestamp chip should appear in the HTML
+    assert "timestamp-chip" in html
+    assert "2026-05-13 19:12 UTC" in html

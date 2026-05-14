@@ -511,6 +511,11 @@ class VNextOrchestrator:
             event_refs = getattr(conflict, "event_refs", []) if hasattr(conflict, "event_refs") else conflict.get("event_refs", [])
             all_event_refs.update(event_refs)
 
+        # Also collect event_refs from bridge summaries (Bridge may have marked
+        # events at the memo level that don't appear in typed conflicts).
+        for bridge_summary in synthesis_packet.bridge_summaries:
+            all_event_refs.update(bridge_summary.get("event_refs", []) if isinstance(bridge_summary, dict) else getattr(bridge_summary, "event_refs", []) or [])
+
         thesis_key_support_chains = [_model_dump(chain) for chain in thesis.key_support_chains]
         for chain in thesis.key_support_chains:
             all_evidence_refs.update(chain.evidence_refs)
