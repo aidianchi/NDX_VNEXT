@@ -853,6 +853,64 @@ def test_enrich_indicator_data_quality_injects_collection_timestamp():
     assert "手动输入" in vix["data_quality"]["source_tier"]
 
 
+def test_enrich_indicator_data_quality_with_existing_dq():
+    """When item already has data_quality (e.g. from LLM), valuation_sources
+    and collected_at_utc must still be extracted / injected (U7 fix)."""
+    artifacts = {
+        "analysis_packet": {
+            "raw_data": {
+                "L4": {
+                    "get_ndx_pe": {
+                        "value": {
+                            "ThirdPartyChecks": [
+                                {"source_name": "Bloomberg", "availability": "available"},
+                                {"source_name": "Wind", "availability": "available"},
+                            ]
+                        },
+                        "collection_timestamp_utc": "2026-05-13T19:12:36+00:00",
+                        "data_quality": {
+                            "source_tier": "third_party_estimate",
+                            "formula": "PE = price / earnings",
+                        },
+                    }
+                }
+            }
+        },
+        "layers": {
+            "L4": {
+                "indicator_analyses": [
+                    {
+                        "function_id": "get_ndx_pe",
+                        "metric": "NDX PE",
+                        "current_reading": "32.5",
+                        # LLM generated a data_quality dict
+                        "data_quality": {
+                            "source_tier": "third_party_estimate",
+                            "confidence": "medium",
+                        },
+                    }
+                ]
+            }
+        },
+    }
+    reporter = VNextReportGenerator(reports_dir="/tmp")
+    reporter._enrich_indicator_data_quality(artifacts)
+
+    item = artifacts["layers"]["L4"]["indicator_analyses"][0]
+    dq = item["data_quality"]
+
+    # collected_at_utc must be injected even when item had existing dq
+    assert dq["collected_at_utc"] == "2026-05-13T19:12:36+00:00"
+    # valuation_sources must be extracted even when item had existing dq (U7)
+    assert "valuation_sources" in dq
+    assert len(dq["valuation_sources"]) == 2
+    assert dq["valuation_sources"][0]["source_name"] == "Bloomberg"
+    # Existing LLM fields must be preserved
+    assert dq["confidence"] == "medium"
+    # Raw data_quality fields must be merged in (U10: raw as base)
+    assert dq["formula"] == "PE = price / earnings"
+
+
 def test_timestamp_chip_formatting():
     """_timestamp_chip renders a friendly UTC timestamp."""
     reporter = VNextReportGenerator(reports_dir="/tmp")

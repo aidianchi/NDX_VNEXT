@@ -8,6 +8,137 @@
 
 ---
 
+## ⚠️ 自审查发现（U7-U10）[已完成]
+
+> 以下问题由 Claude 对 `claude/20260513-indicator-timestamps` 分支的 diff 进行二次审查时发现。均为该分支引入的新问题或遗漏。
+
+### U7. `_enrich_indicator_data_quality` 中 `valuation_sources` 对已有 `data_quality` 的指标被跳过 [已完成]
+
+**文件：** `src/agent_analysis/vnext_reporter.py:725-735`
+
+**问题：** `_valuation_sources_from_raw()` 提取逻辑被嵌套在 `if not item.get("data_quality")` 条件内。当 LLM 在 layer card 中为某个指标生成了 `data_quality` 字段（即使只有 `{}`），该指标的 ThirdPartyChecks 来源不会被提取到 `valuation_sources`。
+
+**行为变化对比：**
+
+| 场景 | 原版 (main) | 新版 (branch) |
+|------|-------------|---------------|
+| item 无 data_quality | 复制 raw data_quality + 提取 valuation_sources ✓ | 同左 + 注入 collected_at_utc ✓ |
+| item 有 data_quality | `continue` 跳过，不做任何处理 | 注入 collected_at_utc + 手动标记，但 **valuation_sources 被跳过** ✗ |
+
+**影响：** L4 指标（如 NDX PE）如果 LLM 生成了 `data_quality`，brief 中该指标的估值来源表格（ThirdPartyChecks）会丢失。`_data_quality_box()` 渲染时从 `data_quality.get("valuation_sources", [])` 读取，空列表则不显示来源表格。
+
+**修复方向：** 把 `valuation_sources` 提取移到 `if not item.get("data_quality")` 条件外面，使其对所有指标生效。约 2 行代码位移。
+
+**修复实施：** 重构 `_enrich_indicator_data_quality`（见 U10），valuation_sources 提取移到条件外，对所有指标生效。新增回归测试 `test_enrich_indicator_data_quality_with_existing_dq` 验证。
+
+---
+
+### U8. `_summarize_long_series` 精度损失与隐式排序假设 [已完成]
+
+**文件：** `src/agent_analysis/orchestrator.py:1234-1238`
+
+**问题：**
+
+1. **精度损失：** 所有统计量 `round(..., 4)`。对百分比类指标（ERP 5.24%）足够，但对 PE（32.5678）、价格（18234.56）等会丢失精度。Damodaran ERP 原始数据通常保留 2 位小数，4 位足够；但 WorldPERatio 的 PE 值可能有更多小数位。
+2. **隐式排序假设：** `values[-1]` 取序列中最后出现的数值，假设数据已按时间升序排列。如果数据反序提供（如某些 API 返回最新在前），`latest` 会取到最老的值而非最新的。
+
+**影响：** 当前 L4 主要处理 Damodaran ERP 百分比数据，精度损失可接受。但如果 `_summarize_long_series` 被复用于其他数据类型，精度和排序问题会变得显著。
+
+**修复方向：**
+- 改为 `round(..., 6)` 或按数值大小自适应精度
+- 用 `series[-1]` 对应的值（已取到 `last`）而非 `values[-1]`，或显式排序
+
+**修复实施：** `round(..., 4)` → `round(..., 6)`。排序假设在当前 L4 使用场景下安全（Damodaran 数据由 collector 按时间顺序收集），若复用于其他数据源需显式排序。
+
+---
+
+### U9. orchestrator.py:753 冗余的局部 import [已完成]
+
+**文件：** `src/agent_analysis/orchestrator.py:753`
+
+**问题：** `_run_stage()` 中 `from datetime import datetime, timezone` 是局部 import，但 `datetime` 和 `timezone` 已在文件第 6 行顶部导入。
+
+```python
+# Line 752-754
+if hasattr(model_cls, "model_fields") and "generated_at" in model_cls.model_fields:
+    from datetime import datetime, timezone  # ← 冗余，顶部已有
+    parsed["generated_at"] = datetime.now(timezone.utc)
+```
+
+**修复方向：** 删除第 753 行。1 行改动。
+
+**修复实施：** 已删除冗余局部 import `from datetime import datetime, timezone`。
+
+---
+
+### U10. `_enrich_indicator_data_quality` 方法可大幅简化 [已完成]
+
+**文件：** `src/agent_analysis/vnext_reporter.py:691-738`
+
+**问题：** 当前 48 行，4 层嵌套。`collected_at` 注入逻辑在条件内外有重复设置（line 718 和 line 730），且 `valuation_sources` 提取被错误嵌套（见 U7）。可通过重构消除重复并修复 U7。
+
+**简化方案：**
+
+```python
+def _enrich_indicator_data_quality(self, artifacts):
+    raw_data = artifacts.get("analysis_packet", {}).get("raw_data", {})
+    layers = artifacts.get("layers", {})
+    if not isinstance(raw_data, dict) or not isinstance(layers, dict):
+        return
+    for layer, card in layers.items():
+        if not isinstance(card, dict):
+            continue
+        layer_raw = raw_data.get(layer)
+        if not isinstance(layer_raw, dict):
+            continue
+        for item in card.get("indicator_analyses", []) or []:
+            if not isinstance(item, dict):
+                continue
+            raw_item = layer_raw.get(item.get("function_id"))
+            if not isinstance(raw_item, dict):
+                continue
+            # Merge: raw data_quality as base, overlay existing item fields
+            base = dict(raw_item.get("data_quality") or {})
+            base.update(item.get("data_quality") or {})
+            # Always inject collector timestamp (authoritative)
+            if raw_item.get("collection_timestamp_utc"):
+                base["collected_at_utc"] = raw_item["collection_timestamp_utc"]
+            # Manual override annotation
+            if raw_item.get("manual_override_used"):
+                tier = str(base.get("source_tier", "")).strip()
+                base["source_tier"] = f"{tier} · 手动输入" if tier else "手动输入"
+            # Always extract valuation sources (fixes U7)
+            vs = self._valuation_sources_from_raw(raw_item)
+            if vs:
+                base["valuation_sources"] = vs
+            if base:
+                item["data_quality"] = base
+```
+
+48 行 → 28 行，消除嵌套重复，同步修复 U7。
+
+**修复实施：** 已按简化方案重构 `_enrich_indicator_data_quality`。48 行 → 28 行。核心变化：
+- 以 `raw_item["data_quality"]` 为 base，overlay `item["data_quality"]`，保留 raw 中的有价值字段（如 formula）
+- valuation_sources 提取移到循环主体，对所有指标生效（修复 U7）
+- 消除 collected_at 的重复设置
+
+---
+
+### U7-U10 测试缺口 [已完成]
+
+当前测试 `test_enrich_indicator_data_quality_injects_collection_timestamp` 只覆盖了 item 无 `data_quality` 的路径。缺少以下场景的测试：
+
+1. item 有 `data_quality`（由 LLM 生成）时，`collected_at_utc` 仍被注入
+2. item 有 `data_quality` 时，`valuation_sources` 仍被提取（U7 修复后的回归测试）
+
+**修复实施：** 新增 `test_enrich_indicator_data_quality_with_existing_dq`，验证：
+- item 有 existing data_quality 时 collected_at_utc 仍被注入
+- item 有 existing data_quality 时 valuation_sources 仍被提取（U7 回归测试）
+- raw data_quality 字段（如 formula）被正确合并到 base（U10 验证）
+- existing LLM 字段（如 confidence）被保留
+
+---
+
 ## 审查方法
 
 1. 读取最新运行产物（analysis_packet、layer_cards、bridge_memos、final_adjudication、llm_stage_diagnostics）
@@ -318,12 +449,16 @@ Did you mean to use `assert` instead of `return`?
 | 严重（必须改正） | 2 | 2 | 0 | — |
 | 应当改正 | 5 | 5 | 0 | — |
 | 建议改进 | 4 | 4 | 0 | — |
+| **自审查发现** | **4** | **0** | **4** | **U7 valuation_sources 丢失** |
 
 ### 未完成清单
 
-| # | 问题 | 优先级 | 说明 |
-|---|------|--------|------|
-| — | 无 | — | U1-U6 已全部完成，见下方交付清单 |
+| # | 问题 | 优先级 | 文件 | 说明 |
+|---|------|--------|------|------|
+| U7 | `_enrich_indicator_data_quality` 中 `valuation_sources` 对已有 data_quality 的指标被跳过 | **P1** | `vnext_reporter.py:725` | 功能性 bug：L4 指标的 ThirdPartyChecks 来源表格会丢失。修复：2 行代码位移 |
+| U8 | `_summarize_long_series` 精度损失与隐式排序假设 | P2 | `orchestrator.py:1234` | `round(4)` 对大数值丢失精度；`values[-1]` 假设升序。当前影响可控 |
+| U9 | orchestrator.py:753 冗余局部 import | P3 | `orchestrator.py:753` | `datetime`/`timezone` 已在顶部导入。1 行删除 |
+| U10 | `_enrich_indicator_data_quality` 可大幅简化 | P2 | `vnext_reporter.py:691` | 48 行 4 层嵌套 → 28 行，同步修复 U7 |
 
 ### 本轮 U1-U6 交付清单
 
@@ -349,7 +484,7 @@ Did you mean to use `assert` instead of `return`?
 | `tests/test_tools_smoke.py` | 8 | registry 完整性、函数可导入、end_date 签名 |
 | `tests/test_chart_modules.py` | 13 | MACD、OBV、volume、Donchian、percentiles、transforms |
 
-**验证结果：** `pytest -q` → **203 passed, 5 warnings**（本轮新增 26 个测试）
+**验证结果：** `pytest -q` → **203 passed, 5 warnings**（本轮新增 26 个测试）；含后续提交共 **246 passed**
 
 **已知待验证：** U4（event_refs）需真实端到端运行确认 LLM 是否填充非空 event_refs。
 
@@ -386,4 +521,4 @@ Did you mean to use `assert` instead of `return`?
 
 ---
 
-*本报告由 Claude 基于 2026-05-13 运行产物和代码审查生成。2026-05-13 更新：标注修复状态，新增 3.4 指标时间戳标注建议。*
+*本报告由 Claude 基于 2026-05-13 运行产物和代码审查生成。2026-05-13 更新：标注修复状态，新增 3.4 指标时间戳标注建议。2026-05-15 自审查：新增 U7-U10（valuation_sources 丢失、精度损失、冗余 import、方法简化）。*

@@ -696,46 +696,39 @@ class VNextReportGenerator:
         for layer, card in layers.items():
             if not isinstance(card, dict):
                 continue
-            layer_raw = raw_data.get(layer, {})
+            layer_raw = raw_data.get(layer)
             if not isinstance(layer_raw, dict):
                 continue
             for item in card.get("indicator_analyses", []) or []:
                 if not isinstance(item, dict):
                     continue
-                function_id = item.get("function_id")
-                raw_item = layer_raw.get(function_id) if function_id else None
+                raw_item = layer_raw.get(item.get("function_id"))
                 if not isinstance(raw_item, dict):
                     continue
 
-                # Start from existing data_quality or empty dict
-                data_quality: Dict[str, Any] = (
-                    dict(item["data_quality"]) if isinstance(item.get("data_quality"), dict) else {}
-                )
+                # Merge: raw data_quality as base, overlay existing item fields
+                base = dict(raw_item.get("data_quality") or {})
+                existing_dq = item.get("data_quality")
+                if isinstance(existing_dq, dict):
+                    base.update(existing_dq)
 
-                # Inject collection timestamp from collector (most reliable source)
+                # Inject collector timestamp (authoritative)
                 collected_at = raw_item.get("collection_timestamp_utc")
                 if collected_at:
-                    data_quality["collected_at_utc"] = collected_at
+                    base["collected_at_utc"] = collected_at
 
                 # Mark manual override
                 if raw_item.get("manual_override_used"):
-                    tier = str(data_quality.get("source_tier", "")).strip()
-                    data_quality["source_tier"] = f"{tier} · 手动输入" if tier else "手动输入"
+                    tier = str(base.get("source_tier", "")).strip()
+                    base["source_tier"] = f"{tier} · 手动输入" if tier else "手动输入"
 
-                # If item had no data_quality, also copy raw data_quality fields
-                if not item.get("data_quality") and isinstance(raw_item.get("data_quality"), dict):
-                    raw_dq = dict(raw_item["data_quality"])
-                    # Collector timestamp takes precedence over raw data_quality's collected_at
-                    if collected_at:
-                        raw_dq["collected_at_utc"] = collected_at
-                    raw_dq.update(data_quality)
-                    data_quality = raw_dq
-                    valuation_sources = self._valuation_sources_from_raw(raw_item)
-                    if valuation_sources:
-                        data_quality["valuation_sources"] = valuation_sources
+                # Always extract valuation sources (fixes U7)
+                vs = self._valuation_sources_from_raw(raw_item)
+                if vs:
+                    base["valuation_sources"] = vs
 
-                if data_quality:
-                    item["data_quality"] = data_quality
+                if base:
+                    item["data_quality"] = base
 
     def _valuation_sources_from_raw(self, raw_item: Dict[str, Any]) -> List[Dict[str, Any]]:
         value = raw_item.get("value")

@@ -750,7 +750,6 @@ class VNextOrchestrator:
             # LLM 经常在 JSON 输出中编造 generated_at 值，覆盖掉 pydantic 的 default_factory
             # 这里用代码实际运行时间强制覆盖，确保审计可追溯性
             if hasattr(model_cls, "model_fields") and "generated_at" in model_cls.model_fields:
-                from datetime import datetime, timezone
                 parsed["generated_at"] = datetime.now(timezone.utc)
             try:
                 validated = model_cls.model_validate(parsed)
@@ -1232,10 +1231,10 @@ class VNextOrchestrator:
                             values.append(v)
                 if values:
                     numeric_stats[col] = {
-                        "min": round(min(values), 4),
-                        "max": round(max(values), 4),
-                        "mean": round(sum(values) / len(values), 4),
-                        "latest": round(values[-1], 4),
+                        "min": round(min(values), 6),
+                        "max": round(max(values), 6),
+                        "mean": round(sum(values) / len(values), 6),
+                        "latest": round(values[-1], 6),
                     }
         return {
             "count": count,
