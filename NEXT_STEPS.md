@@ -1,6 +1,6 @@
 # vNext 下一步
 
-更新日期：2026-05-10  
+更新日期：2026-05-17  
 阅读方式：本文件只放“接下来要做什么”和少量已完成快照。详细完成记录写入 `WORK_LOG.md`，按时间倒序。
 
 ---
@@ -11,13 +11,32 @@
 
 | 优先级 | 类别 | 待办 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
-| P2 | 核心系统 | L4 prompt 专用摘要 | 1M 上下文模型能容忍约 18 万字符，但当前 L4 重复塞长序列，成本、速度和注意力效率不理想 | 长序列留在 artifact，prompt 只保留 latest/start/end/count/percentile/关键拐点；L4 prompt chars 明显下降 |
+| P1 | 数据基础 | yfinance 盈利质量代理审计 | yfinance 已从估值 regime 主锚降级，但 forward earnings quality、EPS revision、利润率/增长代理仍依赖它；必须确认字段来源、公式和 stale cache 边界 | 针对 `get_ndx_forward_earnings_quality` 输出一份审计结论；字段覆盖率、公式、缓存新鲜度、失败 fallback 和不能证明什么都写入 data_quality / prompt / brief |
+| P1 | 核心系统 | 新闻事件-数据连接器真实 run 复盘 | `news_event_data_links.json` 已落地，但需要观察真实 run 中哪些连接有帮助、哪些只是噪声，防止新闻叙事污染 | 至少 1 次 `--enable-news` 完整 run 复盘；确认事件连接只作背景观察，不进入 L1-L5，不成为 evidence_ref；必要时调整阈值和展示数量 |
+| P2 | 输出体验 | 10 年 workbench 视觉与性能复核 | workbench 默认窗口从 5 年扩到 10 年，信息量更完整，但图表体量和移动端阅读需要复核 | 用最新 run 生成 workbench，桌面/移动打开无明显卡顿、错位或文本重叠；必要时压缩初始可见序列或优化默认模块 |
 
 ---
 
 ## 已完成快照
 
 这里只保留最近完成事项的摘要，详细内容见 `WORK_LOG.md`。
+
+### 2026-05-17
+
+- L4 新增 DanjuanFunds/蛋卷基金 NDX 估值校验源，解析 PE/PB/PE percentile/PB percentile/ROE/PEG/eva_type/date/sample_start/update time；真实接口验证 NDX PE `36.51`、PE 分位 `87.0`、PB 分位 `99.68`。
+- 估值分位权威顺序明确为 Manual/Wind > trusted Trendonify > DanjuanFunds/蛋卷基金 > WorldPERatio std-dev context；yfinance 成分股 PE/PB/Forward PE 降为 component-model proxy / sanity check，不再作为估值 regime 主锚。
+- yfinance 增加持久缓存和失败保留旧值；QQQ 图表与成分股 `.info` 走更稳的缓存路径，减少限流导致的空图和空指标。
+- Workbench 默认历史窗口从 5 年改为 10 年起步，按钮改为 10Y / 15Y / ALL。
+- 新增 `news_event_data_links.json`：把官方事件底账和 chart time series 做时间邻近连接，只输出 temporal association / co-movement observation / needs_bridge_review，不写因果证明，不进入 L1-L5，不成为 `evidence_ref`。
+- Native brief 新闻栏升级为“官方事件底账与市场连接观察”；控制台旧版 HTML/charts 日常入口软删除，并通过 `console_logs_entry_v3` 解决旧服务继续显示 visual regression / legacy HTML 入口的问题。
+- 验证：`python3 -m pytest -q` 为 263 passed；真实蛋卷接口、`news_event_data_links.json`、新版 brief 与 8765 控制台均已验证。
+
+### 2026-05-16
+
+- 复核并合并 Claude 20260513 审计分支方向：治理阶段 `generated_at` 代码覆盖、L4 长序列进入 prompt 前摘要化、反编造约束提升到 system message、DataIntegrity 扩展、workbench 数据时效性警告、指标时间戳与 U7-U10 简化修复。
+- 补强 objective firewall：至少 3 层必须包含可用指标 payload，空层容器不再让 `object_clear` 误判为清晰。
+- 补强 Kimi HTTP fallback：实际携带 system constraints，并兼容 `get_extra_headers("kimi")` 返回 `None`。
+- 验证：`.venv/bin/python -m pytest -q` 为 253 passed。
 
 ### 2026-05-12
 
@@ -85,7 +104,7 @@
 - OpenBB：暂缓整个平台接入。当前只学习它的 provider metadata、coverage discovery 和数据治理思路。
 - Trendonify：真实浏览器 sidecar 已落地；主链仍不硬绕 403，不静默退回 yfinance。后续只观察采集稳定性、来源信任流程和是否需要人工一键导入。
 - 正式前端框架化：在 brief / console / workbench 信息架构稳定前继续保持 self-contained HTML。
-- 新闻 LLM 解读：当前只做官方事件底账，不做泛新闻情绪和摘要。
+- 新闻 LLM 解读：当前只做官方事件底账和事件-数据时间邻近连接，不做泛新闻情绪和摘要。
 - 交易执行、组合建议、自动下单：不属于 vNext 当前范围。
 
 ---

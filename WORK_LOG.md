@@ -4,6 +4,36 @@
 
 ---
 
+## 2026-05-17
+
+### L4 估值权威、新闻连接器、10 年 workbench 与 yfinance 韧性演进
+
+提交：`b4d1551 Evolve valuation news and workbench resilience`
+
+完成内容：
+
+- **L4 外部估值源新增 DanjuanFunds/蛋卷基金**：接入 `https://danjuanfunds.com/djapi/index_eva/detail/NDX`，使用浏览器 UA 与 Referer 读取 NDX PE/PB/PE percentile/PB percentile/ROE/PEG/eva_type/date/begin_at/updated_at。蛋卷进入 `ThirdPartyChecks`，作为第三方估值校验源，不替代 Manual/Wind，也不覆盖可信 Trendonify。
+- **估值发言权重新排序**：L4 prompt 和 packet builder 明确估值分位权威顺序为 Manual/Wind > trusted Trendonify > DanjuanFunds/蛋卷基金 > WorldPERatio std-dev context；yfinance 成分股 PE/PB/Forward PE 降级为 component-model proxy / sanity check，不再作为估值 regime 主锚。
+- **yfinance 韧性增强**：`cached_yf_download()` 增加持久化缓存和失败时 stale cache fallback；`get_yf_ticker_info_with_retry()` 为成分股 `.info` 增加 24h 缓存 fallback；QQQ 图表数据改走统一缓存下载路径。目标是减少限流导致的空图、空 L5 或 L4 成分股模型失败。
+- **Workbench 历史窗口改为 10 年起步**：`DEFAULT_CHART_LOOKBACK_DAYS` 从 1825 调到 3650；workbench 默认 `updateRange(3650)`，按钮改为 10Y / 15Y / ALL。5 年不再是默认研究窗口。
+- **新闻事件-数据连接器落地**：新增 `src/news_event_data_linker.py`，在 `--enable-news` 且写出 `chart_time_series.json` 后生成 `news_event_data_links.json`。连接器只输出 temporal association / co-movement observation / needs_bridge_review，不写因果证明，不进入 L1-L5 runtime context，不成为 `evidence_ref`。
+- **Native brief 新闻栏升级**：新闻栏从单纯“官方事件底账”扩展为“官方事件底账与市场连接观察”，展示事件日前后 QQQ、VIX/VXN、10Y、real yield、HY OAS、HYG、Damodaran ERP 等可用序列的轻量观察，并明确这些观察不是因果证明。
+- **旧版 HTML 日常入口软删除**：控制台隐藏旧版 HTML/charts 勾选入口，默认只生成 vNext artifacts、native brief 和 workbench；兼容旧报告仅保留给开发命令显式启用。
+- **控制台 stale service 修复**：`open_research_console.py` 增加控制台版本标记 `console_logs_entry_v3`，能识别旧的 visual regression / legacy HTML 页面并清理 8765 上所有旧监听进程后重启服务，避免浏览器继续看到旧控制台。
+
+验证结果：
+
+- `python3 -m pytest -q`：263 passed，4 warnings。
+- `python3 -m py_compile src/tools_L4.py src/agent_analysis/packet_builder.py src/news_event_data_linker.py src/main.py src/agent_analysis/vnext_reporter.py src/tools_common.py src/chart_adapter_v6.py src/interactive_chart_workbench.py src/research_console.py src/open_research_console.py`：通过。
+- 真实蛋卷接口验证：NDX PE `36.51`，PE 分位 `87.0`，PB `10.44`，PB 分位 `99.68`，ROE `0.2859`，PEG `1.8119`，`eva_type=high`，数据日 `2026-05-15`，样本起点 `2016-01-26`。
+- 用 `output/analysis/vnext/20260515_113650` 生成 `news_event_data_links.json`，共 25 条事件连接；重新生成 `output/reports/vnext_brief_20260515_113650_newslinks.html`，可检索“官方事件底账与市场连接观察”“附近市场序列观察”“不是因果证明，也不是 evidence_ref”。
+- `http://127.0.0.1:8765/` 已确认返回 `console_logs_entry_v3` 控制台，显示“查看日志 / 最新日志”，旧版 HTML 勾选入口消失。
+
+剩余观察：
+
+- yfinance 在估值 regime 中已降权，但 forward earnings quality、EPS revision、利润率/增长代理仍依赖 yfinance；下一步需要专门审计字段来源、公式、覆盖率和 stale cache 标注。
+- 新闻连接器目前只作为 sidecar 和 native brief 展示，不进入 L1-L5，也不替代 Bridge；后续可评估是否把压缩后的 `news_event_data_links` 作为 Bridge 后段的只读背景索引，但仍必须禁止其成为数值证据。
+
 ## 2026-05-16
 
 ### Claude 20260513 审计分支复核、补强与 main 合并准备
