@@ -1250,10 +1250,26 @@ async function openLatestProductForMode(jobId) {
     const preferred = mode === 'workbench_only' ? summary.workbench : (summary.native_brief || summary.report_path || summary.workbench);
     if (!preferred) return;
     openedArtifactForJob = jobId;
-    window.open(artifactUrl(preferred), '_blank', 'noopener');
-    runStatus.textContent = `${runStatus.textContent}；已自动打开 ${preferred.split('/').pop()}`;
+
+    // Build links for all available reports
+    const reports = [];
+    if (summary.native_brief) reports.push({ label: 'Brief 报告', path: summary.native_brief });
+    if (summary.workbench) reports.push({ label: 'Workbench', path: summary.workbench });
+    if (summary.report_path && summary.report_path !== summary.native_brief) reports.push({ label: '完整报告', path: summary.report_path });
+
+    // Inject clickable links into status area
+    const linksHtml = reports.map(r =>
+      `<a href="${artifactUrl(r.path)}" target="_blank" rel="noopener" style="margin-left:8px;padding:2px 8px;border:1px solid #2563eb;border-radius:4px;text-decoration:none;color:#2563eb;font-size:13px;">${r.label}</a>`
+    ).join('');
+    runStatus.innerHTML = `任务已完成。可用报告：${linksHtml}`;
+
+    // Try auto-open primary report (may be blocked by popup blocker)
+    const w = window.open(artifactUrl(preferred), '_blank', 'noopener');
+    if (!w || w.closed || typeof w.closed === 'undefined') {
+      runStatus.innerHTML += `<br><span style="color:#b45309;font-size:12px;">弹窗可能被浏览器拦截，请点击上方链接手动打开。</span>`;
+    }
   } catch (error) {
-    runStatus.textContent = `${runStatus.textContent}；自动打开失败：${error.message || error}`;
+    runStatus.textContent = `${runStatus.textContent}；获取报告失败：${error.message || error}`;
   }
 }
 

@@ -9,6 +9,9 @@
 【关键约束】
 你不是跨层关系的唯一发现者，而是跨层关系的整合者。Bridge Agents 已经识别了跨层关系，你的工作是组织它们。
 
+【证据纪律】
+所有 evidence_refs 必须来自 synthesis_packet 的 evidence_index。
+
 ## 输入
 
 1. **5 个 Layer Cards**

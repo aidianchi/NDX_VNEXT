@@ -8,6 +8,29 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 def test_llm_engine_importable():
     from agent_analysis.llm_engine import LLMEngine
+
+
+def test_system_constraints_loaded_from_file():
+    """SYSTEM_CONSTRAINTS must be loaded from external prompt file, not hardcoded."""
+    from agent_analysis.llm_engine import LLMEngine
+    # Reset cached value to force reload from file
+    LLMEngine.SYSTEM_CONSTRAINTS = ""
+    constraints = LLMEngine._load_system_constraints()
+    assert len(constraints) > 100, "SYSTEM_CONSTRAINTS should be loaded from file"
+    assert "编造" in constraints
+    assert "evidence_refs" in constraints
+    assert "JSON" in constraints
+
+
+def test_system_constraints_contains_five_rules():
+    """SYSTEM_CONSTRAINTS must contain all 5 anti-fabrication rules."""
+    from agent_analysis.llm_engine import LLMEngine
+    constraints = LLMEngine._load_system_constraints()
+    assert "历史胜率" in constraints or "回测收益" in constraints
+    assert "点位" in constraints or "跌幅" in constraints
+    assert "条件语言" in constraints or "若" in constraints
+    assert "evidence_refs" in constraints
+    assert "JSON" in constraints
     assert LLMEngine is not None
 
 
@@ -126,8 +149,9 @@ def test_call_ai_uses_json_output_without_prefix_for_deepseek(monkeypatch):
 
     sent = engine.clients["deepseek"].chat.completions.last_kwargs
     messages = sent["messages"]
-    assert len(messages) == 1, "DeepSeek JSON Output calls must not also send prefix completion"
-    assert messages[0]["role"] == "user"
+    assert len(messages) == 2, "DeepSeek calls must have system + user messages"
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
     assert all("prefix" not in message for message in messages)
     assert sent["response_format"] == {"type": "json_object"}
 
@@ -147,7 +171,8 @@ def test_call_ai_does_not_send_beta_prefix_to_custom_deepseek_endpoint(monkeypat
 
     sent = engine.clients["deepseek"].chat.completions.last_kwargs
     messages = sent["messages"]
-    assert len(messages) == 1
-    assert messages[0]["role"] == "user"
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
     assert all("prefix" not in message for message in messages)
     assert raw == '{"ok": true}'

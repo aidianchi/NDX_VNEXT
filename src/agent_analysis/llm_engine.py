@@ -17,6 +17,7 @@ import logging
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # 尝试导入配置
@@ -112,6 +113,29 @@ class LLMEngine:
         promoted, _enabled = LLMEngine._resolve_deepseek_base_url(base_url)
         return promoted
 
+    # System-level constraints loaded from external prompt file.
+    # Falls back to inline string if file is missing.
+    _SYSTEM_CONSTRAINTS_PATH = Path(__file__).with_name("prompts") / "system_constraints.md"
+    SYSTEM_CONSTRAINTS: str = ""  # loaded in _load_system_constraints
+
+    @classmethod
+    def _load_system_constraints(cls) -> str:
+        if cls.SYSTEM_CONSTRAINTS:
+            return cls.SYSTEM_CONSTRAINTS
+        try:
+            cls.SYSTEM_CONSTRAINTS = cls._SYSTEM_CONSTRAINTS_PATH.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            # Fallback: inline constraints if external file is missing
+            cls.SYSTEM_CONSTRAINTS = (
+                "你是 NDX 投研分析系统的一部分。你必须遵守以下不可违反的纪律：\n"
+                "1. 不得编造历史胜率、回测收益、样本区间或概率数字，除非输入数据明确提供。\n"
+                "2. 不得编造点位、跌幅、估值倍数、盈利增速阈值或其他定量影响幅度。\n"
+                "3. 没有证据时使用条件语言（'可能''若...则...'）或定性表达。\n"
+                "4. 所有 evidence_refs 必须来自本次输入的 raw_data，不得凭记忆添加。\n"
+                "5. 输出严格合法的 JSON，不要添加任何 JSON 之外的文本。"
+            )
+        return cls.SYSTEM_CONSTRAINTS
+
     def _call_ai(self, prompt: str, model_key: str, stage: str = "") -> Tuple[Optional[str], Dict]:
         config = MODEL_CONFIGS[model_key]
         client_type = config["client"]
@@ -126,7 +150,11 @@ class LLMEngine:
 
             if client_type == "openai_compatible" and service_name in self.clients:
                 use_json_output = service_name == "deepseek"
-                messages: List[Dict[str, Any]] = [{"role": "user", "content": prompt}]
+                # Use system message for constraints (higher authority than user message)
+                messages: List[Dict[str, Any]] = [
+                    {"role": "system", "content": self._load_system_constraints()},
+                    {"role": "user", "content": prompt},
+                ]
                 kwargs = {
                     "model": model_name,
                     "messages": messages,
@@ -189,7 +217,10 @@ class LLMEngine:
 
         payload = {
             "model": model_name,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {"role": "system", "content": self.SYSTEM_CONSTRAINTS},
+                {"role": "user", "content": prompt},
+            ],
             "temperature": 0.2,
             "max_tokens": max_tokens,
             "stream": False,

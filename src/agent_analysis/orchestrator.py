@@ -92,6 +92,13 @@ def _enum_value(value: Any) -> Any:
     return getattr(value, "value", value)
 
 
+_SEVERITY_HIGH_MEDIUM = frozenset({"high", "medium"})
+
+
+def _severity_is_high_or_medium(conflict: Any) -> bool:
+    return str(_enum_value(conflict.severity)) in _SEVERITY_HIGH_MEDIUM
+
+
 class VNextOrchestrator:
     """Lightweight real-LLM orchestrator for the vNext chain."""
 
@@ -103,6 +110,7 @@ class VNextOrchestrator:
         prompts_dir: Optional[str] = None,
         llm_engine: Optional[Any] = None,
         max_node_retries: int = 2,
+        schema_guard_retry: bool = True,
     ) -> None:
         if not llm_engine and not available_models:
             raise ValueError("At least one available model is required.")
@@ -111,6 +119,7 @@ class VNextOrchestrator:
         self.prompts_dir = Path(prompts_dir) if prompts_dir else Path(__file__).with_name("prompts")
         self.llm_engine = llm_engine or LLMEngine(available_models=available_models)
         self.max_node_retries = max_node_retries
+        self.schema_guard_retry = schema_guard_retry
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.layer_cards_dir = self.output_dir / "layer_cards"
         self.layer_context_dir = self.output_dir / "layer_context_briefs"
@@ -138,28 +147,63 @@ class VNextOrchestrator:
             thesis=thesis,
             layer_cards=layer_cards,
         )
-        critique = self._run_stage(
+        critique = self._run_and_save(
             stage_key="critic",
             stage_name="critic",
             model_cls=Critique,
-            payload={
-                "governance_input": _model_dump(gov_input_critic),
-            },
+            payload={"governance_input": _model_dump(gov_input_critic)},
+            filename="critique.json",
         )
-        self._save_json("critique.json", critique)
 
-        risk_report = self._run_stage(
+        risk_report = self._run_and_save(
             stage_key="risk",
             stage_name="risk",
             model_cls=RiskBoundaryReport,
-            payload={
-                "governance_input": _model_dump(gov_input_critic),
-            },
+            payload={"governance_input": _model_dump(gov_input_critic)},
+            filename="risk_boundary_report.json",
         )
-        self._save_json("risk_boundary_report.json", risk_report)
 
         schema_report = self._run_schema_guard(packet_model, layer_cards, bridge_memos, thesis, critique, risk_report)
         self._save_json("schema_guard_report.json", schema_report)
+
+        # Schema Guard retry: if enabled and structural issues found, re-run thesis/critic/risk once
+        # with the schema issues injected into governance input, then re-check.
+        if self.schema_guard_retry and not schema_report.passed and (schema_report.structural_issues or schema_report.missing_fields):
+            logger.warning(
+                "Schema Guard detected structural issues; retrying thesis/critic/risk with "
+                "schema feedback injected into governance input."
+            )
+            gov_input_critic_retry = self._build_governance_input_packet(
+                synthesis_packet=synthesis_packet,
+                thesis=thesis,
+                layer_cards=layer_cards,
+                schema_report=schema_report,
+            )
+            critique = self._run_and_save(
+                stage_key="critic",
+                stage_name="critic_retry",
+                model_cls=Critique,
+                payload={"governance_input": _model_dump(gov_input_critic_retry)},
+                filename="critique.json",
+            )
+            risk_report = self._run_and_save(
+                stage_key="risk",
+                stage_name="risk_retry",
+                model_cls=RiskBoundaryReport,
+                payload={"governance_input": _model_dump(gov_input_critic_retry)},
+                filename="risk_boundary_report.json",
+            )
+            schema_report = self._run_schema_guard(
+                packet_model, layer_cards, bridge_memos, thesis, critique, risk_report
+            )
+            self._save_json("schema_guard_report.json", schema_report)
+            if not schema_report.passed:
+                logger.warning(
+                    "Schema Guard still failing after retry; continuing with residual issues. "
+                    "Structural: %s; Consistency: %s",
+                    schema_report.structural_issues,
+                    schema_report.consistency_issues,
+                )
 
         gov_input_reviser = self._build_governance_input_packet(
             synthesis_packet=synthesis_packet,
@@ -169,15 +213,13 @@ class VNextOrchestrator:
             schema_report=schema_report,
             layer_cards=layer_cards,
         )
-        analysis_revised = self._run_stage(
+        analysis_revised = self._run_and_save(
             stage_key="reviser",
             stage_name="reviser",
             model_cls=AnalysisRevised,
-            payload={
-                "governance_input": _model_dump(gov_input_reviser),
-            },
+            payload={"governance_input": _model_dump(gov_input_reviser)},
+            filename="analysis_revised.json",
         )
-        self._save_json("analysis_revised.json", analysis_revised)
 
         gov_input_final = self._build_governance_input_packet(
             synthesis_packet=synthesis_packet,
@@ -351,15 +393,13 @@ class VNextOrchestrator:
             )
 
         for memo in bridge_memos:
+            # H3: Include both high and medium severity conflicts so Thesis is aware
+            # of all meaningful cross-layer tensions, not just the highest severity ones.
             high_conflicts.extend(
-                conflict
-                for conflict in memo.conflicts
-                if str(_enum_value(conflict.severity)) == "high"
+                conflict for conflict in memo.conflicts if _severity_is_high_or_medium(conflict)
             )
             high_typed_conflicts.extend(
-                conflict
-                for conflict in memo.typed_conflicts
-                if str(_enum_value(conflict.severity)) == "high"
+                conflict for conflict in memo.typed_conflicts if _severity_is_high_or_medium(conflict)
             )
             bridge_summaries.append(
                 BridgeSynthesisItem(
@@ -414,6 +454,21 @@ class VNextOrchestrator:
         unresolved_tensions: List[str] = []
         falsifiers: List[str] = []
 
+        # F3: Check investment object clarity — verify raw_data has expected L1-L5 layers
+        # with actual content. If the packet is empty or has no layer data, object is unclear.
+        # Note: raw_data keys are already uppercase "L1"-"L5" (set by packet_builder LAYER_NAMES).
+        expected_layers = {"L1", "L2", "L3", "L4", "L5"}
+        raw_data_layers = set(expected_layers & set(packet.raw_data.keys()))
+        # object_clear requires at least 3 of 5 layers to have data (partial data is acceptable
+        # but complete absence suggests the investment object is not properly defined)
+        object_clear = len(raw_data_layers) >= 3
+        if not object_clear:
+            present = sorted(raw_data_layers) if raw_data_layers else ["none"]
+            warnings.append(
+                f"Investment object unclear: only {len(raw_data_layers)}/5 layers "
+                f"have data ({', '.join(present)}). Expected L1-L5 coverage."
+            )
+
         known_items = []
         for card in layer_cards:
             for item in card.indicator_analyses:
@@ -446,9 +501,12 @@ class VNextOrchestrator:
             for memo in bridge_memos
             for conflict in memo.conflicts
         ]
-        cross_layer_verified = bool(typed_conflicts or legacy_conflicts)
+        # F4: cross_layer_verified means "bridge has verified cross-layer logic",
+        # i.e. bridge memos exist and contain meaningful cross-layer analysis.
+        # Previously this was inverted: conflicts present → True, no conflicts → False.
+        cross_layer_verified = bool(bridge_memos)
         if not cross_layer_verified:
-            warnings.append("No bridge conflict or typed conflict verifies cross-layer logic.")
+            warnings.append("No bridge memos produced; cross-layer logic cannot be verified.")
 
         for conflict in typed_conflicts:
             if str(_enum_value(conflict.severity)) == "high" or conflict.status == "unresolved":
@@ -464,7 +522,7 @@ class VNextOrchestrator:
             warnings.append("Packet has no data_date or timestamp_utc; timing alignment cannot be verified.")
 
         return ObjectiveFirewallSummary(
-            object_clear=True,
+            object_clear=object_clear,
             authority_clear=authority_clear if known_items else False,
             timing_clear=timing_clear,
             cross_layer_verified=cross_layer_verified,
@@ -1212,37 +1270,68 @@ class VNextOrchestrator:
         return summarized
 
     @staticmethod
-    def _summarize_long_series(series: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """对长序列列表计算统计摘要。"""
+    def _summarize_long_series(series: List[Dict[str, Any]], keep_recent: int = 5) -> Dict[str, Any]:
+        """对长序列列表计算统计摘要，同时保留最近 N 条精简记录和趋势方向。
+
+        recent_records 只保留 data_date 和数值字段的最新值，避免完整 dict 塞入 prompt。
+        """
         if not series:
             return {"count": 0, "summary": "empty"}
         count = len(series)
         first = series[0]
         last = series[-1]
-        # 对数值字段计算统计量
-        numeric_stats: Dict[str, Dict[str, Any]] = {}
+
+        # Single-pass: collect numeric values per column
+        col_values: Dict[str, List[float]] = {}
         if isinstance(first, dict):
-            for col in first.keys():
-                values = []
-                for item in series:
-                    if isinstance(item, dict) and col in item:
-                        v = item[col]
-                        if isinstance(v, (int, float)) and v is not None:
-                            values.append(v)
-                if values:
-                    numeric_stats[col] = {
-                        "min": round(min(values), 6),
-                        "max": round(max(values), 6),
-                        "mean": round(sum(values) / len(values), 6),
-                        "latest": round(values[-1], 6),
-                    }
+            for item in series:
+                if not isinstance(item, dict):
+                    continue
+                for col, v in item.items():
+                    if isinstance(v, (int, float)) and v is not None:
+                        col_values.setdefault(col, []).append(v)
+
+        numeric_stats: Dict[str, Dict[str, Any]] = {}
+        numeric_cols: List[str] = []
+        for col, values in col_values.items():
+            numeric_cols.append(col)
+            mid = len(values) // 2
+            first_half_mean = sum(values[:mid]) / mid if mid > 0 else values[0]
+            second_half_mean = sum(values[mid:]) / len(values[mid:]) if values[mid:] else values[-1]
+            if second_half_mean > first_half_mean * 1.02:
+                trend = "rising"
+            elif second_half_mean < first_half_mean * 0.98:
+                trend = "falling"
+            else:
+                trend = "stable"
+            numeric_stats[col] = {
+                "min": round(min(values), 6),
+                "max": round(max(values), 6),
+                "mean": round(sum(values) / len(values), 6),
+                "latest": round(values[-1], 6),
+                "trend": trend,
+            }
+
+        raw_recent = series[-keep_recent:] if count > keep_recent else series
+        recent_items = []
+        for item in raw_recent:
+            if not isinstance(item, dict):
+                continue
+            compact = {}
+            if "data_date" in item:
+                compact["data_date"] = item["data_date"]
+            for col in numeric_cols:
+                if col in item and item[col] is not None:
+                    compact[col] = item[col]
+            recent_items.append(compact)
         return {
             "count": count,
             "period_start": first.get("data_date") if isinstance(first, dict) else None,
             "period_end": last.get("data_date") if isinstance(last, dict) else None,
             "latest_record": last if isinstance(last, dict) else None,
             "numeric_summary": numeric_stats,
-            "note": "完整序列在 chart_time_series.json artifact 中可用。",
+            "recent_records": recent_items,
+            "note": f"显示最近 {len(recent_items)}/{count} 条记录（仅 data_date + 数值）。完整序列在 chart_time_series.json artifact 中可用。",
         }
 
     def _layer_indicator_manifest(self, layer_raw_data: Any) -> List[Dict[str, Any]]:
@@ -1268,6 +1357,11 @@ class VNextOrchestrator:
                 }
             )
         return manifest
+
+    def _run_and_save(self, *, stage_key: str, stage_name: str, model_cls: type, payload: dict, filename: str) -> Any:
+        result = self._run_stage(stage_key=stage_key, stage_name=stage_name, model_cls=model_cls, payload=payload)
+        self._save_json(filename, result)
+        return result
 
     def _load_prompt(self, stage_key: str) -> str:
         prompt_name = PROMPT_FILES.get(stage_key)

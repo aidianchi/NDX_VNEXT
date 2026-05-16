@@ -19,8 +19,13 @@ class TimeSeriesManager:
     所有日期列统一转换为 pandas datetime64[ns]。
     """
 
-    def __init__(self, cache_dir: str = path_config.cache_dir) -> None:
+    def __init__(
+        self,
+        cache_dir: str = path_config.cache_dir,
+        staleness_threshold_days: int = 7,
+    ) -> None:
         self.cache_dir = cache_dir
+        self.staleness_threshold_days = staleness_threshold_days
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir, exist_ok=True)
 
@@ -50,10 +55,13 @@ class TimeSeriesManager:
         """
         获取或增量更新指定时间序列。
         - update_func 必须接受 start_date 参数（str 或 datetime），返回包含 date 列的 DataFrame。
+        - 返回时附带 staleness 元信息：若缓存数据过期，会在 DataFrame.attrs 中标记。
         """
         path = self._series_path(series_id)
         local_df = self._read_local(path, date_col=date_col)
         local_df = self._normalize_df(local_df)
+
+        stale_info = None
 
         # 冷启动：无本地文件或为空
         if local_df.empty:
@@ -63,7 +71,23 @@ class TimeSeriesManager:
                 print(f"[TimeSeriesManager] 初始化拉取失败: {exc}")
                 return local_df
         else:
+            # Check staleness before attempting update
             last_date = local_df[date_col].max()
+            if not pd.isna(last_date):
+                age_days = (pd.Timestamp.now() - last_date).days
+                if age_days > self.staleness_threshold_days:
+                    stale_info = {
+                        "series_id": series_id,
+                        "last_date": str(last_date.date()),
+                        "age_days": age_days,
+                        "threshold_days": self.staleness_threshold_days,
+                    }
+                    print(
+                        f"[TimeSeriesManager] ⚠ 缓存过期警告: {series_id} "
+                        f"最新数据日期 {last_date.date()}，已 {age_days} 天未更新 "
+                        f"(阈值 {self.staleness_threshold_days} 天)"
+                    )
+
             if pd.isna(last_date):
                 start_date = None
             else:
@@ -72,11 +96,20 @@ class TimeSeriesManager:
                 new_df = update_func(start_date=start_date)
             except Exception as exc:  # noqa: BLE001
                 print(f"[TimeSeriesManager] 增量更新失败，返回本地缓存: {exc}")
+                local_df.attrs["stale"] = stale_info or {
+                    "series_id": series_id,
+                    "last_date": str(last_date.date()) if not pd.isna(last_date) else "unknown",
+                    "age_days": age_days if not pd.isna(last_date) else -1,
+                    "threshold_days": self.staleness_threshold_days,
+                    "reason": "update_func_failed",
+                }
                 return local_df
 
         new_df = self._normalize_df(new_df)
         merged = self._merge_and_clean(local_df, new_df, date_col=date_col)
         self._write_local(path, merged)
+        if stale_info:
+            merged.attrs["was_stale"] = stale_info
         return merged
 
     @staticmethod

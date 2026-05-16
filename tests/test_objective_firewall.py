@@ -32,7 +32,11 @@ def test_synthesis_packet_includes_objective_firewall_summary(tmp_path: Path):
         output_dir=str(tmp_path),
         llm_engine=object(),
     )
-    packet = AnalysisPacket(meta={"data_date": "2026-04-24"}, raw_data={})
+    # F3: raw_data must have at least 3 layers for object_clear to be True
+    packet = AnalysisPacket(
+        meta={"data_date": "2026-04-24"},
+        raw_data={"L1": {"get_10y_real_rate": {}}, "L2": {"get_vix": {}}, "L3": {"get_adx": {}}, "L4": {"get_pe": {}}, "L5": {"get_rsi": {}}},
+    )
     context = ContextBrief(data_summary="data", task_description="task")
     layer_cards = [_empty_layer_card(layer) for layer in ["L2", "L3", "L4", "L5"]]
     layer_cards.insert(
@@ -88,6 +92,51 @@ def test_synthesis_packet_includes_objective_firewall_summary(tmp_path: Path):
     assert firewall.cross_layer_verified is True
     assert "盈利上修" in firewall.strongest_falsifier
     assert any("real_rate_vs_valuation" in item for item in firewall.unresolved_tensions)
+
+
+def test_object_clear_false_when_insufficient_layers(tmp_path: Path):
+    """F3: object_clear must be False when raw_data has fewer than 3 layers."""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+    packet = AnalysisPacket(meta={"data_date": "2026-04-24"}, raw_data={"L1": {"get_10y_real_rate": {}}})
+    context = ContextBrief(data_summary="data", task_description="task")
+    layer_cards = [_empty_layer_card("L1")]
+    bridge = BridgeMemo(
+        bridge_type="macro_valuation",
+        layers_connected=["L1", "L4"],
+        implication_for_ndx="test",
+    )
+    synthesis = orchestrator._build_synthesis_packet(packet, context, layer_cards, [bridge])
+    firewall = synthesis.objective_firewall_summary
+    assert firewall.object_clear is False
+    assert any("Investment object unclear" in w for w in firewall.warnings)
+
+
+def test_cross_layer_verified_true_when_bridge_memos_exist(tmp_path: Path):
+    """F4: cross_layer_verified should be True when bridge memos exist, regardless of conflict count."""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+    packet = AnalysisPacket(
+        meta={"data_date": "2026-04-24"},
+        raw_data={"L1": {}, "L2": {}, "L3": {}},
+    )
+    context = ContextBrief(data_summary="data", task_description="task")
+    layer_cards = [_empty_layer_card("L1")]
+    # Bridge memo with NO conflicts — cross_layer_verified should still be True
+    bridge = BridgeMemo(
+        bridge_type="macro_valuation",
+        layers_connected=["L1", "L4"],
+        implication_for_ndx="no conflicts found",
+    )
+    synthesis = orchestrator._build_synthesis_packet(packet, context, layer_cards, [bridge])
+    firewall = synthesis.objective_firewall_summary
+    assert firewall.cross_layer_verified is True
 
 
 def test_thesis_prompt_mentions_objective_firewall_summary(tmp_path: Path):

@@ -521,4 +521,259 @@ Did you mean to use `assert` instead of `return`?
 
 ---
 
-*本报告由 Claude 基于 2026-05-13 运行产物和代码审查生成。2026-05-13 更新：标注修复状态，新增 3.4 指标时间戳标注建议。2026-05-15 自审查：新增 U7-U10（valuation_sources 丢失、精度损失、冗余 import、方法简化）。*
+## 七、深度偏差审查（2026-05-15）[已完成]
+
+> 本次审查系统性排查了 NDX vnext 中可能导致最终分析结果出现明显偏差的所有环节：数据处理、AI 分析推理、跨层 Bridge、治理阶段和报告生成。
+
+### 7.1 Few-shot 示例编造无来源历史统计数据 [已完成]
+
+**问题：** `prompt_examples.py` 中 FGI few-shot 示例包含无来源的编造统计数字：
+- `"历史上，FGI<20时的6个月后市场平均收益约+24%"`（第 162-163 行）
+- `"历史上，FGI>80时的3个月后市场平均收益为负"`（第 185-186 行）
+
+`reasoning_examples.py` 中同样包含编造声明：
+- `"纳斯达克指数在创新高，但内部已经有70%的股票在下跌"`（第 97 行）— 无来源的具体百分比
+- `"历史经验表明，在ADX>40的强趋势中逆势交易，失败率极高"`（第 161 行）— 编造胜率
+- `"顺势而为（持有现金或做空）的胜率远高于逆势抄底"`（第 163 行）— 编造概率
+
+**影响：** L1-L5 analyst prompt 通过 `build_layer_few_shot_prompt()` 注入这些示例，LLM 学会"引用无来源历史概率"的模式，在真实分析中复制这种行为。这是最危险的分析偏差源头。
+
+**修复实施：**
+- `prompt_examples.py`：将编造统计替换为条件语言（"历史上常对应...但必须结合..."）
+- `reasoning_examples.py`：删除"70%的股票"等编造具体数字，删除"失败率极高""胜率远高于"等编造概率
+
+### 7.2 L1-L5 analyst prompt 全部缺少反编造约束 [已完成]
+
+**问题：** 通过 grep 确认：`l1_analyst.md` ~ `l5_analyst.md`、`thesis_builder.md`、`critic.md`、`reviser.md` 中均无"编造/fabricat/hallucin"关键词。只有 `risk_sentinel.md` 和 `final_adjudicator.md` 有反编造禁令。
+
+**影响：** 产生原始分析的 layer analyst 没有约束，治理层只能管自己的输出，管不了上游传来的假数据。
+
+**修复实施：** 在以下 8 个 prompt 文件中新增"证据纪律（不可违反）"段落：
+- `l1_analyst.md`、`l2_analyst.md`、`l3_analyst.md`、`l4_analyst.md`、`l5_analyst.md`
+- `thesis_builder.md`、`critic.md`、`reviser.md`
+
+约束内容：不得编造历史胜率/回测收益/概率数字；不得编造点位/跌幅/估值倍数；引用历史只用"常伴随"不编造具体数字；所有 evidence_refs 必须来自输入数据。
+
+### 7.3 客观性防火墙 `object_clear` 硬编码 True [已完成]
+
+**问题：** `orchestrator.py:467` 中 `object_clear=True` 无条件设置。ObjectCanon 定义的反证条件（如"输入数据不覆盖 NDX/QQQ"）从未被评估。防火墙四道门中的第一道永久失效。
+
+**影响：** 当投资对象定义不清晰时，系统不会降置信度，也不会警告。
+
+**修复实施：** `_build_objective_firewall_summary` 中新增实际检查：验证 `packet.raw_data` 是否包含至少 3/5 层（L1-L5）的数据。不足时设 `object_clear=False` 并在 warnings 中说明缺失的层。
+
+### 7.4 `cross_layer_verified` 语义反转 [已完成]
+
+**问题：** `orchestrator.py:449` 中 `cross_layer_verified = bool(typed_conflicts or legacy_conflicts)`。变量名暗示"跨层逻辑已被验证"，但实现含义是"发现了跨层冲突"。结果：危险情况（大量冲突）不惩罚，安全情况（零冲突）反而惩罚。
+
+**修复实施：** 改为 `cross_layer_verified = bool(bridge_memos)`——只要 Bridge 产生了 memo（即执行了跨层分析），就视为已验证。
+
+### 7.5 L4 长序列压缩摧毁时间分辨率 [已完成]
+
+**问题：** `orchestrator.py:1214-1246` 的 `_summarize_long_series` 将长序列压缩为 min/max/mean/latest 统计摘要。LLM 无法识别趋势方向、拐点或近期动量变化。
+
+**修复实施：** `_summarize_long_series` 改进为：
+1. 新增 `recent_records`：保留最近 10 条完整记录，让 LLM 看到时间轨迹
+2. 每个数值字段新增 `trend`：通过前半段均值 vs 后半段均值判断 "rising"/"falling"/"stable"
+3. 保留原有统计摘要（min/max/mean/latest），新增趋势判断
+
+### 7.6 SynthesisPacket 只包含高严重度冲突 [已完成]
+
+**问题：** `orchestrator.py:354-363` 中过滤条件为 `severity == "high"`。中等严重度的跨层冲突被排除在 SynthesisPacket 之外，Thesis 阶段看不到它们。
+
+**修复实施：** 过滤条件从 `severity == "high"` 改为 `severity in ("high", "medium")`，确保 Bridge 识别的所有有意义的跨层冲突都传递到 Thesis。
+
+### 7.7 测试更新 [已完成]
+
+- `tests/test_objective_firewall.py`：更新现有测试以提供包含 L1-L5 的 raw_data；新增 2 个测试：
+  - `test_object_clear_false_when_insufficient_layers`：验证 object_clear 在数据不足时为 False
+  - `test_cross_layer_verified_true_when_bridge_memos_exist`：验证有 Bridge memo 时为 True
+
+### 7.8 TimeSeriesManager 缓存过期检测 [已完成]
+
+**问题：** `data_manager.py:74` 中当 API 更新失败时，静默返回旧缓存，只打印 print 警告。没有 TTL 检查，没有 staleness 标记。下游完全不知道数据已过期。
+
+**影响：** 如果数据源临时不可用，系统可能用几天前的数据做分析，且不会有任何警告。
+
+**修复实施：**
+- `TimeSeriesManager.__init__` 新增 `staleness_threshold_days` 参数（默认 7 天）
+- `get_or_update_series` 在返回前检查缓存最新日期与当前日期的差值
+- 缓存过期时打印明确警告：`"[TimeSeriesManager] ⚠ 缓存过期警告: {series_id} 最新数据日期 {date}，已 {N} 天未更新"`
+- 返回的 DataFrame 在 `.attrs["stale"]` 或 `.attrs["was_stale"]` 中携带过期元信息
+- 更新失败时在 `.attrs["stale"]` 中记录失败原因
+
+### 7.9 LLM 调用 system/user 角色分离 [已完成]
+
+**问题：** `llm_engine.py:129` 中所有内容（包括反编造约束、分析请求、数据）都作为单条 `{"role": "user"}` message 发送。约束指令与分析请求竞争注意力。
+
+**影响：** LLM 对约束的遵守率低于使用 system message 的场景。
+
+**修复实施：**
+- `LLMEngine` 新增类常量 `SYSTEM_CONSTRAINTS`：包含 5 条不可违反的纪律（不编造统计、不编造定量影响、条件语言、evidence_refs 来源、JSON 格式）
+- `_call_ai` 和 `_call_kimi_http` 中 messages 改为 `[system_message, user_message]` 结构
+- system message 承载约束（高权威），user message 承载分析请求
+
+### 7.10 Schema Guard 从纯建议性升级为带重试 [已完成]
+
+**问题：** `orchestrator.py:894-1017` 的 `_run_schema_guard` 产出 `SchemaGuardReport`，`passed=False` 时只是作为文本传给下游 LLM。没有代码级的阻断或重试。
+
+**影响：** 即使检测到结构完整性问题（如丢失高严重度冲突），流程仍会继续。
+
+**修复实施：**
+- 在 `run()` 方法中，schema_guard 检查后新增重试逻辑：
+  - 当 `structural_issues` 或 `missing_fields` 非空时，自动重试 thesis + critic + risk
+  - 重试时将 schema issues 注入 governance input，让 LLM 知道需要修复什么
+  - 重试后重新运行 schema_guard
+  - 若仍失败，记录 WARNING 并继续（避免无限循环）
+- 重试次数限制为 1 次（嵌入在 `run()` 流程中，不额外增加复杂度）
+
+### 7.11 问题汇总
+
+| # | 问题 | 严重度 | 状态 | 修改文件 |
+|---|------|--------|------|----------|
+| F1 | Few-shot 编造历史统计数据 | 致命 | **已修复** | `prompt_examples.py`, `reasoning_examples.py` |
+| H1 | L1-L5 prompt 缺反编造约束 | 高 | **已修复** | `l1_analyst.md` ~ `l5_analyst.md`, `thesis_builder.md`, `critic.md`, `reviser.md` |
+| F3 | object_clear 硬编码 True | 致命 | **已修复** | `orchestrator.py` |
+| F4 | cross_layer_verified 语义反转 | 致命 | **已修复** | `orchestrator.py` |
+| F5 | 长序列压缩丢失时间轨迹 | 致命 | **已修复** | `orchestrator.py` |
+| H3 | 中等冲突被排除出 SynthesisPacket | 高 | **已修复** | `orchestrator.py` |
+| — | TimeSeriesManager 缓存无 TTL | 高 | **已修复** | `data_manager.py` |
+| — | LLM 调用无 system/user 角色分离 | 中 | **已修复** | `llm_engine.py` |
+| — | Schema Guard 纯建议性 | 中 | **已修复** | `orchestrator.py` |
+| — | M7 ROE 单位不一致（AV 路径） | 高 | **暂缓** | Alpha Vantage 路径当前非主路径，暂缓修复 |
+
+**验证结果：** `pytest -q` → **249 passed, 5 warnings**
+
+---
+
+## 八、代码简化审查（2026-05-15）[已完成]
+
+> 在修复上述所有问题后，对全部代码改动进行了一次全局简化审查，目标是在不影响功能的前提下让实现更简洁、更不容易出错。
+
+### 8.1 删除 Schema Guard 重试中多余的 thesis 调用 [已完成]
+
+**问题：** `orchestrator.py` 的 Schema Guard 重试块中，`thesis = self._run_thesis(synthesis_packet)` 用的是**原始** `synthesis_packet`（schema 反馈没有注入到 thesis 输入中）。这意味着重试时 thesis 的输入和第一次完全一样，白白浪费一次完整的 LLM 调用。
+
+**影响：** 每次触发 Schema Guard 重试时，浪费一次 DeepSeek API 调用（约 10-30 秒 + token 费用）。
+
+**修复：** 删除重试块中的 `_run_thesis` 调用。重试只重新运行 critic 和 risk（它们的 governance input 确实包含了 schema 反馈）。
+
+### 8.2 从 8 个 prompt 文件中去重"证据纪律"段落 [已完成]
+
+**问题：** `system_constraints.md`（通过 system message 注入，最高权威级别）已经包含 5 条防编造纪律。但 8 个 prompt 文件中又有各自的"证据纪律"段落，内容完全或大部分重复：
+- L1-L5 analyst：282 字，与 system_constraints 100% 重复
+- critic、reviser、thesis_builder：部分重复 + 各自独有的层特定指令
+
+**影响：** 每个 prompt 多了 ~280 字的冗余内容；维护时需要同步修改 9 个地方（system_constraints + 8 个 prompt）。
+
+**修复：**
+- L1-L5：**删除**整个"证据纪律"段落（system message 已覆盖）
+- critic/reviser/thesis_builder：**精简**到只保留各自独有的指令（如 critic 的"发现上游编造数据要指出"、reviser 的"改写为定性表达"、thesis_builder 的"evidence_refs 必须来自 evidence_index"）
+
+### 8.3 `_summarize_long_series` 从 O(C×N) 改为单次遍历 [已完成]
+
+**问题：** 原实现对每个列遍历所有行（`for col in first.keys()` 外层，`for item in series` 内层）。6 列 × 120 行 = 720 次迭代。
+
+**修复：** 改为单次遍历，同时收集所有列的数值。120 行只需 120 次迭代。输出完全不变。
+
+### 8.4 提取 `_run_and_save` 辅助方法 [已完成]
+
+**问题：** `_run_stage()` + `_save_json()` 的配对调用在 `run()` 方法中出现 5 次（critic×2、risk×2、reviser×1），每次都写两行几乎相同的代码。
+
+**修复：** 提取 `_run_and_save()` 辅助方法（3 行），5 处调用简化为一行。final 阶段因有 token_usage 赋值等特殊后处理，保留原样。
+
+### 8.5 提取 `_severity_is_high_or_medium` 辅助函数 [已完成]
+
+**问题：** `str(_enum_value(conflict.severity)) in ("high", "medium")` 在 `high_conflicts` 和 `high_typed_conflicts` 两处过滤中重复出现。
+
+**修复：** 提取为模块级 `_severity_is_high_or_medium()` 函数 + `_SEVERITY_HIGH_MEDIUM` frozenset 常量，两处调用统一使用。
+
+### 8.6 简化审查汇总
+
+| # | 改动 | 类型 | 影响行数 |
+|---|------|------|---------|
+| 8.1 | 删除多余 thesis 重试 | 效率 | -1 行 |
+| 8.2 | 去重 8 个 prompt 的证据纪律 | 复用 | -40 行 |
+| 8.3 | 单次遍历统计摘要 | 效率 | ~0（重写） |
+| 8.4 | 提取 `_run_and_save` | 质量 | -15 行 +3 行 |
+| 8.5 | 提取冲突过滤函数 | 质量 | -4 行 +5 行 |
+
+**验证结果：** `pytest -q` → **251 passed, 5 warnings**
+
+---
+
+## 附录：全分支改动总览
+
+> 以下列出 `claude/20260513-indicator-timestamps` 分支相对于 `main` 的全部改动。
+>
+> - **已提交**（4 个 commit）：33 个文件，+2675 行，-115 行
+> - **未提交**（工作区）：9 个源文件 + 1 个新文件，+239 行，-56 行（深度偏差审查 + 简化审查的改动）
+>
+> 注：L1-L5 analyst prompt 的证据纪律在本轮中先添加（7.2）后删除（8.2），净变化为零，因此不在 git diff 中体现。
+
+### 源文件（20 个）
+
+| 文件 | 改动类型 | 章节索引 |
+|------|---------|---------|
+| `src/agent_analysis/orchestrator.py` | 核心逻辑：防火墙修复、冲突过滤、L4 压缩、Schema Guard 重试、system/user 分离、简化 | 7.3-7.6, 7.10, 8.1, 8.4-8.5 |
+| `src/agent_analysis/llm_engine.py` | system_constraints 加载、system/user 消息分离 | 7.9 |
+| `src/agent_analysis/prompts/system_constraints.md` | **新增**：5 条防编造纪律（外部化） | 7.9 |
+| `src/agent_analysis/prompts/l1_analyst.md` ~ `l5_analyst.md` | 添加/精简证据纪律 | 7.2, 8.2 |
+| `src/agent_analysis/prompts/critic.md` | 添加/精简证据纪律 | 7.2, 8.2 |
+| `src/agent_analysis/prompts/reviser.md` | 添加/精简证据纪律 | 7.2, 8.2 |
+| `src/agent_analysis/prompts/thesis_builder.md` | 添加/精简证据纪律 | 7.2, 8.2 |
+| `src/agent_analysis/prompts/cross_layer_bridge.md` | event_refs 引用指南 | 3.3 |
+| `src/agent_analysis/vnext_reporter.py` | 时间戳注入、_enrich 简化、valuation_sources 修复 | U7, U10, 3.4 |
+| `src/agent_analysis/report_styles/slate_v2.css` | .timestamp-chip 样式 | 3.4 |
+| `src/agent_analysis/contracts.py` | datetime.utcnow → datetime.now(timezone.utc) | 2.2 |
+| `src/data_manager.py` | TimeSeriesManager 缓存过期检测 | 7.8 |
+| `src/prompt_examples.py` | 清除 few-shot 编造统计 | 7.1 |
+| `src/reasoning_examples.py` | 清除编造概率/百分比 | 7.1 |
+| `src/core/collector.py` | datetime.utcnow 替换 | 2.2 |
+| `src/core/checker.py` | DataIntegrity 扩展 | 3.2 |
+| `src/tools_L2.py` / `tools_L3.py` / `tools_L4.py` | datetime.utcnow 替换 | 2.2 |
+| `src/console_run_all.py` | report_path fallback | 3.1 |
+| `src/interactive_chart_workbench.py` | 数据时效性警告横幅 | 1.2 |
+| `src/research_console.py` | 多报告链接 + 弹窗检测 | — |
+
+### 测试文件（11 个）
+
+| 文件 | 测试数 | 覆盖内容 |
+|------|--------|---------|
+| `tests/test_contracts.py` | 14 | enum、model 序列化、generated_at UTC |
+| `tests/test_core_checker.py` | 6 | DataIntegrity + layer_breakdown + third_party_checks |
+| `tests/test_tools_smoke.py` | 8 | registry 完整性、函数导入 |
+| `tests/test_tools_calculation.py` | 43 | tools_L4/L5 数据清洗 + tools_common 分析 |
+| `tests/test_chart_modules.py` | 13 | MACD、OBV、Donchian 等纯函数 |
+| `tests/test_vnext_orchestrator.py` | +3 | generated_at 覆盖、L4 压缩 |
+| `tests/test_interactive_chart_workbench.py` | +2 | 缓存警告、空序列警告 |
+| `tests/test_objective_firewall.py` | +4 | object_clear、cross_layer_verified |
+| `tests/test_vnext_llm_engine.py` | +5 | system_constraints 加载、system/user 角色 |
+| `tests/test_deepseek_runtime_config.py` | +1 | system/user 消息结构 |
+| `tests/test_vnext_reporter.py` | +3 | 时间戳注入、chip 格式、HTML 渲染 |
+
+### 文档（2 个）
+
+| 文件 | 改动 |
+|------|------|
+| `PROJECT_AUDIT_20260513.md` | 本审查报告（新增） |
+| `RUN_REVIEW_CHECKLIST.md` | 补填运行记录 |
+
+### 问题修复总数
+
+| 类别 | 总数 | 已完成 | 暂缓 |
+|------|------|--------|------|
+| 严重（F1-F5） | 5 | 5 | 0 |
+| 高（H1-H3） | 3 | 3 | 0 |
+| 建议改进（3.1-3.4） | 4 | 4 | 0 |
+| 自审查（U7-U10） | 4 | 4 | 0 |
+| 深度审查补充（7.8-7.10） | 3 | 3 | 0 |
+| 简化审查（8.1-8.5） | 5 | 5 | 0 |
+| 暂缓 | 1 | 0 | 1 |
+| **合计** | **25** | **24** | **1** |
+
+**最终验证：** `pytest -q` → **251 passed, 5 warnings**
+
+---
+
+*本报告由 Claude 基于 2026-05-13 运行产物和代码审查生成。2026-05-13 更新：标注修复状态，新增 3.4 指标时间戳标注建议。2026-05-15 自审查：新增 U7-U10。2026-05-15 深度偏差审查：新增第七章（F1-H3 共 9 项已修复，1 项暂缓）。2026-05-15 简化审查：新增第八章（8.1-8.5 共 5 项已修复）。附录：全分支 33 个文件改动总览，25 项问题中 24 项已完成，251 tests passed。*

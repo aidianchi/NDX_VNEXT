@@ -63,6 +63,7 @@ def test_deepseek_v4_calls_use_official_reasoning_parameters():
     assert sent["reasoning_effort"] == "high"
     assert sent["extra_body"] == {"thinking": {"type": "enabled"}}
     assert sent["response_format"] == {"type": "json_object"}
-    assert len(sent["messages"]) == 1
-    assert sent["messages"][0]["role"] == "user"
+    assert len(sent["messages"]) == 2
+    assert sent["messages"][0]["role"] == "system"
+    assert sent["messages"][1]["role"] == "user"
     assert all("prefix" not in message for message in sent["messages"])
