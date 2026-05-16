@@ -15,6 +15,7 @@ try:
     from .chart_time_series_artifacts import write_chart_time_series_artifact
     from .config import MODEL_CONFIGS, path_config
     from .core import DataCollector, DataIntegrity, ReportGenerator
+    from .news_event_data_linker import write_news_event_data_links
     from .news_event_ledger import NewsEventLedgerBuilder
 except ImportError:
     from agent_analysis import adapt_vnext_to_legacy
@@ -24,6 +25,7 @@ except ImportError:
     from chart_time_series_artifacts import write_chart_time_series_artifact
     from config import MODEL_CONFIGS, path_config
     from core import DataCollector, DataIntegrity, ReportGenerator
+    from news_event_data_linker import write_news_event_data_links
     from news_event_ledger import NewsEventLedgerBuilder
 
 
@@ -158,6 +160,15 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         output_path=os.path.join(run_dir, "analysis_packet.json"),
     )
     chart_time_series_path = write_chart_time_series_artifact(run_dir, analysis_packet=packet)
+    news_event_data_links_path = ""
+    if args.enable_news and news_event_ledger_payload:
+        news_event_data_links_path = write_news_event_data_links(
+            run_dir,
+            event_ledger=news_event_ledger_payload,
+            analysis_packet=packet,
+            event_ledger_path=news_event_ledger_path,
+            chart_time_series_path=chart_time_series_path,
+        )
 
     orchestrator = VNextOrchestrator(available_models=available_models, output_dir=run_dir)
     artifacts = orchestrator.run(packet)
@@ -191,6 +202,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "report_path": report_path,
         "chart_time_series": chart_time_series_path,
         "news_event_ledger": news_event_ledger_path,
+        "news_event_data_links": news_event_data_links_path,
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
         "approval_status": _enum_value(getattr(artifacts["final_adjudication"], "approval_status", "")),
         "models": available_models,

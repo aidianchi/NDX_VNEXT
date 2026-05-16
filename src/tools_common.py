@@ -8,6 +8,7 @@ NDX Agent · 共享工具模块
 import os
 import time
 import json
+import hashlib
 import logging
 import requests
 import pandas as pd
@@ -187,6 +188,87 @@ def _format_yf_cache_value(value: Optional[Any]) -> str:
         return str(value)
 
 
+def _yf_persistent_cache_dir() -> str:
+    cache_dir = os.path.join(path_config.cache_dir, "yfinance")
+    os.makedirs(cache_dir, exist_ok=True)
+    return cache_dir
+
+
+def _yf_cache_slug(cache_key: str) -> str:
+    return hashlib.sha1(cache_key.encode("utf-8")).hexdigest()[:24]
+
+
+def _yf_frame_cache_path(cache_key: str) -> str:
+    return os.path.join(_yf_persistent_cache_dir(), f"{_yf_cache_slug(cache_key)}.pkl")
+
+
+def _yf_info_cache_path(cache_key: str) -> str:
+    return os.path.join(_yf_persistent_cache_dir(), f"{_yf_cache_slug(cache_key)}.json")
+
+
+def _read_yf_frame_cache(cache_key: str) -> pd.DataFrame:
+    path = _yf_frame_cache_path(cache_key)
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        cached_df = pd.read_pickle(path)
+        if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
+            logging.warning(f"Using stale yfinance cache for {cache_key}")
+            return cached_df.copy()
+    except Exception as exc:
+        logging.warning(f"Failed reading yfinance frame cache {path}: {exc}")
+    return pd.DataFrame()
+
+
+def _write_yf_frame_cache(cache_key: str, frame: pd.DataFrame) -> None:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return
+    path = _yf_frame_cache_path(cache_key)
+    try:
+        frame.to_pickle(path)
+    except Exception as exc:
+        logging.warning(f"Failed writing yfinance frame cache {path}: {exc}")
+
+
+def _read_yf_info_cache(cache_key: str, max_age_seconds: Optional[int] = None) -> Dict[str, Any]:
+    path = _yf_info_cache_path(cache_key)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if max_age_seconds is not None:
+            cached_at = pd.to_datetime(payload.get("cached_at_utc"), utc=True, errors="coerce")
+            if pd.isna(cached_at):
+                return {}
+            age = (pd.Timestamp.now(tz="UTC") - cached_at).total_seconds()
+            if age > max_age_seconds:
+                return {}
+        value = payload.get("value")
+        if isinstance(value, dict) and value:
+            logging.warning(f"Using cached yfinance info for {cache_key}")
+            return dict(value)
+    except Exception as exc:
+        logging.warning(f"Failed reading yfinance info cache {path}: {exc}")
+    return {}
+
+
+def _write_yf_info_cache(cache_key: str, value: Dict[str, Any]) -> None:
+    if not isinstance(value, dict) or not value:
+        return
+    path = _yf_info_cache_path(cache_key)
+    payload = {
+        "cached_at_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "value": value,
+    }
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, default=str)
+            handle.write("\n")
+    except Exception as exc:
+        logging.warning(f"Failed writing yfinance info cache {path}: {exc}")
+
+
 def cached_yf_download(
     tickers: Any,
     start: Optional[Any] = None,
@@ -221,7 +303,7 @@ def cached_yf_download(
 
     def _fetch() -> pd.DataFrame:
         try:
-            return yf.download(
+            frame = yf.download(
                 tickers,
                 start=start,
                 end=end,
@@ -229,9 +311,17 @@ def cached_yf_download(
                 progress=progress,
                 auto_adjust=auto_adjust,
             )
+            if isinstance(frame, pd.DataFrame) and not frame.empty:
+                _write_yf_frame_cache(cache_key, frame)
+                return frame
+            stale = _read_yf_frame_cache(cache_key)
+            if not stale.empty:
+                return stale
+            return pd.DataFrame()
         except Exception as exc:
             logging.warning(f"yfinance download failed for {ticker_key}: {exc}")
-            return pd.DataFrame()
+            stale = _read_yf_frame_cache(cache_key)
+            return stale if not stale.empty else pd.DataFrame()
 
     if not CACHE_AVAILABLE or get_global_cache is None:
         return _fetch()
@@ -251,11 +341,13 @@ def get_yf_ticker_info_with_retry(ticker: str, attempts: int = 2, pause_seconds:
     if not YF_AVAILABLE:
         raise RuntimeError("yfinance not available")
 
+    cache_key = f"yf.info:{ticker}"
     last_error: Optional[Exception] = None
     for attempt in range(attempts):
         try:
             info = yf.Ticker(ticker).info
             if info and isinstance(info, dict):
+                _write_yf_info_cache(cache_key, info)
                 return info
             raise ValueError(f"Empty info for {ticker}")
         except Exception as exc:
@@ -263,6 +355,9 @@ def get_yf_ticker_info_with_retry(ticker: str, attempts: int = 2, pause_seconds:
             if attempt < attempts - 1:
                 time.sleep(pause_seconds)
 
+    cached_info = _read_yf_info_cache(cache_key, max_age_seconds=60 * 60 * 24)
+    if cached_info:
+        return cached_info
     raise last_error or RuntimeError(f"Failed to fetch info for {ticker}")
 
 
@@ -429,7 +524,7 @@ def _fetch_yf_history(ticker: str, start_date: Optional[Any] = None, end_date: O
     for attempt in range(retry_count):
         try:
             logging.info(f"正在获取 {ticker} 数据（尝试 {attempt + 1}/{retry_count}）...")
-            df = yf.download(ticker, start=start_str, end=end_str, progress=False, auto_adjust=False)
+            df = cached_yf_download(ticker, start=start_str, end=end_str, progress=False, auto_adjust=False)
             df = clean_yfinance_dataframe(df)
             
             if df.empty or "close" not in df.columns:

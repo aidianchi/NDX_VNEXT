@@ -240,6 +240,90 @@ def test_l4_state_accepts_trendonify_or_manual_real_percentile():
     assert packet.facts_by_layer["L4"].state == "expensive"
 
 
+def test_l4_state_accepts_danjuan_real_percentile_after_trendonify():
+    data = _mock_data_json()
+    for indicator in data["indicators"]:
+        if indicator["function_id"] == "get_ndx_pe_and_earnings_yield":
+            indicator["raw_data"] = {
+                "name": "NDX Valuation",
+                "value": {
+                    "PE": 34.0,
+                    "TrailingPE": 34.0,
+                    "ThirdPartyChecks": [
+                        {
+                            "source_name": "WorldPERatio",
+                            "source_id": "worldperatio_pe",
+                            "metric": "ndx_trailing_pe",
+                            "value": 32.27,
+                            "historical_percentile": None,
+                            "relative_position": {
+                                "position_type": "std_dev_context_not_percentile",
+                                "valuation_windows": {"10y": {"valuation_label": "Overvalued"}},
+                            },
+                        },
+                        {
+                            "source_name": "DanjuanFunds",
+                            "source_id": "danjuan_ndx_valuation",
+                            "metric": "ndx_trailing_pe",
+                            "value": 36.5,
+                            "historical_percentile": 87.0,
+                            "pe_percentile_raw": 0.87,
+                            "availability": "available",
+                        },
+                    ],
+                },
+                "source_tier": "component_model",
+                "source_name": "yfinance (NDX100 Components)",
+            }
+
+    packet = AnalysisPacketBuilder().build(data, manual_overrides={"active": False, "metrics": {}})
+    valuation_signal = next(
+        signal for signal in packet.facts_by_layer["L4"].core_signals if signal["metric"] == "get_ndx_pe_and_earnings_yield"
+    )
+
+    assert valuation_signal["historical_percentile"] == 87.0
+    assert valuation_signal["relative_position_context"]["WorldPERatio"]["position_type"] == "std_dev_context_not_percentile"
+    assert packet.facts_by_layer["L4"].state == "expensive"
+
+
+def test_l4_trendonify_percentile_has_priority_over_danjuan():
+    data = _mock_data_json()
+    for indicator in data["indicators"]:
+        if indicator["function_id"] == "get_ndx_pe_and_earnings_yield":
+            indicator["raw_data"] = {
+                "name": "NDX Valuation",
+                "value": {
+                    "PE": 34.0,
+                    "ThirdPartyChecks": [
+                        {
+                            "source_name": "DanjuanFunds",
+                            "source_id": "danjuan_ndx_valuation",
+                            "historical_percentile": 87.0,
+                            "availability": "available",
+                        },
+                        {
+                            "source_name": "Trendonify",
+                            "source_id": "trendonify_pe",
+                            "historical_percentile": 62.0,
+                            "availability": "available",
+                        },
+                    ],
+                },
+                "source_tier": "component_model",
+                "source_name": "yfinance (NDX100 Components)",
+            }
+        if indicator["function_id"] == "get_equity_risk_premium":
+            indicator["raw_data"] = {"name": "NDX Simple Yield Gap", "value": {"level": 2.2}}
+
+    packet = AnalysisPacketBuilder().build(data, manual_overrides={"active": False, "metrics": {}})
+    valuation_signal = next(
+        signal for signal in packet.facts_by_layer["L4"].core_signals if signal["metric"] == "get_ndx_pe_and_earnings_yield"
+    )
+
+    assert valuation_signal["historical_percentile"] == 62.0
+    assert packet.facts_by_layer["L4"].state == "neutral"
+
+
 def test_l3_state_treats_declining_ad_line_as_deteriorating():
     data = {
         "timestamp_utc": "2026-05-02T00:00:00Z",

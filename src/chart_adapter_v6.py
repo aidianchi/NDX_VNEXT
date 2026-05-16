@@ -21,6 +21,11 @@ from pathlib import Path
 from typing import Optional
 
 try:
+    from .tools_common import cached_yf_download
+except ImportError:
+    from tools_common import cached_yf_download
+
+try:
     import yfinance as yf
     YFINANCE_AVAILABLE = True
 except ImportError:
@@ -42,14 +47,12 @@ def get_qqq_price_data(lookback_days: int = 365) -> Optional[pd.DataFrame]:
         return None
     
     try:
-        ticker = yf.Ticker("QQQ")
-        
         # 计算起始日期
         end_date = pd.Timestamp.now()
         start_date = end_date - pd.Timedelta(days=lookback_days + 100)  # 多取一些数据用于计算均线
         
         # 获取历史数据
-        df = ticker.history(start=start_date, end=end_date)
+        df = cached_yf_download("QQQ", start=start_date, end=end_date, progress=False, auto_adjust=False)
         
         if df.empty:
             logging.warning("QQQ数据为空")
@@ -348,4 +351,3 @@ if __name__ == "__main__":
     
     print("\n" + "=" * 70)
     print("测试完成！")
-

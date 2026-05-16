@@ -4,7 +4,14 @@ import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import pytest
+
 import tools_L4
+
+
+@pytest.fixture(autouse=True)
+def _disable_live_danjuan_fetch(monkeypatch):
+    monkeypatch.setattr(tools_L4, "_fetch_json", lambda *args, **kwargs: (None, "danjuan disabled in unit test"))
 
 
 def test_trendonify_pe_parser_extracts_value_percentile_and_date():
@@ -46,6 +53,92 @@ def test_trendonify_pe_parser_extracts_value_percentile_and_date():
     assert parsed["percentile_since_inception"] == 88.8
     assert parsed["data_date"] == "May 01, 2026"
     assert parsed["availability"] == "available"
+
+
+def test_danjuan_ndx_valuation_parser_extracts_percentiles_and_dates():
+    payload = {
+        "data": {
+            "index_code": "NDX",
+            "name": "纳指100",
+            "pe": 36.508,
+            "pb": 10.4366,
+            "pe_percentile": 0.87,
+            "pb_percentile": 0.9968,
+            "roe": 0.2859,
+            "peg": 1.8119,
+            "eva_type": "high",
+            "eva_type_int": 2,
+            "ts": 1778774400000,
+            "begin_at": 1453737600000,
+            "updated_at": 1778895120349,
+            "date": "05-15",
+        },
+        "result_code": 0,
+    }
+
+    parsed = tools_L4._parse_danjuan_ndx_valuation(payload)
+
+    assert parsed["source_id"] == "danjuan_ndx_valuation"
+    assert parsed["source_name"] == "DanjuanFunds"
+    assert parsed["source_tier"] == "third_party_estimate"
+    assert parsed["metric"] == "ndx_trailing_pe"
+    assert parsed["value"] == 36.51
+    assert parsed["pb"] == 10.44
+    assert parsed["historical_percentile"] == 87.0
+    assert parsed["percentile_10y"] == 87.0
+    assert parsed["pb_percentile"] == 99.68
+    assert parsed["roe"] == 0.2859
+    assert parsed["peg"] == 1.8119
+    assert parsed["eva_type"] == "high"
+    assert parsed["date"] == "05-15"
+    assert parsed["sample_start"] == "2016-01-26"
+    assert parsed["updated_at"].endswith("Z")
+    assert parsed["source_url"] == tools_L4.DANJUAN_NDX_VALUATION_URL
+    assert "pe_percentile * 100" in parsed["formula"]
+
+
+def test_danjuan_check_is_included_with_required_headers(monkeypatch):
+    captured = {}
+
+    def fake_fetch_text(url, timeout=8):
+        return None, "skip html source"
+
+    def fake_fetch_json(url, timeout=8, headers=None):
+        captured["url"] = url
+        captured["headers"] = headers or {}
+        return (
+            {
+                "data": {
+                    "index_code": "NDX",
+                    "name": "纳指100",
+                    "pe": 35.2,
+                    "pb": 9.8,
+                    "pe_percentile": 0.73,
+                    "pb_percentile": 0.91,
+                    "roe": 0.26,
+                    "peg": 1.7,
+                    "eva_type": "high",
+                    "ts": 1778774400000,
+                    "begin_at": 1453737600000,
+                    "updated_at": 1778895120349,
+                    "date": "05-15",
+                },
+                "result_code": 0,
+            },
+            None,
+        )
+
+    monkeypatch.setattr(tools_L4, "_fetch_text", fake_fetch_text)
+    monkeypatch.setattr(tools_L4, "_fetch_json", fake_fetch_json)
+
+    checks = tools_L4.get_ndx_valuation_third_party_checks()
+    by_id = {item["source_id"]: item for item in checks}
+
+    assert by_id["danjuan_ndx_valuation"]["availability"] == "available"
+    assert by_id["danjuan_ndx_valuation"]["historical_percentile"] == 73.0
+    assert captured["url"] == tools_L4.DANJUAN_NDX_VALUATION_URL
+    assert "Mozilla/5.0" in captured["headers"]["User-Agent"]
+    assert captured["headers"]["Referer"] == tools_L4.DANJUAN_NDX_VALUATION_REFERER
 
 
 def test_trendonify_forward_pe_parser_extracts_value_percentile_and_date():

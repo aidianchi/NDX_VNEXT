@@ -380,7 +380,11 @@ class AnalysisPacketBuilder:
 
     def _build_signal(self, function_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         value = payload.get("value")
-        percentile = self._extract_percentile(value)
+        percentile = (
+            self._extract_l4_valuation_percentile(value, payload=payload)
+            if function_id == "get_ndx_pe_and_earnings_yield"
+            else self._extract_percentile(value)
+        )
         trend = self._extract_trend(value)
         status = self._extract_status(value)
         compact_value = self._extract_signal_value(value, function_id=function_id)
@@ -443,6 +447,53 @@ class AnalysisPacketBuilder:
 
     def _extract_percentile(self, value: Any) -> Optional[float]:
         return _find_first_number(value, ("percentile_10y", "percentile_5y", "percentile_1y", "percentile"))
+
+    def _extract_l4_valuation_percentile(self, value: Any, *, payload: Optional[Dict[str, Any]] = None) -> Optional[float]:
+        if not isinstance(value, dict):
+            return self._extract_percentile(value)
+
+        checks = value.get("ThirdPartyChecks")
+        root_value = {key: item for key, item in value.items() if key != "ThirdPartyChecks"}
+        payload = payload or {}
+        source_tier = str(payload.get("source_tier") or payload.get("data_quality", {}).get("source_tier") or "").lower()
+        source_name = str(payload.get("source_name") or "").lower()
+
+        # Root-level percentiles are accepted for Manual/Wind or legacy explicit inputs,
+        # but not for yfinance component-model current valuation proxies.
+        if "component_model" not in source_tier and "yfinance" not in source_name:
+            root_percentile = self._extract_percentile(root_value)
+            if root_percentile is not None:
+                return root_percentile
+
+        if not isinstance(checks, list):
+            return None
+
+        def source_percentile(*source_tokens: str) -> Optional[float]:
+            for item in checks:
+                if not isinstance(item, dict) or item.get("availability") == "unavailable":
+                    continue
+                source_label = " ".join(
+                    str(item.get(key) or "")
+                    for key in ("source_id", "source", "source_name")
+                ).lower()
+                if not any(token in source_label for token in source_tokens):
+                    continue
+                percentile = _find_first_number(
+                    item,
+                    ("historical_percentile", "percentile_10y", "percentile_5y", "percentile_1y", "percentile"),
+                )
+                if percentile is not None:
+                    return percentile
+            return None
+
+        for percentile in (
+            source_percentile("trendonify"),
+            source_percentile("danjuan"),
+            source_percentile("worldperatio"),
+        ):
+            if percentile is not None:
+                return percentile
+        return None
 
     def _extract_relative_position_context(self, value: Any, *, function_id: str = "") -> Dict[str, Any]:
         if function_id != "get_ndx_pe_and_earnings_yield" or not isinstance(value, dict):
@@ -556,7 +607,11 @@ class AnalysisPacketBuilder:
 
         if layer == "L4":
             pe = self._metric_level(metrics, "get_ndx_pe_and_earnings_yield", "pe_ttm", "weighted_forward_pe", "forward_pe")
-            pe_pct = self._metric_level(metrics, "get_ndx_pe_and_earnings_yield", "pe_ttm_percentile_5y", "percentile_5y", "percentile_10y")
+            valuation_payload = metrics.get("get_ndx_pe_and_earnings_yield", {})
+            pe_pct = self._extract_l4_valuation_percentile(
+                valuation_payload.get("value"),
+                payload=valuation_payload,
+            )
             simple_gap = self._metric_level(metrics, "get_equity_risk_premium", "simple_yield_gap", "erp_value", "level")
             if (pe_pct is not None and pe_pct >= 70) or (simple_gap is not None and simple_gap <= 1.5):
                 return "expensive"

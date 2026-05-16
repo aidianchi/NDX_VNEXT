@@ -18,6 +18,49 @@ def _write_json(path: Path, payload):
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def test_vnext_reporter_news_section_shows_event_data_links():
+    reporter = VNextReportGenerator()
+
+    html = reporter._news_section(
+        {
+            "news_event_ledger": {
+                "events": [
+                    {
+                        "event_id": "event:fomc",
+                        "title": "Federal Reserve issues FOMC statement",
+                        "published_at": "Fri, 08 May 2026 18:00:00 GMT",
+                        "source_tier": "official_macro",
+                        "layers": ["L1", "L4"],
+                        "symbols": [],
+                        "notes": "Official RSS item; treat as catalyst/background only.",
+                    }
+                ],
+                "source_errors": [],
+            },
+            "news_event_data_links": {
+                "links": [
+                    {
+                        "event_id": "event:fomc",
+                        "observations": [
+                            {
+                                "series_key": "QQQ_OHLCV",
+                                "series_label": "QQQ",
+                                "statement": "QQQ 在事件日前后 +/-5 天窗口内从 450 变为 468。",
+                                "needs_bridge_review": True,
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+
+    assert "官方事件底账与市场连接观察" in html
+    assert "附近市场序列观察" in html
+    assert "QQQ 在事件日前后" in html
+    assert "不是因果证明，也不是 evidence_ref" in html
+
+
 def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     run_dir = tmp_path / "run"
     _write_json(

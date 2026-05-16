@@ -172,7 +172,7 @@ def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(t
     assert "overlay_volume" in html
     assert "subscribeVisibleLogicalRangeChange" in html
     assert "setVisibleTimeRangeAll" in html
-    assert "updateRange(365)" in html
+    assert "updateRange(3650)" in html
     assert "if (!item.primaryData || !item.primaryData.length) return;" in html
     assert "try {\n        timeScale.setVisibleRange({ from, to });" in html
     assert "setCrosshairPosition" in html

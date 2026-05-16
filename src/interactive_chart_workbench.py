@@ -556,9 +556,8 @@ class InteractiveChartWorkbenchGenerator:
         </div>
         <div class="workbench-tools">
           <div class="range-buttons" aria-label="Time ranges">
-            <button data-range="90">3M</button>
-            <button data-range="180">6M</button>
-            <button data-range="365">1Y</button>
+            <button data-range="3650">10Y</button>
+            <button data-range="5475">15Y</button>
             <button data-range="all">ALL</button>
           </div>
           <div class="sync-buttons" aria-label="Time axis controls">
@@ -1633,7 +1632,7 @@ let savedPreset = 'simple_price';
 try { savedPreset = localStorage.getItem(STORAGE_KEY) || 'simple_price'; } catch (error) {}
 applyPreset(PRESETS[savedPreset] ? savedPreset : 'simple_price', false);
 updateActiveModuleChrome('price_technical');
-updateRange(365);
+updateRange(3650);
 """
 
 

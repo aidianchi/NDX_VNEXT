@@ -18,10 +18,21 @@ except ImportError:
 
 
 DEFAULT_PORT = 8765
+CONSOLE_VERSION = "console_logs_entry_v3"
 CONSOLE_READY_MARKERS = (
     "NDX vNext 研究控制台",
     "historicalDateMode",
     "function artifactUrl(path)",
+    CONSOLE_VERSION,
+    'value="logs_only"',
+    "最新日志",
+    "旧版 HTML 已退出日常入口",
+)
+STALE_CONSOLE_MARKERS = (
+    'value="visual_check"',
+    "视觉回归</h3>",
+    "不生成旧版 HTML",
+    "临时启用旧版 charts",
 )
 
 
@@ -37,12 +48,16 @@ def _console_is_ready(url: str) -> bool:
     try:
         with urllib.request.urlopen(url, timeout=1.2) as response:
             body = response.read(250000).decode("utf-8", errors="replace")
-            return response.status == 200 and all(marker in body for marker in CONSOLE_READY_MARKERS)
+            return (
+                response.status == 200
+                and all(marker in body for marker in CONSOLE_READY_MARKERS)
+                and not any(marker in body for marker in STALE_CONSOLE_MARKERS)
+            )
     except (OSError, urllib.error.URLError):
         return False
 
 
-def _pid_on_port(port: int) -> Optional[int]:
+def _pids_on_port(port: int) -> list[int]:
     try:
         result = subprocess.run(
             ["lsof", "-ti", f"tcp:{port}"],
@@ -52,28 +67,36 @@ def _pid_on_port(port: int) -> Optional[int]:
             timeout=1.5,
         )
     except (OSError, subprocess.SubprocessError):
-        return None
+        return []
+    pids: list[int] = []
     for line in result.stdout.splitlines():
         line = line.strip()
         if line.isdigit():
-            return int(line)
-    return None
+            pids.append(int(line))
+    return pids
+
+
+def _pid_on_port(port: int) -> Optional[int]:
+    pids = _pids_on_port(port)
+    return pids[0] if pids else None
 
 
 def _stop_service_on_port(port: int) -> bool:
-    pid = _pid_on_port(port)
-    if not pid:
+    pids = _pids_on_port(port)
+    if not pids:
         return False
     try:
         import os
         import signal
 
-        os.kill(pid, signal.SIGTERM)
+        for pid in pids:
+            os.kill(pid, signal.SIGTERM)
         for _ in range(20):
-            if _pid_on_port(port) is None:
+            if not _pids_on_port(port):
                 return True
             time.sleep(0.1)
-        os.kill(pid, signal.SIGKILL)
+        for pid in _pids_on_port(port):
+            os.kill(pid, signal.SIGKILL)
         return True
     except OSError:
         return False

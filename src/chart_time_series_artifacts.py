@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 
 Fetcher = Callable[[int], Any]
-DEFAULT_CHART_LOOKBACK_DAYS = 1825
+DEFAULT_CHART_LOOKBACK_DAYS = 3650
 
 
 WORKBENCH_MODULES: Dict[str, Dict[str, Any]] = {

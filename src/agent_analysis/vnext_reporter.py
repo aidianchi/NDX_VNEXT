@@ -629,6 +629,7 @@ class VNextReportGenerator:
             "schema_guard_report": _load_json(run_path / "schema_guard_report.json", {}),
             "context_brief": _load_json(run_path / "context_brief.json", {}),
             "news_event_ledger": _load_json(run_path / "news_event_ledger.json", {}),
+            "news_event_data_links": _load_json(run_path / "news_event_data_links.json", {}),
             "layers": layers,
             "bridges": bridges,
             "run_summary": _load_json(run_path / "run_summary.json", {}),
@@ -650,6 +651,7 @@ class VNextReportGenerator:
             "bridges": artifacts["bridges"],
             "risk_boundary_report": artifacts["risk_boundary_report"],
             "news_event_ledger": artifacts.get("news_event_ledger", {}),
+            "news_event_data_links": artifacts.get("news_event_data_links", {}),
             "critique": artifacts["critique"],
             "schema_guard_report": artifacts["schema_guard_report"],
         }
@@ -925,6 +927,12 @@ class VNextReportGenerator:
 
     def _news_section(self, artifacts: Dict[str, Any]) -> str:
         ledger = artifacts.get("news_event_ledger", {})
+        data_links = artifacts.get("news_event_data_links", {})
+        links_by_event = {
+            str(link.get("event_id") or link.get("event_ref")): link
+            for link in _as_list(data_links.get("links"))
+            if isinstance(link, dict)
+        }
         events = [event for event in _as_list(ledger.get("events")) if isinstance(event, dict)]
         rows = []
         for event in events[:12]:
@@ -939,6 +947,26 @@ class VNextReportGenerator:
             url = str(event.get("url") or "")
             title = _escape(event.get("title") or event.get("event_id") or "未命名事件")
             title_html = f'<a href="{_escape(url)}">{title}</a>' if url else title
+            link = links_by_event.get(str(event.get("event_id")))
+            observations = []
+            if link:
+                for observation in _as_list(link.get("observations"))[:4]:
+                    if not isinstance(observation, dict):
+                        continue
+                    review = " · 需 Bridge 复核" if observation.get("needs_bridge_review") else ""
+                    observations.append(
+                        f"<li><b>{_escape(observation.get('series_label') or observation.get('series_key'))}</b> "
+                        f"{_escape(observation.get('statement', ''))}"
+                        f"<span>{_escape(review)}</span></li>"
+                    )
+            link_html = ""
+            if observations:
+                link_html = (
+                    '<details class="news-links"><summary>附近市场序列观察</summary>'
+                    f"<ul>{''.join(observations)}</ul>"
+                    "<p>这些是时间邻近和共同波动观察，不是因果证明，也不是 evidence_ref。</p>"
+                    "</details>"
+                )
             rows.append(
                 f"""
 <article class="news-card">
@@ -946,6 +974,7 @@ class VNextReportGenerator:
     <span class="news-date">{_escape(event.get('published_at', ''))}</span>
     <h3>{title_html}</h3>
     <p>{_escape(event.get('notes') or '官方来源事件；只作为背景和触发条件，不替代指标证据。')}</p>
+    {link_html}
   </div>
   <div class="news-tags">{''.join(tags)}</div>
 </article>
@@ -963,8 +992,8 @@ class VNextReportGenerator:
         return f"""
 <section class="panel news-panel" id="news">
   <div class="section-kicker">03 · 新闻源</div>
-  <h2>官方事件底账</h2>
-  <p class="section-note">这里只展示官方宏观 RSS 与 M7 SEC filings。事件可以解释触发背景，但不能替代任何指标证据。</p>
+  <h2>官方事件底账与市场连接观察</h2>
+  <p class="section-note">这里只展示官方宏观 RSS、M7 SEC filings，以及事件日前后市场序列的轻量观察。事件可以解释触发背景，但不能替代任何指标证据。</p>
   <div class="news-grid">{''.join(rows) if rows else empty}</div>
   {error_html}
 </section>

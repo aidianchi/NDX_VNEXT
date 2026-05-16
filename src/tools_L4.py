@@ -637,15 +637,13 @@ def get_ndx_components_data_yf_v5(end_date: str = None) -> Tuple[pd.DataFrame, D
             continue
 
         try:
-            stock = yf.Ticker(ticker)
-            info = stock.info
+            info = get_yf_ticker_info_with_retry(ticker, attempts=2, pause_seconds=0.5)
 
             # 如果获取失败，尝试替换股票
             if not info or 'marketCap' not in info or info.get('marketCap', 0) <= 0:
                 if ticker in TICKER_REPLACEMENTS and TICKER_REPLACEMENTS[ticker]:
                     ticker = TICKER_REPLACEMENTS[ticker]
-                    stock = yf.Ticker(ticker)
-                    info = stock.info
+                    info = get_yf_ticker_info_with_retry(ticker, attempts=2, pause_seconds=0.5)
                 else:
                     failed_tickers.append(ticker)
                     continue
@@ -853,6 +851,26 @@ def _fetch_text(url: str, timeout: int = 8) -> Tuple[Optional[str], Optional[str
         return None, str(exc)[:120]
 
 
+def _fetch_json(url: str, timeout: int = 8, *, headers: Optional[Dict[str, str]] = None) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    try:
+        request_headers = {"User-Agent": "Mozilla/5.0 (compatible; ndx-vnext/1.0)"}
+        if headers:
+            request_headers.update(headers)
+        response = requests.get(
+            url,
+            headers=request_headers,
+            timeout=timeout,
+            proxies=get_requests_proxies(),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return None, "json_response_not_object"
+        return payload, None
+    except Exception as exc:
+        return None, str(exc)[:120]
+
+
 def _fetch_bytes(url: str, timeout: int = 12) -> Tuple[Optional[bytes], Optional[str]]:
     try:
         response = requests.get(
@@ -865,6 +883,26 @@ def _fetch_bytes(url: str, timeout: int = 12) -> Tuple[Optional[bytes], Optional
         return response.content, None
     except Exception as exc:
         return None, str(exc)[:120]
+
+
+def _epoch_ms_to_china_date(value: Any) -> Optional[str]:
+    number = _safe_float(value)
+    if number is None:
+        return None
+    try:
+        return datetime.fromtimestamp(number / 1000, tz=timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def _epoch_ms_to_utc(value: Any) -> Optional[str]:
+    number = _safe_float(value)
+    if number is None:
+        return None
+    try:
+        return datetime.fromtimestamp(number / 1000, tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    except Exception:
+        return None
 
 
 def _parse_worldperatio_ndx_pe(html: str) -> Dict[str, Any]:
@@ -1147,6 +1185,57 @@ def _parse_trendonify_historical_percentiles(text: str) -> Dict[str, Dict[str, A
     return percentiles
 
 
+DANJUAN_NDX_VALUATION_URL = "https://danjuanfunds.com/djapi/index_eva/detail/NDX"
+DANJUAN_NDX_VALUATION_REFERER = "https://danjuanfunds.com/dj-valuation-table-detail/NDX"
+
+
+def _parse_danjuan_ndx_valuation(payload: Dict[str, Any]) -> Dict[str, Any]:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        raise ValueError("Danjuan response missing data object")
+
+    pe_percentile = _percent_or_none(data.get("pe_percentile"))
+    pb_percentile = _percent_or_none(data.get("pb_percentile"))
+    data_date = _epoch_ms_to_china_date(data.get("ts")) or data.get("date")
+    sample_start = _epoch_ms_to_china_date(data.get("begin_at"))
+    updated_at = _epoch_ms_to_utc(data.get("updated_at"))
+    result = _valuation_source_result(
+        source_id="danjuan_ndx_valuation",
+        source_name="DanjuanFunds",
+        source_url=DANJUAN_NDX_VALUATION_URL,
+        source_tier=SOURCE_TIER_THIRD_PARTY,
+        metric="ndx_trailing_pe",
+        value=_safe_float(data.get("pe")),
+        percentile_10y=pe_percentile,
+        data_date=data_date,
+        methodology=(
+            "DanjuanFunds index valuation detail/NDX JSON; PE/PB percentiles are published ratios "
+            "converted from 0-1 scale to 0-100 scale; used as third-party validation, not the Manual/Wind primary value"
+        ),
+        formula="Published NDX PE/PB/ROE/PEG/eva_type with PE percentile from pe_percentile * 100",
+        coverage={"index_code": data.get("index_code"), "index_name": data.get("name"), "sample_start": sample_start},
+    )
+    result.update(
+        {
+            "pb": _round_or_none(_safe_float(data.get("pb"))),
+            "pe_percentile_raw": _round_or_none(_safe_float(data.get("pe_percentile")), 4),
+            "pb_percentile": pb_percentile,
+            "pb_percentile_raw": _round_or_none(_safe_float(data.get("pb_percentile")), 4),
+            "roe": _round_or_none(_safe_float(data.get("roe")), 4),
+            "peg": _round_or_none(_safe_float(data.get("peg")), 4),
+            "eva_type": data.get("eva_type"),
+            "eva_type_int": data.get("eva_type_int"),
+            "date": data.get("date"),
+            "sample_start": sample_start,
+            "begin_at": sample_start,
+            "updated_at": updated_at,
+            "updated_at_utc": updated_at,
+            "source_url": DANJUAN_NDX_VALUATION_URL,
+        }
+    )
+    return result
+
+
 def get_ndx_valuation_third_party_checks() -> List[Dict[str, Any]]:
     """读取第三方NDX估值页面，作为校验源，不作为主估值源。"""
     checks: List[Dict[str, Any]] = []
@@ -1189,12 +1278,46 @@ def get_ndx_valuation_third_party_checks() -> List[Dict[str, Any]]:
                     reason=str(exc)[:120],
                 )
             )
+    payload, error = _fetch_json(
+        DANJUAN_NDX_VALUATION_URL,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": DANJUAN_NDX_VALUATION_REFERER,
+        },
+    )
+    if error or not payload:
+        checks.append(
+            _unavailable_valuation_source(
+                source_id="danjuan_ndx_valuation",
+                source_name="DanjuanFunds",
+                source_url=DANJUAN_NDX_VALUATION_URL,
+                metric="ndx_trailing_pe",
+                reason=error or "empty_response",
+                methodology="DanjuanFunds detail/NDX JSON requires browser User-Agent and valuation detail Referer",
+            )
+        )
+    else:
+        try:
+            checks.append(_parse_danjuan_ndx_valuation(payload))
+        except Exception as exc:
+            checks.append(
+                _unavailable_valuation_source(
+                    source_id="danjuan_ndx_valuation",
+                    source_name="DanjuanFunds",
+                    source_url=DANJUAN_NDX_VALUATION_URL,
+                    metric="ndx_trailing_pe",
+                    reason=str(exc)[:120],
+                    methodology="DanjuanFunds detail/NDX JSON requires browser User-Agent and valuation detail Referer",
+                )
+            )
     sidecar_sources = _trusted_trendonify_sidecar_sources()
     if sidecar_sources:
         by_id = {item.get("source_id"): item for item in checks if isinstance(item, dict)}
         for item in sidecar_sources:
             by_id[item.get("source_id")] = item
-        checks = [by_id.get(source_id, item) for source_id, _, _ in sources for item in [by_id.get(source_id)] if item]
+        ordered_ids = [source_id for source_id, _, _ in sources] + ["danjuan_ndx_valuation"]
+        checks = [by_id[source_id] for source_id in ordered_ids if source_id in by_id]
+        checks.extend(item for key, item in by_id.items() if key not in set(ordered_ids))
     return checks
 
 

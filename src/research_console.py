@@ -149,6 +149,7 @@ class ResearchConsoleGenerator:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="ndx-console-version" content="console_logs_entry_v3">
   <title>NDX vNext 研究控制台</title>
   <style>{self._css()}</style>
 </head>
@@ -315,12 +316,10 @@ class ResearchConsoleGenerator:
             <p>一次运行会保存人工数据，执行 vNext，生成 native brief，并生成 workbench。</p>
           </div>
         </div>
-        <div class="toggle-line">
-          <label><input id="skipLegacyReport" type="checkbox" checked> 不生成旧版 HTML</label>
-          <label><input id="disableCharts" type="checkbox" checked> 不生成旧版 charts</label>
-          <label><input id="enableLegacyCharts" type="checkbox"> 临时启用旧版 charts</label>
-        </div>
-        <p class="legacy-note">旧版 HTML 是过渡期兼容产物；默认只生成 vNext artifacts、native brief 和 workbench。</p>
+        <input id="skipLegacyReport" type="checkbox" checked hidden>
+        <input id="disableCharts" type="checkbox" checked hidden>
+        <input id="enableLegacyCharts" type="checkbox" hidden>
+        <p class="legacy-note">旧版 HTML 已退出日常入口；控制台默认只生成 vNext artifacts、native brief 和 workbench。兼容旧报告仅保留给开发命令显式启用。</p>
         <div class="module-picker" aria-label="交互工作台模块">
           <h3>交互工作台模块</h3>
           <label><input type="checkbox" name="workbenchModule" value="price_technical" checked> 价格技术</label>

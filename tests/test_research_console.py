@@ -30,6 +30,7 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     html = output.read_text(encoding="utf-8")
 
     assert "NDX vNext 研究控制台" in html
+    assert "console_logs_entry_v3" in html
     assert "运行对象与日期" in html
     assert "历史日期 / 回测" in html
     assert 'id="historicalDateMode"' in html
@@ -48,6 +49,7 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     assert "只生成 brief" in html
     assert "只生成 workbench" in html
     assert "查看日志" in html
+    assert 'value="logs_only"' in html
     assert "最新日志" in html
     assert "20260512_215333_001.log" in html
     assert "output/logs/control_service/*.log" in html
@@ -56,7 +58,7 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     assert "deepseek-v4-pro" in html
     assert "自定义顺序" in html
     assert "数据源选择" in html
-    assert "不生成旧版 HTML" in html
+    assert "旧版 HTML 已退出日常入口" in html
     assert "默认只生成 vNext artifacts、native brief 和 workbench" in html
     assert "运行时生成官方新闻底账" in html
     assert "--enable-news" in html
