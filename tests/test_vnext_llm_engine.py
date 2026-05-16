@@ -2,6 +2,7 @@
 import sys
 import os
 from typing import Any, Dict, List
+import requests
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
@@ -176,3 +177,46 @@ def test_call_ai_does_not_send_beta_prefix_to_custom_deepseek_endpoint(monkeypat
     assert messages[1]["role"] == "user"
     assert all("prefix" not in message for message in messages)
     assert raw == '{"ok": true}'
+
+
+def test_kimi_http_call_loads_system_constraints(monkeypatch):
+    from agent_analysis import llm_engine as engine_mod
+    from agent_analysis.llm_engine import LLMEngine
+
+    monkeypatch.setattr(engine_mod, "get_api_key", lambda service: "fake-key")
+    monkeypatch.setattr(engine_mod, "get_base_url", lambda service: "https://kimi.example.com")
+    monkeypatch.setattr(engine_mod, "get_extra_headers", lambda service: {})
+    monkeypatch.setattr(engine_mod, "get_requests_proxies", lambda: None)
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": '{"ok": true}'}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+
+    class FakeSession:
+        def __init__(self):
+            self.last_payload = None
+            self.trust_env = True
+
+        def post(self, _url, **kwargs):
+            self.last_payload = kwargs["json"]
+            return FakeResponse()
+
+    fake_session = FakeSession()
+    monkeypatch.setattr(requests, "Session", lambda: fake_session)
+
+    LLMEngine.SYSTEM_CONSTRAINTS = ""
+    engine = LLMEngine(available_models=[])
+    raw, usage = engine._call_kimi_http("{}", "kimi-test", 100)
+
+    assert raw == '{"ok": true}'
+    assert usage["total_tokens"] == 2
+    messages = fake_session.last_payload["messages"]
+    assert messages[0]["role"] == "system"
+    assert "不得编造" in messages[0]["content"]
+    assert messages[1] == {"role": "user", "content": "{}"}

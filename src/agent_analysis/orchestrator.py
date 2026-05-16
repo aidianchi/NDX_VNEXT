@@ -99,6 +99,19 @@ def _severity_is_high_or_medium(conflict: Any) -> bool:
     return str(_enum_value(conflict.severity)) in _SEVERITY_HIGH_MEDIUM
 
 
+def _layer_has_usable_raw_data(layer_payload: Any) -> bool:
+    if not isinstance(layer_payload, dict):
+        return False
+    for indicator_payload in layer_payload.values():
+        if not isinstance(indicator_payload, dict):
+            continue
+        if indicator_payload.get("error"):
+            continue
+        if indicator_payload:
+            return True
+    return False
+
+
 class VNextOrchestrator:
     """Lightweight real-LLM orchestrator for the vNext chain."""
 
@@ -458,7 +471,11 @@ class VNextOrchestrator:
         # with actual content. If the packet is empty or has no layer data, object is unclear.
         # Note: raw_data keys are already uppercase "L1"-"L5" (set by packet_builder LAYER_NAMES).
         expected_layers = {"L1", "L2", "L3", "L4", "L5"}
-        raw_data_layers = set(expected_layers & set(packet.raw_data.keys()))
+        raw_data_layers = {
+            layer
+            for layer in expected_layers
+            if _layer_has_usable_raw_data(packet.raw_data.get(layer))
+        }
         # object_clear requires at least 3 of 5 layers to have data (partial data is acceptable
         # but complete absence suggests the investment object is not properly defined)
         object_clear = len(raw_data_layers) >= 3

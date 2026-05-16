@@ -32,10 +32,17 @@ def test_synthesis_packet_includes_objective_firewall_summary(tmp_path: Path):
         output_dir=str(tmp_path),
         llm_engine=object(),
     )
-    # F3: raw_data must have at least 3 layers for object_clear to be True
+    # F3: raw_data must have at least 3 layers with usable indicator payloads
+    # for object_clear to be True.
     packet = AnalysisPacket(
         meta={"data_date": "2026-04-24"},
-        raw_data={"L1": {"get_10y_real_rate": {}}, "L2": {"get_vix": {}}, "L3": {"get_adx": {}}, "L4": {"get_pe": {}}, "L5": {"get_rsi": {}}},
+        raw_data={
+            "L1": {"get_10y_real_rate": {"value": {"level": 1.9}}},
+            "L2": {"get_vix": {"value": {"level": 18.0}}},
+            "L3": {"get_qqq_qqew_ratio": {"value": {"level": 1.15}}},
+            "L4": {"get_ndx_pe_and_earnings_yield": {"value": {"PE_TTM": 32.5}}},
+            "L5": {"get_rsi_qqq": {"value": {"level": 62.0}}},
+        },
     )
     context = ContextBrief(data_summary="data", task_description="task")
     layer_cards = [_empty_layer_card(layer) for layer in ["L2", "L3", "L4", "L5"]]
@@ -137,6 +144,30 @@ def test_cross_layer_verified_true_when_bridge_memos_exist(tmp_path: Path):
     synthesis = orchestrator._build_synthesis_packet(packet, context, layer_cards, [bridge])
     firewall = synthesis.objective_firewall_summary
     assert firewall.cross_layer_verified is True
+
+
+def test_object_clear_false_when_layers_are_present_but_empty(tmp_path: Path):
+    """F3: empty layer containers must not count as usable object coverage."""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+    packet = AnalysisPacket(
+        meta={"data_date": "2026-04-24"},
+        raw_data={"L1": {}, "L2": {}, "L3": {}, "L4": {}, "L5": {}},
+    )
+    context = ContextBrief(data_summary="data", task_description="task")
+    layer_cards = [_empty_layer_card("L1")]
+    bridge = BridgeMemo(
+        bridge_type="macro_valuation",
+        layers_connected=["L1", "L4"],
+        implication_for_ndx="empty input",
+    )
+    synthesis = orchestrator._build_synthesis_packet(packet, context, layer_cards, [bridge])
+    firewall = synthesis.objective_firewall_summary
+    assert firewall.object_clear is False
+    assert any("only 0/5 layers" in w for w in firewall.warnings)
 
 
 def test_thesis_prompt_mentions_objective_firewall_summary(tmp_path: Path):

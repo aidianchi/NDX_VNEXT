@@ -211,14 +211,14 @@ class LLMEngine:
         if not api_key or not base_url:
             return None, {}
 
-        headers = get_extra_headers("kimi")
+        headers = dict(get_extra_headers("kimi") or {})
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
 
         payload = {
             "model": model_name,
             "messages": [
-                {"role": "system", "content": self.SYSTEM_CONSTRAINTS},
+                {"role": "system", "content": self._load_system_constraints()},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,

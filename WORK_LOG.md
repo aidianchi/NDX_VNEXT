@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-05-16
+
+### Claude 20260513 审计分支复核、补强与 main 合并准备
+
+完成内容：
+
+- 深入复核 `PROJECT_AUDIT_20260513.md` 与 `claude/20260513-indicator-timestamps` 相对 `main` 的改动，确认主线修复方向合理：治理阶段 `generated_at` 强制由代码覆盖、L4 长序列进入 prompt 前摘要化、反编造约束提升到 system message、DataIntegrity 扩展、workbench 数据时效性警告、指标时间戳与 U7-U10 简化修复均符合 vNext 当前架构目标。
+- 补强 objective firewall：`object_clear` 不再只看 `raw_data` 是否存在 L1-L5 key，而是至少 3 层必须包含可用指标 payload；空层容器不再被误判为投资对象清晰。
+- 补强 Kimi HTTP fallback：system message 现在会实际调用 `_load_system_constraints()`，并兼容 `get_extra_headers("kimi")` 返回 `None` 的情况，避免 fallback 路径绕过反编造约束。
+- 新增/更新回归测试：覆盖空层容器不能通过 `object_clear`，以及 Kimi HTTP 调用必须携带 system constraints。
+
+验证结果：
+
+- `.venv/bin/python -m pytest -q tests/test_vnext_llm_engine.py tests/test_objective_firewall.py`：15 passed，4 warnings。
+- `.venv/bin/python -m pytest -q`：253 passed，22 warnings。
+
 ## 2026-05-12
 
 ### L4 外部估值源稳定收口：Damodaran、WorldPERatio、Trendonify sidecar
