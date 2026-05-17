@@ -125,8 +125,6 @@ def _start_service(repo_root: Path, port: int) -> None:
 def _choose_service(repo_root: Path) -> str | None:
     for port in range(DEFAULT_PORT, DEFAULT_PORT + 10):
         url = f"http://127.0.0.1:{port}"
-        if _console_is_ready(url):
-            return url
         if _service_is_ready(url):
             _stop_service_on_port(port)
             time.sleep(0.3)
@@ -144,7 +142,7 @@ def main() -> int:
     repo_root = Path(path_config.base_dir).resolve()
     console_path = ResearchConsoleGenerator().run()
     service_url = _choose_service(repo_root)
-    target_url = service_url or Path(console_path).resolve().as_uri()
+    target_url = f"{service_url}/?opened_at={int(time.time())}" if service_url else Path(console_path).resolve().as_uri()
     webbrowser.open(target_url)
     print(f"NDX vNext 控制台已打开：{target_url}")
     if target_url.startswith("file:"):

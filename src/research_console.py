@@ -166,8 +166,6 @@ class ResearchConsoleGenerator:
         latest_workbench = workbenches[0] if workbenches else None
         data_jsons = self._latest_data_jsons()
         latest_data_json = data_jsons[0] if data_jsons else None
-        latest_href = latest_report.resolve().as_uri() if latest_report else "#"
-        latest_workbench_href = latest_workbench.resolve().as_uri() if latest_workbench else "#"
         manual_path = get_manual_data_local_path()
         initial_manual_data = self._initial_manual_data_json()
         payload = json.dumps(
@@ -199,11 +197,11 @@ class ResearchConsoleGenerator:
       <div>
         <p class="eyebrow">NDX vNext</p>
         <h1>研究控制台</h1>
-        <p>把运行对象、人工数据、模型策略、功能开关、输出入口和健康状态放在同一屏。它是研究动作的总控台，不替代最终报告。</p>
+        <p>先运行，后审阅；常用动作放在最前面，人工数据、sidecar 和安全边界保留在同一条工作流里。</p>
       </div>
       <aside class="status-card">
-        <span>默认路径</span>
-        <strong>brief 报告</strong>
+        <span>上次产物</span>
+        <strong>brief + workbench</strong>
         <div class="status-actions">
           <a class="primary-link" {self._artifact_link_attrs(latest_report)}>打开最新报告</a>
           <a class="secondary-link" {self._artifact_link_attrs(latest_workbench)}>打开 workbench</a>
@@ -212,16 +210,16 @@ class ResearchConsoleGenerator:
     </section>
 
     <nav class="workflow-rail" aria-label="研究控制台流程">
-      <a href="#setup-panel"><b>01</b><span>对象与日期</span></a>
-      <a href="#manual-panel"><b>02</b><span>数据校准</span></a>
-      <a href="#run-panel"><b>03</b><span>运行报告</span></a>
+      <a href="#run-panel"><b>01</b><span>运行与结果</span></a>
+      <a href="#setup-panel"><b>02</b><span>对象与日期</span></a>
+      <a href="#manual-panel"><b>03</b><span>人工数据</span></a>
       <a href="#health-panel"><b>04</b><span>健康审计</span></a>
     </nav>
 
     <section class="control-grid">
       <article class="panel setup-panel" id="setup-panel">
         <div class="panel-head">
-          <span>01</span>
+          <span>02</span>
           <div>
             <h2>运行对象与日期</h2>
             <p>先确定研究对象和时点，再决定是否使用已有数据。</p>
@@ -239,7 +237,7 @@ class ResearchConsoleGenerator:
 
       <article class="panel manual-panel" id="manual-panel">
         <div class="panel-head">
-          <span>02</span>
+          <span>04</span>
           <div>
             <h2>人工数据与数据源校准</h2>
             <p>上次保存的人工锚会自动带入；这里同时决定哪些外部来源可以进入本轮校准。</p>
@@ -358,54 +356,60 @@ class ResearchConsoleGenerator:
 
       <article class="panel run-panel" id="run-panel">
         <div class="panel-head">
-          <span>04</span>
+          <span>01</span>
           <div>
             <h2>运行完整报告</h2>
             <p>一次运行会保存人工数据，执行 vNext，生成 native brief、workbench；勾选新闻后还会生成事件底账与市场连接观察。</p>
           </div>
         </div>
-        <input id="skipLegacyReport" type="checkbox" checked hidden>
-        <input id="disableCharts" type="checkbox" checked hidden>
-        <input id="enableLegacyCharts" type="checkbox" hidden>
-        <p class="legacy-note">旧版 HTML 已退出日常入口；控制台默认只生成 vNext artifacts、native brief 和 workbench。兼容旧报告仅保留给开发命令显式启用。</p>
-        <div class="module-picker" aria-label="交互工作台模块">
-          <h3>交互工作台模块</h3>
-          <label><input type="checkbox" name="workbenchModule" value="price_technical" checked> 价格技术</label>
-          <label><input type="checkbox" name="workbenchModule" value="volatility_credit" checked> 波动信用</label>
-          <label><input type="checkbox" name="workbenchModule" value="rates_valuation" checked> 利率估值</label>
-          <label><input type="checkbox" name="workbenchModule" value="breadth_concentration" checked> 广度集中度</label>
-          <label><input type="checkbox" name="workbenchModule" value="liquidity" checked> 流动性</label>
-        </div>
-        <div class="run-actions">
-          <button class="command-button" type="button" id="buildCommand">生成运行命令</button>
-          <button class="run-now-button" type="button" id="runNow">运行完整报告</button>
-          <button type="button" id="refreshJob">刷新状态</button>
-          <button type="button" id="cancelJob">取消任务</button>
-        </div>
-        <p id="runStatus" class="run-status">运行按钮会调用本机 127.0.0.1 的 vNext control service；它会先保存人工数据，再串联生成报告。新闻开关会生成 news_event_ledger.json 和 news_event_data_links.json。</p>
-        <pre id="jobStatusPreview">尚无任务。</pre>
-        <pre id="runCommandPreview">python3 src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts</pre>
-        <pre id="workbenchCommandPreview">python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/&lt;run_id&gt; --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity</pre>
-        <div class="artifact-grid">
-          <div class="report-list">
-            <h3>最新 brief</h3>
-            {self._links(reports, '还没有生成过 native 报告。')}
+        <div class="run-stage">
+          <div class="run-primary">
+            <input id="skipLegacyReport" type="checkbox" checked hidden>
+            <input id="disableCharts" type="checkbox" checked hidden>
+            <input id="enableLegacyCharts" type="checkbox" hidden>
+            <p class="legacy-note">旧版 HTML 已退出日常入口；控制台默认只生成 vNext artifacts、native brief 和 workbench。兼容旧报告仅保留给开发命令显式启用。</p>
+            <div class="module-picker" aria-label="交互工作台模块">
+              <h3>交互工作台模块</h3>
+              <label><input type="checkbox" name="workbenchModule" value="price_technical" checked> 价格技术</label>
+              <label><input type="checkbox" name="workbenchModule" value="volatility_credit" checked> 波动信用</label>
+              <label><input type="checkbox" name="workbenchModule" value="rates_valuation" checked> 利率估值</label>
+              <label><input type="checkbox" name="workbenchModule" value="breadth_concentration" checked> 广度集中度</label>
+              <label><input type="checkbox" name="workbenchModule" value="liquidity" checked> 流动性</label>
+            </div>
+            <div class="run-actions">
+              <button class="run-now-button" type="button" id="runNow">运行完整报告</button>
+              <button class="command-button" type="button" id="buildCommand">生成运行命令</button>
+              <button type="button" id="refreshJob">刷新状态</button>
+              <button type="button" id="cancelJob">取消任务</button>
+            </div>
+            <p id="runStatus" class="run-status">运行按钮会调用本机 127.0.0.1 的 vNext control service；它会先保存人工数据，再串联生成报告。新闻开关会生成 news_event_ledger.json 和 news_event_data_links.json。</p>
+            <pre id="jobStatusPreview">尚无任务。</pre>
+            <pre id="runCommandPreview">python3 src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts</pre>
+            <pre id="workbenchCommandPreview">python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/&lt;run_id&gt; --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity</pre>
           </div>
-          <div class="report-list">
-            <h3>最新 workbench</h3>
-            {self._links(workbenches, '还没有生成过 workbench。')}
-          </div>
-          <div class="report-list">
-            <h3>最新 run</h3>
-            {self._links(runs, '还没有 vNext run 目录。')}
-          </div>
-          <div class="report-list">
-            <h3>最新日志</h3>
-            {self._links(control_logs, '还没有 control service 日志。')}
-          </div>
-          <div class="report-list">
-            <h3>最新新闻产物</h3>
-            {self._links(news_sidecars, '还没有新闻事件 sidecar。')}
+          <div class="run-artifacts">
+            <div class="artifact-grid">
+              <div class="report-list">
+                <h3>最新 brief</h3>
+                {self._links(reports, '还没有生成过 native 报告。')}
+              </div>
+              <div class="report-list">
+                <h3>最新 workbench</h3>
+                {self._links(workbenches, '还没有生成过 workbench。')}
+              </div>
+              <div class="report-list">
+                <h3>最新 run</h3>
+                {self._links(runs, '还没有 vNext run 目录。')}
+              </div>
+              <div class="report-list">
+                <h3>最新日志</h3>
+                {self._links(control_logs, '还没有 control service 日志。')}
+              </div>
+              <div class="report-list">
+                <h3>最新新闻产物</h3>
+                {self._links(news_sidecars, '还没有新闻事件 sidecar。')}
+              </div>
+            </div>
           </div>
         </div>
       </article>
@@ -442,29 +446,27 @@ class ResearchConsoleGenerator:
     def _css(self) -> str:
         return """
 :root {
-  --paper: oklch(0.967 0.008 86);
-  --paper-quiet: oklch(0.94 0.012 86);
-  --raised: oklch(0.992 0.005 86);
-  --ink: oklch(0.19 0.014 80);
-  --soft: oklch(0.37 0.018 80);
-  --muted: oklch(0.50 0.018 80);
-  --rule: oklch(0.82 0.014 82);
+  --paper: oklch(0.975 0.006 86);
+  --paper-quiet: oklch(0.952 0.008 86);
+  --raised: oklch(0.995 0.004 86);
+  --ink: oklch(0.185 0.012 80);
+  --soft: oklch(0.34 0.016 80);
+  --muted: oklch(0.48 0.018 80);
+  --rule: oklch(0.84 0.012 82);
   --rule-strong: oklch(0.66 0.018 82);
-  --accent: oklch(0.51 0.14 31);
-  --accent-strong: oklch(0.42 0.13 31);
-  --good: oklch(0.45 0.11 150);
-  --watch: oklch(0.58 0.12 76);
-  --risk: oklch(0.50 0.15 28);
+  --accent: oklch(0.48 0.11 235);
+  --accent-strong: oklch(0.39 0.10 235);
+  --good: oklch(0.52 0.11 150);
+  --watch: oklch(0.66 0.12 78);
+  --risk: oklch(0.55 0.16 28);
   --radius: 8px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --sans: Avenir Next, Helvetica Neue, PingFang SC, system-ui, sans-serif;
-  --serif: Charter, Georgia, Songti SC, serif;
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", PingFang SC, system-ui, sans-serif;
 }
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  background:
-    linear-gradient(180deg, var(--raised) 0, var(--paper) 420px, var(--paper) 100%);
+  background: var(--paper);
   color: var(--ink);
   font-family: var(--sans);
   overflow-x: hidden;
@@ -476,38 +478,36 @@ p {
   word-break: break-word;
 }
 .console-shell {
-  width: min(1240px, calc(100% - 32px));
+  width: min(1280px, calc(100% - 28px));
   margin: 0 auto;
-  padding: 24px 0 80px;
+  padding: 14px 0 80px;
 }
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
-  gap: 32px;
-  align-items: end;
-  padding: 28px 0 22px;
-  border-top: 2px solid var(--ink);
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 390px);
+  gap: 20px;
+  align-items: center;
+  padding: 18px 0 14px;
   border-bottom: 1px solid var(--rule);
 }
 .hero > * { min-width: 0; }
 @media (max-width: 780px) { .hero { grid-template-columns: 1fr; } }
 .eyebrow {
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   color: var(--accent);
-  letter-spacing: .14em;
   text-transform: uppercase;
   font: 700 12px var(--sans);
 }
 h1 {
-  margin: 0 0 10px;
-  font: 650 58px/.98 var(--serif);
+  margin: 0 0 8px;
+  font: 700 32px/1.08 var(--sans);
 }
-@media (max-width: 780px) { h1 { font-size: 38px; line-height: 1.04; } }
+@media (max-width: 780px) { h1 { font-size: 28px; line-height: 1.12; } }
 .hero p:last-child {
-  max-width: 70ch;
+  max-width: 74ch;
   color: var(--soft);
-  font-size: 16px;
-  line-height: 1.7;
+  font-size: 14px;
+  line-height: 1.6;
   line-break: anywhere;
   word-break: break-all;
 }
@@ -518,8 +518,7 @@ h1 {
   border-radius: var(--radius);
 }
 .status-card {
-  padding: 18px 20px 20px;
-  box-shadow: 0 1px 0 color-mix(in oklch, var(--ink) 7%, transparent);
+  padding: 14px 16px 16px;
 }
 .status-card span {
   color: var(--muted);
@@ -527,8 +526,8 @@ h1 {
 }
 .status-card strong {
   display: block;
-  margin: 4px 0 14px;
-  font: 650 24px var(--serif);
+  margin: 4px 0 12px;
+  font: 720 18px var(--sans);
 }
 .primary-link,
 .secondary-link,
@@ -537,7 +536,7 @@ button {
   align-items: center;
   justify-content: center;
   border: 1px solid var(--ink);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--ink);
   color: var(--raised);
   padding: 8px 12px;
@@ -545,7 +544,7 @@ button {
   font: 700 13px var(--sans);
   cursor: pointer;
   min-height: 38px;
-  transition: background-color 160ms ease-out, border-color 160ms ease-out, color 160ms ease-out, transform 160ms ease-out;
+  transition: background-color 170ms cubic-bezier(.22,1,.36,1), border-color 170ms cubic-bezier(.22,1,.36,1), color 170ms cubic-bezier(.22,1,.36,1), transform 170ms cubic-bezier(.22,1,.36,1);
 }
 .primary-link:hover,
 .secondary-link:hover,
@@ -564,24 +563,23 @@ button:hover {
 }
 .workflow-rail {
   position: sticky;
-  top: 10px;
+  top: 0;
   z-index: 5;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
-  margin: 16px 0 18px;
+  margin: 12px 0 14px;
   border: 1px solid var(--rule);
   border-radius: var(--radius);
-  background: color-mix(in oklch, var(--raised) 92%, transparent);
-  backdrop-filter: blur(10px);
+  background: var(--raised);
 }
 .workflow-rail a {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
   align-items: center;
-  min-height: 48px;
-  padding: 10px 14px;
+  min-height: 42px;
+  padding: 8px 12px;
   color: var(--soft);
   text-decoration: none;
   border-right: 1px solid var(--rule);
@@ -611,18 +609,19 @@ button:hover {
 }
 .control-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-  margin-top: 18px;
+  grid-template-columns: minmax(340px, .92fr) minmax(0, 1.08fr);
+  gap: 14px;
+  margin-top: 14px;
   align-items: start;
 }
-.setup-panel { order: 1; grid-column: span 1; }
-.model-panel { order: 2; grid-column: span 2; }
-.manual-panel { order: 3; grid-column: 1 / -1; }
-.run-panel { order: 4; grid-column: span 2; }
-.health-panel { order: 5; }
+.run-panel { order: 1; grid-column: 1 / -1; }
+.setup-panel { order: 2; grid-column: span 1; }
+.model-panel { order: 3; grid-column: span 1; }
+.manual-panel { order: 4; grid-column: 1 / -1; }
+.health-panel { order: 5; grid-column: 1 / -1; }
 @media (max-width: 1080px) {
-  .control-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .control-grid { grid-template-columns: minmax(0, 1fr); }
+  .setup-panel,
   .model-panel,
   .manual-panel,
   .run-panel,
@@ -636,31 +635,44 @@ button:hover {
   }
 }
 .panel {
-  padding: 18px 20px 20px;
+  padding: 16px;
   scroll-margin-top: 92px;
 }
 .run-panel {
-  background:
-    linear-gradient(180deg, color-mix(in oklch, var(--accent) 8%, var(--raised)), var(--raised) 35%);
+  background: color-mix(in oklch, var(--accent) 4%, var(--raised));
+  border-color: color-mix(in oklch, var(--accent) 30%, var(--rule));
+}
+.run-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr);
+  gap: 16px;
+  align-items: start;
+}
+.run-primary,
+.run-artifacts {
+  min-width: 0;
+}
+@media (max-width: 900px) {
+  .run-stage { grid-template-columns: 1fr; }
 }
 .panel-head {
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 .panel-head > span {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border: 1px solid var(--ink);
-  border-radius: 4px;
+  border-radius: 6px;
   font: 700 12px var(--mono);
 }
 h2 {
   margin: 0 0 3px;
-  font: 650 22px var(--serif);
+  font: 720 19px var(--sans);
 }
 .panel-head p {
   margin: 0;
@@ -683,7 +695,7 @@ select,
 textarea {
   width: 100%;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: 6px;
   background: oklch(0.987 0.006 86);
   color: var(--ink);
   padding: 9px 10px;
@@ -701,7 +713,7 @@ textarea:focus {
 .manual-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 10px 12px;
 }
 .field-grid label,
 .manual-form label {
@@ -724,7 +736,7 @@ textarea:focus {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: 6px;
   background: oklch(0.987 0.006 86);
   padding: 10px;
   margin: 0;
@@ -733,7 +745,6 @@ textarea:focus {
   padding: 0 6px;
   color: var(--accent);
   font: 800 12px var(--sans);
-  letter-spacing: .08em;
 }
 @media (max-width: 640px) {
   .field-grid,
@@ -749,7 +760,7 @@ textarea {
   margin-top: 12px;
   border: 1px solid var(--rule);
   background: oklch(0.987 0.006 86);
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 8px;
 }
 .advanced-json summary {
@@ -787,7 +798,7 @@ textarea {
   border-color: var(--accent-strong);
 }
 .run-status {
-  margin: 10px 0 0;
+  margin: 10px 0;
   color: var(--muted);
   font: 12px var(--mono);
   line-height: 1.55;
@@ -812,9 +823,9 @@ textarea {
   align-items: center;
   gap: 8px;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: 6px;
   background: oklch(0.987 0.006 86);
-  padding: 10px 12px;
+  padding: 9px 11px;
   margin: 0;
 }
 .mode-grid {
@@ -826,7 +837,7 @@ textarea {
 }
 .custom-models { margin-top: 12px; }
 .module-picker {
-  margin: 14px 0;
+  margin: 12px 0;
 }
 .module-picker h3 {
   flex-basis: 100%;
@@ -839,7 +850,6 @@ textarea {
 h3 {
   margin: 0 0 4px;
   font: 700 12px var(--sans);
-  letter-spacing: .1em;
   text-transform: uppercase;
   color: var(--accent);
 }
@@ -858,9 +868,9 @@ h3 {
 .good { color: var(--good); }
 .watch { color: var(--watch); }
 .legacy-note {
-  margin: 10px 0 0;
+  margin: 0;
   border: 1px solid color-mix(in oklch, var(--watch) 42%, var(--rule));
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 10px 12px;
   background: color-mix(in oklch, var(--watch) 10%, var(--raised));
   color: var(--soft);
@@ -881,23 +891,24 @@ h3 {
 pre {
   overflow: auto;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: 6px;
   background: oklch(0.22 0.014 80);
   color: oklch(0.94 0.012 86);
   padding: 12px;
   font: 12px/1.55 var(--mono);
+  max-height: 220px;
 }
 .report-list {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 14px;
+  margin-top: 0;
 }
 .artifact-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 12px;
-  margin-top: 14px;
+  margin-top: 0;
 }
 @media (max-width: 760px) { .artifact-grid { grid-template-columns: 1fr; } }
 .report-list h3 {
@@ -907,7 +918,7 @@ pre {
 .report-list span,
 .empty-link {
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--ink);
   background: oklch(0.987 0.006 86);
   padding: 6px 8px;
@@ -921,7 +932,7 @@ pre {
 .safety-box {
   margin-top: 18px;
   border: 1px solid var(--rule);
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 12px;
   background: oklch(0.987 0.006 86);
 }

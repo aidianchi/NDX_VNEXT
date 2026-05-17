@@ -6,6 +6,23 @@
 
 ## 2026-05-17
 
+### NDX Agent 启动可靠性与研究控制台 demo 重排
+
+完成内容：
+
+- `start.command` / NDX Agent 图标现在每次都会重启本地 control service，而不是复用 8765 上“看起来可用”的旧进程；打开地址附带 `opened_at` 时间戳，避免浏览器缓存旧控制台。
+- control service 对 HTML / JSON / artifact 响应补充 `Cache-Control: no-store` 和 `Pragma: no-cache`，保证控制台、最新 brief 和 workbench 链接尽量读取当前文件。
+- 研究控制台 demo 按普通用户默认路径重排：首屏优先显示“运行完整报告”、workbench 模块、运行状态、命令预览和最新 brief/workbench/run/log/news 产物；对象日期、模型流程、人工数据和 sidecar 校准保留在后续工作区。
+- UI 从“所有功能平铺”改为“先运行与结果，再配置和校准”的操作顺序；移动端自然折成单列，不隐藏原有输入、按钮、开关和 JSON 预览。
+- 新增测试覆盖：即使旧 8765 服务已经能返回控制台，启动器也会停止并重新启动，防止点击应用图标继续打开旧页面。
+
+验证结果：
+
+- 真实执行 `./start.command`：打开 `http://127.0.0.1:8765/?opened_at=<timestamp>`；页面返回 `console_logs_entry_v4`、`运行与结果`、`使用人工数据`、`news_event_data_links.json`，且没有旧 `data-manual-field="confidence"`。
+- 服务响应头确认 `Cache-Control: no-store, max-age=0`。
+- `python3 -m pytest -q`：275 passed，4 warnings。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_brief_20260512_2152_20260517_0016.html --workbench-html output/reports/vnext_workbench_20260512_2152_20260517_0016.html --console-html output/reports/vnext_research_console.html --output-dir output/visual_regression/console_interaction_demo`：passed，console/brief/workbench 桌面和移动布局检查均无 issues。
+
 ### 控制台启动器旧服务识别与新闻产物入口修复
 
 完成内容：
