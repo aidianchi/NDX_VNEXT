@@ -352,7 +352,7 @@ def get_crowdedness_dashboard(end_date: str = None) -> Dict[str, Any]:
 
     数据源策略：
     - SKEW: yfinance (^SKEW) - 可靠
-    - Put/Call: yfinance期权链（主） + AKShare（备用）
+    - Put/Call: yfinance期权链
     - 空仓率: yfinance info - 通常为None（ETF不提供）
 
     架构说明：
@@ -386,7 +386,7 @@ def get_crowdedness_dashboard(end_date: str = None) -> Dict[str, Any]:
         "interpretation": ">150: 尾部风险溢价高 (市场担忧黑天鹅); <120: 尾部风险溢价低"
     }
 
-    # 2. QQQ Put/Call Ratio (基于期权持仓量) - yfinance主源 + AKShare备用
+    # 2. QQQ Put/Call Ratio (基于期权持仓量) - yfinance期权链
     pc_ratio = None
     pc_source = "unavailable"
     pc_notes = ""
@@ -407,21 +407,8 @@ def get_crowdedness_dashboard(end_date: str = None) -> Dict[str, Any]:
             else:
                 raise Exception("OpenInterest data is zero")
         except Exception as e:
-            logging.warning(f"yfinance Put/Call failed: {e}, trying AKShare fallback...")
-            # 尝试AKShare备用源
-            try:
-                try:
-                    from .tools_akshare import get_qqq_put_call_akshare
-                except ImportError:
-                    from tools_akshare import get_qqq_put_call_akshare
-                akshare_result = get_qqq_put_call_akshare(end_date=end_date)
-                if akshare_result and akshare_result.get("value"):
-                    pc_ratio = akshare_result["value"]
-                    pc_source = "akshare (fallback)"
-                    pc_notes = akshare_result.get("notes", "")
-            except Exception as ak_error:
-                logging.warning(f"AKShare Put/Call fallback also failed: {ak_error}")
-                pc_notes = f"yfinance和AKShare均失败: {str(e)[:30]}"
+            logging.warning(f"yfinance Put/Call failed: {e}")
+            pc_notes = f"yfinance期权链失败: {str(e)[:50]}"
 
     crowdedness_data["qqq_put_call_ratio_oi"] = {
         "value": pc_ratio,

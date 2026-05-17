@@ -19,12 +19,12 @@ from typing import Dict, Any, Optional, List, Tuple
 import logging
 try:
     from .data_manager import TimeSeriesManager, align_and_calculate_ratio
-    from .tools_common import _fetch_fred_series, _fetch_yf_history, get_fred_api_key
+    from .tools_common import _fetch_fred_series, _fetch_yf_history, get_fred_api_key, cached_yf_download
     from .tools_L1 import _build_net_liquidity_series
     from .config import CHART_OVERLAY_PRESETS, CHART_OVERLAY_BY_FUNCTION, path_config
 except ImportError:
     from data_manager import TimeSeriesManager, align_and_calculate_ratio
-    from tools_common import _fetch_fred_series, _fetch_yf_history, get_fred_api_key
+    from tools_common import _fetch_fred_series, _fetch_yf_history, get_fred_api_key, cached_yf_download
     from tools_L1 import _build_net_liquidity_series
     from config import CHART_OVERLAY_PRESETS, CHART_OVERLAY_BY_FUNCTION, path_config
 
@@ -1822,18 +1822,13 @@ def generate_chart_for_single_indicator(
         # V7.0新增：多尺度MA分析使用K线图
         if function_id == "get_multi_scale_ma_position":
             try:
-                # 直接从yfinance获取OHLCV数据
-                if not YF_AVAILABLE:
-                    logging.warning("yfinance未安装，无法生成K线图")
-                    return ""
-                
                 from datetime import datetime, timedelta
                 
                 end_date = datetime.now()
                 start_date = end_date - timedelta(days=lookback_days)
                 
                 # 下载QQQ数据
-                df = yf.download('QQQ', start=start_date, end=end_date, interval="1d", progress=False, auto_adjust=False)
+                df = cached_yf_download('QQQ', start=start_date, end=end_date, interval="1d", progress=False, auto_adjust=False)
                 
                 if df.empty:
                     logging.warning("无法获取QQQ数据")
@@ -2412,4 +2407,3 @@ def generate_candlestick_with_ma_chart(
         </details>
         """
     print("测试完成！")
-

@@ -784,8 +784,8 @@ def get_xly_xlp_ratio(end_date: str = None) -> Dict[str, Any]:
         start_date = effective_date - timedelta(days=365 * 11)
         start_str = start_date.strftime("%Y-%m-%d")
         end_str = (effective_date + timedelta(days=1)).strftime("%Y-%m-%d")
-        xly_df = yf.download("XLY", start=start_str, end=end_str, progress=False, auto_adjust=False)
-        xlp_df = yf.download("XLP", start=start_str, end=end_str, progress=False, auto_adjust=False)
+        xly_df = cached_yf_download("XLY", start=start_str, end=end_str, progress=False, auto_adjust=False)
+        xlp_df = cached_yf_download("XLP", start=start_str, end=end_str, progress=False, auto_adjust=False)
         xly_df = clean_yfinance_dataframe(xly_df)
         xlp_df = clean_yfinance_dataframe(xlp_df)
         if xly_df.empty or "close" not in xly_df.columns:
@@ -894,8 +894,8 @@ def get_copper_gold_ratio(end_date: str = None) -> Dict[str, Any]:
         start_date = effective_date - timedelta(days=365 * 11)
         start_str = start_date.strftime("%Y-%m-%d")
         end_str = (effective_date + timedelta(days=1)).strftime("%Y-%m-%d")
-        copper_df = yf.download("HG=F", start=start_str, end=end_str, progress=False, auto_adjust=False)
-        gold_df = yf.download("GC=F", start=start_str, end=end_str, progress=False, auto_adjust=False)
+        copper_df = cached_yf_download("HG=F", start=start_str, end=end_str, progress=False, auto_adjust=False)
+        gold_df = cached_yf_download("GC=F", start=start_str, end=end_str, progress=False, auto_adjust=False)
         copper_df = clean_yfinance_dataframe(copper_df)
         gold_df = clean_yfinance_dataframe(gold_df)
         if copper_df.empty or "close" not in copper_df.columns:
@@ -1074,7 +1074,7 @@ def get_wti_oil(end_date: str = None) -> Dict[str, Any]:
         # 获取11年历史用于10年百分位
         start_date = effective_date - timedelta(days=365 * 11)
 
-        df = yf.download(
+        df = cached_yf_download(
             "CL=F",
             start=start_date.strftime("%Y-%m-%d"),
             end=(effective_date + timedelta(days=1)).strftime("%Y-%m-%d"),
@@ -1171,8 +1171,8 @@ def get_gold_wti_ratio(end_date: str = None) -> Dict[str, Any]:
         end_str = (effective_date + timedelta(days=1)).strftime("%Y-%m-%d")
 
         # 下载黄金和WTI数据
-        gold_df = yf.download("GC=F", start=start_str, end=end_str, progress=False, auto_adjust=False)
-        wti_df = yf.download("CL=F", start=start_str, end=end_str, progress=False, auto_adjust=False)
+        gold_df = cached_yf_download("GC=F", start=start_str, end=end_str, progress=False, auto_adjust=False)
+        wti_df = cached_yf_download("CL=F", start=start_str, end=end_str, progress=False, auto_adjust=False)
 
         gold_df = clean_yfinance_dataframe(gold_df)
         wti_df = clean_yfinance_dataframe(wti_df)

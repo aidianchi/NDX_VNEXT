@@ -16,7 +16,7 @@ data_cache.py
     cache = SharedDataCache()
     
     # 在各工具函数中检查缓存
-    df = cache.get_or_fetch('QQQ', lambda: yf.download('QQQ', ...))
+    df = cache.get_or_fetch('QQQ', lambda: fetch_price_data(...))
 """
 
 import threading
@@ -25,12 +25,6 @@ import time
 from typing import Dict, Any, Optional, Callable, Tuple
 from datetime import datetime
 import pandas as pd
-
-try:
-    import yfinance as yf
-    YF_AVAILABLE = True
-except ImportError:
-    YF_AVAILABLE = False
 
 
 class SharedDataCache:
@@ -181,12 +175,18 @@ class SharedDataCache:
         key = self._make_key(ticker, start_date, end_date, 'yf')
         
         def default_fetch():
-            if not YF_AVAILABLE:
-                return pd.DataFrame()
             try:
-                df = yf.download(ticker, start=start_date, end=end_date, 
-                                progress=False, auto_adjust=False)
-                return df
+                try:
+                    from .tools_common import cached_yf_download
+                except ImportError:
+                    from tools_common import cached_yf_download
+                return cached_yf_download(
+                    ticker,
+                    start=start_date,
+                    end=end_date,
+                    progress=False,
+                    auto_adjust=False,
+                )
             except Exception as e:
                 logging.warning(f"yfinance download failed for {ticker}: {e}")
                 return pd.DataFrame()

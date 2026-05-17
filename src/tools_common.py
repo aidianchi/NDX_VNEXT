@@ -102,10 +102,13 @@ ts_manager = TimeSeriesManager(cache_dir=path_config.cache_dir)
 
 DEFAULT_FRED_BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 DEFAULT_ALPHAVANTAGE_BASE_URL = "https://www.alphavantage.co/query"
+DEFAULT_TWELVE_DATA_BASE_URL = "https://api.twelvedata.com"
 YF_FRAME_CACHE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
+YF_FRAME_CACHE_PREFER_MAX_AGE_SECONDS = 60 * 60 * 12
 # 退避周期偏长，是为了让 Yahoo 限流（429）窗口有机会自动恢复。
 # 2026-05 多次 run 显示：2 秒间隔的重试都落在 Yahoo cooldown 窗口内，反复撞墙。
 YF_DOWNLOAD_RETRY_DELAYS_SECONDS = (10, 60)
+TWELVE_DATA_PRIORITY_TICKERS = {"QQQ", "HYG", "QQEW", "XLY", "XLP"}
 
 
 def get_fred_api_key() -> str:
@@ -128,6 +131,18 @@ def get_fred_base_url() -> str:
 
 def get_alphavantage_base_url() -> str:
     return get_base_url("alphavantage") or DEFAULT_ALPHAVANTAGE_BASE_URL
+
+
+def get_twelve_data_api_key() -> str:
+    return (
+        os.getenv("TWELVE_DATA_API_KEY", "").strip()
+        or os.getenv("twelve_data_api_key", "").strip()
+        or get_api_key("twelve_data")
+    )
+
+
+def get_twelve_data_base_url() -> str:
+    return get_base_url("twelve_data") or DEFAULT_TWELVE_DATA_BASE_URL
 
 # M7成分股列表
 M7_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
@@ -283,6 +298,95 @@ def _write_yf_info_cache(cache_key: str, value: Dict[str, Any]) -> None:
         logging.warning(f"Failed writing yfinance info cache {path}: {exc}")
 
 
+def _is_twelve_data_priority_download(tickers: Any, interval: str, auto_adjust: bool) -> bool:
+    if auto_adjust or interval != "1d":
+        return False
+    if isinstance(tickers, (list, tuple, set)):
+        return False
+    ticker = str(tickers).strip().upper()
+    return ticker in TWELVE_DATA_PRIORITY_TICKERS
+
+
+def _format_twelve_date(value: Optional[Any]) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        return pd.to_datetime(value).strftime("%Y-%m-%d")
+    except Exception:
+        return str(value)
+
+
+def _fetch_twelve_data_daily_frame(
+    ticker: str,
+    start: Optional[Any] = None,
+    end: Optional[Any] = None,
+) -> pd.DataFrame:
+    api_key = get_twelve_data_api_key()
+    if not api_key:
+        return pd.DataFrame()
+
+    params: Dict[str, Any] = {
+        "symbol": ticker.upper(),
+        "interval": "1day",
+        "outputsize": 5000,
+        "apikey": api_key,
+    }
+    start_date = _format_twelve_date(start)
+    end_date = _format_twelve_date(end)
+    if start_date:
+        params["start_date"] = start_date
+    if end_date:
+        params["end_date"] = end_date
+
+    try:
+        response = requests.get(
+            get_twelve_data_base_url().rstrip("/") + "/time_series",
+            params=params,
+            proxies=get_requests_proxies(),
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        logging.warning("Twelve Data fetch failed for %s: %s", ticker, str(exc)[:120])
+        return pd.DataFrame()
+
+    if payload.get("status") == "error":
+        logging.warning("Twelve Data returned error for %s: %s", ticker, str(payload.get("message", ""))[:160])
+        return pd.DataFrame()
+
+    values = payload.get("values")
+    if not isinstance(values, list) or not values:
+        return pd.DataFrame()
+
+    frame = pd.DataFrame(values)
+    if frame.empty or "datetime" not in frame.columns:
+        return pd.DataFrame()
+
+    frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
+    frame = frame.dropna(subset=["datetime"]).set_index("datetime").sort_index()
+    frame.index.name = "Date"
+
+    column_map = {
+        "open": "Open",
+        "high": "High",
+        "low": "Low",
+        "close": "Close",
+        "volume": "Volume",
+    }
+    frame = frame.rename(columns=column_map)
+    wanted = [col for col in ["Open", "High", "Low", "Close", "Volume"] if col in frame.columns]
+    frame = frame[wanted]
+    for col in wanted:
+        frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    frame = frame.dropna(subset=["Close"])
+    if frame.empty:
+        return pd.DataFrame()
+    if "Adj Close" not in frame.columns:
+        frame["Adj Close"] = frame["Close"]
+    return frame[["Open", "High", "Low", "Close", "Adj Close", "Volume"]]
+
+
 def cached_yf_download(
     tickers: Any,
     start: Optional[Any] = None,
@@ -296,7 +400,7 @@ def cached_yf_download(
     鐪熸鐨勪紭鍖栧彧鍙戠敓鍦ㄢ€滃悓涓€娆¤繍琛屽唴涓嶉噸澶嶄笅杞解€濊繖涓眰闈紝
     鑰屼笉鍘绘敼鍙樻寚鏍囧叕寮忋€佹暟鎹簮鎴栬緭鍑虹粨鏋勩€?
     """
-    if not YF_AVAILABLE:
+    if not YF_AVAILABLE and not get_twelve_data_api_key():
         return pd.DataFrame()
 
     if isinstance(tickers, (list, tuple, set)):
@@ -316,6 +420,23 @@ def cached_yf_download(
     )
 
     def _fetch() -> pd.DataFrame:
+        recent = _read_yf_frame_cache(cache_key, max_age_seconds=YF_FRAME_CACHE_PREFER_MAX_AGE_SECONDS)
+        if not recent.empty:
+            return recent
+
+        if _is_twelve_data_priority_download(tickers, interval, auto_adjust):
+            frame = _fetch_twelve_data_daily_frame(ticker_key, start=start, end=end)
+            if not frame.empty:
+                logging.info("Using Twelve Data priority daily frame for %s", ticker_key)
+                _write_yf_frame_cache(cache_key, frame)
+                return frame
+
+        if not YF_AVAILABLE:
+            stale = _read_yf_frame_cache(cache_key)
+            if not stale.empty:
+                return stale
+            return pd.DataFrame()
+
         last_error: Optional[Exception] = None
         for attempt in range(len(YF_DOWNLOAD_RETRY_DELAYS_SECONDS) + 1):
             empty_reason: Optional[str] = None
@@ -367,9 +488,14 @@ def cached_yf_download(
     if cache is None:
         return _fetch()
 
-    cached_value = cache.get_or_fetch(cache_key, _fetch)
-    if isinstance(cached_value, pd.DataFrame):
+    cached_value = cache.get(cache_key)
+    if isinstance(cached_value, pd.DataFrame) and not cached_value.empty:
         return cached_value.copy()
+
+    fetched = _fetch()
+    if isinstance(fetched, pd.DataFrame) and not fetched.empty:
+        cache.set(cache_key, fetched)
+        return fetched.copy()
     return pd.DataFrame()
 
 

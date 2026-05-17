@@ -6,6 +6,26 @@
 
 ## 2026-05-17
 
+### Twelve Data 优先与 yfinance 入口收口
+
+完成内容：
+
+- 删除旧 `tools_akshare.py` 后，同步移除 `tools_L4.py` 中 QQQ Put/Call 的 AKShare fallback 残留，并从 `requirements.txt` 移除 `akshare` 依赖，避免继续引用错误备用源。
+- `cached_yf_download` 新增 Twelve Data 优先路径：当前只覆盖 `QQQ/HYG/QQEW/XLY/XLP` 的日线 OHLCV，兼容 `.env` 中 `TWELVE_DATA_API_KEY` 与 `twelve_data_api_key`；不把 VIX/VXN、期货、复权序列误接到 Twelve Data。
+- `cached_yf_download` 在联网前先读取 12 小时内的持久缓存，降低同日重复运行对 Yahoo 的请求压力；失败时仍保留 7 天 stale cache 兜底。
+- `cached_yf_download` 不再把 empty DataFrame 写入同次运行的内存缓存，避免一次限流后把空结果固定住。
+- `tools_L1.py` 中 XLY/XLP、HG/GC、CL、GC/CL 的裸 `yf.download` 收口到 `cached_yf_download`；`chart_generator.py` 和 `data_cache.py` 的直接下载入口也收口到共享入口。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_yfinance_cache_resilience.py`：8 passed。新增覆盖 Twelve Data 优先路径、短时持久缓存优先路径和 empty frame 不写入内存缓存。
+
+剩余边界：
+
+- Twelve Data basic 当前限制为 8 credits/min、800/day，因此只作为关键 ETF 日线优先源，不扩大到成分股全量。
+- `^VIX/^VXN` 仍无 Twelve Data / AkShare 免费稳定替代，暂保留 yfinance 与缓存退避。
+- yfinance `.Ticker` 基本面和期权链仍无法用 Twelve Data 直接替代，后续需要单独评估 Finnhub / Twelve Fundamentals / 付费源。
+
 ### yfinance 限流退避修复（cached_yf_download empty df 路径）
 
 分支：`claude/20260517-yfinance-rate-limit-resilience`
