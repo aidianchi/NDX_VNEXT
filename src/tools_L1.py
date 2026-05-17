@@ -33,7 +33,7 @@ def _get_yf_series_with_analysis(ticker: str, name: str, end_date: Optional[str]
         # 获取至少10年的历史数据，用于计算10年百分位
         request_start_date = effective_date - timedelta(days=365 * 11)
 
-        df = yf.download(
+        df = cached_yf_download(
             ticker,
             start=request_start_date.strftime("%Y-%m-%d"),
             end=request_end_date.strftime("%Y-%m-%d"),
@@ -478,6 +478,22 @@ def _build_net_liquidity_series() -> Tuple[pd.DataFrame, pd.Series, pd.Series, p
     tga_df = ts_manager.get_or_update_series("WTREGEN", _fetch_tga_history)
     rrp_df = ts_manager.get_or_update_series("RRPONTSYD", _fetch_rrp_history)
 
+    def _repair_wtregen_pre_2007_history(series: pd.Series) -> pd.Series:
+        if series.empty:
+            return series
+        index = pd.to_datetime(series.index, errors="coerce")
+        early_mask = (index < pd.Timestamp("2007-05-02")) & (series > 1000)
+        if not early_mask.any():
+            return series
+        repaired = series.copy()
+        repaired.loc[early_mask] = repaired.loc[early_mask] / 100.0
+        logging.warning(
+            "WTREGEN early-history anomaly repaired for %s rows before 2007-05-02; "
+            "FRED historical TGA values appear to use an inconsistent pre-2007 scale.",
+            int(early_mask.sum()),
+        )
+        return repaired
+
     def _normalize_billions(series: pd.Series, series_id: str) -> pd.Series:
         """
         兜底归一到十亿美元，根据序列ID采用不同的转换策略。
@@ -522,16 +538,19 @@ def _build_net_liquidity_series() -> Tuple[pd.DataFrame, pd.Series, pd.Series, p
             # WTREGEN 原始口径可能是百万美元；RRPONTSYD 通常已经是十亿美元。
             if max_val > 10_000:
                 logging.warning(f"{series_id}检测到百万美元口径或混合缓存（最大值={max_val:.2f}），逐点转换为十亿美元")
-                return series.where(series <= 10_000, series / 1000.0)
+                normalized = series.where(series <= 10_000, series / 1000.0)
             elif max_val < 10:
                 # 异常小值
                 logging.error(f"{series_id}数据异常：最大值={max_val:.2f}，远低于合理范围（应在几百到几千十亿美元）")
                 # 可能是万亿美元单位，需要乘以1000
-                return series * 1000.0
+                normalized = series * 1000.0
             else:
                 # 数值在合理范围内
                 logging.info(f"{series_id}数据范围正常：{min_val:.2f} - {max_val:.2f} 十亿美元")
-                return series
+                normalized = series
+            if series_id == "WTREGEN":
+                normalized = _repair_wtregen_pre_2007_history(normalized)
+            return normalized
         
         return series
 

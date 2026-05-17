@@ -102,6 +102,8 @@ ts_manager = TimeSeriesManager(cache_dir=path_config.cache_dir)
 
 DEFAULT_FRED_BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 DEFAULT_ALPHAVANTAGE_BASE_URL = "https://www.alphavantage.co/query"
+YF_FRAME_CACHE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
+YF_DOWNLOAD_RETRY_DELAYS_SECONDS = (2, 6)
 
 
 def get_fred_api_key() -> str:
@@ -206,14 +208,24 @@ def _yf_info_cache_path(cache_key: str) -> str:
     return os.path.join(_yf_persistent_cache_dir(), f"{_yf_cache_slug(cache_key)}.json")
 
 
-def _read_yf_frame_cache(cache_key: str) -> pd.DataFrame:
+def _read_yf_frame_cache(cache_key: str, max_age_seconds: Optional[int] = YF_FRAME_CACHE_MAX_AGE_SECONDS) -> pd.DataFrame:
     path = _yf_frame_cache_path(cache_key)
     if not os.path.exists(path):
         return pd.DataFrame()
     try:
+        if max_age_seconds is not None:
+            age = (datetime.utcnow() - datetime.utcfromtimestamp(os.path.getmtime(path))).total_seconds()
+            if age > max_age_seconds:
+                logging.warning(
+                    "Ignoring expired yfinance frame cache for %s: age %.1f hours exceeds %.1f hours",
+                    cache_key,
+                    age / 3600,
+                    max_age_seconds / 3600,
+                )
+                return pd.DataFrame()
         cached_df = pd.read_pickle(path)
         if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
-            logging.warning(f"Using stale yfinance cache for {cache_key}")
+            logging.warning(f"Using recent yfinance frame cache for {cache_key}")
             return cached_df.copy()
     except Exception as exc:
         logging.warning(f"Failed reading yfinance frame cache {path}: {exc}")
@@ -302,26 +314,39 @@ def cached_yf_download(
     )
 
     def _fetch() -> pd.DataFrame:
-        try:
-            frame = yf.download(
-                tickers,
-                start=start,
-                end=end,
-                interval=interval,
-                progress=progress,
-                auto_adjust=auto_adjust,
-            )
-            if isinstance(frame, pd.DataFrame) and not frame.empty:
-                _write_yf_frame_cache(cache_key, frame)
-                return frame
-            stale = _read_yf_frame_cache(cache_key)
-            if not stale.empty:
-                return stale
-            return pd.DataFrame()
-        except Exception as exc:
-            logging.warning(f"yfinance download failed for {ticker_key}: {exc}")
-            stale = _read_yf_frame_cache(cache_key)
-            return stale if not stale.empty else pd.DataFrame()
+        last_error: Optional[Exception] = None
+        for attempt in range(len(YF_DOWNLOAD_RETRY_DELAYS_SECONDS) + 1):
+            try:
+                frame = yf.download(
+                    tickers,
+                    start=start,
+                    end=end,
+                    interval=interval,
+                    progress=progress,
+                    auto_adjust=auto_adjust,
+                )
+                if isinstance(frame, pd.DataFrame) and not frame.empty:
+                    _write_yf_frame_cache(cache_key, frame)
+                    return frame
+                stale = _read_yf_frame_cache(cache_key)
+                if not stale.empty:
+                    return stale
+                return pd.DataFrame()
+            except Exception as exc:
+                last_error = exc
+                stale = _read_yf_frame_cache(cache_key)
+                if not stale.empty:
+                    return stale
+                if attempt < len(YF_DOWNLOAD_RETRY_DELAYS_SECONDS):
+                    delay = YF_DOWNLOAD_RETRY_DELAYS_SECONDS[attempt]
+                    logging.warning("yfinance download failed for %s: %s; retrying in %ss", ticker_key, exc, delay)
+                    time.sleep(delay)
+                    continue
+                logging.warning(f"yfinance download failed for {ticker_key}: {exc}")
+                return pd.DataFrame()
+        if last_error:
+            logging.warning(f"yfinance download failed for {ticker_key}: {last_error}")
+        return pd.DataFrame()
 
     if not CACHE_AVAILABLE or get_global_cache is None:
         return _fetch()

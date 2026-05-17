@@ -40,6 +40,22 @@ def test_l5_formula_layer_keeps_core_fields_and_adds_price_volume_quality():
     assert indicators["mfi_status"] in {"overbought", "oversold", "neutral"}
     assert indicators["cmf_20"] is not None
     assert indicators["cmf_status"] in {"accumulation", "distribution", "neutral"}
+    assert indicators["adx_14"] is not None
+    assert indicators["pdi_14"] is not None
+    assert indicators["mdi_14"] is not None
+    assert indicators["adx_trend_strength"] in {"strong", "weak_or_range"}
+
+
+def test_l5_formula_layer_calculates_adx_without_ta_library(monkeypatch):
+    monkeypatch.setattr(tools_L5, "TA_LIB_AVAILABLE", False)
+
+    indicators = tools_L5.calculate_technical_indicators_yf(_ohlcv_frame())
+
+    assert indicators["formula_engine"] == "internal_fallback"
+    assert indicators["adx_14"] is not None
+    assert indicators["pdi_14"] is not None
+    assert indicators["mdi_14"] is not None
+    assert indicators["adx_direction"] in {"up", "down", "neutral"}
 
 
 def test_l5_price_volume_quality_reuses_technical_indicator_payload(monkeypatch):

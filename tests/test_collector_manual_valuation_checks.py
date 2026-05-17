@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import manual_data
+import core.collector as collector_module
 from core.collector import DataCollector
 
 
@@ -53,3 +54,36 @@ def test_manual_ndx_valuation_keeps_live_third_party_checks(tmp_path, monkeypatc
     assert raw["value"]["ThirdPartyChecks"][0]["source_id"] == "worldperatio_pe"
     assert raw["data_quality"]["source_disagreement"]["trendonify_forward_pe"]["browser_sidecar"]["user_trusted"] is True
     assert "Manual valuation values remain primary" in raw["manual_override_note"]
+
+
+def test_manual_confidence_only_falls_back_to_live_source(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.collector.path_config.data_dir", str(tmp_path))
+    monkeypatch.setattr(
+        manual_data,
+        "load_manual_data",
+        lambda: {
+            "active": True,
+            "metrics": {
+                "get_ndx_pe_and_earnings_yield": {
+                    "name": "NDX Valuation (Manual)",
+                    "value": {},
+                    "source_name": "Wind",
+                    "data_quality": {"coverage": {"confidence": "high"}},
+                }
+            },
+        },
+    )
+    monkeypatch.setitem(
+        collector_module.TOOLS_REGISTRY,
+        "get_ndx_pe_and_earnings_yield",
+        lambda end_date=None: {"name": "NDX Valuation (Live)", "value": {"PE_TTM": 35.0}, "source_name": "live"},
+    )
+
+    collector = DataCollector()
+    collector.LAYER_FUNCTIONS = {4: ["get_ndx_pe_and_earnings_yield"]}
+
+    data = collector.run()
+    raw = data["indicators"][0]["raw_data"]
+
+    assert raw["source_name"] == "live"
+    assert raw["value"]["PE_TTM"] == 35.0

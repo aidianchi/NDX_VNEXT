@@ -68,3 +68,11 @@ def test_manual_erp_description_fields_do_not_trigger_override():
     }
 
     assert manual_data.has_meaningful_manual_override(metric) is False
+
+
+def test_manual_confidence_metadata_does_not_trigger_override():
+    metric = json.loads(json.dumps(manual_data.DEFAULT_MANUAL_DATA["metrics"]["get_ndx_pe_and_earnings_yield"]))
+    metric["data_quality"]["coverage"]["confidence"] = "high"
+    metric["source_name"] = "Wind"
+
+    assert manual_data.has_meaningful_manual_override(metric) is False

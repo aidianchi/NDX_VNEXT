@@ -11,6 +11,36 @@ import numpy as np
 import pytest
 
 
+def test_net_liquidity_repairs_pre_2007_tga_scale_anomaly(monkeypatch):
+    import tools_L1
+
+    def series_frame(values):
+        return pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2006-01-04", "2007-05-02", "2026-05-01"]),
+                "value": values,
+            }
+        )
+
+    frames = {
+        "WALCL": series_frame([719.0, 850.0, 7600.0]),
+        "WTREGEN": series_frame([5959.0, 15.0, 600.0]),
+        "RRPONTSYD": series_frame([0.0, 0.0, 100.0]),
+    }
+
+    monkeypatch.setattr(
+        tools_L1.ts_manager,
+        "get_or_update_series",
+        lambda series_id, fetcher: frames[series_id].copy(),
+    )
+
+    net_df, _walcl, tga, _rrp = tools_L1._build_net_liquidity_series()
+    first_net = float(net_df.iloc[0]["value"])
+
+    assert float(tga.iloc[0]) == pytest.approx(59.59)
+    assert first_net > 0
+
+
 # ---------------------------------------------------------------------------
 # tools_L4 — data cleaning / parsing helpers
 # ---------------------------------------------------------------------------

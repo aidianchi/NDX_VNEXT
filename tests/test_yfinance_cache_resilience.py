@@ -31,6 +31,31 @@ def test_cached_yf_download_uses_stale_persistent_cache_when_live_fetch_empty(tm
     assert result.iloc[0]["Close"] == 100.0
 
 
+def test_cached_yf_download_ignores_expired_persistent_cache_when_live_fetch_empty(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(tools_common.path_config, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(tools_common, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_common, "CACHE_AVAILABLE", False)
+    monkeypatch.setattr(tools_common, "YF_DOWNLOAD_RETRY_DELAYS_SECONDS", ())
+
+    stale = pd.DataFrame({"Close": [100.0]})
+    cache_key = ":".join(["yf.download", "QQQ", "2026-01-01", "2026-01-02", "1d", "raw"])
+    tools_common._write_yf_frame_cache(cache_key, stale)
+    cache_path = Path(tools_common._yf_frame_cache_path(cache_key))
+    expired = cache_path.stat().st_mtime - tools_common.YF_FRAME_CACHE_MAX_AGE_SECONDS - 60
+    os.utime(cache_path, (expired, expired))
+
+    class _YF:
+        @staticmethod
+        def download(*args, **kwargs):
+            return pd.DataFrame()
+
+    monkeypatch.setattr(tools_common, "yf", _YF)
+
+    result = tools_common.cached_yf_download("QQQ", start="2026-01-01", end="2026-01-02")
+
+    assert result.empty
+
+
 def test_ticker_info_retry_uses_recent_persistent_cache(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(tools_common.path_config, "cache_dir", str(tmp_path))
     monkeypatch.setattr(tools_common, "YF_AVAILABLE", True)

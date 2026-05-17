@@ -193,7 +193,13 @@ class InteractiveChartWorkbenchGenerator:
             qqq = series.get("QQQ_OHLCV", {}) if isinstance(series, dict) else {}
             rows = qqq.get("rows", []) if isinstance(qqq, dict) else []
             if isinstance(rows, list) and rows:
-                return rows, f"cached fallback: {path.parent.name}/chart_time_series.json · QQQ OHLCV"
+                latest_time = ""
+                for row in reversed(rows):
+                    if isinstance(row, dict) and row.get("time"):
+                        latest_time = str(row.get("time"))
+                        break
+                suffix = f" · latest {latest_time}" if latest_time else ""
+                return rows, f"cached fallback: {path.parent.name}/chart_time_series.json · QQQ OHLCV{suffix}"
         return [], ""
 
     def _fetch_price_rows(self, lookback_days: int) -> List[Dict[str, Any]]:
@@ -360,10 +366,16 @@ class InteractiveChartWorkbenchGenerator:
         source_label = artifacts.get("_price_source_label", "")
         if "cached fallback" in source_label:
             cached_run = source_label.split("cached fallback: ")[-1].split(" · ")[0] if "cached fallback: " in source_label else ""
+            latest_date = source_label.split(" · latest ")[-1] if " · latest " in source_label else ""
+            meta = artifacts.get("analysis_packet", {}).get("meta", {})
+            run_date = meta.get("data_date") or meta.get("collector_timestamp_utc") or ""
+            detail = f"；缓存最新日期 {latest_date}" if latest_date else ""
+            if run_date:
+                detail += f"；当前 run 数据日期 {str(run_date)[:10]}"
             warnings.append({
                 "level": "warn",
                 "icon": "⚠",
-                "message": f"价格数据来自缓存回退（{cached_run}），非本次运行实时采集。",
+                "message": f"价格数据来自缓存回退（{cached_run}），非本次运行实时采集{detail}。",
             })
         elif "unavailable" in source_label:
             warnings.append({

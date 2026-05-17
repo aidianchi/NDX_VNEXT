@@ -16,7 +16,7 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     latest_data = data_dir / "data_collected_v9_20260509.json"
-    latest_data.write_text("{}", encoding="utf-8")
+    latest_data.write_text('{"timestamp_utc": "2026-05-09T12:30:00Z"}', encoding="utf-8")
     logs_dir = tmp_path / "logs"
     control_log_dir = logs_dir / "control_service"
     control_log_dir.mkdir(parents=True)
@@ -35,7 +35,16 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     assert "历史日期 / 回测" in html
     assert 'id="historicalDateMode"' in html
     assert "人工数据与数据源校准" in html
+    assert "完整 vNext 默认重新采集数据" in html
+    assert "使用人工数据" in html
+    assert 'id="manualActive"' in html
+    assert 'data-manual-field="confidence"' not in html
     assert "当前 PE" in html
+    assert "Forward PE" in html
+    assert "Earnings Yield" in html
+    assert "Forward Earnings Yield" in html
+    assert "FCF Yield" in html
+    assert "当前 PCF" in html
     assert "PE 10Y 分位" in html
     assert "ERP 5Y 分位" in html
     assert "ERP 10Y 分位" in html
@@ -77,6 +86,9 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     assert "fetch(`${controlOrigin}/manual-data`" in html
     assert "src/console_run_all.py" in html
     assert "data_collected_v9_20260509.json" in html
+    assert "dataJsonWarning" in html
+    assert "mode === 'analyze_existing'" in html
+    assert "mode !== 'collect_data'" not in html
     assert "base.concat(['--collect-only']).join(' ')" in html
     assert "document.getElementById('historicalDateMode').checked && dataDate.value" in html
     assert "control service" in html
@@ -103,6 +115,9 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     assert "runCommandPreview" in html
     assert "workbenchCommandPreview" in html
     assert "buildManualPayload" in html
+    assert "valuation.value.ForwardPE = fields.forward_pe" in html
+    assert "valuation.value.FCFYield = fields.fcf_yield" in html
+    assert "valuation.value.PCF_TTM = fields.pcf" in html
 
     console_data = re.search(r'<script type="application/json" id="console-data">(.*?)</script>', html, re.S)
     assert console_data is not None
@@ -112,3 +127,4 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     assert "initialManualData" in parsed
     assert "manual_data.local.json" in parsed["manualPath"]
     assert parsed["latestDataJson"].endswith("data_collected_v9_20260509.json")
+    assert parsed["latestDataJsonMeta"]["data_date"] == "2026-05-09"

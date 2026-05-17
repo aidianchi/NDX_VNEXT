@@ -6,6 +6,40 @@
 
 ## 2026-05-17
 
+### 20260517 run 数据完整性审计修复
+
+完成内容：
+
+- **控制台完整运行不再误用旧数据 JSON**：`完整 vNext` 默认重新采集；只有选择“已有数据分析”时才追加 `--data-json`。控制台会解析最新 data JSON 的数据日期和修改时间，并在已有数据分析模式提示“以 JSON 为准，不会重新采集”。
+- **人工数据 UI 去掉误导性置信度下拉**：改为真实的“使用人工数据”开关，和 collector/packet builder 的 `active + meaningful value` 逻辑一致。仅有来源、日期或 confidence 元数据不会触发人工覆盖。
+- **补齐关键人工估值入口**：控制台表单、回填、保存和校验补齐 Forward PE、Earnings Yield、Forward Earnings Yield、FCF Yield、PCF、Forward PE 分位和 FCF Yield 分位，减少只能手写高级 JSON 的缺口。
+- **yfinance 帧缓存增加时效边界**：持久化 pickle frame cache 默认 7 天 TTL；过期缓存不再作为限流 fallback 使用。`cached_yf_download()` 增加短退避重试；L1 的 yfinance 序列读取改走统一缓存路径。
+- **ADX 增加内部公式 fallback**：当 QQQ OHLCV 可用但 `ta` / `pandas_ta` 不可用时，L5 仍能用内部 Wilder smoothing 公式产出 ADX、+DI 和 -DI，避免把库缺失误报成趋势强度缺失。
+- **Workbench 缓存回退提示增强**：当 QQQ 价格来自旧 run fallback 时，顶部 warning 显示 fallback run、缓存最新日期和当前 run 数据日期，避免误读为本次实时采集。
+- **净流动性早期 TGA 异常修复**：对 2007-05-02 前 WTREGEN/TGA 明显异常的大值做窄规则修正，并记录 warning，避免 2003-2008 的历史口径异常污染 `NET_LIQUIDITY` 图表和历史统计。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_ta_l5_and_pdr_sources.py tests/test_research_console.py tests/test_yfinance_cache_resilience.py tests/test_manual_data_template.py tests/test_collector_manual_valuation_checks.py tests/test_tools_calculation.py tests/test_interactive_chart_workbench.py`：67 passed，4 warnings。
+- `python3 -m pytest -q`：268 passed，4 warnings。
+
+剩余边界：
+
+- ADX 仍取决于 QQQ OHLCV 是否能从 live 或未过期缓存拿到；本轮修复提高公式层韧性，但没有新增第三方 OHLCV 主源。
+- DeepSeek L3 首次 JSON 解析失败已有重试机制，本轮未改变 LLM 输出治理。
+- Workbench 10Y 默认源码和测试已确认生效；用户若仍看到 5Y，大概率是旧 HTML 或浏览器缓存。
+
+### AGENTS 执行准则内化
+
+完成内容：
+
+- 将 `karpathy-guidelines` 的核心纪律内化到 `AGENTS.md`：先暴露假设和取舍，再做最小必要修改，保持外科手术式改动，并以可验证成功标准闭环。
+- 收紧 `AGENTS.md` 推荐工作顺序：先确认成功标准和不可破坏原则，再按 L1-L5、Bridge、Thesis/Governance、数据层、UI 等改动范围选择验证方式。
+
+验证结果：
+
+- 文档检查：确认没有引入外部 skill frontmatter 或整段照搬内容，规则以仓库级 agent 行为准则形式存在。
+
 ### L4 估值权威、新闻连接器、10 年 workbench 与 yfinance 韧性演进
 
 提交：`b4d1551 Evolve valuation news and workbench resilience`

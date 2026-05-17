@@ -74,6 +74,26 @@ class ResearchConsoleGenerator:
             return []
         return sorted(data_root.glob("data_collected_v9_*.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:5]
 
+    def _data_json_meta(self, path: Optional[Path]) -> Dict[str, Any]:
+        if not path:
+            return {}
+        meta: Dict[str, Any] = {
+            "path": str(path),
+            "modified_at": datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return meta
+        timestamp = payload.get("timestamp_utc") or payload.get("collector_timestamp_utc")
+        backtest_date = payload.get("backtest_date")
+        data_date = backtest_date or (str(timestamp)[:10] if timestamp else "")
+        if data_date:
+            meta["data_date"] = data_date
+        if timestamp:
+            meta["collector_timestamp_utc"] = timestamp
+        return meta
+
     def _latest_control_logs(self) -> List[Path]:
         log_root = Path(path_config.logs_dir) / "control_service"
         if not log_root.exists():
@@ -140,6 +160,7 @@ class ResearchConsoleGenerator:
                 "latestWorkbench": str(latest_workbench or ""),
                 "latestRun": str(runs[0] if runs else ""),
                 "latestDataJson": str(latest_data_json or ""),
+                "latestDataJsonMeta": self._data_json_meta(latest_data_json),
                 "browserSidecarPath": str((Path(path_config.output_dir) / "browser_sidecar" / "trendonify_ndx_valuation.json")),
             },
             ensure_ascii=False,
@@ -194,6 +215,7 @@ class ResearchConsoleGenerator:
           <label>已有数据 JSON <input id="dataJsonPath" type="text" value="{_escape(str(latest_data_json or ''))}" placeholder="output/data/data_collected_YYYYMMDD_live.json"></label>
           <label>已有 run 目录 <input id="runDirPath" type="text" value="{_escape(str(runs[0]) if runs else '')}" placeholder="output/analysis/vnext/<run_id>"></label>
         </div>
+        <p class="path-note">完整 vNext 默认重新采集数据；只有选择“已有数据分析”时才会使用上方 JSON。</p>
       </article>
 
       <article class="panel manual-panel" id="manual-panel">
@@ -207,14 +229,7 @@ class ResearchConsoleGenerator:
         <div class="manual-form">
           <label>数据日期 <input data-manual-field="date" type="date"></label>
           <label>来源 <input data-manual-field="source" type="text" placeholder="Wind / manual"></label>
-          <label>置信度
-            <select data-manual-field="confidence">
-              <option value="">不覆盖</option>
-              <option value="high">high</option>
-              <option value="medium">medium</option>
-              <option value="low">low</option>
-            </select>
-          </label>
+          <label class="checkbox-field"><input id="manualActive" type="checkbox"> 使用人工数据</label>
           <fieldset class="metric-pair">
             <legend>ERP</legend>
             <label>ERP % <input data-manual-field="erp" type="number" step="0.01"></label>
@@ -224,8 +239,18 @@ class ResearchConsoleGenerator:
           <fieldset class="metric-pair">
             <legend>PE</legend>
             <label>当前 PE <input data-manual-field="pe" type="number" step="0.01" min="0"></label>
+            <label>Forward PE <input data-manual-field="forward_pe" type="number" step="0.01" min="0"></label>
             <label>PE 5Y 分位 <input data-manual-field="pe_percentile_5y" type="number" step="0.1" min="0" max="100"></label>
             <label>PE 10Y 分位 <input data-manual-field="pe_percentile_10y" type="number" step="0.1" min="0" max="100"></label>
+            <label>Forward PE 5Y 分位 <input data-manual-field="forward_pe_percentile_5y" type="number" step="0.1" min="0" max="100"></label>
+            <label>Forward PE 10Y 分位 <input data-manual-field="forward_pe_percentile_10y" type="number" step="0.1" min="0" max="100"></label>
+          </fieldset>
+          <fieldset class="metric-pair">
+            <legend>收益率</legend>
+            <label>Earnings Yield % <input data-manual-field="earnings_yield" type="number" step="0.01"></label>
+            <label>Forward Earnings Yield % <input data-manual-field="forward_earnings_yield" type="number" step="0.01"></label>
+            <label>FCF Yield % <input data-manual-field="fcf_yield" type="number" step="0.01"></label>
+            <label>FCF Yield 5Y 分位 <input data-manual-field="fcf_yield_percentile_5y" type="number" step="0.1" min="0" max="100"></label>
           </fieldset>
           <fieldset class="metric-pair">
             <legend>PB</legend>
@@ -236,6 +261,7 @@ class ResearchConsoleGenerator:
           <fieldset class="metric-pair">
             <legend>PS</legend>
             <label>当前 PS <input data-manual-field="ps" type="number" step="0.01" min="0"></label>
+            <label>当前 PCF <input data-manual-field="pcf" type="number" step="0.01" min="0"></label>
             <label>PS 5Y 分位 <input data-manual-field="ps_percentile_5y" type="number" step="0.1" min="0" max="100"></label>
             <label>PS 10Y 分位 <input data-manual-field="ps_percentile_10y" type="number" step="0.1" min="0" max="100"></label>
           </fieldset>
@@ -960,20 +986,27 @@ function applyManualPayloadToForm(payload) {
   const dateValue = payload.date || new Date().toISOString().slice(0, 10);
   dataDate.value = dateValue;
   setManualField('date', dateValue);
+  document.getElementById('manualActive').checked = Boolean(payload.active);
   const valuation = manualMetric(payload, 'get_ndx_pe_and_earnings_yield');
   const erp = manualMetric(payload, 'get_damodaran_us_implied_erp');
-  const quality = valuation.data_quality || {};
   setManualField('source', valuation.source_name || erp.source_name || '');
-  setManualField('confidence', ((quality.coverage || {}).confidence) || '');
   const valuationValue = valuation.value || {};
   const erpValue = erp.value || {};
   setManualField('pe', valuationValue.PE_TTM);
+  setManualField('forward_pe', valuationValue.ForwardPE);
+  setManualField('earnings_yield', valuationValue.EarningsYield);
+  setManualField('forward_earnings_yield', valuationValue.ForwardEarningsYield);
+  setManualField('fcf_yield', valuationValue.FCFYield);
   setManualField('pe_percentile_5y', valuationValue.PE_TTM_percentile_5y);
   setManualField('pe_percentile_10y', valuationValue.PE_TTM_percentile_10y);
+  setManualField('forward_pe_percentile_5y', valuationValue.ForwardPE_percentile_5y);
+  setManualField('forward_pe_percentile_10y', valuationValue.ForwardPE_percentile_10y);
+  setManualField('fcf_yield_percentile_5y', valuationValue.FCFYield_percentile_5y);
   setManualField('pb', valuationValue.PB);
   setManualField('pb_percentile_5y', valuationValue.PB_percentile_5y);
   setManualField('pb_percentile_10y', valuationValue.PB_percentile_10y);
   setManualField('ps', valuationValue.PS_TTM);
+  setManualField('pcf', valuationValue.PCF_TTM);
   setManualField('ps_percentile_5y', valuationValue.PS_TTM_percentile_5y);
   setManualField('ps_percentile_10y', valuationValue.PS_TTM_percentile_10y);
   setManualField('erp', erpValue.manual_erp);
@@ -1011,7 +1044,7 @@ function modeCommand(mode, models) {
     base.push(`--date ${dataDate.value}`);
     full.push(`--date ${dataDate.value}`);
   }
-  if (dataPath && mode !== 'collect_data') {
+  if (dataPath && mode === 'analyze_existing') {
     base.push(`--data-json ${dataPath}`);
     full.push(`--data-json ${dataPath}`);
   }
@@ -1054,7 +1087,7 @@ function numberOrNull(value) {
 
 function buildManualPayload() {
   const payload = parseJson(data.manualTemplate, {});
-  payload.active = true;
+  payload.active = document.getElementById('manualActive').checked;
   const fields = {};
   document.querySelectorAll('[data-manual-field]').forEach(input => {
     const raw = input.value.trim();
@@ -1076,17 +1109,21 @@ function buildManualPayload() {
   const setMetricSource = (metric) => {
     if (fields.source) metric.source_name = fields.source;
     if (fields.date && metric.data_quality) metric.data_quality.data_date = fields.date;
-    if (fields.confidence && metric.data_quality) {
-      metric.data_quality.coverage = metric.data_quality.coverage || {};
-      metric.data_quality.coverage.confidence = fields.confidence;
-    }
   };
   [valuation, gap, erp].forEach(setMetricSource);
   valuation.value.PE_TTM = fields.pe;
+  valuation.value.ForwardPE = fields.forward_pe;
+  valuation.value.EarningsYield = fields.earnings_yield;
+  valuation.value.ForwardEarningsYield = fields.forward_earnings_yield;
+  valuation.value.FCFYield = fields.fcf_yield;
   valuation.value.PB = fields.pb;
   valuation.value.PS_TTM = fields.ps;
+  valuation.value.PCF_TTM = fields.pcf;
   valuation.value.PE_TTM_percentile_5y = fields.pe_percentile_5y;
   valuation.value.PE_TTM_percentile_10y = fields.pe_percentile_10y;
+  valuation.value.ForwardPE_percentile_5y = fields.forward_pe_percentile_5y;
+  valuation.value.ForwardPE_percentile_10y = fields.forward_pe_percentile_10y;
+  valuation.value.FCFYield_percentile_5y = fields.fcf_yield_percentile_5y;
   valuation.value.PB_percentile_5y = fields.pb_percentile_5y;
   valuation.value.PB_percentile_10y = fields.pb_percentile_10y;
   valuation.value.PS_TTM_percentile_5y = fields.ps_percentile_5y;
@@ -1100,7 +1137,7 @@ function buildManualPayload() {
 function validateManualPayload(payload) {
   const warnings = [];
   const valuation = payload.metrics.get_ndx_pe_and_earnings_yield.value;
-  ['PE_TTM_percentile_5y', 'PE_TTM_percentile_10y', 'PB_percentile_5y', 'PB_percentile_10y', 'PS_TTM_percentile_5y', 'PS_TTM_percentile_10y'].forEach(key => {
+  ['PE_TTM_percentile_5y', 'PE_TTM_percentile_10y', 'ForwardPE_percentile_5y', 'ForwardPE_percentile_10y', 'FCFYield_percentile_5y', 'PB_percentile_5y', 'PB_percentile_10y', 'PS_TTM_percentile_5y', 'PS_TTM_percentile_10y'].forEach(key => {
     const value = valuation[key];
     if (value !== undefined && value !== null && (value < 0 || value > 100)) warnings.push(`${key} 应在 0-100`);
   });
@@ -1108,10 +1145,13 @@ function validateManualPayload(payload) {
     const value = payload.metrics.get_damodaran_us_implied_erp.value[key];
     if (value !== undefined && value !== null && (value < 0 || value > 100)) warnings.push(`${key} 应在 0-100`);
   });
-  ['PE_TTM', 'PB', 'PS_TTM'].forEach(key => {
+  ['PE_TTM', 'ForwardPE', 'PB', 'PS_TTM', 'PCF_TTM'].forEach(key => {
     const value = valuation[key];
     if (value !== undefined && value !== null && value < 0) warnings.push(`${key} 不应为负数`);
   });
+  if (payload.active && !['PE_TTM', 'ForwardPE', 'EarningsYield', 'ForwardEarningsYield', 'FCFYield', 'PB', 'PS_TTM', 'PCF_TTM'].some(key => valuation[key] !== null && valuation[key] !== undefined)) {
+    warnings.push('已勾选使用人工数据，但关键估值字段仍为空');
+  }
   return warnings;
 }
 
@@ -1123,10 +1163,32 @@ function syncManualPreview() {
   validation.classList.toggle('is-warning', Boolean(warnings.length));
 }
 
+function dataJsonWarning(mode) {
+  if (mode !== 'analyze_existing') return '';
+  const meta = data.latestDataJsonMeta || {};
+  const jsonDate = meta.data_date || '';
+  const modified = meta.modified_at || '';
+  if (!jsonDate && !modified) return '';
+  const selectedDate = dataDate.value || '';
+  const mismatch = selectedDate && jsonDate && selectedDate !== jsonDate;
+  const bits = [`已有数据日期 ${jsonDate || '未知'}`];
+  if (modified) bits.push(`文件修改 ${modified}`);
+  if (mismatch) bits.push(`与分析日期 ${selectedDate} 不一致`);
+  return bits.join('；');
+}
+
 function buildCommand() {
   const mode = selectedRunMode();
   const models = currentModels();
   preview.textContent = modeCommand(mode, models);
+  const warning = dataJsonWarning(mode);
+  if (warning) {
+    runStatus.textContent = `注意：${warning}。已有数据分析会以该 JSON 为准，不会重新采集。`;
+    runStatus.className = 'run-status is-warning';
+  } else if (!activeJobId) {
+    runStatus.textContent = '运行按钮会调用本机 127.0.0.1 的 vNext control service；完整 vNext 会重新采集数据。';
+    runStatus.className = 'run-status';
+  }
   const modules = Array.from(document.querySelectorAll('input[name="workbenchModule"]:checked')).map(node => node.value);
   const runDir = pathValue('runDirPath') || 'output/analysis/vnext/<run_id>';
   workbenchPreview.textContent = `python3 src/interactive_chart_workbench.py --run-dir ${runDir} --modules ${modules.join(',') || 'price_technical'}`;
@@ -1137,6 +1199,7 @@ function buildCommand() {
 document.querySelectorAll('input[name="modelMode"], input[name="runMode"], #customModels, #dataJsonPath, #runDirPath, #historicalDateMode, #skipLegacyReport, #disableCharts, #enableLegacyCharts, #enableNews, #trustBbBrowser, input[name="workbenchModule"]')
   .forEach((node) => node.addEventListener('change', buildCommand));
 document.getElementById('trustBbBrowser').addEventListener('change', syncManualPreview);
+document.getElementById('manualActive').addEventListener('change', syncManualPreview);
 document.querySelectorAll('#customModels, #dataJsonPath, #runDirPath').forEach((node) => node.addEventListener('input', buildCommand));
 document.querySelectorAll('[data-manual-field]').forEach((node) => node.addEventListener('input', syncManualPreview));
 dataDate.addEventListener('change', () => {

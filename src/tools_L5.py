@@ -67,6 +67,31 @@ def _manual_cmf(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Se
         / volume.rolling(window=window, min_periods=window).sum().replace(0, np.nan)
     )
 
+
+def _manual_adx(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    high = pd.to_numeric(high, errors="coerce")
+    low = pd.to_numeric(low, errors="coerce")
+    close = pd.to_numeric(close, errors="coerce")
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=high.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=high.index)
+    true_range = pd.concat(
+        [
+            high - low,
+            (high - close.shift()).abs(),
+            (low - close.shift()).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    alpha = 1 / window
+    atr = true_range.ewm(alpha=alpha, adjust=False, min_periods=window).mean()
+    plus_di = 100 * plus_dm.ewm(alpha=alpha, adjust=False, min_periods=window).mean() / atr.replace(0, np.nan)
+    minus_di = 100 * minus_dm.ewm(alpha=alpha, adjust=False, min_periods=window).mean() / atr.replace(0, np.nan)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    adx = dx.ewm(alpha=alpha, adjust=False, min_periods=window).mean()
+    return adx, plus_di, minus_di
+
 # =====================================================
 # 第5层函数
 # =====================================================
@@ -279,11 +304,17 @@ def calculate_technical_indicators_yf(df: pd.DataFrame) -> dict:
                     indicators["donchian_signal"] = "mid_channel"  # 通道中部
 
         # 9. ADX / DI：趋势强度与方向分离，避免把强度误读成多空结论
-        if {'high', 'low', 'close'}.issubset(df.columns) and len(df) >= 30 and TA_LIB_AVAILABLE:
-            adx_obj = ADXIndicator(df["high"], df["low"], df["close"], window=14)
-            adx = _last_valid(adx_obj.adx())
-            pdi = _last_valid(adx_obj.adx_pos())
-            mdi = _last_valid(adx_obj.adx_neg())
+        if {'high', 'low', 'close'}.issubset(df.columns) and len(df) >= 30:
+            if TA_LIB_AVAILABLE:
+                adx_obj = ADXIndicator(df["high"], df["low"], df["close"], window=14)
+                adx_series = adx_obj.adx()
+                pdi_series = adx_obj.adx_pos()
+                mdi_series = adx_obj.adx_neg()
+            else:
+                adx_series, pdi_series, mdi_series = _manual_adx(df["high"], df["low"], df["close"], window=14)
+            adx = _last_valid(adx_series)
+            pdi = _last_valid(pdi_series)
+            mdi = _last_valid(mdi_series)
             indicators["adx_14"] = _round_value(adx, 2)
             indicators["pdi_14"] = _round_value(pdi, 2)
             indicators["mdi_14"] = _round_value(mdi, 2)
@@ -844,4 +875,3 @@ def get_multi_scale_ma_position(end_date: str = None) -> Dict[str, Any]:
 # =====================================================
 # 新增函数 (任务一)
 # =====================================================
-
