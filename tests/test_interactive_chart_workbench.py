@@ -84,6 +84,10 @@ def test_interactive_chart_workbench_generates_lightweight_chart_html(tmp_path: 
     assert "moduleReadoutHtml" in html
     assert "findPointAtOrBefore" in html
     assert "function timeKey(value)" in html
+    assert "function readoutModuleKey(entry)" in html
+    assert "'price_technical'" in html
+    assert "chartInlineLegend" in html
+    assert "updateInlineLegends" in html
     assert "Latest · " in html
     assert "<dt>MA20</dt>" in html
     assert "<dt>VWAP20</dt>" in html
@@ -188,6 +192,9 @@ def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(t
     assert "syncLocked = true;\nchart.timeScale().fitContent();" in html
     assert "function unregisterChart(chart)" in html
     assert "unregisterChart(moduleCharts[moduleKey]);" in html
+    assert "createBaseChart(root, 640, 'price', 'price_technical')" in html
+    assert "createBaseChart(target, 150, panelKey, 'price_technical')" in html
+    assert "legendItem(item.label, point, color, 2, key)" in html
     assert "syncedCharts.forEach(item => item.timeScale().fitContent())" not in html
     assert 'data-price-module-only' in html
     assert 'id="summaryValueB"' in html

@@ -478,18 +478,18 @@ def _build_net_liquidity_series() -> Tuple[pd.DataFrame, pd.Series, pd.Series, p
     tga_df = ts_manager.get_or_update_series("WTREGEN", _fetch_tga_history)
     rrp_df = ts_manager.get_or_update_series("RRPONTSYD", _fetch_rrp_history)
 
-    def _repair_wtregen_pre_2007_history(series: pd.Series) -> pd.Series:
+    def _repair_wtregen_early_mixed_cache(series: pd.Series) -> pd.Series:
         if series.empty:
             return series
         index = pd.to_datetime(series.index, errors="coerce")
-        early_mask = (index < pd.Timestamp("2007-05-02")) & (series > 1000)
+        early_mask = (index < pd.Timestamp("2008-10-22")) & (series > 1000)
         if not early_mask.any():
             return series
         repaired = series.copy()
-        repaired.loc[early_mask] = repaired.loc[early_mask] / 100.0
+        repaired.loc[early_mask] = repaired.loc[early_mask] / 1000.0
         logging.warning(
-            "WTREGEN early-history anomaly repaired for %s rows before 2007-05-02; "
-            "FRED historical TGA values appear to use an inconsistent pre-2007 scale.",
+            "WTREGEN early-history mixed-cache anomaly repaired for %s rows before 2008-10-22; "
+            "cached historical TGA values appear to mix raw million-dollar and normalized billion-dollar units.",
             int(early_mask.sum()),
         )
         return repaired
@@ -549,7 +549,7 @@ def _build_net_liquidity_series() -> Tuple[pd.DataFrame, pd.Series, pd.Series, p
                 logging.info(f"{series_id}数据范围正常：{min_val:.2f} - {max_val:.2f} 十亿美元")
                 normalized = series
             if series_id == "WTREGEN":
-                normalized = _repair_wtregen_pre_2007_history(normalized)
+                normalized = _repair_wtregen_early_mixed_cache(normalized)
             return normalized
         
         return series

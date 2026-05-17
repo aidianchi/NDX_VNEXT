@@ -6,6 +6,30 @@
 
 ## 2026-05-17
 
+### Workbench Crosshair、流动性早期单位与新闻层中文分析修复
+
+完成内容：
+
+- 修复价格技术 workbench crosshair 读数长期缺失的根因：主价格图内部 key 是 `price`、副图是 `macd/volume/...`，但右侧读数只识别 `price_technical`。现在主图和所有价格技术副图都显式映射回 `price_technical`，hover 后右侧读数稳定显示 OHLC、均线、VWAP、Bollinger、Donchian、Volume、OBV、MACD、RSI、ATR、MFI、CMF。
+- 把 MACD 左上角读数从单点范例推广为通用图内读数：价格主图、所有副图、波动信用/利率估值/广度集中度/流动性模块图都会在左上角显示当前 crosshair 对应的可绘制序列值；模块重绘后也会重新注册 crosshair。
+- 修复 2009 年前净流动性假负数：WTREGEN/TGA 本地混合缓存中，2007-05-09 到 2008-10-21 一段小于 `10000` 的 FRED 原始“百万美元”值被误当成“十亿美元”。修复后 2008-10-22 前 `WTREGEN > 1000` 的早期混合缓存点统一除以 `1000`，并把原先 pre-2007 的 `/100` 错误修正为 `/1000`。
+- 新增 `news_layer_analysis.json` 独立 sidecar：对官方事件生成中文概要、可能对股市的影响、压力通道和新闻层总分析；仍明确不进入 L1-L5，不成为 `evidence_ref`，只作为背景/催化剂/复核线索。
+- Native brief 新闻区升级为“新闻中文概要、股市影响与市场连接观察”，顶部展示新闻层总分析，逐条事件展示中文概要和可能影响，原有附近市场序列观察继续作为可展开审计材料。
+- 重新生成最新 run 的 `chart_time_series.json`、`news_layer_analysis.json`、`output/reports/vnext_workbench_20260517_1852.html` 和 `output/reports/vnext_brief_20260517_1852.html`。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_interactive_chart_workbench.py tests/test_tools_calculation.py tests/test_news_layer_analyzer.py tests/test_news_event_data_linker.py tests/test_vnext_reporter.py`：68 passed，4 warnings。
+- `python3 -m pytest -q`：278 passed，4 warnings。
+- 最新 run 数据复核：`NET_LIQUIDITY` 2009 年前最小值为 `706.10`，不再出现假负数；`2007-05-09` TGA 为 `4.914`、净流动性为 `864.606`；`2008-01-02` TGA 为 `8.693`、净流动性为 `911.994`。
+- 浏览器 hover 验证：价格技术 readout 包含 `MA20` / `VWAP20` 且不再显示“该模块暂无”；波动信用 readout 包含 `VIX` 且不再显示“该模块暂无”；页面内共有 10 个 `.chart-inline-legend`。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_brief_20260517_1852.html --workbench-html output/reports/vnext_workbench_20260517_1852.html --console-html output/reports/vnext_research_console.html --output-dir output/visual_regression/workbench_news_liquidity_fix`：passed。
+
+剩余边界：
+
+- 新闻层当前为规则化中文解读，不是 LLM 深度新闻分析；它能给出保守影响通道和总分析，但不会也不应声称因果证明。
+- 油价尚未进入 `chart_time_series` / 新闻连接器，因此新闻层只能明确提示“无法自动判断油价高企通道”；如要分析该通道，需要后续接入 WTI/Brent。
+
 ### Workbench MACD 图内图例与读数补强
 
 完成内容：

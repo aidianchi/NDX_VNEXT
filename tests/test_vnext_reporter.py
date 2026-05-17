@@ -52,10 +52,30 @@ def test_vnext_reporter_news_section_shows_event_data_links():
                     }
                 ]
             },
+            "news_layer_analysis": {
+                "aggregate_analysis": {
+                    "market_state_zh": "综合看来，新闻背景更偏向利率和政策预期敏感。",
+                    "equity_fragility_zh": "若新闻同时对应利率上行和波动率上升，股市脆弱性会增加。",
+                    "rate_pressure_zh": "涉及美联储的数据会改变降息/加息预期。",
+                    "oil_pressure_zh": "本次新闻连接器尚未接入油价序列。",
+                    "dominant_pressure_channels": ["利率预期", "风险溢价上升"],
+                },
+                "event_summaries": [
+                    {
+                        "event_id": "event:fomc",
+                        "summary_zh": "这是一条来自美联储的政策事件。",
+                        "possible_equity_impact_zh": "可能通过利率预期影响股市。",
+                        "pressure_channels": ["利率预期"],
+                    }
+                ],
+                "source_boundary": "本新闻层只基于官方事件标题和市场序列观察生成。",
+            },
         }
     )
 
-    assert "官方事件底账与市场连接观察" in html
+    assert "新闻中文概要、股市影响与市场连接观察" in html
+    assert "新闻层总分析" in html
+    assert "可能对股市的影响" in html
     assert "附近市场序列观察" in html
     assert "QQQ 在事件日前后" in html
     assert "不是因果证明，也不是 evidence_ref" in html

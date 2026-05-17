@@ -695,6 +695,32 @@ p, li {
   font-size: 13px;
   line-height: 1.55;
 }
+.news-aggregate {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-raised);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.news-aggregate h3 {
+  margin: 0 0 8px;
+  font: 700 17px/1.3 var(--sans);
+}
+.news-aggregate p,
+.news-impact p {
+  margin: 0 0 8px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.news-impact {
+  display: grid;
+  gap: 4px;
+}
+.news-impact b {
+  color: var(--ink);
+  font: 700 12px/1.3 var(--sans);
+}
 .news-tags {
   display: flex;
   flex-wrap: wrap;

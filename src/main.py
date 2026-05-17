@@ -17,6 +17,7 @@ try:
     from .core import DataCollector, DataIntegrity, ReportGenerator
     from .news_event_data_linker import write_news_event_data_links
     from .news_event_ledger import NewsEventLedgerBuilder
+    from .news_layer_analyzer import write_news_layer_analysis
 except ImportError:
     from agent_analysis import adapt_vnext_to_legacy
     from agent_analysis.orchestrator import VNextOrchestrator
@@ -27,6 +28,7 @@ except ImportError:
     from core import DataCollector, DataIntegrity, ReportGenerator
     from news_event_data_linker import write_news_event_data_links
     from news_event_ledger import NewsEventLedgerBuilder
+    from news_layer_analyzer import write_news_layer_analysis
 
 
 DEFAULT_MODEL_PRIORITY = [
@@ -161,6 +163,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     )
     chart_time_series_path = write_chart_time_series_artifact(run_dir, analysis_packet=packet)
     news_event_data_links_path = ""
+    news_layer_analysis_path = ""
     if args.enable_news and news_event_ledger_payload:
         news_event_data_links_path = write_news_event_data_links(
             run_dir,
@@ -168,6 +171,15 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
             analysis_packet=packet,
             event_ledger_path=news_event_ledger_path,
             chart_time_series_path=chart_time_series_path,
+        )
+        with open(news_event_data_links_path, "r", encoding="utf-8") as handle:
+            news_event_data_links_payload = json.load(handle)
+        news_layer_analysis_path = write_news_layer_analysis(
+            run_dir,
+            event_ledger=news_event_ledger_payload,
+            news_event_data_links=news_event_data_links_payload,
+            event_ledger_path=news_event_ledger_path,
+            news_event_data_links_path=news_event_data_links_path,
         )
 
     orchestrator = VNextOrchestrator(available_models=available_models, output_dir=run_dir)
@@ -203,6 +215,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "chart_time_series": chart_time_series_path,
         "news_event_ledger": news_event_ledger_path,
         "news_event_data_links": news_event_data_links_path,
+        "news_layer_analysis": news_layer_analysis_path,
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
         "approval_status": _enum_value(getattr(artifacts["final_adjudication"], "approval_status", "")),
         "models": available_models,

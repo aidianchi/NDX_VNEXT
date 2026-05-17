@@ -926,6 +926,7 @@ body {
   min-width: 0;
   border: 1px solid var(--rule);
   background: #fff;
+  position: relative;
 }
 .subpanel-grid {
   display: grid;
@@ -983,7 +984,52 @@ body {
 .macd-legend .dif i { background: #2563eb; }
 .macd-legend .dea i { background: #be4d25; }
 .macd-legend .hist i { background: #94a3b8; }
-[data-panel-root] { height: 136px; min-width: 0; }
+[data-panel-root] {
+  height: 136px;
+  min-width: 0;
+  position: relative;
+}
+.chart-inline-legend {
+  position: absolute;
+  z-index: 6;
+  top: 8px;
+  left: 10px;
+  max-width: calc(100% - 20px);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 10px;
+  padding: 5px 7px;
+  border: 1px solid rgba(215, 212, 203, .78);
+  border-radius: 6px;
+  background: rgba(251, 251, 248, .86);
+  color: #2b2b2a;
+  font: 700 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: none;
+  backdrop-filter: blur(5px);
+}
+.chart-inline-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.chart-inline-legend i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.chart-inline-legend small {
+  color: var(--muted);
+  font-size: 10px;
+}
+[data-panel-root] .chart-inline-legend {
+  top: 6px;
+  left: 74px;
+  max-width: calc(100% - 84px);
+}
 .module-copy {
   border: 1px solid var(--rule);
   border-bottom: 0;
@@ -1016,6 +1062,7 @@ body {
   height: 460px;
   border: 1px solid var(--rule);
   background: #fff;
+  position: relative;
 }
 .readout {
   border: 1px solid var(--rule);
@@ -1141,6 +1188,15 @@ function findPointAtOrBefore(rows, time) {
   return null;
 }
 
+function legendItem(label, point, color, digits = 2, targetTime = '') {
+  const stale = point && targetTime && point.time !== targetTime ? ` <small>${point.time}</small>` : '';
+  return `<span style="color:${color}"><i></i>${label} ${fmt(point?.value, digits)}${stale}</span>`;
+}
+
+function candleLegendItem(label, value, color, digits = 2) {
+  return `<span style="color:${color}"><i></i>${label} ${fmt(value, digits)}</span>`;
+}
+
 function macdLegendValues(time) {
   const key = timeKey(time) || latestTimeForModule('price_technical');
   return {
@@ -1174,6 +1230,15 @@ function timeKey(value) {
   return String(value);
 }
 
+function readoutModuleKey(entry) {
+  if (!entry) return activeModuleKey();
+  if (entry.readoutKey) return entry.readoutKey;
+  if (['price', 'volume', 'obv', 'macd', 'rsi-atr', 'money-flow'].includes(entry.key)) {
+    return 'price_technical';
+  }
+  return entry.key || activeModuleKey();
+}
+
 function latestTimeForModule(moduleKey = activeModuleKey()) {
   if (moduleKey === 'price_technical') {
     const latest = payload.candles[payload.candles.length - 1];
@@ -1195,7 +1260,7 @@ function timeFromCrosshair(param, entry) {
     const index = Math.max(0, Math.min(entry.primaryData.length - 1, Math.round(param.logical)));
     return entry.primaryData[index]?.time || '';
   }
-  return latestTimeForModule(entry && entry.key ? entry.key : activeModuleKey());
+  return latestTimeForModule(readoutModuleKey(entry));
 }
 
 function addIndicator(key, series) {
@@ -1209,7 +1274,25 @@ function applySeriesVisible(series, visible) {
   }
 }
 
-function createBaseChart(target, height, key = 'chart') {
+function subscribeEntryCrosshair(entry) {
+  if (!entry || entry.crosshairSubscribed) return;
+  if (entry.chart && typeof entry.chart.subscribeCrosshairMove === 'function') {
+    entry.chart.subscribeCrosshairMove(param => handleCrosshair(param, entry));
+    entry.crosshairSubscribed = true;
+  }
+}
+
+function ensureInlineLegend(target, entry) {
+  if (!target || !entry) return null;
+  const legend = document.createElement('div');
+  legend.className = 'chart-inline-legend';
+  legend.dataset.chartInlineLegend = entry.key;
+  target.appendChild(legend);
+  entry.inlineLegend = legend;
+  return legend;
+}
+
+function createBaseChart(target, height, key = 'chart', readoutKey = key) {
   const chart = LightweightCharts.createChart(target, {
     autoSize: true,
     height,
@@ -1219,8 +1302,10 @@ function createBaseChart(target, height, key = 'chart') {
     timeScale: { borderColor: '#d7d4cb', timeVisible: false },
   });
   syncedCharts.push(chart);
-  const entry = { chart, key, primarySeries: null, primaryData: [] };
+  const entry = { chart, key, readoutKey, primarySeries: null, primaryData: [], inlineLegend: null, crosshairSubscribed: false };
   chartEntries.push(entry);
+  ensureInlineLegend(target, entry);
+  subscribeEntryCrosshair(entry);
   const timeScale = chart.timeScale();
   if (timeScale && typeof timeScale.subscribeVisibleLogicalRangeChange === 'function') {
     timeScale.subscribeVisibleLogicalRangeChange((range) => {
@@ -1250,7 +1335,7 @@ function unregisterChart(chart) {
   }
 }
 
-const chart = createBaseChart(root, 640, 'price');
+const chart = createBaseChart(root, 640, 'price', 'price_technical');
 chart.applyOptions({
   grid: { vertLines: { color: '#eeeeea' }, horzLines: { color: '#eeeeea' } },
   crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
@@ -1306,7 +1391,7 @@ addIndicator('overlay_volume', volumeSeries);
 function renderPanel(rootSelector, panelKey, config) {
   const target = document.querySelector(rootSelector);
   if (!target) return;
-  const panel = createBaseChart(target, 150, panelKey);
+  const panel = createBaseChart(target, 150, panelKey, 'price_technical');
   const entry = chartEntries.find(item => item.key === panelKey);
   config.forEach(item => {
     const kind = item.kind || 'line';
@@ -1361,7 +1446,7 @@ function renderModuleChart(moduleKey, colors) {
   target.innerHTML = '';
   const normalize = Boolean(document.querySelector(`[data-module-normalize="${moduleKey}"]`)?.checked);
   const dualAxis = Boolean(document.querySelector(`[data-module-dual-axis="${moduleKey}"]`)?.checked);
-  const moduleChart = createBaseChart(target, 460, moduleKey);
+  const moduleChart = createBaseChart(target, 460, moduleKey, moduleKey);
   moduleCharts[moduleKey] = moduleChart;
   moduleChart.applyOptions({
     leftPriceScale: { visible: dualAxis, borderColor: '#d7d4cb' },
@@ -1391,7 +1476,7 @@ function renderModuleChart(moduleKey, colors) {
       priceScaleId: dualAxis && index % 2 ? 'left' : 'right',
     });
     line.setData(renderedData);
-    moduleSeriesData[moduleKey].push({ label, rows: renderedData, rawRows: data, normalized: normalize });
+    moduleSeriesData[moduleKey].push({ label, rows: renderedData, rawRows: data, normalized: normalize, color: colors[index % colors.length] });
     const entry = chartEntries.find(item => item.key === moduleKey);
     if (entry && !entry.primarySeries) {
       entry.primarySeries = line;
@@ -1410,6 +1495,8 @@ function renderModuleChart(moduleKey, colors) {
       legend.appendChild(button);
     }
   });
+  const moduleEntry = chartEntries.find(item => item.key === moduleKey);
+  updateInlineLegend(moduleEntry, latestTimeForModule(moduleKey));
 }
 
 renderModuleChart('volatility_credit', ['#be4d25', '#7c3aed', '#b7791f', '#2563eb', '#18845b']);
@@ -1664,6 +1751,78 @@ function moduleReadoutHtml(time, moduleKey, isLatest = false) {
   `;
 }
 
+function priceChartLegendHtml(time) {
+  const key = timeKey(time) || latestTimeForModule('price_technical');
+  const candle = payload.candles.find(item => item.time === key) || {};
+  const parts = [
+    candleLegendItem('Close', candle.close, '#171717'),
+    legendItem('MA20', findPointAtOrBefore(payload.ma.ma20, key), '#2563eb', 2, key),
+    legendItem('MA200', findPointAtOrBefore(payload.ma.ma200, key), '#6d5bd0', 2, key),
+    legendItem('VWAP20', findPointAtOrBefore(payload.bands.vwap20, key), '#7c3aed', 2, key),
+    legendItem('Vol', findPointAtOrBefore(payload.volume, key), '#64748b', 0, key),
+  ];
+  return parts.join('');
+}
+
+function technicalPanelLegendHtml(panelKey, time) {
+  const key = timeKey(time) || latestTimeForModule('price_technical');
+  if (panelKey === 'volume') {
+    return legendItem('Volume', findPointAtOrBefore(payload.volume, key), '#64748b', 0, key);
+  }
+  if (panelKey === 'obv') {
+    return legendItem('OBV', findPointAtOrBefore(payload.subpanels.obv, key), '#7c3aed', 0, key);
+  }
+  if (panelKey === 'macd') {
+    return [
+      legendItem('DIF', findPointAtOrBefore(payload.subpanels.macd, key), '#2563eb', 2, key),
+      legendItem('DEA', findPointAtOrBefore(payload.subpanels.macd_signal, key), '#be4d25', 2, key),
+      legendItem('Hist', findPointAtOrBefore(payload.subpanels.macd_histogram, key), '#64748b', 2, key),
+    ].join('');
+  }
+  if (panelKey === 'rsi-atr') {
+    return [
+      legendItem('RSI', findPointAtOrBefore(payload.subpanels.rsi14, key), '#b7791f', 2, key),
+      legendItem('ATR', findPointAtOrBefore(payload.subpanels.atr14, key), '#0f766e', 2, key),
+    ].join('');
+  }
+  if (panelKey === 'money-flow') {
+    return [
+      legendItem('MFI', findPointAtOrBefore(payload.subpanels.mfi14, key), '#2563eb', 2, key),
+      legendItem('CMF', findPointAtOrBefore(payload.subpanels.cmf20, key), '#18845b', 4, key),
+    ].join('');
+  }
+  return priceChartLegendHtml(key);
+}
+
+function moduleChartLegendHtml(moduleKey, time) {
+  const key = timeKey(time) || latestTimeForModule(moduleKey);
+  const rows = moduleSeriesData[moduleKey] || [];
+  if (!rows.length) return '<span>暂无可绘制序列</span>';
+  return rows.map((item, index) => {
+    const point = findPointAtOrBefore(item.rows, key);
+    const color = item.color || '#2563eb';
+    return legendItem(item.label, point, color, 2, key);
+  }).join('');
+}
+
+function updateInlineLegend(entry, time) {
+  if (!entry || !entry.inlineLegend) return;
+  const moduleKey = readoutModuleKey(entry);
+  const key = timeKey(time) || latestTimeForModule(moduleKey);
+  let html = '';
+  if (moduleKey === 'price_technical') {
+    html = entry.key === 'price' ? priceChartLegendHtml(key) : technicalPanelLegendHtml(entry.key, key);
+  } else {
+    html = moduleChartLegendHtml(moduleKey, key);
+  }
+  entry.inlineLegend.innerHTML = html;
+  entry.inlineLegend.title = `${moduleKey} ${key}`;
+}
+
+function updateInlineLegends(time) {
+  chartEntries.forEach(entry => updateInlineLegend(entry, time));
+}
+
 function readoutHtml(time, moduleKey = activeModuleKey(), isLatest = false) {
   return moduleKey === 'price_technical' ? priceReadoutHtml(time, isLatest) : moduleReadoutHtml(time, moduleKey, isLatest);
 }
@@ -1682,7 +1841,7 @@ function syncCrosshair(time, sourceEntry) {
 }
 
 function handleCrosshair(param, entry) {
-  const moduleKey = entry && entry.key ? entry.key : activeModuleKey();
+  const moduleKey = readoutModuleKey(entry);
   const time = timeFromCrosshair(param, entry);
   if (!time) {
     readout.innerHTML = defaultReadoutHtml(moduleKey);
@@ -1690,19 +1849,19 @@ function handleCrosshair(param, entry) {
   }
   readout.innerHTML = readoutHtml(time, moduleKey);
   updateMacdLegend(time);
+  updateInlineLegends(time);
   syncCrosshair(time, entry);
 }
 
 chartEntries.forEach(entry => {
-  if (entry.chart && typeof entry.chart.subscribeCrosshairMove === 'function') {
-    entry.chart.subscribeCrosshairMove(param => handleCrosshair(param, entry));
-  }
+  subscribeEntryCrosshair(entry);
 });
 
 let savedPreset = 'simple_price';
 try { savedPreset = localStorage.getItem(STORAGE_KEY) || 'simple_price'; } catch (error) {}
 applyPreset(PRESETS[savedPreset] ? savedPreset : 'simple_price', false);
 updateActiveModuleChrome('price_technical');
+updateInlineLegends(latestTimeForModule('price_technical'));
 updateRange(3650);
 """
 

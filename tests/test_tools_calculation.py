@@ -37,8 +37,39 @@ def test_net_liquidity_repairs_pre_2007_tga_scale_anomaly(monkeypatch):
     net_df, _walcl, tga, _rrp = tools_L1._build_net_liquidity_series()
     first_net = float(net_df.iloc[0]["value"])
 
-    assert float(tga.iloc[0]) == pytest.approx(59.59)
+    assert float(tga.iloc[0]) == pytest.approx(5.959)
     assert first_net > 0
+
+
+def test_net_liquidity_repairs_2007_2008_tga_mixed_cache_units(monkeypatch):
+    import tools_L1
+
+    def series_frame(values):
+        return pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2007-05-09", "2008-01-02", "2026-05-01"]),
+                "value": values,
+            }
+        )
+
+    frames = {
+        "WALCL": series_frame([875.27, 900.0, 7600.0]),
+        "WTREGEN": series_frame([4914.0, 8672.313, 600.0]),
+        "RRPONTSYD": series_frame([5.75, 0.0, 100.0]),
+    }
+
+    monkeypatch.setattr(
+        tools_L1.ts_manager,
+        "get_or_update_series",
+        lambda series_id, fetcher: frames[series_id].copy(),
+    )
+
+    net_df, _walcl, tga, _rrp = tools_L1._build_net_liquidity_series()
+
+    assert float(tga.loc[pd.Timestamp("2007-05-09")]) == pytest.approx(4.914)
+    assert float(tga.loc[pd.Timestamp("2008-01-02")]) == pytest.approx(8.672313)
+    assert float(net_df.loc[net_df["date"] == pd.Timestamp("2007-05-09"), "value"].iloc[0]) > 0
+    assert float(net_df.loc[net_df["date"] == pd.Timestamp("2008-01-02"), "value"].iloc[0]) > 0
 
 
 # ---------------------------------------------------------------------------

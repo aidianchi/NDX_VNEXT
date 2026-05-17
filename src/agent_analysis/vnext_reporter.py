@@ -630,6 +630,7 @@ class VNextReportGenerator:
             "context_brief": _load_json(run_path / "context_brief.json", {}),
             "news_event_ledger": _load_json(run_path / "news_event_ledger.json", {}),
             "news_event_data_links": _load_json(run_path / "news_event_data_links.json", {}),
+            "news_layer_analysis": _load_json(run_path / "news_layer_analysis.json", {}),
             "layers": layers,
             "bridges": bridges,
             "run_summary": _load_json(run_path / "run_summary.json", {}),
@@ -652,6 +653,7 @@ class VNextReportGenerator:
             "risk_boundary_report": artifacts["risk_boundary_report"],
             "news_event_ledger": artifacts.get("news_event_ledger", {}),
             "news_event_data_links": artifacts.get("news_event_data_links", {}),
+            "news_layer_analysis": artifacts.get("news_layer_analysis", {}),
             "critique": artifacts["critique"],
             "schema_guard_report": artifacts["schema_guard_report"],
         }
@@ -928,6 +930,13 @@ class VNextReportGenerator:
     def _news_section(self, artifacts: Dict[str, Any]) -> str:
         ledger = artifacts.get("news_event_ledger", {})
         data_links = artifacts.get("news_event_data_links", {})
+        news_analysis = artifacts.get("news_layer_analysis", {})
+        aggregate = news_analysis.get("aggregate_analysis", {}) if isinstance(news_analysis, dict) else {}
+        summaries_by_event = {
+            str(item.get("event_id") or item.get("event_ref")): item
+            for item in _as_list(news_analysis.get("event_summaries") if isinstance(news_analysis, dict) else [])
+            if isinstance(item, dict)
+        }
         links_by_event = {
             str(link.get("event_id") or link.get("event_ref")): link
             for link in _as_list(data_links.get("links"))
@@ -947,6 +956,22 @@ class VNextReportGenerator:
             url = str(event.get("url") or "")
             title = _escape(event.get("title") or event.get("event_id") or "未命名事件")
             title_html = f'<a href="{_escape(url)}">{title}</a>' if url else title
+            summary = summaries_by_event.get(str(event.get("event_id")), {})
+            summary_html = ""
+            if summary:
+                channels = "".join(
+                    f"<span>{_escape(channel)}</span>"
+                    for channel in _as_list(summary.get("pressure_channels"))[:5]
+                )
+                summary_html = f"""
+    <div class="news-impact">
+      <b>中文概要</b>
+      <p>{_escape(summary.get('summary_zh', ''))}</p>
+      <b>可能对股市的影响</b>
+      <p>{_escape(summary.get('possible_equity_impact_zh', ''))}</p>
+      <div class="news-tags">{channels}</div>
+    </div>
+"""
             link = links_by_event.get(str(event.get("event_id")))
             observations = []
             if link:
@@ -973,7 +998,7 @@ class VNextReportGenerator:
   <div>
     <span class="news-date">{_escape(event.get('published_at', ''))}</span>
     <h3>{title_html}</h3>
-    <p>{_escape(event.get('notes') or '官方来源事件；只作为背景和触发条件，不替代指标证据。')}</p>
+    {summary_html or f"<p>{_escape(event.get('notes') or '官方来源事件；只作为背景和触发条件，不替代指标证据。')}</p>"}
     {link_html}
   </div>
   <div class="news-tags">{''.join(tags)}</div>
@@ -989,12 +1014,33 @@ class VNextReportGenerator:
 <p class="chart-empty">本次 run 没有生成新闻事件底账。控制台可单独采集官方新闻数据；事件只作背景，不进入 L1-L5 数值证据。</p>
 """
         error_html = f"<details><summary>来源异常</summary><ul>{errors}</ul></details>" if errors else ""
+        aggregate_html = ""
+        if aggregate:
+            channels = "".join(
+                f"<span>{_escape(channel)}</span>"
+                for channel in _as_list(aggregate.get("dominant_pressure_channels"))[:6]
+            )
+            aggregate_html = f"""
+  <article class="news-aggregate">
+    <h3>新闻层总分析</h3>
+    <p>{_escape(aggregate.get('market_state_zh') or aggregate.get('one_sentence_zh') or '')}</p>
+    <p>{_escape(aggregate.get('equity_fragility_zh') or '')}</p>
+    <p>{_escape(aggregate.get('rate_pressure_zh') or '')}</p>
+    <p>{_escape(aggregate.get('oil_pressure_zh') or '')}</p>
+    <div class="news-tags">{channels}</div>
+  </article>
+"""
+        boundary = ""
+        if isinstance(news_analysis, dict) and news_analysis.get("source_boundary"):
+            boundary = f"<p class=\"section-note\">{_escape(news_analysis.get('source_boundary'))}</p>"
         return f"""
 <section class="panel news-panel" id="news">
   <div class="section-kicker">03 · 新闻源</div>
-  <h2>官方事件底账与市场连接观察</h2>
-  <p class="section-note">这里只展示官方宏观 RSS、M7 SEC filings，以及事件日前后市场序列的轻量观察。事件可以解释触发背景，但不能替代任何指标证据。</p>
+  <h2>新闻中文概要、股市影响与市场连接观察</h2>
+  <p class="section-note">这里只展示官方事件底账、官方宏观 RSS、M7 SEC filings、中文概要、可能影响通道，以及事件日前后市场序列的轻量观察。事件可以解释触发背景，但不能替代任何指标证据。</p>
+  {aggregate_html}
   <div class="news-grid">{''.join(rows) if rows else empty}</div>
+  {boundary}
   {error_html}
 </section>
 """

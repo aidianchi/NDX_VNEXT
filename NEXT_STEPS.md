@@ -13,7 +13,6 @@
 | --- | --- | --- | --- | --- |
 | P1 | 数据基础 | yfinance 盈利质量代理审计 | yfinance 已从估值 regime 主锚降级，但 forward earnings quality、EPS revision、利润率/增长代理仍依赖它；必须确认字段来源、公式和 stale cache 边界 | 针对 `get_ndx_forward_earnings_quality` 输出一份审计结论；字段覆盖率、公式、缓存新鲜度、失败 fallback 和不能证明什么都写入 data_quality / prompt / brief |
 | P1 | 核心系统 | 新闻事件-数据连接器真实 run 复盘 | `news_event_data_links.json` 已落地，但需要观察真实 run 中哪些连接有帮助、哪些只是噪声，防止新闻叙事污染 | 至少 1 次 `--enable-news` 完整 run 复盘；确认事件连接只作背景观察，不进入 L1-L5，不成为 evidence_ref；必要时调整阈值和展示数量 |
-| P2 | 输出体验 | 10 年 workbench 视觉与性能复核 | workbench 默认窗口从 5 年扩到 10 年，信息量更完整，但图表体量和移动端阅读需要复核 | 用最新 run 生成 workbench，桌面/移动打开无明显卡顿、错位或文本重叠；必要时压缩初始可见序列或优化默认模块 |
 
 ---
 
@@ -23,6 +22,9 @@
 
 ### 2026-05-17
 
+- 修复 workbench crosshair 模块映射：价格技术主图和全部副图都回到 `price_technical` 读数路径；所有图新增左上角 hover 序列读数，最新 workbench 桌面/移动视觉回归通过。
+- 修复 WTREGEN/TGA 早期混合缓存单位：2009 年前净流动性不再出现由单位错误造成的假负数。
+- 新增 `news_layer_analysis.json` 独立新闻层 sidecar，生成中文概要、可能股市影响、压力通道和新闻层总分析；不进入 L1-L5，不成为 `evidence_ref`。
 - L4 新增 DanjuanFunds/蛋卷基金 NDX 估值校验源，解析 PE/PB/PE percentile/PB percentile/ROE/PEG/eva_type/date/sample_start/update time；真实接口验证 NDX PE `36.51`、PE 分位 `87.0`、PB 分位 `99.68`。
 - 估值分位权威顺序明确为 Manual/Wind > trusted Trendonify > DanjuanFunds/蛋卷基金 > WorldPERatio std-dev context；yfinance 成分股 PE/PB/Forward PE 降为 component-model proxy / sanity check，不再作为估值 regime 主锚。
 - yfinance 增加持久缓存和失败保留旧值；QQQ 图表与成分股 `.info` 走更稳的缓存路径，减少限流导致的空图和空指标。
