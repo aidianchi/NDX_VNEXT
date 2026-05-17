@@ -361,7 +361,7 @@ class ControlServiceHandler(BaseHTTPRequestHandler):
             try:
                 summary = _read_latest_console_summary()
                 payload = {"ok": True, "summary": summary}
-                for key in ["native_brief", "workbench", "report_path"]:
+                for key in ["native_brief", "workbench", "report_path", "news_event_ledger", "news_event_data_links"]:
                     if summary.get(key):
                         payload[f"{key}_url"] = _artifact_url(self, str(summary[key]))
                 _json_response(self, 200, payload)

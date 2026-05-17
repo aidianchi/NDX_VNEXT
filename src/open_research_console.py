@@ -18,17 +18,22 @@ except ImportError:
 
 
 DEFAULT_PORT = 8765
-CONSOLE_VERSION = "console_logs_entry_v3"
+CONSOLE_VERSION = "console_logs_entry_v4"
 CONSOLE_READY_MARKERS = (
     "NDX vNext 研究控制台",
+    "使用人工数据",
     "historicalDateMode",
     "function artifactUrl(path)",
     CONSOLE_VERSION,
     'value="logs_only"',
     "最新日志",
     "旧版 HTML 已退出日常入口",
+    "官方事件底账与市场连接观察",
+    "news_event_data_links.json",
 )
 STALE_CONSOLE_MARKERS = (
+    'data-manual-field="confidence"',
+    "置信度",
     'value="visual_check"',
     "视觉回归</h3>",
     "不生成旧版 HTML",

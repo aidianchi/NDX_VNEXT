@@ -107,6 +107,24 @@ class ResearchConsoleGenerator:
             return []
         return sorted(sidecar_root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:4]
 
+    def _latest_news_sidecars(self) -> List[Path]:
+        analysis_root = Path(path_config.analysis_dir)
+        candidates: List[Path] = []
+        standalone = analysis_root / "news_event_ledger.json"
+        if standalone.exists():
+            candidates.append(standalone)
+        run_root = analysis_root / "vnext"
+        if run_root.exists():
+            for run_dir in run_root.iterdir():
+                if not run_dir.is_dir():
+                    continue
+                for name in ("news_event_ledger.json", "news_event_data_links.json"):
+                    path = run_dir / name
+                    if path.exists():
+                        candidates.append(path)
+        unique = {path.resolve(): path for path in candidates}
+        return sorted(unique.values(), key=lambda path: path.stat().st_mtime, reverse=True)[:6]
+
     def _links(self, paths: List[Path], empty_text: str) -> str:
         if not paths:
             return f'<span class="empty-link">{_escape(empty_text)}</span>'
@@ -143,6 +161,7 @@ class ResearchConsoleGenerator:
         runs = self._latest_runs()
         control_logs = self._latest_control_logs()
         browser_sidecars = self._latest_browser_sidecars()
+        news_sidecars = self._latest_news_sidecars()
         latest_report = reports[0] if reports else None
         latest_workbench = workbenches[0] if workbenches else None
         data_jsons = self._latest_data_jsons()
@@ -170,7 +189,7 @@ class ResearchConsoleGenerator:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="ndx-console-version" content="console_logs_entry_v3">
+  <meta name="ndx-console-version" content="console_logs_entry_v4">
   <title>NDX vNext 研究控制台</title>
   <style>{self._css()}</style>
 </head>
@@ -281,7 +300,7 @@ class ResearchConsoleGenerator:
             <p>人工/Wind 是最高信任校准源；Trendonify 和新闻只作为显式 sidecar 或人工确认来源。</p>
           </div>
           <div class="toggle-line">
-            <label><input id="enableNews" type="checkbox"> 运行时生成官方新闻底账</label>
+            <label><input id="enableNews" type="checkbox"> 运行时生成官方事件底账与市场连接观察</label>
             <label><input id="trustBbBrowser" type="checkbox"> Trendonify sidecar 标记为信任</label>
           </div>
           <div class="browser-sidecar">
@@ -299,12 +318,15 @@ class ResearchConsoleGenerator:
             <p id="browserStatus" class="run-status">勾选只影响 sidecar 输出的信任标记；采集需点击“采集 Trendonify”，结果不会静默进入 L1-L5。</p>
           </div>
           <div class="browser-sidecar">
-            <h3>官方新闻 sidecar</h3>
+            <h3>官方事件底账与市场连接观察</h3>
             <pre id="newsCommandPreview">python3 src/news_event_ledger.py --output output/analysis/news_event_ledger.json</pre>
             <div class="button-row">
-              <button type="button" id="runNewsLedger">采集新闻数据</button>
+              <button type="button" id="runNewsLedger">单独采集事件底账</button>
             </div>
-            <p id="newsStatus" class="run-status">新闻底账只记录官方宏观 RSS 和 M7 SEC filings；作为背景，不替代指标证据。</p>
+            <p id="newsStatus" class="run-status">勾选后，完整 vNext run 会同时写入 news_event_ledger.json 和 news_event_data_links.json。单独采集只生成底账；连接观察需要 run 目录里的市场时间序列。</p>
+            <div class="browser-actions">
+              {self._links(news_sidecars, '还没有新闻事件 sidecar JSON。')}
+            </div>
           </div>
         </div>
         <p class="path-note">目标文件：{_escape(manual_path)}</p>
@@ -339,7 +361,7 @@ class ResearchConsoleGenerator:
           <span>04</span>
           <div>
             <h2>运行完整报告</h2>
-            <p>一次运行会保存人工数据，执行 vNext，生成 native brief，并生成 workbench。</p>
+            <p>一次运行会保存人工数据，执行 vNext，生成 native brief、workbench；勾选新闻后还会生成事件底账与市场连接观察。</p>
           </div>
         </div>
         <input id="skipLegacyReport" type="checkbox" checked hidden>
@@ -360,7 +382,7 @@ class ResearchConsoleGenerator:
           <button type="button" id="refreshJob">刷新状态</button>
           <button type="button" id="cancelJob">取消任务</button>
         </div>
-        <p id="runStatus" class="run-status">运行按钮会调用本机 127.0.0.1 的 vNext control service；它会先保存人工数据，再串联生成报告。</p>
+        <p id="runStatus" class="run-status">运行按钮会调用本机 127.0.0.1 的 vNext control service；它会先保存人工数据，再串联生成报告。新闻开关会生成 news_event_ledger.json 和 news_event_data_links.json。</p>
         <pre id="jobStatusPreview">尚无任务。</pre>
         <pre id="runCommandPreview">python3 src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts</pre>
         <pre id="workbenchCommandPreview">python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/&lt;run_id&gt; --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity</pre>
@@ -381,6 +403,10 @@ class ResearchConsoleGenerator:
             <h3>最新日志</h3>
             {self._links(control_logs, '还没有 control service 日志。')}
           </div>
+          <div class="report-list">
+            <h3>最新新闻产物</h3>
+            {self._links(news_sidecars, '还没有新闻事件 sidecar。')}
+          </div>
         </div>
       </article>
 
@@ -389,7 +415,7 @@ class ResearchConsoleGenerator:
           <span>05</span>
           <div>
             <h2>运行日志 / 健康 / 安全</h2>
-            <p>一键运行通过本地 control service 执行白名单命令；新闻只生成独立事件底账，不进入 L1-L5 输入上下文。</p>
+            <p>一键运行通过本地 control service 执行白名单命令；新闻只生成独立事件底账和市场连接观察，不进入 L1-L5 输入上下文。</p>
           </div>
         </div>
         <div class="health-list" aria-label="数据源健康">
@@ -1186,7 +1212,7 @@ function buildCommand() {
     runStatus.textContent = `注意：${warning}。已有数据分析会以该 JSON 为准，不会重新采集。`;
     runStatus.className = 'run-status is-warning';
   } else if (!activeJobId) {
-    runStatus.textContent = '运行按钮会调用本机 127.0.0.1 的 vNext control service；完整 vNext 会重新采集数据。';
+    runStatus.textContent = '运行按钮会调用本机 127.0.0.1 的 vNext control service；完整 vNext 会重新采集数据。新闻开关会同时生成底账和连接观察。';
     runStatus.className = 'run-status';
   }
   const modules = Array.from(document.querySelectorAll('input[name="workbenchModule"]:checked')).map(node => node.value);
@@ -1318,6 +1344,8 @@ async function openLatestProductForMode(jobId) {
     if (summary.native_brief) reports.push({ label: 'Brief 报告', path: summary.native_brief });
     if (summary.workbench) reports.push({ label: 'Workbench', path: summary.workbench });
     if (summary.report_path && summary.report_path !== summary.native_brief) reports.push({ label: '完整报告', path: summary.report_path });
+    if (summary.news_event_ledger) reports.push({ label: '事件底账', path: summary.news_event_ledger });
+    if (summary.news_event_data_links) reports.push({ label: '市场连接观察', path: summary.news_event_data_links });
 
     // Inject clickable links into status area
     const linksHtml = reports.map(r =>

@@ -30,7 +30,7 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     html = output.read_text(encoding="utf-8")
 
     assert "NDX vNext 研究控制台" in html
-    assert "console_logs_entry_v3" in html
+    assert "console_logs_entry_v4" in html
     assert "运行对象与日期" in html
     assert "历史日期 / 回测" in html
     assert 'id="historicalDateMode"' in html
@@ -69,12 +69,14 @@ def test_research_console_generates_first_screen_controls(tmp_path: Path, monkey
     assert "数据源选择" in html
     assert "旧版 HTML 已退出日常入口" in html
     assert "默认只生成 vNext artifacts、native brief 和 workbench" in html
-    assert "运行时生成官方新闻底账" in html
+    assert "运行时生成官方事件底账与市场连接观察" in html
+    assert "news_event_data_links.json" in html
+    assert "最新新闻产物" in html
     assert "--enable-news" in html
     assert "Trendonify sidecar 标记为信任" in html
     assert "勾选只影响 sidecar 输出的信任标记" in html
     assert "采集 Trendonify" in html
-    assert "采集新闻数据" in html
+    assert "单独采集事件底账" in html
     assert "src/news_event_ledger.py" in html
     assert "运行完整报告" in html
     assert "运行日志 / 健康 / 安全" in html

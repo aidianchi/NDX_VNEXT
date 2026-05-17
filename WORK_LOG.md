@@ -6,6 +6,21 @@
 
 ## 2026-05-17
 
+### 控制台启动器旧服务识别与新闻产物入口修复
+
+完成内容：
+
+- 将控制台版本标记升级到 `console_logs_entry_v4`，并把旧人工数据“置信度”表单加入 stale service 判定；`start.command` / 应用图标再次打开时会清理 8765 上的旧服务后重启新版控制台。
+- 控制台新闻区从“官方新闻底账”改成“官方事件底账与市场连接观察”，明确完整 vNext 勾选新闻会同时生成 `news_event_ledger.json` 和 `news_event_data_links.json`。
+- 控制台新增“最新新闻产物”列表，展示 run 目录里的事件底账和市场连接观察；完整运行完成后的状态链接也会列出事件底账和市场连接观察。
+- `/latest-product` API 补充新闻产物 URL，方便前端在运行完成后直接打开相关 JSON。
+
+验证结果：
+
+- 真实执行 `./start.command`：旧 8765 进程被替换，新页面返回 `console_logs_entry_v4`，有“使用人工数据”和“官方事件底账与市场连接观察”，没有 `data-manual-field="confidence"` / “置信度”。
+- `python3 -m pytest -q`：274 passed，4 warnings。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_brief_20260512_2152_20260517_0016.html --workbench-html output/reports/vnext_workbench_20260512_2152_20260517_0016.html --console-html output/reports/vnext_research_console.html --output-dir output/visual_regression/console_launcher_fix`：passed，console/brief/workbench 桌面和移动布局检查均无 issues。
+
 ### Twelve Data 优先与 yfinance 入口收口
 
 完成内容：
