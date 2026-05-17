@@ -6,6 +6,21 @@
 
 ## 2026-05-17
 
+### Workbench MACD 图内图例与读数补强
+
+完成内容：
+
+- MACD 副图左上角新增图内图例：蓝色 `DIF`、红色 `DEA`、灰色 `Hist`，并直接显示当前同步时间点的数值。
+- 图例会跟随十字光标同步更新；没有悬停时显示最新时间点读数。
+- 重新生成当前 `output/reports/vnext_workbench_20260517_1852.html`，让浏览器里正在看的 workbench 也能刷新看到新版标注。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_interactive_chart_workbench.py`：6 passed，4 warnings。
+- `python3 -m pytest -q`：275 passed，4 warnings。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_brief_20260517_1852.html --workbench-html output/reports/vnext_workbench_20260517_1852.html --console-html output/reports/vnext_research_console.html --output-dir output/visual_regression/macd_legend_fix`：passed。
+- `http://127.0.0.1:8765/artifact?...vnext_workbench_20260517_1852.html` 已确认包含 `data-macd-legend`、`DIF`、`DEA`、`Hist`。
+
 ### NDX Agent 启动可靠性与研究控制台 demo 重排
 
 完成内容：

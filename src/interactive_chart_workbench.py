@@ -617,7 +617,11 @@ class InteractiveChartWorkbenchGenerator:
             <div class="subpanel-grid is-time-synced" aria-label="L5 technical subpanels">
               <article data-panel-shell="volume"><h3>Volume</h3><div data-panel-root="volume"></div></article>
               <article data-panel-shell="obv"><h3>OBV</h3><div data-panel-root="obv"></div></article>
-              <article data-panel-shell="macd"><h3>MACD</h3><div data-panel-root="macd"></div></article>
+              <article data-panel-shell="macd">
+                <h3>MACD</h3>
+                <div class="panel-inline-legend macd-legend" data-macd-legend aria-label="MACD line legend"></div>
+                <div data-panel-root="macd"></div>
+              </article>
               <article data-panel-shell="rsi-atr"><h3>RSI / ATR</h3><div data-panel-root="rsi-atr"></div></article>
               <article data-panel-shell="money-flow"><h3>MFI / CMF</h3><div data-panel-root="money-flow"></div></article>
             </div>
@@ -948,6 +952,37 @@ body {
   text-transform: uppercase;
   pointer-events: none;
 }
+.panel-inline-legend {
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  left: 64px;
+  right: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  pointer-events: none;
+}
+.macd-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid rgba(215, 212, 203, .82);
+  background: rgba(255, 255, 255, .86);
+  padding: 2px 6px;
+  color: var(--ink);
+  font: 700 11px/1.25 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.macd-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+}
+.macd-legend .dif i { background: #2563eb; }
+.macd-legend .dea i { background: #be4d25; }
+.macd-legend .hist i { background: #94a3b8; }
 [data-panel-root] { height: 136px; min-width: 0; }
 .module-copy {
   border: 1px solid var(--rule);
@@ -1104,6 +1139,28 @@ function findPointAtOrBefore(rows, time) {
     if (clean[index].time <= key) return clean[index];
   }
   return null;
+}
+
+function macdLegendValues(time) {
+  const key = timeKey(time) || latestTimeForModule('price_technical');
+  return {
+    key,
+    dif: findPointAtOrBefore(payload.subpanels.macd, key),
+    dea: findPointAtOrBefore(payload.subpanels.macd_signal, key),
+    hist: findPointAtOrBefore(payload.subpanels.macd_histogram, key),
+  };
+}
+
+function updateMacdLegend(time) {
+  const target = document.querySelector('[data-macd-legend]');
+  if (!target) return;
+  const values = macdLegendValues(time);
+  target.innerHTML = `
+    <span class="dif"><i></i>DIF ${fmt(values.dif?.value)}</span>
+    <span class="dea"><i></i>DEA ${fmt(values.dea?.value)}</span>
+    <span class="hist"><i></i>Hist ${fmt(values.hist?.value)}</span>
+  `;
+  target.title = `MACD ${values.key}: DIF ${fmt(values.dif?.value)}, DEA ${fmt(values.dea?.value)}, Hist ${fmt(values.hist?.value)}`;
 }
 
 function timeKey(value) {
@@ -1274,6 +1331,7 @@ renderPanel('[data-panel-root="macd"]', 'macd', [
   { data: payload.subpanels.macd, color: '#2563eb' },
   { data: payload.subpanels.macd_signal, color: '#be4d25' },
 ]);
+updateMacdLegend(latestTimeForModule('price_technical'));
 renderPanel('[data-panel-root="rsi-atr"]', 'rsi-atr', [
   { data: payload.subpanels.rsi14, color: '#b7791f' },
   { data: payload.subpanels.atr14, color: '#0f766e' },
@@ -1631,6 +1689,7 @@ function handleCrosshair(param, entry) {
     return;
   }
   readout.innerHTML = readoutHtml(time, moduleKey);
+  updateMacdLegend(time);
   syncCrosshair(time, entry);
 }
 

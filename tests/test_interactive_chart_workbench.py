@@ -161,6 +161,10 @@ def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(t
     assert 'data-module="volatility_credit"' in html
     assert 'subpanel-grid is-time-synced' in html
     assert 'data-panel-root="macd"' in html
+    assert 'data-macd-legend' in html
+    assert "DIF ${fmt(values.dif?.value)}" in html
+    assert "DEA ${fmt(values.dea?.value)}" in html
+    assert "Hist ${fmt(values.hist?.value)}" in html
     assert 'data-panel-root="money-flow"' in html
     assert 'data-pane-toggle="macd"' in html
     assert 'data-module-normalize="rates_valuation"' in html
