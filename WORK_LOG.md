@@ -6,6 +6,35 @@
 
 ## 2026-05-17
 
+### yfinance 限流退避修复（cached_yf_download empty df 路径）
+
+分支：`claude/20260517-yfinance-rate-limit-resilience`
+
+根因（systematic-debugging Phase 1-2 调查结论）：
+
+- 5/13、5/15、5/16、5/17 连续四次 run 都在启动 8 秒内首请求即 `YFRateLimitError`，但相同代码在 Yahoo 冷却后能正常拉数据（5/17 12:55 复现单 ticker 与 5 ticker burst 均成功）；问题不是项目 burst 模式，而是 Yahoo 对该 IP 的周期性限流策略。
+- 放大因素：`cached_yf_download` 在 yfinance 1.3+ 返回 empty df 时直接放弃（**不进入重试**，因为 yfinance 内部 catch 了 `YFRateLimitError`），仅依赖外层 `_fetch_yf_history` 的 2 秒固定间隔重试。2 秒间隔正好落在 Yahoo cooldown 窗口内，反复撞墙。
+
+最小修复内容：
+
+- **`cached_yf_download` empty df 路径合并到 exception 退避路径**：empty df 视同 silent rate-limit，与 exception 共用同一退避循环；优先返回 stale frame cache，否则进入分级退避重试。
+- **退避周期从 (2s, 6s) 调到 (10s, 60s)**：让 Yahoo 限流窗口有机会自然恢复。原值在 5/17 真实日志中复现无效，所有 retry 全部 429。
+- **`_fetch_yf_history` 不再对 empty df 重复外层 3 次重试**：`cached_yf_download` 已经完成 10s/60s 内部退避，外层继续 2 秒循环只会在无全局缓存时把长退避重复跑 3 轮。
+- 调整范围仍收敛在 yfinance 共享入口，不动 `tools_L1.py`、`chart_generator.py`、`data_cache.py` 等绕过 cached_yf_download 的直调点。
+
+验证结果：
+
+- 新增 `test_cached_yf_download_retries_with_long_backoff_when_empty_and_no_stale` 失败测试（empty df + no stale 必须按 10s/60s 退避重试），修复前 red、修复后 green。
+- 新增 `test_fetch_yf_history_does_not_repeat_inner_yfinance_backoff`，防止 `_fetch_yf_history` 把内层长退避重复跑 3 轮。
+- `python3 -m pytest -q tests/test_yfinance_cache_resilience.py`：5 passed（含 2 个原有 stale-fallback 行为兼容性测试）。
+- `python3 -m pytest -q`：270 passed（修复前 268，本次新增 2）。
+
+剩余风险与未完成：
+
+- `tools_L1.py:787/788/897/898/1077/1174/1175`、`chart_generator.py:1836`、`data_cache.py:187`、`tools_L4.py:1808` 仍是裸 `yf.download/yf.Ticker` 直调，不享受这次修复。本次按最小修复原则不动它们；如果 5/18 以后 run 还是首请求即 429 且数据缺失，需要继续把这些入口收口到 `cached_yf_download`。
+- yfinance 抛 429 时是 silent return empty，没有专门的"识别为 rate-limit"通道。这次把所有 empty 视同 rate-limit 处理；如果未来出现"ticker 真实不存在"等正常 empty 情况，会被多 retry 一次（成本：单次 70s 退避）。
+- Yahoo 若对此 IP 长期严限（>1 小时），本次修复也无法救场，仍需考虑替代源（FRED 部分指标可替代；VIX/VXN/HYG 暂无稳定免费源）。
+
 ### 20260517 run 数据完整性审计修复
 
 完成内容：

@@ -103,7 +103,9 @@ ts_manager = TimeSeriesManager(cache_dir=path_config.cache_dir)
 DEFAULT_FRED_BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 DEFAULT_ALPHAVANTAGE_BASE_URL = "https://www.alphavantage.co/query"
 YF_FRAME_CACHE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
-YF_DOWNLOAD_RETRY_DELAYS_SECONDS = (2, 6)
+# 退避周期偏长，是为了让 Yahoo 限流（429）窗口有机会自动恢复。
+# 2026-05 多次 run 显示：2 秒间隔的重试都落在 Yahoo cooldown 窗口内，反复撞墙。
+YF_DOWNLOAD_RETRY_DELAYS_SECONDS = (10, 60)
 
 
 def get_fred_api_key() -> str:
@@ -316,6 +318,7 @@ def cached_yf_download(
     def _fetch() -> pd.DataFrame:
         last_error: Optional[Exception] = None
         for attempt in range(len(YF_DOWNLOAD_RETRY_DELAYS_SECONDS) + 1):
+            empty_reason: Optional[str] = None
             try:
                 frame = yf.download(
                     tickers,
@@ -328,22 +331,31 @@ def cached_yf_download(
                 if isinstance(frame, pd.DataFrame) and not frame.empty:
                     _write_yf_frame_cache(cache_key, frame)
                     return frame
-                stale = _read_yf_frame_cache(cache_key)
-                if not stale.empty:
-                    return stale
-                return pd.DataFrame()
+                # yfinance 1.3+ 内部 catch 了 YFRateLimitError 后只返回 empty df 并 log error。
+                # 必须把这种 silent 失败视同 exception 来进入退避，否则限流时一次就放弃。
+                empty_reason = "yfinance returned empty frame (likely silent rate limit)"
             except Exception as exc:
                 last_error = exc
-                stale = _read_yf_frame_cache(cache_key)
-                if not stale.empty:
-                    return stale
-                if attempt < len(YF_DOWNLOAD_RETRY_DELAYS_SECONDS):
-                    delay = YF_DOWNLOAD_RETRY_DELAYS_SECONDS[attempt]
-                    logging.warning("yfinance download failed for %s: %s; retrying in %ss", ticker_key, exc, delay)
-                    time.sleep(delay)
-                    continue
-                logging.warning(f"yfinance download failed for {ticker_key}: {exc}")
-                return pd.DataFrame()
+                empty_reason = f"yfinance raised: {exc}"
+            stale = _read_yf_frame_cache(cache_key)
+            if not stale.empty:
+                return stale
+            if attempt < len(YF_DOWNLOAD_RETRY_DELAYS_SECONDS):
+                delay = YF_DOWNLOAD_RETRY_DELAYS_SECONDS[attempt]
+                logging.warning(
+                    "yfinance fetch unusable for %s: %s; retrying in %ss",
+                    ticker_key,
+                    empty_reason,
+                    delay,
+                )
+                time.sleep(delay)
+                continue
+            logging.warning(
+                "yfinance fetch unusable for %s after retries: %s",
+                ticker_key,
+                empty_reason,
+            )
+            return pd.DataFrame()
         if last_error:
             logging.warning(f"yfinance download failed for {ticker_key}: {last_error}")
         return pd.DataFrame()
@@ -545,7 +557,8 @@ def _fetch_yf_history(ticker: str, start_date: Optional[Any] = None, end_date: O
     end_dt = pd.to_datetime(end_date) if end_date else datetime.now()
     end_str = (end_dt + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # 重试机制
+    # cached_yf_download 已经负责 yfinance 空结果/异常的退避重试。
+    # 这里保留外层循环只兜底清洗阶段的意外异常，避免把内层 10s/60s 退避重复跑 3 轮。
     for attempt in range(retry_count):
         try:
             logging.info(f"正在获取 {ticker} 数据（尝试 {attempt + 1}/{retry_count}）...")
@@ -553,13 +566,8 @@ def _fetch_yf_history(ticker: str, start_date: Optional[Any] = None, end_date: O
             df = clean_yfinance_dataframe(df)
             
             if df.empty or "close" not in df.columns:
-                if attempt < retry_count - 1:
-                    logging.warning(f"{ticker} 返回空数据，{2}秒后重试...")
-                    time.sleep(2)
-                    continue
-                else:
-                    logging.error(f"{ticker} 在 {retry_count} 次尝试后仍返回空数据")
-                    return pd.DataFrame(columns=["date", "value"])
+                logging.error(f"{ticker} 返回空数据或缺少 close 列；cached_yf_download 已完成内部退避")
+                return pd.DataFrame(columns=["date", "value"])
 
             # 【核心修复】：先提取close列并重命名，保持DatetimeIndex
             df = df[["close"]].rename(columns={"close": "value"})
