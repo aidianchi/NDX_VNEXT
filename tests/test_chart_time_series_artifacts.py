@@ -89,6 +89,36 @@ def test_write_chart_time_series_artifact_persists_qqq_rows(tmp_path: Path):
     assert payload["series"]["QQQ_OHLCV"]["rows"][1]["ma5"] == 103.5
 
 
+def test_chart_time_series_artifact_respects_effective_date(tmp_path: Path):
+    output_path = write_chart_time_series_artifact(
+        tmp_path,
+        fetcher=lambda lookback_days: _MiniFrame(
+            [
+                {"date": _Date("2025-04-08"), "open": 99, "high": 101, "low": 98, "close": 100, "volume": 1000},
+                {"date": _Date("2025-04-09"), "open": 100, "high": 102, "low": 99, "close": 101, "volume": 1000},
+                {"date": _Date("2025-04-10"), "open": 101, "high": 103, "low": 100, "close": 102, "volume": 1000},
+            ]
+        ),
+        supplemental_fetchers={
+            "VIX": lambda lookback_days: _MiniFrame(
+                [
+                    {"date": _Date("2025-04-09"), "value": 40.0},
+                    {"date": _Date("2025-04-10"), "value": 20.0},
+                ]
+            )
+        },
+        effective_date="2025-04-09",
+        generated_at="2026-05-05T00:00:00Z",
+    )
+    payload = json.loads(Path(output_path).read_text(encoding="utf-8"))
+
+    assert payload["effective_date"] == "2025-04-09"
+    assert [row["time"] for row in payload["series"]["QQQ_OHLCV"]["rows"]] == ["2025-04-08", "2025-04-09"]
+    assert payload["series"]["QQQ_OHLCV"]["max_observed_date"] == "2025-04-09"
+    assert payload["series"]["QQQ_OHLCV"]["future_rows_dropped"] == 1
+    assert payload["series"]["VIX"]["rows"] == [{"time": "2025-04-09", "value": 40.0}]
+
+
 def test_chart_time_series_artifact_adds_workbench_modules_and_research_series():
     payload = build_chart_time_series_artifact(
         fetcher=lambda lookback_days: _ohlcv_frame(),

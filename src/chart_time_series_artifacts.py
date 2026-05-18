@@ -112,6 +112,38 @@ def _date_text(value: Any) -> str:
     return str(value or "")
 
 
+def _parse_date(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value)[:10])
+        return parsed.replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _filter_rows_to_effective_date(rows: List[Dict[str, Any]], effective_date: Optional[str]) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if not effective_date:
+        max_date = max((str(row.get("time")) for row in rows if row.get("time")), default=None)
+        return rows, {"max_observed_date": max_date, "future_rows_dropped": 0}
+    effective = _parse_date(effective_date)
+    if effective is None:
+        max_date = max((str(row.get("time")) for row in rows if row.get("time")), default=None)
+        return rows, {"effective_date": effective_date, "max_observed_date": max_date, "future_rows_dropped": 0}
+    kept: List[Dict[str, Any]] = []
+    dropped = 0
+    max_observed: Optional[str] = None
+    for row in rows:
+        row_date = _parse_date(row.get("time"))
+        if row_date is not None and row_date > effective:
+            dropped += 1
+            continue
+        kept.append(row)
+        if row.get("time") and (max_observed is None or str(row["time"]) > max_observed):
+            max_observed = str(row["time"])
+    return kept, {"effective_date": effective_date, "max_observed_date": max_observed, "future_rows_dropped": dropped}
+
+
 def _is_finite(value: Any) -> bool:
     number = _safe_number(value)
     return number is not None and math.isfinite(number)
@@ -297,13 +329,13 @@ def _cmf(highs: List[Optional[float]], lows: List[Optional[float]], closes: List
     return out
 
 
-def _default_fetcher(lookback_days: int) -> Any:
+def _default_fetcher(lookback_days: int, effective_date: Optional[str] = None) -> Any:
     try:
         from chart_adapter_v6 import get_qqq_price_data
     except ImportError:
         from .chart_adapter_v6 import get_qqq_price_data
 
-    return get_qqq_price_data(lookback_days=lookback_days)
+    return get_qqq_price_data(lookback_days=lookback_days, end_date=effective_date)
 
 
 def _frame_to_rows(frame: Any) -> List[Dict[str, Any]]:
@@ -435,6 +467,7 @@ def _damodaran_rows_from_packet(packet: Any) -> List[Dict[str, Any]]:
 def build_chart_time_series_artifact(
     *,
     lookback_days: int = DEFAULT_CHART_LOOKBACK_DAYS,
+    effective_date: Optional[str] = None,
     fetcher: Optional[Fetcher] = None,
     supplemental_fetchers: Optional[Dict[str, Fetcher]] = None,
     analysis_packet: Any = None,
@@ -444,6 +477,7 @@ def build_chart_time_series_artifact(
     payload: Dict[str, Any] = {
         "schema_version": "vnext_chart_time_series_v1",
         "generated_at_utc": generated_at,
+        "effective_date": effective_date,
         "workbench_modules": WORKBENCH_MODULES,
         "series": {
             "QQQ_OHLCV": {
@@ -462,18 +496,22 @@ def build_chart_time_series_artifact(
         ],
     }
     try:
-        frame = (fetcher or _default_fetcher)(lookback_days)
-        payload["series"]["QQQ_OHLCV"]["rows"] = _frame_to_rows(frame)
+        frame = fetcher(lookback_days) if fetcher else _default_fetcher(lookback_days, effective_date=effective_date)
+        rows, row_meta = _filter_rows_to_effective_date(_frame_to_rows(frame), effective_date)
+        payload["series"]["QQQ_OHLCV"]["rows"] = rows
+        payload["series"]["QQQ_OHLCV"].update(row_meta)
     except Exception as exc:  # pragma: no cover - defensive artifact fallback
         payload["series"]["QQQ_OHLCV"]["availability"] = "unavailable"
         payload["series"]["QQQ_OHLCV"]["unavailable_reason"] = str(exc)
     if supplemental_fetchers is None:
-        supplemental_fetchers = _default_supplemental_fetchers() if fetcher is None else {}
+        supplemental_fetchers = _default_supplemental_fetchers(effective_date=effective_date) if fetcher is None else {}
     for series_key, series_fetcher in supplemental_fetchers.items():
         meta = dict(SUPPLEMENTAL_SERIES_META.get(series_key, {"label": series_key, "provider": "unknown", "frequency": "mixed"}))
         meta.update({"source_file": "chart_time_series.json", "lookback_days": lookback_days, "rows": []})
         try:
-            meta["rows"] = _frame_to_value_rows(series_fetcher(lookback_days))
+            rows, row_meta = _filter_rows_to_effective_date(_frame_to_value_rows(series_fetcher(lookback_days)), effective_date)
+            meta["rows"] = rows
+            meta.update(row_meta)
         except Exception as exc:  # pragma: no cover - defensive artifact fallback
             meta["availability"] = "unavailable"
             meta["unavailable_reason"] = str(exc)
@@ -486,7 +524,7 @@ def build_chart_time_series_artifact(
             "lookback_days": lookback_days,
             "rows": ratio_rows,
         }
-    damodaran_rows = _damodaran_rows_from_packet(analysis_packet)
+    damodaran_rows, damodaran_meta = _filter_rows_to_effective_date(_damodaran_rows_from_packet(analysis_packet), effective_date)
     payload["series"]["DAMODARAN_ERP_MONTHLY"] = {
         "label": "Damodaran ERP",
         "provider": "Damodaran ERPbymonth.xlsx",
@@ -495,6 +533,7 @@ def build_chart_time_series_artifact(
         "layer": "L4",
         "function_id": "get_damodaran_us_implied_erp",
         "rows": damodaran_rows,
+        **damodaran_meta,
     }
     return payload
 
@@ -514,7 +553,7 @@ def _ratio_rows(numerator_rows: List[Dict[str, Any]], denominator_rows: List[Dic
     return rows
 
 
-def _default_supplemental_fetchers() -> Dict[str, Fetcher]:
+def _default_supplemental_fetchers(effective_date: Optional[str] = None) -> Dict[str, Fetcher]:
     try:
         from tools_common import _fetch_yf_history, get_fred_series
         from tools_L1 import _build_net_liquidity_series
@@ -527,21 +566,21 @@ def _default_supplemental_fetchers() -> Dict[str, Fetcher]:
 
     def fred(series_id: str) -> Fetcher:
         def _fetch(lookback_days: int) -> Any:
-            frame = get_fred_series(series_id, days=max(lookback_days * 2, 800))
+            frame = get_fred_series(series_id, days=max(lookback_days * 2, 800), end_date=effective_date)
             return frame if frame is not None else []
 
         return _fetch
 
     def yf_series(ticker: str) -> Fetcher:
-        return lambda lookback_days: _fetch_yf_history(ticker)
+        return lambda lookback_days: _fetch_yf_history(ticker, end_date=effective_date)
 
     def qqq_qqew(_lookback_days: int) -> Any:
         try:
             from tools_common import align_and_calculate_ratio
         except ImportError:
             from .tools_common import align_and_calculate_ratio
-        qqq = _fetch_yf_history("QQQ")
-        qqew = _fetch_yf_history("QQEW")
+        qqq = _fetch_yf_history("QQQ", end_date=effective_date)
+        qqew = _fetch_yf_history("QQEW", end_date=effective_date)
         if qqq.empty or qqew.empty:
             return []
         return align_and_calculate_ratio(qqq, qqew).rename(columns={"ratio": "value"})[["date", "value"]]
@@ -557,7 +596,7 @@ def _default_supplemental_fetchers() -> Dict[str, Fetcher]:
         return _fetch
 
     def m2_yoy(lookback_days: int) -> Any:
-        frame = get_fred_series("M2SL", days=max(lookback_days + 500, 900))
+        frame = get_fred_series("M2SL", days=max(lookback_days + 500, 900), end_date=effective_date)
         if frame is None or getattr(frame, "empty", False):
             return []
         frame = frame.copy()
@@ -565,8 +604,8 @@ def _default_supplemental_fetchers() -> Dict[str, Fetcher]:
         return frame.dropna(subset=["value"])[["date", "value"]]
 
     def hy_quality_spread(lookback_days: int) -> Any:
-        ccc = get_fred_series("BAMLH0A3HYC", days=lookback_days)
-        bb = get_fred_series("BAMLH0A1HYBB", days=lookback_days)
+        ccc = get_fred_series("BAMLH0A3HYC", days=lookback_days, end_date=effective_date)
+        bb = get_fred_series("BAMLH0A1HYBB", days=lookback_days, end_date=effective_date)
         if ccc is None or bb is None or getattr(ccc, "empty", False) or getattr(bb, "empty", False):
             return []
         aligned = ccc[["date", "value"]].rename(columns={"value": "ccc_oas"}).merge(
@@ -601,6 +640,7 @@ def write_chart_time_series_artifact(
     run_dir: str | Path,
     *,
     lookback_days: int = DEFAULT_CHART_LOOKBACK_DAYS,
+    effective_date: Optional[str] = None,
     fetcher: Optional[Fetcher] = None,
     supplemental_fetchers: Optional[Dict[str, Fetcher]] = None,
     analysis_packet: Any = None,
@@ -609,6 +649,7 @@ def write_chart_time_series_artifact(
     path = Path(run_dir) / "chart_time_series.json"
     payload = build_chart_time_series_artifact(
         lookback_days=lookback_days,
+        effective_date=effective_date,
         fetcher=fetcher,
         supplemental_fetchers=supplemental_fetchers,
         analysis_packet=analysis_packet,

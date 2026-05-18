@@ -1,7 +1,7 @@
 # vNext 目标 Agent 架构与实施路线图
 
 日期：2026-04-24  
-更新日期：2026-05-06
+更新日期：2026-05-18
 状态：主架构文件；以 `RESEARCH_CANON.md` 的研究结论为路线图基准。
 
 ---
@@ -305,6 +305,24 @@ native 图表主路径必须直接消费 vNext artifacts 或 `analysis_packet.ra
 - Wind 人工输入是可选高信任源，不是系统运行硬依赖；空模板不得触发人工覆盖。
 - `get_equity_risk_premium` 保留函数名兼容历史调用，但语义已经改为 NDX 简式收益差距：`earnings_yield - 10Y` 或 `fcf_yield - 10Y`。
 - Damodaran 美国 implied ERP 只作为美国市场参考锚，不替代 NDX 成分股聚合估值。
+- 回测模式下，yfinance 成分股基本面批量代理默认不进入 agent 上下文：`get_ndx_pe_and_earnings_yield`、`get_ndx_forward_earnings_quality`、`get_equity_risk_premium` 在没有人工/Wind 覆盖时自动跳过，并写入 `backtest_data_boundaries`。原则是宁缺勿错，不用缺失严重的成分股代理结果伪装成纳斯达克100整体估值。
+- 当前严格回测基线是“数据日期不超过回测日”；ALFRED first-vintage、财报 first-reported、point-in-time universe 和 LLM 训练后验知识属于后续升级项，不能在当前报告中伪装成已经解决。
+
+### 6.6 历史数据研究助理与采集机模式
+
+严格回测的数据缺口不应靠 LLM 在主分析链里临场“想办法补”。更合适的方向是新增一个独立的联网研究助理层：
+
+- 它读取 `backtest_data_boundaries`、DataIntegrity notes 和缺失指标清单，先识别“这次到底缺什么”。
+- 它联网寻找候选来源，例如官网、SEC、Nasdaq、基金页面、存档网页、新闻稿、PDF、历史表格或付费数据源说明。
+- 它只输出 `research_candidate` / `manual_review_required` 级别的候选证据包，包含来源链接、发布时间、数据日期、摘录、截图或缓存路径、适用理由、不适用风险和置信度。
+- 它不能直接把候选数据塞进 L1-L5 核心证据；只有人工确认、规则确认，或沉淀成可重复采集的正式数据源后，才允许升级为 `manual/Wind`、可信 sidecar 或正式工具函数。
+- 每次探索必须沉淀“如何找到历史数据”的经验：查询词、入口页面、参数、日期字段、失败原因、验证办法。稳定重复多次后，可以从候选流程升级为新的死规则或正式采集器。
+
+运行部署上，系统允许把数据采集和 LLM 推理解耦：
+
+- `collect-only` / 采集机模式只负责生成不可变数据快照、图表时间序列和 sidecar，并写清采集时间、有效日期、跳过项和数据边界。
+- 主机可以只消费这些快照运行 DeepSeek 和报告生成，避免同一次完整 run 中频繁切换 VPN、半截采集半截分析。
+- 同机分流可作为更优雅方案：Yahoo/yfinance 走 VPN，DeepSeek API 直连；但无论单机还是双机，产物边界必须靠快照和元数据说清。
 
 ---
 

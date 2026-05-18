@@ -33,7 +33,7 @@ except ImportError:
     logging.warning("yfinance 未安装，V6.0图表功能不可用")
 
 
-def get_qqq_price_data(lookback_days: int = 365) -> Optional[pd.DataFrame]:
+def get_qqq_price_data(lookback_days: int = 365, end_date: Optional[str] = None) -> Optional[pd.DataFrame]:
     """
     获取QQQ价格数据（用于计算技术指标）
     
@@ -48,11 +48,12 @@ def get_qqq_price_data(lookback_days: int = 365) -> Optional[pd.DataFrame]:
     
     try:
         # 计算起始日期
-        end_date = pd.Timestamp.now()
-        start_date = end_date - pd.Timedelta(days=lookback_days + 100)  # 多取一些数据用于计算均线
+        effective_end = pd.Timestamp(end_date) if end_date else pd.Timestamp.now()
+        effective_end = effective_end.tz_localize(None) if effective_end.tzinfo else effective_end
+        start_date = effective_end - pd.Timedelta(days=lookback_days + 100)  # 多取一些数据用于计算均线
         
         # 获取历史数据
-        df = cached_yf_download("QQQ", start=start_date, end=end_date, progress=False, auto_adjust=False)
+        df = cached_yf_download("QQQ", start=start_date, end=effective_end, progress=False, auto_adjust=False)
         
         if df.empty:
             logging.warning("QQQ数据为空")
@@ -70,8 +71,8 @@ def get_qqq_price_data(lookback_days: int = 365) -> Optional[pd.DataFrame]:
         df['date'] = pd.to_datetime(df['date']).dt.tz_localize(None)
         
         # 只取最近的数据
-        cutoff_date = pd.Timestamp.now().tz_localize(None) - pd.Timedelta(days=lookback_days)
-        df = df[df['date'] >= cutoff_date]
+        cutoff_date = effective_end.tz_localize(None) - pd.Timedelta(days=lookback_days)
+        df = df[(df['date'] >= cutoff_date) & (df['date'] <= effective_end)]
         
         logging.info(f"成功获取QQQ数据: {len(df)} 条记录")
         return df

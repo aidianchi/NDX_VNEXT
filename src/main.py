@@ -150,7 +150,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     news_event_ledger_payload = None
     if args.enable_news:
         news_event_ledger_path = os.path.join(run_dir, "news_event_ledger.json")
-        news_event_ledger_payload = NewsEventLedgerBuilder().build(news_event_ledger_path)
+        news_event_ledger_payload = NewsEventLedgerBuilder(effective_date=backtest_date).build(news_event_ledger_path)
 
     integrity_report = DataIntegrity().run(data_json)
     builder = AnalysisPacketBuilder()
@@ -161,7 +161,11 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         context={"news_event_ledger_path": news_event_ledger_path} if news_event_ledger_path else None,
         output_path=os.path.join(run_dir, "analysis_packet.json"),
     )
-    chart_time_series_path = write_chart_time_series_artifact(run_dir, analysis_packet=packet)
+    chart_time_series_path = write_chart_time_series_artifact(
+        run_dir,
+        analysis_packet=packet,
+        effective_date=backtest_date,
+    )
     news_event_data_links_path = ""
     news_layer_analysis_path = ""
     if args.enable_news and news_event_ledger_payload:

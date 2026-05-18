@@ -60,6 +60,12 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 python -m pytest -q
 ```
 
+只采集数据快照：
+
+```bash
+python src/main.py --collect-only --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts
+```
+
 真实运行：
 
 ```bash
@@ -114,10 +120,19 @@ python src/open_research_console.py
 ```
 
 - 备选手动方式：先运行 `python src/control_service.py`，再打开 `http://127.0.0.1:8765`。服务根地址现在会直接显示控制台。
-- 默认阅读入口：`output/reports/vnext_research_ui_brief_*.html`。
+- 默认阅读入口：`output/reports/vnext_brief_*.html`。
 - 研究控制台：`output/reports/vnext_research_console.html`。
-- 交互 workbench：`output/reports/vnext_interactive_charts_*.html`。
+- 交互 workbench：`output/reports/vnext_workbench_*.html`。
 - 同源图表数据：`output/analysis/vnext/<run_id>/chart_time_series.json`。
 - 视觉回归摘要：`output/reports/visual_regression/<label>/visual_regression_summary.json`。
 
 `brief` 是连续阅读报告；workbench 是看盘式探索页面；控制台是运行前配置面板。三者不要互相替代。
+
+## 采集与分析解耦
+
+当前推荐支持两段式运行：
+
+1. 先用 `--collect-only` 生成不可变数据快照和 sidecar。
+2. 再在主机上选择这个数据包，只跑 DeepSeek 分析和报告生成。
+
+这样可以让 yfinance/Yahoo 走更适合的网络路径，让 DeepSeek API 走更稳定的直连路径。无论同机分流还是双机采集，关键是报告必须能追溯到同一个数据快照，而不是在一次完整 run 中反复切换网络。

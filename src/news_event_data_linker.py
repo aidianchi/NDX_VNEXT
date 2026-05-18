@@ -69,6 +69,15 @@ def _parse_datetime(value: Any) -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
+def _effective_datetime(value: Any) -> Optional[datetime]:
+    parsed = _parse_datetime(value)
+    if parsed is None:
+        return None
+    if len(str(value).strip()) == 10:
+        parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return parsed
+
+
 def _safe_number(value: Any) -> Optional[float]:
     if value in (None, "", "N/A"):
         return None
@@ -165,11 +174,20 @@ class NewsEventDataLinker:
     ) -> Dict[str, Any]:
         series = chart_time_series.get("series") if isinstance(chart_time_series, dict) else {}
         series = series if isinstance(series, dict) else {}
+        effective_date = _effective_datetime(chart_time_series.get("effective_date")) if isinstance(chart_time_series, dict) else None
         events = [event for event in event_ledger.get("events", []) if isinstance(event, dict)]
+        if effective_date is not None:
+            events = [
+                event for event in events
+                if (_parse_datetime(event.get("published_at")) is None or _parse_datetime(event.get("published_at")) <= effective_date)
+            ]
         prepared = self._prepare_series(series)
+        if effective_date is not None:
+            for meta in prepared.values():
+                meta["rows"] = [row for row in meta["rows"] if row["time"] <= effective_date]
         links = []
         for event in events[: self.max_events]:
-            link = self._link_event(event, prepared)
+            link = self._link_event(event, prepared, effective_date=effective_date)
             if link:
                 links.append(link)
         payload = {
@@ -182,6 +200,7 @@ class NewsEventDataLinker:
                 "allowed_observation_types": ["temporal_association", "co_movement_observation", "needs_bridge_review"],
             },
             "source_artifacts": source_paths or {},
+            "effective_date": effective_date.date().isoformat() if effective_date else None,
             "windows_days": self.windows_days,
             "linked_series": sorted(prepared.keys()),
             "analysis_packet_context": self._analysis_packet_context(analysis_packet or {}),
@@ -210,7 +229,12 @@ class NewsEventDataLinker:
             }
         return prepared
 
-    def _link_event(self, event: Dict[str, Any], prepared: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _link_event(
+        self,
+        event: Dict[str, Any],
+        prepared: Dict[str, Dict[str, Any]],
+        effective_date: Optional[datetime] = None,
+    ) -> Optional[Dict[str, Any]]:
         event_time = _parse_datetime(event.get("published_at"))
         if event_time is None:
             return None
@@ -220,6 +244,8 @@ class NewsEventDataLinker:
             for window_days in self.windows_days:
                 start, end, points = _window_points(rows, event_time, window_days)
                 if start is None or end is None:
+                    continue
+                if effective_date is not None and end["time"] > effective_date:
                     continue
                 change_abs = round(end["value"] - start["value"], 6)
                 change_pct = None if start["value"] == 0 else round((change_abs / start["value"]) * 100, 4)

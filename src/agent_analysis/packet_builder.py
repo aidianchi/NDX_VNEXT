@@ -85,6 +85,29 @@ LAYER_FUNCTIONS = {
 }
 
 
+def _indicator_error(indicator: Dict[str, Any], raw_payload: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    error = indicator.get("error")
+    if error:
+        return str(error)
+    payload = raw_payload if isinstance(raw_payload, dict) else indicator.get("raw_data")
+    if isinstance(payload, dict) and payload.get("backtest_skipped"):
+        return "backtest_skipped_unsupported_function"
+    if indicator.get("backtest_skipped"):
+        return "backtest_skipped_unsupported_function"
+    return None
+
+
+def _indicator_successful(indicator: Dict[str, Any]) -> bool:
+    if _indicator_error(indicator):
+        return False
+    raw = indicator.get("raw_data") if isinstance(indicator.get("raw_data"), dict) else {}
+    if raw.get("backtest_skipped"):
+        return False
+    if "value" in raw:
+        return raw.get("value") is not None
+    return indicator.get("value") is not None or bool(raw)
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -274,7 +297,7 @@ class AnalysisPacketBuilder:
     ) -> Dict[str, Any]:
         indicators = data_json.get("indicators", [])
         total_indicators = len(indicators)
-        successful_indicators = sum(1 for item in indicators if not item.get("error"))
+        successful_indicators = sum(1 for item in indicators if _indicator_successful(item))
         manual_count = 0
         for metrics in grouped_raw_data.values():
             manual_count += sum(1 for item in metrics.values() if item.get("manual_override_used"))
@@ -333,7 +356,7 @@ class AnalysisPacketBuilder:
             raw_payload.setdefault("name", indicator.get("metric_name") or function_id)
             raw_payload["function_id"] = function_id
             raw_payload["metric_name"] = indicator.get("metric_name") or raw_payload.get("name") or function_id
-            raw_payload["error"] = indicator.get("error")
+            raw_payload["error"] = _indicator_error(indicator, raw_payload)
             raw_payload["collection_timestamp_utc"] = indicator.get("collection_timestamp_utc")
 
             manual_metric = manual_metrics.get(function_id) if isinstance(manual_metrics, dict) else None

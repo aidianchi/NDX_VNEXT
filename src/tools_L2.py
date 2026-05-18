@@ -10,7 +10,7 @@ except ImportError:
     from tools_common import *
 
 from datetime import timezone
-from typing import Iterable, Optional
+from typing import Any, Dict, Iterable, Optional
 
 try:
     from .tools_L3 import get_ndx100_components
@@ -639,6 +639,61 @@ def _get_cnn_headers() -> Dict[str, str]:
     }
 
 
+def _cnn_safe_float(value: Any) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cnn_fgi_timestamp_to_date(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+        if number > 10_000_000_000:
+            number = number / 1000.0
+        return datetime.fromtimestamp(number, tz=timezone.utc).strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    try:
+        return pd.to_datetime(value, utc=True, errors="coerce").strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def _select_cnn_fgi_historical_point(data: Dict[str, Any], end_date: str) -> Optional[Dict[str, Any]]:
+    historical = data.get("fear_and_greed_historical")
+    rows = historical.get("data") if isinstance(historical, dict) else None
+    if not isinstance(rows, list):
+        return None
+    effective = pd.to_datetime(end_date, utc=True, errors="coerce")
+    if pd.isna(effective):
+        return None
+    selected: Optional[Dict[str, Any]] = None
+    selected_date = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_date_text = row.get("date") or row.get("x") or row.get("timestamp")
+        row_date = pd.to_datetime(
+            _cnn_fgi_timestamp_to_date(row_date_text) or row_date_text,
+            utc=True,
+            errors="coerce",
+        )
+        if pd.isna(row_date) or row_date > effective:
+            continue
+        if selected_date is None or row_date > selected_date:
+            selected = row
+            selected_date = row_date
+    if selected is not None and selected_date is not None:
+        selected = dict(selected)
+        selected["_selected_date"] = selected_date.strftime("%Y-%m-%d")
+    return selected
+
+
 def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
     """
     获取CNN恐贪指数 (Fear & Greed Index)
@@ -675,7 +730,22 @@ def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
         response.raise_for_status()
         data = response.json()
 
-        fear_greed = data.get('fear_and_greed', {})
+        historical_point = _select_cnn_fgi_historical_point(data, end_date) if end_date else None
+        if end_date and not historical_point:
+            return {
+                "name": "CNN Fear & Greed Index",
+                "value": None,
+                "source_tier": "unavailable",
+                "source_name": "CNN Business",
+                "notes": "Historical CNN Fear & Greed data unavailable for effective_date; live field was not used in backtest mode.",
+                "data_quality": {
+                    "data_date": end_date,
+                    "anomalies": ["historical_point_missing"],
+                    "fallback_chain": ["CNN fear_and_greed_historical.data", "unavailable"],
+                },
+            }
+
+        fear_greed = historical_point or data.get('fear_and_greed', {})
         if not fear_greed:
             return {
                 "name": "CNN Fear & Greed Index",
@@ -684,15 +754,21 @@ def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
             }
 
         score = fear_greed.get('score')
+        if score is None:
+            score = fear_greed.get("y")
+        if score is None:
+            score = fear_greed.get("value")
+        score = _cnn_safe_float(score)
         rating = fear_greed.get('rating')
 
         result = {
             "name": "CNN Fear & Greed Index",
             "series_id": "CNN_FGI",
             "value": {
-                "score": round(score, 2) if score else None,
+                "score": round(score, 2) if score is not None else None,
                 "rating": rating,
-                "timestamp": fear_greed.get('timestamp'),
+                "timestamp": fear_greed.get('timestamp') or fear_greed.get("x"),
+                "data_date": fear_greed.get("_selected_date") or _cnn_fgi_timestamp_to_date(fear_greed.get('timestamp') or fear_greed.get("x")),
                 "previous_close": fear_greed.get('previous_close'),
                 "previous_1_week": fear_greed.get('previous_1_week'),
                 "previous_1_month": fear_greed.get('previous_1_month'),
@@ -702,6 +778,19 @@ def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
             "source_name": "CNN Business",
             "notes": "Score range: 0-100. <25=Extreme Fear (buy signal), >75=Extreme Greed (risk warning)"
         }
+        if end_date:
+            result["data_quality"] = {
+                "data_date": result["value"].get("data_date") or end_date,
+                "effective_date": end_date,
+                "source_path": "fear_and_greed_historical.data",
+                "anomalies": [],
+            }
+        else:
+            result["data_quality"] = {
+                "data_date": result["value"].get("data_date"),
+                "source_path": "fear_and_greed",
+                "anomalies": ["live_current_field"],
+            }
 
         sub_metrics = {}
         sub_metric_names = {
@@ -739,7 +828,7 @@ def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
                 trend = "extreme_greed"
         result["value"]["trend"] = trend
 
-        logging.info(f"CNN FGI: {score:.2f} ({rating})")
+        logging.info(f"CNN FGI: {score:.2f} ({rating})" if score is not None else f"CNN FGI: unavailable ({rating})")
         return result
 
     except requests.exceptions.HTTPError as e:

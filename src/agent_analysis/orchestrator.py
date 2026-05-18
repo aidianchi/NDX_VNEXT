@@ -1076,7 +1076,7 @@ class VNextOrchestrator:
         for function_id, payload in layer_data.items():
             if not isinstance(payload, dict):
                 continue
-            if payload.get("error"):
+            if self._indicator_unavailable_for_analysis(payload):
                 continue
             required.append(str(payload.get("function_id") or function_id))
         return required
@@ -1089,7 +1089,7 @@ class VNextOrchestrator:
         for function_id, payload in layer_data.items():
             if not isinstance(payload, dict):
                 continue
-            if payload.get("error"):
+            if self._indicator_unavailable_for_analysis(payload):
                 continue
             resolved_function_id = str(payload.get("function_id") or function_id)
             required[resolved_function_id] = str(
@@ -1098,6 +1098,18 @@ class VNextOrchestrator:
                 or resolved_function_id
             )
         return required
+
+    def _indicator_unavailable_for_analysis(self, payload: Dict[str, Any]) -> bool:
+        if payload.get("error"):
+            return True
+        if payload.get("backtest_skipped"):
+            return True
+        if payload.get("value") is None and payload.get("skip_reason"):
+            return True
+        data_quality = payload.get("data_quality")
+        if isinstance(data_quality, dict) and data_quality.get("availability") == "backtest_skipped":
+            return True
+        return False
 
     def _compose_prompt(self, stage_key: str, model_cls: Type[Any], payload: Dict[str, Any]) -> str:
         prompt_payload = self._sanitize_prompt_payload(stage_key, payload)
@@ -1362,7 +1374,7 @@ class VNextOrchestrator:
                 {
                     "function_id": payload.get("function_id") or function_id,
                     "metric_name": payload.get("metric_name") or payload.get("name") or function_id,
-                    "analysis_required": not bool(payload.get("error")),
+                    "analysis_required": not self._indicator_unavailable_for_analysis(payload),
                     "error": payload.get("error"),
                     "value": payload.get("value"),
                     "source_tier": payload.get("source_tier") or (payload.get("data_quality") or {}).get("source_tier"),
@@ -1390,6 +1402,22 @@ class VNextOrchestrator:
             if nested_prompt_path.exists():
                 return nested_prompt_path.read_text(encoding="utf-8")
         return INLINE_PROMPTS.get(stage_key, "请基于输入返回严格合法的 JSON。")
+
+    def _normalize_historical_percentile(self, value: Any) -> tuple[Optional[float], Optional[str]]:
+        if value is None or isinstance(value, bool):
+            return None, None
+        if isinstance(value, (int, float)):
+            number = float(value)
+            return (number, None) if 0 <= number <= 100 else (None, str(value))
+        if isinstance(value, str):
+            text = value.strip()
+            match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*%?", text)
+            if match:
+                number = float(match.group(1))
+                return (number, None) if 0 <= number <= 100 else (None, text)
+            if text:
+                return None, text
+        return None, str(value)
 
     def _save_json(self, filename: str | Path, payload: Any) -> None:
         path = Path(filename)
@@ -1420,6 +1448,13 @@ class VNextOrchestrator:
                     continue
                 fact["trend"] = self._normalize_trend(fact.get("trend"))
                 fact["magnitude"] = self._normalize_magnitude(fact.get("magnitude"))
+                if "historical_percentile" in fact:
+                    percentile, percentile_note = self._normalize_historical_percentile(fact.get("historical_percentile"))
+                    fact["historical_percentile"] = percentile
+                    if percentile_note:
+                        raw_data = fact.get("raw_data") if isinstance(fact.get("raw_data"), dict) else {}
+                        raw_data["historical_percentile_note"] = percentile_note
+                        fact["raw_data"] = raw_data
                 if isinstance(fact.get("value"), dict):
                     fact["value"] = json.dumps(fact["value"], ensure_ascii=False)
                 normalized_core_facts.append(fact)

@@ -89,3 +89,40 @@ def test_data_integrity_third_party_checks():
     assert tp["total"] == 2
     assert tp["available"] == 1
     assert tp["confidence"] == 50.0
+
+
+def test_data_integrity_penalizes_skips_partial_coverage_and_future_dates():
+    data = {
+        "backtest_date": "2025-04-09",
+        "indicators": [
+            {
+                "layer": 3,
+                "function_id": "get_percent_above_ma",
+                "metric_name": "Percent Above MA",
+                "raw_data": {
+                    "value": {"level": 40},
+                    "data_quality": {"coverage": {"constituent_coverage_pct": 55.0}},
+                },
+            },
+            {
+                "layer": 2,
+                "function_id": "get_cnn_fear_greed_index",
+                "metric_name": "CNN FGI",
+                "raw_data": {"value": {"score": 62.9, "data_date": "2026-05-15"}},
+            },
+            {
+                "layer": 4,
+                "function_id": "get_ndx_forward_earnings_quality",
+                "metric_name": "Forward Earnings",
+                "raw_data": {"value": None, "backtest_skipped": True},
+                "error": "backtest_skipped_unsupported_function",
+            },
+        ],
+    }
+
+    report = DataIntegrity().run(data)
+
+    assert report["confidence_percent"] < 100.0
+    assert "覆盖率不足" in report["notes"]
+    assert "晚于回测日" in report["notes"]
+    assert "前瞻风险被跳过" in report["notes"]

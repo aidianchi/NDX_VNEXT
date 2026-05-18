@@ -142,6 +142,16 @@ def _parse_event_datetime(value: str) -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
+def _effective_datetime(value: Optional[str]) -> datetime:
+    parsed = _parse_event_datetime(value) if value else None
+    if parsed is None:
+        return datetime.now(timezone.utc)
+    text = str(value).strip()
+    if len(text) == 10:
+        parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return parsed
+
+
 def _dedupe_id(source_id: str, title: str, url: str, published_at: str) -> str:
     published_date = ""
     parsed = _parse_event_datetime(published_at)
@@ -214,11 +224,13 @@ class NewsEventLedgerBuilder:
         max_events_per_source: int = 8,
         timeout: int = 12,
         lookback_days: int = 45,
+        effective_date: Optional[str] = None,
     ) -> None:
         self.fetch_text = fetch_text
         self.max_events_per_source = max_events_per_source
         self.timeout = timeout
         self.lookback_days = lookback_days
+        self.effective_date = effective_date
 
     def build(self, output_path: str | Path, include_sec: bool = True, include_rss: bool = True) -> Dict[str, Any]:
         events: List[NewsEvent] = []
@@ -245,6 +257,7 @@ class NewsEventLedgerBuilder:
                 "source_tiers": ["official_macro", "official_filing"],
                 "dedupe_key": "source_id + normalized title + url + published date",
                 "lookback_days": self.lookback_days,
+                "effective_date": self.effective_date,
                 "event_fields": ["source_tier", "event_type", "published_at", "symbols", "layers", "dedupe_id", "source_errors"],
             },
             "sources": {
@@ -260,10 +273,13 @@ class NewsEventLedgerBuilder:
         return payload
 
     def _dedupe_and_window(self, events: List[NewsEvent]) -> List[NewsEvent]:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=max(0, self.lookback_days))
+        effective = _effective_datetime(self.effective_date)
+        cutoff = effective - timedelta(days=max(0, self.lookback_days))
         deduped: Dict[str, NewsEvent] = {}
         for event in events:
             parsed = _parse_event_datetime(event.published_at)
+            if parsed is not None and parsed > effective:
+                continue
             if parsed is not None and self.lookback_days > 0 and parsed < cutoff:
                 continue
             deduped.setdefault(event.dedupe_id, event)
@@ -375,13 +391,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-rss", action="store_true", help="Skip official macro RSS feeds.")
     parser.add_argument("--max-events-per-source", type=int, default=8)
     parser.add_argument("--lookback-days", type=int, default=45)
+    parser.add_argument("--effective-date", default=None)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    payload = NewsEventLedgerBuilder(max_events_per_source=args.max_events_per_source, lookback_days=args.lookback_days).build(
+    payload = NewsEventLedgerBuilder(
+        max_events_per_source=args.max_events_per_source,
+        lookback_days=args.lookback_days,
+        effective_date=args.effective_date,
+    ).build(
         args.output,
         include_sec=not args.no_sec,
         include_rss=not args.no_rss,

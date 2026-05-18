@@ -48,3 +48,27 @@ def test_news_event_ledger_builds_official_sidecar_without_layer_injection(tmp_p
         assert event["event_type"]
         assert event["published_at"]
         assert isinstance(event["layers"], list)
+
+
+def test_news_event_ledger_backtest_window_uses_effective_date(tmp_path: Path):
+    rss = """<?xml version="1.0"?>
+<rss><channel>
+<item><title>Past FOMC statement</title><link>https://www.federalreserve.gov/past.htm</link><pubDate>Tue, 08 Apr 2025 18:00:00 GMT</pubDate></item>
+<item><title>Future FOMC statement</title><link>https://www.federalreserve.gov/future.htm</link><pubDate>Thu, 10 Apr 2025 18:00:00 GMT</pubDate></item>
+</channel></rss>"""
+
+    def fake_fetch(url, headers, timeout):
+        return rss
+
+    output = tmp_path / "news_event_ledger.json"
+    payload = NewsEventLedgerBuilder(
+        fetch_text=fake_fetch,
+        max_events_per_source=5,
+        effective_date="2025-04-09",
+        lookback_days=45,
+    ).build(output, include_sec=False)
+
+    titles = {event["title"] for event in payload["events"]}
+    assert "Past FOMC statement" in titles
+    assert "Future FOMC statement" not in titles
+    assert payload["governance"]["effective_date"] == "2025-04-09"

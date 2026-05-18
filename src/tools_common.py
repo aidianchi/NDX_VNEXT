@@ -225,7 +225,48 @@ def _yf_info_cache_path(cache_key: str) -> str:
     return os.path.join(_yf_persistent_cache_dir(), f"{_yf_cache_slug(cache_key)}.json")
 
 
-def _read_yf_frame_cache(cache_key: str, max_age_seconds: Optional[int] = YF_FRAME_CACHE_MAX_AGE_SECONDS) -> pd.DataFrame:
+def _requested_ticker_list(tickers: Any) -> List[str]:
+    if isinstance(tickers, (list, tuple, set)):
+        return sorted(str(ticker).upper() for ticker in tickers)
+    ticker = str(tickers).upper()
+    return [ticker] if ticker else []
+
+
+def _yf_close_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return pd.DataFrame()
+    if isinstance(frame.columns, pd.MultiIndex):
+        for level in range(frame.columns.nlevels):
+            labels = [str(item).lower() for item in frame.columns.get_level_values(level)]
+            if "close" in labels:
+                try:
+                    return frame.xs(frame.columns.get_level_values(level)[labels.index("close")], axis=1, level=level)
+                except Exception:
+                    return pd.DataFrame()
+    for column in frame.columns:
+        if str(column).lower() == "close":
+            return frame[[column]]
+    return pd.DataFrame()
+
+
+def _yf_frame_cache_usable(frame: pd.DataFrame, requested_tickers: Optional[List[str]] = None) -> bool:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return False
+    close = _yf_close_frame(frame)
+    if close.empty or close.dropna(how="all").empty:
+        return False
+    requested = [ticker.upper() for ticker in (requested_tickers or [])]
+    if len(requested) <= 1:
+        return True
+    available = {str(column).upper() for column in close.columns if not close[column].dropna().empty}
+    return set(requested).issubset(available)
+
+
+def _read_yf_frame_cache(
+    cache_key: str,
+    max_age_seconds: Optional[int] = YF_FRAME_CACHE_MAX_AGE_SECONDS,
+    requested_tickers: Optional[List[str]] = None,
+) -> pd.DataFrame:
     path = _yf_frame_cache_path(cache_key)
     if not os.path.exists(path):
         return pd.DataFrame()
@@ -241,16 +282,18 @@ def _read_yf_frame_cache(cache_key: str, max_age_seconds: Optional[int] = YF_FRA
                 )
                 return pd.DataFrame()
         cached_df = pd.read_pickle(path)
-        if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
+        if _yf_frame_cache_usable(cached_df, requested_tickers=requested_tickers):
             logging.warning(f"Using recent yfinance frame cache for {cache_key}")
             return cached_df.copy()
+        logging.warning(f"Ignoring incomplete yfinance frame cache for {cache_key}")
     except Exception as exc:
         logging.warning(f"Failed reading yfinance frame cache {path}: {exc}")
     return pd.DataFrame()
 
 
-def _write_yf_frame_cache(cache_key: str, frame: pd.DataFrame) -> None:
-    if not isinstance(frame, pd.DataFrame) or frame.empty:
+def _write_yf_frame_cache(cache_key: str, frame: pd.DataFrame, requested_tickers: Optional[List[str]] = None) -> None:
+    if not _yf_frame_cache_usable(frame, requested_tickers=requested_tickers):
+        logging.warning(f"Skipping incomplete yfinance frame cache write for {cache_key}")
         return
     path = _yf_frame_cache_path(cache_key)
     try:
@@ -403,10 +446,8 @@ def cached_yf_download(
     if not YF_AVAILABLE and not get_twelve_data_api_key():
         return pd.DataFrame()
 
-    if isinstance(tickers, (list, tuple, set)):
-        ticker_key = ",".join(sorted(str(ticker) for ticker in tickers))
-    else:
-        ticker_key = str(tickers)
+    requested_tickers = _requested_ticker_list(tickers)
+    ticker_key = ",".join(requested_tickers) if len(requested_tickers) > 1 else (requested_tickers[0] if requested_tickers else str(tickers))
 
     cache_key = ":".join(
         [
@@ -420,7 +461,11 @@ def cached_yf_download(
     )
 
     def _fetch() -> pd.DataFrame:
-        recent = _read_yf_frame_cache(cache_key, max_age_seconds=YF_FRAME_CACHE_PREFER_MAX_AGE_SECONDS)
+        recent = _read_yf_frame_cache(
+            cache_key,
+            max_age_seconds=YF_FRAME_CACHE_PREFER_MAX_AGE_SECONDS,
+            requested_tickers=requested_tickers,
+        )
         if not recent.empty:
             return recent
 
@@ -428,11 +473,11 @@ def cached_yf_download(
             frame = _fetch_twelve_data_daily_frame(ticker_key, start=start, end=end)
             if not frame.empty:
                 logging.info("Using Twelve Data priority daily frame for %s", ticker_key)
-                _write_yf_frame_cache(cache_key, frame)
+                _write_yf_frame_cache(cache_key, frame, requested_tickers=requested_tickers)
                 return frame
 
         if not YF_AVAILABLE:
-            stale = _read_yf_frame_cache(cache_key)
+            stale = _read_yf_frame_cache(cache_key, requested_tickers=requested_tickers)
             if not stale.empty:
                 return stale
             return pd.DataFrame()
@@ -449,8 +494,8 @@ def cached_yf_download(
                     progress=progress,
                     auto_adjust=auto_adjust,
                 )
-                if isinstance(frame, pd.DataFrame) and not frame.empty:
-                    _write_yf_frame_cache(cache_key, frame)
+                if _yf_frame_cache_usable(frame, requested_tickers=requested_tickers):
+                    _write_yf_frame_cache(cache_key, frame, requested_tickers=requested_tickers)
                     return frame
                 # yfinance 1.3+ 内部 catch 了 YFRateLimitError 后只返回 empty df 并 log error。
                 # 必须把这种 silent 失败视同 exception 来进入退避，否则限流时一次就放弃。
@@ -458,7 +503,7 @@ def cached_yf_download(
             except Exception as exc:
                 last_error = exc
                 empty_reason = f"yfinance raised: {exc}"
-            stale = _read_yf_frame_cache(cache_key)
+            stale = _read_yf_frame_cache(cache_key, requested_tickers=requested_tickers)
             if not stale.empty:
                 return stale
             if attempt < len(YF_DOWNLOAD_RETRY_DELAYS_SECONDS):
@@ -489,11 +534,11 @@ def cached_yf_download(
         return _fetch()
 
     cached_value = cache.get(cache_key)
-    if isinstance(cached_value, pd.DataFrame) and not cached_value.empty:
+    if _yf_frame_cache_usable(cached_value, requested_tickers=requested_tickers):
         return cached_value.copy()
 
     fetched = _fetch()
-    if isinstance(fetched, pd.DataFrame) and not fetched.empty:
+    if _yf_frame_cache_usable(fetched, requested_tickers=requested_tickers):
         cache.set(cache_key, fetched)
         return fetched.copy()
     return pd.DataFrame()

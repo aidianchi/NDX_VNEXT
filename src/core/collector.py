@@ -113,12 +113,29 @@ class DataCollector:
         )
         return result
 
-    # 回测时不支持历史数据的函数列表
-    BACKTEST_UNSUPPORTED_FUNCTIONS = [
-        "get_m7_fundamentals",  # yfinance.info只返回最新财报，不支持历史查询
-        "get_qqq_top10_concentration",  # Invesco endpoint only exposes current holdings in this path
-        "get_ndx_forward_earnings_quality",  # yfinance fundamentals / EPS trend are latest-only
-    ]
+    # 回测时不支持历史数据的函数：宁缺勿错，跳过并写入可审计记录。
+    BACKTEST_UNSUPPORTED_FUNCTIONS = {
+        "get_m7_fundamentals": {
+            "reason": "yfinance.info 只返回最新财报，不能证明是回测日可见数据",
+            "anomalies": ["latest_only_yfinance_fundamentals_not_used_in_backtest"],
+        },
+        "get_qqq_top10_concentration": {
+            "reason": "当前路径的 Invesco holdings 只暴露最新持仓，不能证明是回测日成分/权重",
+            "anomalies": ["latest_only_holdings_endpoint_not_used_in_backtest"],
+        },
+        "get_ndx_pe_and_earnings_yield": {
+            "reason": "自动路径依赖 yfinance 成分股基本面批量代理；回测时覆盖率和历史可见性不可接受，若有人工/Wind 数据可用人工覆盖",
+            "anomalies": ["batch_yfinance_component_fundamentals_not_used_in_backtest"],
+        },
+        "get_ndx_forward_earnings_quality": {
+            "reason": "自动路径依赖 yfinance 最新 forward fundamentals / EPS trend，回测时自动跳过",
+            "anomalies": ["latest_only_yfinance_forward_fundamentals_not_used_in_backtest"],
+        },
+        "get_equity_risk_premium": {
+            "reason": "该简式收益差距依赖 NDX 成分股估值收益率；回测自动路径不可用时不再间接触发批量 yfinance",
+            "anomalies": ["dependent_on_skipped_ndx_component_valuation"],
+        },
+    }
 
     def _collect_single_indicator(self, func_name: str, end_date: Optional[str] = None) -> dict:
         """安全地调用单个数据函数并处理异常。"""
@@ -128,13 +145,19 @@ class DataCollector:
             
             # 回测模式下，跳过不支持历史数据的函数
             if end_date and func_name in self.BACKTEST_UNSUPPORTED_FUNCTIONS:
+                skip_meta = self.BACKTEST_UNSUPPORTED_FUNCTIONS[func_name]
                 logging.warning(f"  - 跳过 {func_name}... ⊘ (回测模式下不支持历史数据，避免前瞻偏差)")
                 return {
                     "name": func_name.replace('_', ' ').title(),
                     "value": None,
-                    "error": None,
+                    "error": "backtest_skipped_unsupported_function",
                     "backtest_skipped": True,
-                    "skip_reason": "该指标仅支持实时数据，回测模式下自动跳过以避免前瞻偏差"
+                    "skip_reason": skip_meta["reason"],
+                    "data_quality": {
+                        "effective_date": end_date,
+                        "availability": "backtest_skipped",
+                        "anomalies": skip_meta.get("anomalies", ["latest_only_source_not_used_in_backtest"]),
+                    },
                 }
             
             result = TOOLS_REGISTRY[func_name](end_date=end_date)
@@ -211,10 +234,10 @@ class DataCollector:
                                 merged_value[key] = manual_value[key]
                         result["value"] = merged_value
                         result["manual_override_used"] = True
-                        result["manual_override_note"] = "Manual ERP values merged into live Damodaran data; monthly series from live fetch"
-                        logging.info(f"  - 调用 {func_name}... ✔ (live Damodaran data merged with manual ERP overrides)")
+                        result["manual_override_note"] = "Manual ERP values merged into Damodaran monthly data; series is filtered by target_date when supplied"
+                        logging.info(f"  - 调用 {func_name}... ✔ (Damodaran monthly data merged with manual ERP overrides)")
                     else:
-                        logging.info(f"  - 调用 {func_name}... ✔ (live Damodaran data)")
+                        logging.info(f"  - 调用 {func_name}... ✔ (Damodaran monthly data)")
                     indicator = {
                         "layer": layer_num,
                         "metric_name": result.get("name", func_name.replace("_", " ").title()),
@@ -261,10 +284,25 @@ class DataCollector:
                 }
                 indicators.append(indicator)
 
+        backtest_data_boundaries = []
+        if backtest_date:
+            for indicator in indicators:
+                raw = indicator.get("raw_data") if isinstance(indicator.get("raw_data"), dict) else {}
+                if raw.get("backtest_skipped"):
+                    backtest_data_boundaries.append({
+                        "layer": indicator.get("layer"),
+                        "function_id": indicator.get("function_id"),
+                        "status": "skipped",
+                        "reason": raw.get("skip_reason"),
+                        "effective_date": backtest_date,
+                        "future_upgrade": "接入能证明回测日可见性的历史数据源后再启用",
+                    })
+
         data_json = {
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "backtest_date": backtest_date,
-            "indicators": indicators
+            "indicators": indicators,
+            "backtest_data_boundaries": backtest_data_boundaries,
         }
         
         # News/events are intentionally handled as a sidecar artifact by src/main.py.

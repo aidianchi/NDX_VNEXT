@@ -4,7 +4,53 @@
 
 ---
 
+## 2026-05-18
+
+### 回测模式 L4 yfinance 成分股代理宁缺勿错
+
+完成内容：
+
+- 按最新拍板，回测模式承认 LLM 有不可完全消除的后验风险，不额外收紧模型表达空间；工程侧只负责保证进入 agent 上下文的数据不晚于回测日，并把缺失、跳过和降级写清楚。
+- 回测模式下，未提供人工/Wind 覆盖时，`get_ndx_pe_and_earnings_yield`、`get_ndx_forward_earnings_quality`、`get_equity_risk_premium` 自动跳过，不再触发 yfinance 成分股基本面批量代理，也不再试图在核心股票大面积缺失后给一个看似精确的置信度。
+- `DataCollector.run()` 新增 `backtest_data_boundaries`，集中记录本次回测哪些指标被跳过、为什么跳过、对应的 `effective_date`，以及未来需要接入能证明回测日可见性的历史数据源后再启用。
+- 保留人工/Wind 高信任覆盖路径：如果 `manual_data.py` 提供了有效的 NDX 估值数据，回测仍可使用人工数据，不会被自动跳过规则挡掉。
+- `NEXT_STEPS.md` 已把 yfinance 审计改为实时模式审计，并记录严格回测后续升级边界：ALFRED first-vintage、财报 first-reported、point-in-time universe 和 LLM 训练后验知识后续单列设计。
+- 记录历史数据研究助理方向：联网 AI skill 只能先生成 `research_candidate` / `manual_review_required` 候选证据包，并把每次如何找到历史数据的路径、日期字段、失败原因和验证办法沉淀下来；稳定可重复后再升级为正式采集规则。
+- 记录采集机 / 快照模式：数据采集和 DeepSeek 推理解耦，先用 `collect-only` 生成不可变数据快照、图表和新闻 sidecar，再由主机消费同一快照运行分析；同机分流和双机采集都可以，但报告必须能追溯到同一数据包。
+- 同步 `ARCHITECTURE.md`、`DATA_COVERAGE_REVIEW.md`、`RUN_REVIEW_CHECKLIST.md`、`README.md` 和 `NEXT_STEPS.md`；补充文档瘦身候选，暂不直接删除旧审计/实验材料。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_collector_manual_valuation_checks.py tests/test_vnext_orchestrator.py::test_backtest_skipped_indicator_is_not_analysis_required tests/test_core_checker.py::test_data_integrity_penalizes_skips_partial_coverage_and_future_dates`：6 passed，4 warnings。
+
+剩余边界：
+
+- 本轮只改变回测采集策略，不解决 yfinance 在实时模式下的字段可靠性；实时模式仍需要后续审计。
+- 当前回测目标仍是“数据日期不超过回测日”，不是“每个数据源都还原当时第一版”。后者需要 ALFRED、披露日财报、历史指数成分和更严格数据血缘。
+
 ## 2026-05-17
+
+### 2025-04-09 回测前瞻污染 P0 修复
+
+完成内容：
+
+- 修复 CNN Fear & Greed 回测污染：回测模式下只读取 `fear_and_greed_historical.data` 中不晚于 `effective_date` 的最后一点；如果历史点缺失，明确 unavailable，不再回退使用 live `fear_and_greed` 顶层当前值。
+- 修复回测跳过项契约不一致：latest-only 指标在回测模式下标记为 `backtest_skipped_unsupported_function`，packet/orchestrator 不再把它们列为 `analysis_required=true`；L4 forward earnings quality 不会再因“已跳过但仍必填”阻断。
+- 修复 LLM 把 `historical_percentile` 写成说明文字导致 Pydantic 崩溃的问题：只接受 0-100 数字或百分数字符串，复杂来源说明转入 `raw_data.historical_percentile_note` 并把分位设为 `null`；L4 prompt 同步硬约束。
+- 给 `chart_time_series.json`、默认 QQQ/FRED/yfinance supplemental fetchers、Damodaran rows、新闻底账和新闻-数据连接器加 `effective_date` 守门；回测新闻侧栏和 workbench 不再使用回测日之后的事件或市场行。
+- 提升 DataIntegrity 口径：回测跳过不再算成功；覆盖率不足、未来数据日期会压低完整性并写入 notes。
+- 加强 yfinance frame cache 写入/读取校验：缺少 Close 或 batch ticker 覆盖不完整的 DataFrame 不再写入/命中持久缓存，避免部分失败 batch 被缓存放大。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_l2_cnn_fgi_backtest.py tests/test_chart_time_series_artifacts.py tests/test_core_checker.py tests/test_vnext_orchestrator.py::test_backtest_skipped_indicator_is_not_analysis_required tests/test_vnext_orchestrator.py::test_historical_percentile_string_is_sanitized tests/test_news_event_ledger.py tests/test_news_event_data_linker.py`：19 passed，4 warnings。
+- `python3 -m pytest -q`：286 passed，4 warnings。
+- `python3 -m py_compile src/tools_L2.py src/tools_common.py src/chart_adapter_v6.py src/chart_time_series_artifacts.py src/news_event_ledger.py src/news_event_data_linker.py src/core/checker.py src/core/collector.py src/agent_analysis/orchestrator.py src/agent_analysis/packet_builder.py`：通过。
+
+剩余边界：
+
+- 本轮没有解决 ALFRED first-vintage、财报 first-reported、LLM 训练后验知识和 point-in-time universe 建库审计；这些属于严格回测架构项，需要单独设计。
+- yfinance cache 现在拒绝明显不完整 batch，但还没有实现 per-ticker normalized cache；重复拉取和并发 SQLite 问题仍可能影响稳定性。
 
 ### Workbench Crosshair、流动性早期单位与新闻层中文分析修复
 

@@ -133,6 +133,55 @@ def _quality_self_check(*function_ids: str):
     }
 
 
+def test_backtest_skipped_indicator_is_not_analysis_required(tmp_path: Path):
+    data_json = {
+        "timestamp_utc": "2026-05-17T00:00:00Z",
+        "backtest_date": "2025-04-09",
+        "indicators": [
+            {
+                "layer": 4,
+                "metric_name": "NDX Forward Earnings Quality",
+                "function_id": "get_ndx_forward_earnings_quality",
+                "raw_data": {
+                    "name": "NDX Forward Earnings Quality",
+                    "value": None,
+                    "backtest_skipped": True,
+                    "skip_reason": "latest-only source",
+                    "data_quality": {"availability": "backtest_skipped"},
+                },
+                "error": None,
+                "collection_timestamp_utc": "2026-05-17T00:00:00Z",
+            }
+        ],
+    }
+    packet = AnalysisPacketBuilder().build(data_json)
+    orchestrator = VNextOrchestrator(available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({}))
+
+    assert "get_ndx_forward_earnings_quality" not in orchestrator._analysis_required_function_ids(packet, "L4")
+    manifest = orchestrator._layer_indicator_manifest(packet.raw_data["L4"])
+    skipped = [item for item in manifest if item["function_id"] == "get_ndx_forward_earnings_quality"][0]
+    assert skipped["analysis_required"] is False
+
+
+def test_historical_percentile_string_is_sanitized(tmp_path: Path):
+    orchestrator = VNextOrchestrator(available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({}))
+
+    normalized = orchestrator._normalize_payload(
+        "l4_analyst",
+        {
+            "layer": "L4",
+            "core_facts": [
+                {"metric": "pe", "value": 32.5, "historical_percentile": "Trendonify: 100% (10y), Danjuan 87%"},
+                {"metric": "pb", "value": 8.1, "historical_percentile": "87.5%"},
+            ],
+        },
+    )
+
+    assert normalized["core_facts"][0]["historical_percentile"] is None
+    assert "Trendonify" in normalized["core_facts"][0]["raw_data"]["historical_percentile_note"]
+    assert normalized["core_facts"][1]["historical_percentile"] == 87.5
+
+
 def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
     responses = {
         "l1": json.dumps(

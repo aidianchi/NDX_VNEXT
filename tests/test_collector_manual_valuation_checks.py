@@ -87,3 +87,62 @@ def test_manual_confidence_only_falls_back_to_live_source(tmp_path, monkeypatch)
 
     assert raw["source_name"] == "live"
     assert raw["value"]["PE_TTM"] == 35.0
+
+
+def test_backtest_skips_yfinance_component_valuation_without_manual_override(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.collector.path_config.data_dir", str(tmp_path))
+    monkeypatch.setattr(
+        manual_data,
+        "load_manual_data",
+        lambda: {"active": False, "metrics": {}},
+    )
+    monkeypatch.setitem(
+        collector_module.TOOLS_REGISTRY,
+        "get_ndx_pe_and_earnings_yield",
+        lambda end_date=None: (_ for _ in ()).throw(AssertionError("should not call yfinance valuation in backtest")),
+    )
+
+    collector = DataCollector()
+    collector.LAYER_FUNCTIONS = {4: ["get_ndx_pe_and_earnings_yield", "get_equity_risk_premium"]}
+
+    data = collector.run(backtest_date="2025-04-09")
+
+    skipped = {item["function_id"]: item["raw_data"] for item in data["indicators"]}
+    assert skipped["get_ndx_pe_and_earnings_yield"]["backtest_skipped"] is True
+    assert skipped["get_ndx_pe_and_earnings_yield"]["data_quality"]["availability"] == "backtest_skipped"
+    assert skipped["get_equity_risk_premium"]["backtest_skipped"] is True
+    assert {item["function_id"] for item in data["backtest_data_boundaries"]} == {
+        "get_ndx_pe_and_earnings_yield",
+        "get_equity_risk_premium",
+    }
+
+
+def test_backtest_manual_ndx_valuation_still_overrides_skip(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.collector.path_config.data_dir", str(tmp_path))
+    monkeypatch.setattr(
+        manual_data,
+        "load_manual_data",
+        lambda: {
+            "active": True,
+            "metrics": {
+                "get_ndx_pe_and_earnings_yield": {
+                    "name": "NDX Valuation (Manual)",
+                    "value": {"PE_TTM": 31.2},
+                    "source_name": "Wind",
+                    "data_quality": {"source_disagreement": {}},
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(manual_data, "has_meaningful_manual_override", lambda metric: True)
+    monkeypatch.setattr("tools_L4.get_ndx_valuation_third_party_checks", lambda: [])
+
+    collector = DataCollector()
+    collector.LAYER_FUNCTIONS = {4: ["get_ndx_pe_and_earnings_yield"]}
+
+    data = collector.run(backtest_date="2025-04-09")
+    raw = data["indicators"][0]["raw_data"]
+
+    assert raw["source_name"] == "Wind"
+    assert raw["value"]["PE_TTM"] == 31.2
+    assert not data["backtest_data_boundaries"]

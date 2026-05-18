@@ -84,3 +84,31 @@ def test_write_news_event_data_links_reads_run_dir_artifacts(tmp_path: Path):
     assert Path(output).name == "news_event_data_links.json"
     assert payload["source_artifacts"]["news_event_ledger"].endswith("news_event_ledger.json")
     assert payload["links"][0]["link_boundary"].startswith("temporal_association only")
+
+
+def test_news_event_data_linker_drops_future_events_and_observations():
+    ledger = _ledger()
+    ledger["events"].append(
+        {
+            "event_id": "event:future",
+            "dedupe_id": "future",
+            "title": "Future event",
+            "published_at": "Tue, 12 May 2026 18:00:00 GMT",
+            "source_tier": "official_macro",
+            "event_type": "policy_or_financial_conditions",
+            "symbols": [],
+            "layers": ["L1"],
+        }
+    )
+    chart = _chart_time_series()
+    chart["effective_date"] = "2026-05-08"
+
+    payload = NewsEventDataLinker(windows_days=[5]).build(
+        event_ledger=ledger,
+        chart_time_series=chart,
+    )
+
+    assert payload["effective_date"] == "2026-05-08"
+    assert {link["event_id"] for link in payload["links"]} == {"event:fomc"}
+    for observation in payload["links"][0]["observations"]:
+        assert observation["end_time"] <= "2026-05-08"

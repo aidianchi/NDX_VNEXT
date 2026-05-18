@@ -1,6 +1,6 @@
 # vNext 下一步
 
-更新日期：2026-05-17  
+更新日期：2026-05-18  
 阅读方式：本文件只放“接下来要做什么”和少量已完成快照。详细完成记录写入 `WORK_LOG.md`，按时间倒序。
 
 ---
@@ -11,8 +11,12 @@
 
 | 优先级 | 类别 | 待办 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
-| P1 | 数据基础 | yfinance 盈利质量代理审计 | yfinance 已从估值 regime 主锚降级，但 forward earnings quality、EPS revision、利润率/增长代理仍依赖它；必须确认字段来源、公式和 stale cache 边界 | 针对 `get_ndx_forward_earnings_quality` 输出一份审计结论；字段覆盖率、公式、缓存新鲜度、失败 fallback 和不能证明什么都写入 data_quality / prompt / brief |
+| P1 | 数据基础 | yfinance 盈利质量代理实时模式审计 | 回测模式已自动跳过 yfinance 成分股基本面批量代理；实时模式仍可把它作为 sanity check 使用，但必须确认字段来源、公式和 stale cache 边界 | 针对 `get_ndx_pe_and_earnings_yield`、`get_ndx_forward_earnings_quality` 输出审计结论；字段覆盖率、公式、缓存新鲜度、失败 fallback 和不能证明什么都写入 data_quality / prompt / brief |
 | P1 | 核心系统 | 新闻事件-数据连接器真实 run 复盘 | `news_event_data_links.json` 已落地，但需要观察真实 run 中哪些连接有帮助、哪些只是噪声，防止新闻叙事污染 | 至少 1 次 `--enable-news` 完整 run 复盘；确认事件连接只作背景观察，不进入 L1-L5，不成为 evidence_ref；必要时调整阈值和展示数量 |
+| P1 | 核心系统 | 严格回测剩余 invariant 设计 | 本轮已堵住 CNN FGI、chart/news effective_date、回测跳过契约和 cache 脏写入，但 ALFRED vintage、财报 first-reported、LLM 后验知识和 point-in-time universe 审计仍未系统化 | 写出严格回测 invariant 方案；明确哪些能工程化强制、哪些只能降级/明示；补充 RUN_REVIEW_CHECKLIST 和 DataIntegrity/packet metadata |
+| P1 | 数据基础 | 历史数据研究助理 skill 原型 | 回测缺口不能靠主分析链临场补；需要一个独立联网研究助理持续寻找候选历史数据源，并把“如何找到”的经验沉淀成可复用规则 | 读取 `backtest_data_boundaries` 生成候选证据包；输出链接、发布时间、数据日期、摘录/截图、适用风险和置信度；默认标记 `research_candidate` / `manual_review_required`，不得直接进入 L1-L5 |
+| P2 | 数据基础 | 采集机 / 快照模式产品化 | 当前网络环境里 yfinance/Yahoo 和 DeepSeek 的最佳网络路径不同；采集与推理解耦能减少半截数据、半截分析、难复现的问题 | `collect-only` 产物包含不可变数据快照、chart/news sidecar、校验摘要和数据边界；主电脑可选择快照只跑 LLM/报告；文档说明单机分流与双机采集两种运行法 |
+| P2 | 文档治理 | 文档瘦身与归档审查 | 根目录主文档仍可用，但 `docs/` 中多份 4 月旧审计/实验材料已不是当前事实，容易让后续 agent 误读 | 列出保留/归档/删除候选；历史材料优先移入 `docs/archive/` 并加索引，确认无引用后再删除 |
 
 ---
 
@@ -20,9 +24,16 @@
 
 这里只保留最近完成事项的摘要，详细内容见 `WORK_LOG.md`。
 
+### 2026-05-18
+
+- 按回测原则拍板更新 L4 自动采集：回测模式下，未提供人工/Wind 覆盖时，`get_ndx_pe_and_earnings_yield`、`get_ndx_forward_earnings_quality`、`get_equity_risk_premium` 这类依赖 yfinance 成分股批量基本面的自动路径直接跳过，并写入 `backtest_data_boundaries`；宁缺勿错，不再反复触发批量错误后给伪置信度。
+- 回测口径明确：暂时做到“数据日期不超过回测日”；ALFRED first-vintage、财报 first-reported、point-in-time universe 和 LLM 训练后验知识列为后续严格回测升级，不进入当前 P0 修复范围。
+- 记录两个后续方向：联网历史数据研究助理只产出待审候选证据包，并把每次探索经验沉淀为可复用规则；采集机/快照模式把数据采集和 DeepSeek 推理解耦，先支持同机分流，必要时再升级为双机采集。
+
 ### 2026-05-17
 
 - 修复 workbench crosshair 模块映射：价格技术主图和全部副图都回到 `price_technical` 读数路径；所有图新增左上角 hover 序列读数，最新 workbench 桌面/移动视觉回归通过。
+- 修复 2025-04-09 回测 P0 前瞻污染：CNN FGI 回测只用历史数组，回测跳过项不再被 L4 contract 必填，`historical_percentile` 字符串说明不再触发 Pydantic 崩溃，chart/news sidecar 加 `effective_date` 守门，DataIntegrity 不再把跳过/低覆盖/未来日期报成 100%，yfinance frame cache 拒绝明显不完整 batch。
 - 修复 WTREGEN/TGA 早期混合缓存单位：2009 年前净流动性不再出现由单位错误造成的假负数。
 - 新增 `news_layer_analysis.json` 独立新闻层 sidecar，生成中文概要、可能股市影响、压力通道和新闻层总分析；不进入 L1-L5，不成为 `evidence_ref`。
 - L4 新增 DanjuanFunds/蛋卷基金 NDX 估值校验源，解析 PE/PB/PE percentile/PB percentile/ROE/PEG/eva_type/date/sample_start/update time；真实接口验证 NDX PE `36.51`、PE 分位 `87.0`、PB 分位 `99.68`。
@@ -132,6 +143,21 @@
 - 不得为了报告顺滑抹平冲突。
 - 不得把新闻、浏览器采集或登录态工具直接混入主指标链。
 - 不得用未经证据支持的历史概率、回测收益、样本期包装判断。
+- 回测缺口的联网探索必须先进入待审候选层，不能直接污染 L1-L5 主证据；稳定可重复后再升级为正式采集规则。
+
+---
+
+## 文档清理候选
+
+先不直接删除，下一轮按“当前事实 / 历史材料 / 可删除噪音”三类处理：
+
+| 候选 | 建议 | 理由 |
+| --- | --- | --- |
+| `docs/2026-04-24_*`、`docs/2026-04-25_*` | 优先归档到 `docs/archive/` | 多数是 vNext 初期审计、prompt 实验和 legacy 对比，历史价值仍在，但不应作为当前路线入口 |
+| `docs/4.20 VNEXT_REPORT.md` | 归档并在 ARCHITECTURE 留摘要链接 | 长篇初始路线图，很多内容已被 `ARCHITECTURE.md` / `NEXT_STEPS.md` 吸收 |
+| 根目录 `PLAIN_LANGUAGE_*` | 暂保留，后续合并索引 | 面向普通读者，受众不同；可加一份索引说明哪些仍是当前解释，哪些是历史说明 |
+| `audit_report_20260517.md`、`PROJECT_AUDIT_20260513.md` | 保留为审计记录 | 仍解释了重要缺陷来源；不能当作当前待办清单使用 |
+| `ai_response_debug_*.txt` | 可考虑移入 `output/debug/` 或删除 | 调试原始响应不适合作为根目录长期文档 |
 
 ---
 
