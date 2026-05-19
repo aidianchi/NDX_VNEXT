@@ -81,8 +81,20 @@ class DataCollector:
             ]
         }
 
-    def _merge_manual_ndx_valuation_checks(self, manual_metric: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_manual_ndx_valuation_checks(self, manual_metric: Dict[str, Any], backtest_date: Optional[str] = None) -> Dict[str, Any]:
         result = deepcopy(manual_metric)
+        if backtest_date:
+            value = result.get("value") if isinstance(result.get("value"), dict) else {}
+            result["value"] = {**value, "ThirdPartyChecks": []}
+            data_quality = result.get("data_quality") if isinstance(result.get("data_quality"), dict) else {}
+            data_quality["source_disagreement"] = dict(data_quality.get("source_disagreement") or {})
+            result["data_quality"] = data_quality
+            result["manual_override_note"] = (
+                "Manual valuation values remain primary; live third-party checks are skipped in backtest "
+                "to avoid current web data entering historical evidence."
+            )
+            return result
+
         try:
             try:
                 from ..tools_L4 import get_ndx_valuation_third_party_checks
@@ -353,8 +365,11 @@ class DataCollector:
                     logging.info(f"  - 调用 {func_name}... ✔ (使用 'manual_data.py' 中的人工数据)")
                     raw_data = manual_metric
                     if func_name == "get_ndx_pe_and_earnings_yield" and isinstance(manual_metric, dict):
-                        raw_data = self._merge_manual_ndx_valuation_checks(manual_metric)
-                        logging.info(f"  - 调用 {func_name}... ✔ (manual valuation merged with live third-party checks)")
+                        raw_data = self._merge_manual_ndx_valuation_checks(manual_metric, backtest_date=backtest_date)
+                        if backtest_date:
+                            logging.info(f"  - 调用 {func_name}... ✔ (manual valuation used; live third-party checks skipped in backtest)")
+                        else:
+                            logging.info(f"  - 调用 {func_name}... ✔ (manual valuation merged with live third-party checks)")
                     indicator = {
                         "layer": layer_num,
                         "metric_name": raw_data.get("name", func_name.replace("_", " ").title()),

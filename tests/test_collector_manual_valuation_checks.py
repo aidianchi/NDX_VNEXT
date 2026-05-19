@@ -140,7 +140,10 @@ def test_backtest_manual_ndx_valuation_still_overrides_skip(tmp_path, monkeypatc
         },
     )
     monkeypatch.setattr(manual_data, "has_meaningful_manual_override", lambda metric: True)
-    monkeypatch.setattr("tools_L4.get_ndx_valuation_third_party_checks", lambda: [])
+    monkeypatch.setattr(
+        "tools_L4.get_ndx_valuation_third_party_checks",
+        lambda: (_ for _ in ()).throw(AssertionError("should not fetch live valuation checks in backtest")),
+    )
 
     collector = DataCollector()
     collector.LAYER_FUNCTIONS = {4: ["get_ndx_pe_and_earnings_yield"]}
@@ -150,4 +153,7 @@ def test_backtest_manual_ndx_valuation_still_overrides_skip(tmp_path, monkeypatc
 
     assert raw["source_name"] == "Wind"
     assert raw["value"]["PE_TTM"] == 31.2
+    assert raw["value"]["ThirdPartyChecks"] == []
+    assert raw["data_quality"]["source_disagreement"] == {}
+    assert "live third-party checks are skipped in backtest" in raw["manual_override_note"]
     assert not data["backtest_data_boundaries"]
