@@ -460,6 +460,31 @@ def test_crowdedness_dashboard_backtest_does_not_use_current_option_or_info_snap
     assert value["qqq_short_interest_percent"]["source"] == "backtest_unavailable"
 
 
+def test_crowdedness_dashboard_backtest_handles_yfinance_multiindex_skew(monkeypatch):
+    skew = pd.DataFrame(
+        {("Close", "^SKEW"): [121.0, 130.0, 155.0]},
+        index=pd.to_datetime(["2025-04-08", "2025-04-09", "2026-05-15"]),
+    )
+
+    monkeypatch.setattr(tools_L4, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_L4, "cached_yf_download", lambda *args, **kwargs: skew.copy())
+    monkeypatch.setattr(
+        tools_L4,
+        "get_yf_option_chain_with_retry",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("current option chain should not be used")),
+    )
+    monkeypatch.setattr(
+        tools_L4,
+        "get_yf_ticker_info_with_retry",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("current ticker info should not be used")),
+    )
+
+    result = tools_L4.get_crowdedness_dashboard(end_date="2025-04-09")
+
+    assert result["value"]["skew_index"]["value"] == 130.0
+    assert result["value"]["skew_index"]["date"] == "2025-04-09"
+
+
 def test_damodaran_getter_falls_back_to_html_when_excel_fails(monkeypatch):
     html = """
     <table>

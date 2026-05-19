@@ -120,6 +120,22 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
                         "future_upgrade": "historical source required",
                     }
                 ],
+                "strict_backtest_invariants": {
+                    "hard_enforced": [
+                        {
+                            "invariant_id": "observation_dates_lte_effective_date",
+                            "status": "enforced_by_data_integrity_gate",
+                            "description": "dates are gated",
+                        }
+                    ],
+                    "declared_limitations": [
+                        {
+                            "invariant_id": "alfred_first_vintage_not_enforced",
+                            "status": "declared_limitation",
+                            "future_upgrade": "ALFRED vintage required",
+                        }
+                    ],
+                },
             },
             "objective_firewall_summary": {
                 "object_clear": True,
@@ -476,6 +492,9 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert "回测数据边界" in html
     assert "get_ndx_forward_earnings_quality" in html
     assert "historical source required" in html
+    assert "严格回测 invariant" in html
+    assert "observation_dates_lte_effective_date" in html
+    assert "alfred_first_vintage_not_enforced" in html
     assert "可发布" in html
     assert "可控" in html
     assert "需关注" in html

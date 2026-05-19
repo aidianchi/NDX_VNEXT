@@ -184,3 +184,26 @@ def test_data_integrity_recursively_blocks_future_observation_dates_and_note_dat
     assert report["publish_status"] == "blocked"
     assert "value.monthly_series[1].data_date=2026-05-01" in report["future_date_violations"]["Damodaran ERP"]
     assert "notes[text_date]=2026-05-18" in report["future_date_violations"]["Crowdedness"]
+
+
+def test_data_integrity_carries_strict_backtest_invariants_without_blocking():
+    data = {
+        "backtest_date": "2025-04-09",
+        "strict_backtest_invariants": {
+            "schema_version": "strict_backtest_invariants_v1",
+            "declared_limitations": [
+                {"invariant_id": "alfred_first_vintage_not_enforced", "status": "declared_limitation"},
+                {"invariant_id": "financials_first_reported_not_enforced", "status": "declared_limitation"},
+            ],
+        },
+        "indicators": [
+            {"function_id": "get_fed_funds_rate", "metric_name": "Fed Funds", "value": 5.25},
+        ],
+    }
+
+    report = DataIntegrity().run(data)
+
+    assert report["publish_status"] == "publishable"
+    assert report["strict_backtest_invariants"]["schema_version"] == "strict_backtest_invariants_v1"
+    assert "严格回测限制已明示" in report["notes"]
+    assert "alfred_first_vintage_not_enforced" in report["notes"]

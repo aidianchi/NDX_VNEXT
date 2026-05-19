@@ -2450,6 +2450,13 @@ class VNextReportGenerator:
             or []
         )
         integrity = artifacts.get("data_integrity_report", {}) or {}
+        strict_invariants = (
+            integrity.get("strict_backtest_invariants")
+            or meta.get("strict_backtest_invariants")
+            or analysis_meta.get("strict_backtest_invariants")
+            or analysis_packet.get("context", {}).get("strict_backtest_invariants")
+            or {}
+        )
         boundary_rows = "".join(
             f"""
     <li>
@@ -2463,6 +2470,26 @@ class VNextReportGenerator:
         )
         if not boundary_rows:
             boundary_rows = "<li><b>无</b><span>本次没有记录回测跳过项。</span></li>"
+        invariant_rows = ""
+        if isinstance(strict_invariants, dict) and strict_invariants:
+            enforced_rows = "".join(
+                f"<li><b>{_escape(item.get('invariant_id') or 'unknown')}</b><span>{_escape(item.get('status') or '')}</span><small>{_escape(item.get('description') or '')}</small></li>"
+                for item in _as_list(strict_invariants.get("hard_enforced"))
+                if isinstance(item, dict)
+            )
+            limitation_rows = "".join(
+                f"<li><b>{_escape(item.get('invariant_id') or 'unknown')}</b><span>{_escape(item.get('status') or '')}</span><small>{_escape(item.get('future_upgrade') or item.get('description') or '')}</small></li>"
+                for item in _as_list(strict_invariants.get("declared_limitations"))
+                if isinstance(item, dict)
+            )
+            invariant_rows = f"""
+  <div class="audit-boundaries">
+    <h3>严格回测 invariant</h3>
+    <ul>{enforced_rows or '<li><b>无</b><span>未记录强制项。</span></li>'}</ul>
+    <h3>仍需明示的 point-in-time 限制</h3>
+    <ul>{limitation_rows or '<li><b>无</b><span>未记录限制项。</span></li>'}</ul>
+  </div>
+"""
         integrity_status = integrity.get("publish_status") or ("blocked" if integrity.get("blocked") else "not recorded")
         blocking_reasons = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(integrity.get("blocking_reasons")))
         runtime_diag = integrity.get("runtime_diagnostics", {}).get("yfinance", {}) if isinstance(integrity.get("runtime_diagnostics"), dict) else {}
@@ -2494,6 +2521,7 @@ class VNextReportGenerator:
     <h3>回测数据边界</h3>
     <ul>{boundary_rows}</ul>
   </div>
+  {invariant_rows}
   <div class="audit-boundaries">
     <h3>阻断原因</h3>
     <ul>{blocking_reasons or '<li>无</li>'}</ul>

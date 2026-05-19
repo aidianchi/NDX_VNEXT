@@ -12,9 +12,6 @@
 | 优先级 | 类别 | 待办 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
 | P1 | 数据基础 | yfinance 盈利质量代理实时模式审计 | 回测模式已自动跳过 yfinance 成分股基本面批量代理；实时模式仍可把它作为 sanity check 使用，但必须确认字段来源、公式和 stale cache 边界 | 针对 `get_ndx_pe_and_earnings_yield`、`get_ndx_forward_earnings_quality` 输出审计结论；字段覆盖率、公式、缓存新鲜度、失败 fallback 和不能证明什么都写入 data_quality / prompt / brief |
-| P1 | 核心系统 | 新闻事件-数据连接器真实 run 复盘 | `news_event_data_links.json` 已落地，但需要观察真实 run 中哪些连接有帮助、哪些只是噪声，防止新闻叙事污染 | 至少 1 次 `--enable-news` 完整 run 复盘；确认事件连接只作背景观察，不进入 L1-L5，不成为 evidence_ref；必要时调整阈值和展示数量 |
-| P1 | 核心系统 | 严格回测剩余 invariant 设计 | 本轮已堵住 CNN FGI、chart/news effective_date、回测跳过契约和 cache 脏写入，但 ALFRED vintage、财报 first-reported、LLM 后验知识和 point-in-time universe 审计仍未系统化 | 写出严格回测 invariant 方案；明确哪些能工程化强制、哪些只能降级/明示；补充 RUN_REVIEW_CHECKLIST 和 DataIntegrity/packet metadata |
-| P1 | 数据基础 | L3/yfinance 运行稳定性专项 | 本轮已把 yfinance 长退避、cache fallback、SQLite/文件句柄/限流等失败类型产品化为 runtime diagnostics，但仍需真实失败日志证明根因并减少系统性失败 | 复盘失败日志和批量下载路径；必要时限制并发/文件句柄，明确 cache 读写边界；L3 失败时质量状态、DataIntegrity 和报告发布状态一致 |
 | P1 | 数据基础 | 历史数据研究助理 skill 原型 | 回测缺口不能靠主分析链临场补；需要一个独立联网研究助理持续寻找候选历史数据源，并把“如何找到”的经验沉淀成可复用规则 | 读取 `backtest_data_boundaries` 生成候选证据包；输出链接、发布时间、数据日期、摘录/截图、适用风险和置信度；默认标记 `research_candidate` / `manual_review_required`，不得直接进入 L1-L5 |
 | P2 | 数据基础 | 采集机 / 快照模式产品化 | 当前网络环境里 yfinance/Yahoo 和 DeepSeek 的最佳网络路径不同；采集与推理解耦能减少半截数据、半截分析、难复现的问题 | `collect-only` 产物包含不可变数据快照、chart/news sidecar、校验摘要和数据边界；主电脑可选择快照只跑 LLM/报告；文档说明单机分流与双机采集两种运行法 |
 | P2 | 文档治理 | 文档瘦身与归档审查 | 根目录主文档仍可用，但 `docs/` 中多份 4 月旧审计/实验材料已不是当前事实，容易让后续 agent 误读 | 列出保留/归档/删除候选；历史材料优先移入 `docs/archive/` 并加索引，确认无引用后再删除 |
@@ -31,7 +28,10 @@
 - 继续完成 audit 剩余项第一轮：L3 failed/unavailable/nested-None 不再进入关键事实或 analysis_required；L5/QQQ/QQEW 日频请求统一按 yfinance 排他 end 请求 T+1 再过滤到 T；native brief 首屏展示发布状态、回测日、观察日期范围、采集/生成时间；safe/warning 中文化，token usage 摘要化；console 回写 native brief/workbench 到 `run_summary.json`；CNN Fear & Greed 等复合指标的子项不得绕过总分语义升格成 high 跨层冲突；L2 evidence_refs dict 输出会被 normalizer 收敛成标准字符串 refs。
 - audit 剩余项第二轮：yfinance runtime diagnostics 记录 retry/cache fallback/failed、退避秒数、采集耗时和失败类型；DataIntegrity、collect-only / run summary、native brief 审计区展示诊断摘要；native brief 新增买方动作层，把风险边界和失效条件转成加仓/减仓/等待/观察窗口。
 - `backtest_data_boundaries` 进入 `analysis_packet.meta/context` 和 native report 审计区，brief 可直接展示回测跳过项、原因和 future upgrade。
-- 验证：旧 `output/data/data_collected_v9_20250409.json` 被新 DataIntegrity 判定为 blocked；P0/P1 闸门修复时 `python3 -m pytest -q` 为 294 passed；剩余项第一轮 targeted tests 为 26 passed；第二轮全量测试为 304 passed。
+- 严格回测 invariant 第一版落地：collector 写出 `strict_backtest_invariants`，区分已强制的 observation date / latest-only skip / inactive manual 隔离，和 ALFRED vintage、财报 first-reported、point-in-time universe、LLM 后验知识等需明示限制；DataIntegrity、AnalysisPacket、run summary 和 native brief 审计区都会携带该 metadata。
+- 重新生成并复盘新的 `2025-04-09` run：修复真实采集中暴露的 Crowdedness SKEW MultiIndex 异常；回测模式 VIX、铜/金、XLY/XLP 优先使用历史缓存，不再为历史日刷新当前 yfinance 缓存导致 10s/60s 退避；新 run 的 DataIntegrity 为 publishable，native brief/workbench 已生成，packet/chart/news sidecar 未发现晚于回测日的业务日期。
+- 新闻事件-数据连接器完成一次 `--enable-news` 完整 run 复盘：`news_event_data_links.json` 保持 sidecar policy，未进入 L1-L5，不成为 evidence_ref；本次 2025-04-09 run 没有生成事件-市场连接，暂不调整阈值。
+- 验证：旧污染采集包曾被新 DataIntegrity 判定为 blocked；P0/P1 闸门修复时 `python3 -m pytest -q` 为 294 passed；剩余项第一轮 targeted tests 为 26 passed；第二轮全量测试为 304 passed；严格回测 invariant 第一版后全量测试为 305 passed；本轮新 run / yfinance 回测稳定性窄修后全量测试为 308 passed。
 
 ### 2026-05-18
 

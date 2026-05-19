@@ -2,6 +2,8 @@ import json
 import os
 import sys
 
+import pandas as pd
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from agent_analysis.contracts import LayerCard
@@ -81,3 +83,58 @@ def test_vxn_vix_ratio_returns_missing_data_instead_of_raising(monkeypatch):
 
     assert result["value"] is None
     assert "VXN=None" in result["notes"]
+
+
+def test_get_vix_backtest_reads_historical_cache_without_current_refresh(tmp_path, monkeypatch):
+    cache_path = tmp_path / "VIX.csv"
+    pd.DataFrame(
+        {
+            "date": pd.date_range("2025-03-01", periods=40, freq="D"),
+            "value": [20.0 + i * 0.1 for i in range(40)],
+        }
+    ).to_csv(cache_path, index=False)
+
+    monkeypatch.setattr(tools_L1.ts_manager, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(
+        tools_L1.ts_manager,
+        "get_or_update_series",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("backtest VIX should not refresh live cache")),
+    )
+    monkeypatch.setattr(
+        tools_L1,
+        "_fetch_yf_history",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cached backtest VIX should not call yfinance")),
+    )
+
+    result = tools_L1.get_vix(end_date="2025-04-09")
+
+    assert result["value"]["date"] == "2025-04-09"
+    assert result["source_name"] == "yfinance (cached historical)"
+
+
+def test_copper_gold_backtest_reads_historical_cache_without_current_refresh(tmp_path, monkeypatch):
+    dates = pd.date_range("2025-02-01", periods=70, freq="D")
+    pd.DataFrame({"date": dates, "value": [4.0 + i * 0.01 for i in range(70)]}).to_csv(tmp_path / "HG=F.csv", index=False)
+    pd.DataFrame({"date": dates, "value": [2700.0 + i for i in range(70)]}).to_csv(tmp_path / "GC=F.csv", index=False)
+
+    monkeypatch.setattr(tools_L1.ts_manager, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(
+        tools_L1.ts_manager,
+        "get_or_update_series",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("backtest commodities should not refresh live cache")),
+    )
+    monkeypatch.setattr(
+        tools_L1,
+        "_fetch_copper_history",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cached backtest copper should not call yfinance")),
+    )
+    monkeypatch.setattr(
+        tools_L1,
+        "_fetch_gold_history",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cached backtest gold should not call yfinance")),
+    )
+
+    result = tools_L1.get_copper_gold_ratio(end_date="2025-04-09")
+
+    assert result["value"]["date"] == "2025-04-09"
+    assert result["source_name"] == "yfinance (cached)"

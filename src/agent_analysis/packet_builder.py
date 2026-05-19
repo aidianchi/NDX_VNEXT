@@ -438,6 +438,7 @@ class AnalysisPacketBuilder:
             "manual_override_count": manual_count,
             "manual_override_active": bool(manual_overrides.get("active")),
             "backtest_data_boundaries": data_json.get("backtest_data_boundaries", []),
+            "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),
         }
 
     def _build_context(
@@ -450,6 +451,7 @@ class AnalysisPacketBuilder:
             "source_timestamp_utc": data_json.get("timestamp_utc"),
             "backtest_date": data_json.get("backtest_date"),
             "backtest_data_boundaries": data_json.get("backtest_data_boundaries", []),
+            "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),
             "layer_states": {layer: facts.state for layer, facts in facts_by_layer.items()},
             "layer_summaries": {layer: facts.summary for layer, facts in facts_by_layer.items()},
         }

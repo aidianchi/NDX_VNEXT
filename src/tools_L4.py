@@ -383,11 +383,13 @@ def get_crowdedness_dashboard(end_date: str = None) -> Dict[str, Any]:
                     auto_adjust=False,
                 )
                 if not skew_hist.empty:
+                    skew_hist = clean_yfinance_dataframe(skew_hist)
                     skew_hist = skew_hist[skew_hist.index <= effective_date]
             else:
                 skew_hist = get_yf_ticker_history_with_retry("^SKEW", period="5d", attempts=3, pause_seconds=1.0)
-            if not skew_hist.empty:
-                skew_val = round(skew_hist['Close'].iloc[-1], 2)
+                skew_hist = clean_yfinance_dataframe(skew_hist)
+            if not skew_hist.empty and "close" in skew_hist.columns:
+                skew_val = round(float(skew_hist["close"].iloc[-1]), 2)
                 skew_date = skew_hist.index[-1].strftime("%Y-%m-%d")
         except Exception as e:
             logging.warning(f"SKEW from yfinance failed: {e}")
@@ -395,7 +397,7 @@ def get_crowdedness_dashboard(end_date: str = None) -> Dict[str, Any]:
     crowdedness_data["skew_index"] = {
         "value": skew_val,
         "date": skew_date,
-        "source": "yfinance (^SKEW)" if skew_val else "unavailable",
+        "source": "yfinance (^SKEW)" if skew_val is not None else "unavailable",
         "interpretation": ">150: 尾部风险溢价高 (市场担忧黑天鹅); <120: 尾部风险溢价低"
     }
 

@@ -111,6 +111,12 @@ def test_packet_builder_hides_inactive_manual_metric_values_and_carries_backtest
             "future_upgrade": "historical source",
         }
     ]
+    data["strict_backtest_invariants"] = {
+        "schema_version": "strict_backtest_invariants_v1",
+        "declared_limitations": [
+            {"invariant_id": "alfred_first_vintage_not_enforced", "status": "declared_limitation"}
+        ],
+    }
     packet = AnalysisPacketBuilder().build(
         data,
         manual_overrides={
@@ -126,6 +132,8 @@ def test_packet_builder_hides_inactive_manual_metric_values_and_carries_backtest
     assert packet.manual_overrides["inactive_metric_count"] == 1
     assert packet.meta["backtest_data_boundaries"][0]["function_id"] == "get_ndx_pe_and_earnings_yield"
     assert packet.context["backtest_data_boundaries"][0]["future_upgrade"] == "historical source"
+    assert packet.meta["strict_backtest_invariants"]["schema_version"] == "strict_backtest_invariants_v1"
+    assert packet.context["strict_backtest_invariants"]["declared_limitations"][0]["invariant_id"] == "alfred_first_vintage_not_enforced"
 
 
 def test_packet_builder_keeps_event_refs_separate_from_layer_data():

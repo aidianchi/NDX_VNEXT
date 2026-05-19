@@ -195,6 +195,7 @@ def run_collect_only(args: argparse.Namespace) -> Dict[str, Any]:
         "data_json": collector_output_path(backtest_date),
         "indicator_count": len(data_json.get("indicators", [])),
         "backtest_date": backtest_date,
+        "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),
         "runtime_diagnostics": _runtime_diagnostics_summary(data_json),
         "data_quality_summary": _data_quality_summary(data_json),
     }
@@ -238,6 +239,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
             "models": available_models,
             "blocked": True,
             "blocking_reasons": integrity_report.get("blocking_reasons", []),
+            "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),
             "runtime_diagnostics": _runtime_diagnostics_summary(data_json),
             "data_quality_summary": _data_quality_summary(data_json),
         }
@@ -315,6 +317,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
         "approval_status": _enum_value(getattr(artifacts["final_adjudication"], "approval_status", "")),
         "models": available_models,
+        "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),
         "runtime_diagnostics": _runtime_diagnostics_summary(data_json),
         "data_quality_summary": _data_quality_summary(data_json),
     }

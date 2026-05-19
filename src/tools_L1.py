@@ -98,6 +98,63 @@ def _get_yf_series_with_analysis(ticker: str, name: str, end_date: Optional[str]
         }
 
 
+def _read_cached_series_until(series_id: str, end_date: str) -> pd.DataFrame:
+    """Read local TimeSeriesManager cache for historical mode without current-day refresh."""
+    try:
+        effective_date = pd.to_datetime(end_date)
+        path = ts_manager._series_path(series_id)
+        frame = ts_manager._read_local(path, date_col="date")
+        frame = ts_manager._normalize_df(frame)
+        if frame.empty or "value" not in frame.columns:
+            return pd.DataFrame(columns=["date", "value"])
+        frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
+        frame = frame[(frame["date"] <= effective_date)].dropna(subset=["date", "value"])
+        return frame.sort_values("date")[["date", "value"]]
+    except Exception as exc:
+        logging.warning("读取 %s 历史缓存失败: %s", series_id, exc)
+        return pd.DataFrame(columns=["date", "value"])
+
+
+def _get_series_for_effective_date(series_id: str, update_func, end_date: Optional[str]) -> pd.DataFrame:
+    """Use historical cache in backtests; only fetch through the requested effective date if cache is missing."""
+    if end_date:
+        effective_date = pd.to_datetime(end_date)
+        cached = _read_cached_series_until(series_id, end_date)
+        if not cached.empty:
+            latest_date = cached["date"].max()
+            if not pd.isna(latest_date) and latest_date >= effective_date - timedelta(days=7):
+                return cached
+        try:
+            return update_func(start_date=None, end_date=end_date)
+        except TypeError as exc:
+            logging.warning("%s historical fetch does not support end_date safely: %s", series_id, exc)
+            return pd.DataFrame(columns=["date", "value"])
+    return ts_manager.get_or_update_series(series_id, update_func)
+
+
+def _vix_payload_from_frame(vix_df: pd.DataFrame, *, source_name: str) -> Optional[Dict[str, Any]]:
+    if vix_df is None or vix_df.empty or len(vix_df) < 3:
+        return None
+    latest_row = vix_df.iloc[-1]
+    latest_level = float(latest_row["value"])
+    latest_date_str = latest_row["date"].strftime("%Y-%m-%d")
+    historical_stats = calculate_long_term_stats(vix_df[["date", "value"]], latest_level)
+    value_out = {"level": round(latest_level, 4), "historical_stats": historical_stats, "date": latest_date_str}
+    if len(vix_df) >= 20:
+        vix_s = vix_df.set_index("date")["value"].sort_index()
+        ma20 = float(vix_s.rolling(20, min_periods=20).mean().iloc[-1])
+        value_out["spot_over_ma20_ratio"] = round(latest_level / ma20, 4) if ma20 > 0 else None
+        value_out["ma20"] = round(ma20, 4)
+    return {
+        "name": "VIX Index",
+        "series_id": "^VIX",
+        "value": value_out,
+        "unit": "index level",
+        "source_name": source_name,
+        "notes": "VIX 恐慌指数；分层降噪：现值 + 趋势比(Spot/MA20)。",
+    }
+
+
 def get_vix(end_date: str = None) -> Dict[str, Any]:
     """获取VIX恐慌指数，使用持久化缓存并返回历史统计。V5.8修复版：增强错误处理和Alpha Vantage备用。"""
     if not YF_AVAILABLE:
@@ -106,31 +163,18 @@ def get_vix(end_date: str = None) -> Dict[str, Any]:
 
     # 尝试使用 TimeSeriesManager 获取数据
     try:
-        vix_df = ts_manager.get_or_update_series("VIX", _fetch_vix_history)
+        vix_df = _get_series_for_effective_date("VIX", _fetch_vix_history, end_date)
         if not vix_df.empty:
             if end_date:
                 effective_date = datetime.strptime(end_date, "%Y-%m-%d")
                 vix_df = vix_df[vix_df["date"] <= effective_date]
-            if not vix_df.empty:
-                latest_row = vix_df.iloc[-1]
-                latest_level = float(latest_row["value"])
-                latest_date_str = latest_row["date"].strftime("%Y-%m-%d")
-                historical_stats = calculate_long_term_stats(vix_df[["date", "value"]], latest_level)
-                value_out = {"level": round(latest_level, 4), "historical_stats": historical_stats, "date": latest_date_str}
-                if len(vix_df) >= 20:
-                    vix_s = vix_df.set_index("date")["value"].sort_index()
-                    ma20 = float(vix_s.rolling(20, min_periods=20).mean().iloc[-1])
-                    value_out["spot_over_ma20_ratio"] = round(latest_level / ma20, 4) if ma20 > 0 else None
-                    value_out["ma20"] = round(ma20, 4)
-                logging.info(f"成功从缓存获取 VIX 数据: {latest_level} (日期: {latest_date_str})")
-                return {
-                    "name": "VIX Index",
-                    "series_id": "^VIX",
-                    "value": value_out,
-                    "unit": "index level",
-                    "source_name": "yfinance (cached)",
-                    "notes": "VIX 恐慌指数；分层降噪：现值 + 趋势比(Spot/MA20)。"
-                }
+            payload = _vix_payload_from_frame(
+                vix_df,
+                source_name="yfinance (cached historical)" if end_date else "yfinance (cached)",
+            )
+            if payload:
+                logging.info(f"成功从缓存获取 VIX 数据: {payload['value']['level']} (日期: {payload['value']['date']})")
+                return payload
     except Exception as e:
         logging.warning(f"TimeSeriesManager 获取 VIX 数据失败: {e}，尝试直接获取")
 
@@ -752,8 +796,8 @@ def get_xly_xlp_ratio(end_date: str = None) -> Dict[str, Any]:
 
     # 尝试使用 TimeSeriesManager 获取数据
     try:
-        xly_df = ts_manager.get_or_update_series("XLY", _fetch_xly_history)
-        xlp_df = ts_manager.get_or_update_series("XLP", _fetch_xlp_history)
+        xly_df = _get_series_for_effective_date("XLY", _fetch_xly_history, end_date)
+        xlp_df = _get_series_for_effective_date("XLP", _fetch_xlp_history, end_date)
 
         if not xly_df.empty and not xlp_df.empty:
             xly_df = xly_df[xly_df["date"] <= effective_date]
@@ -862,8 +906,8 @@ def get_copper_gold_ratio(end_date: str = None) -> Dict[str, Any]:
 
     # 尝试使用 TimeSeriesManager 获取数据
     try:
-        copper_df = ts_manager.get_or_update_series("HG=F", _fetch_copper_history)
-        gold_df = ts_manager.get_or_update_series("GC=F", _fetch_gold_history)
+        copper_df = _get_series_for_effective_date("HG=F", _fetch_copper_history, end_date)
+        gold_df = _get_series_for_effective_date("GC=F", _fetch_gold_history, end_date)
 
         if not copper_df.empty and not gold_df.empty:
             copper_df = copper_df[copper_df["date"] <= effective_date]

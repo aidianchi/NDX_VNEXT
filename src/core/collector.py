@@ -143,6 +143,65 @@ class DataCollector:
         },
     }
 
+    def _build_strict_backtest_invariants(self, backtest_date: Optional[str]) -> Dict[str, Any]:
+        if not backtest_date:
+            return {}
+        return {
+            "schema_version": "strict_backtest_invariants_v1",
+            "effective_date": backtest_date,
+            "hard_enforced": [
+                {
+                    "invariant_id": "observation_dates_lte_effective_date",
+                    "status": "enforced_by_data_integrity_gate",
+                    "description": "进入 packet / prompt / report 的观察日期不得晚于回测日；递归日期扫描发现越界会阻断发布。",
+                },
+                {
+                    "invariant_id": "latest_only_component_fundamentals_skipped",
+                    "status": "enforced_by_collector_visibility_gate",
+                    "description": "不能证明回测日可见的 yfinance 成分股基本面、最新持仓和相关派生估值自动路径会跳过并写入 backtest_data_boundaries。",
+                },
+                {
+                    "invariant_id": "inactive_manual_values_hidden",
+                    "status": "enforced_by_packet_builder",
+                    "description": "inactive manual metrics 只保留审计计数，不把具体数值送入 agent 上下文。",
+                },
+            ],
+            "declared_limitations": [
+                {
+                    "invariant_id": "alfred_first_vintage_not_enforced",
+                    "status": "declared_limitation",
+                    "publish_impact": "publishable_with_disclosure",
+                    "description": "FRED 类宏观序列当前按 observation date 裁剪；尚未强制使用 ALFRED first-vintage 还原首次发布版本。",
+                    "future_upgrade": "为可修订宏观序列接入 ALFRED vintage_date / realtime_start 约束。",
+                },
+                {
+                    "invariant_id": "financials_first_reported_not_enforced",
+                    "status": "declared_limitation",
+                    "publish_impact": "publishable_with_disclosure_or_skip_latest_only",
+                    "description": "财报、盈利预期和成分股 fundamentals 尚未系统校验 first-reported / filing availability；不能证明历史可见的自动路径默认跳过。",
+                    "future_upgrade": "接入带 filing_date / accepted_date / report_date 的历史财报与预期数据源。",
+                },
+                {
+                    "invariant_id": "point_in_time_universe_not_enforced",
+                    "status": "declared_limitation",
+                    "publish_impact": "publishable_with_disclosure_or_proxy_only",
+                    "description": "当前没有完整 point-in-time NDX universe；历史成分、权重和集中度只能用可见来源或明确 proxy，不能冒充正式历史成分事实。",
+                    "future_upgrade": "建立 NDX constituent / weight history，或接入能证明发布时间的官方/供应商快照。",
+                },
+                {
+                    "invariant_id": "llm_training_prior_not_eliminated",
+                    "status": "declared_limitation",
+                    "publish_impact": "publishable_with_disclosure",
+                    "description": "LLM 可能带有回测日之后的世界知识；系统只允许它基于 evidence refs 下结论，不声称完全复原当时认知环境。",
+                    "future_upgrade": "在 prompt / governance 中继续限制无证据历史胜率、点位和事后叙事，并用审计样本复盘。",
+                },
+            ],
+            "research_candidate_policy": {
+                "status": "manual_review_required",
+                "description": "联网研究、浏览器 sidecar 或当前网页发现的历史线索必须先标记 research_candidate / manual_review_required，未升级为正式数据源前不得成为 L1-L5 evidence_ref。",
+            },
+        }
+
     def _collect_single_indicator(self, func_name: str, end_date: Optional[str] = None) -> dict:
         """安全地调用单个数据函数并处理异常。"""
         started = time.monotonic()
@@ -343,6 +402,7 @@ class DataCollector:
             "backtest_date": backtest_date,
             "indicators": indicators,
             "backtest_data_boundaries": backtest_data_boundaries,
+            "strict_backtest_invariants": self._build_strict_backtest_invariants(backtest_date),
             "runtime_diagnostics": get_yfinance_runtime_diagnostics(),
         }
         

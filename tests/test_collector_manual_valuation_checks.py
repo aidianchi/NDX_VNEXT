@@ -115,6 +115,11 @@ def test_backtest_skips_yfinance_component_valuation_without_manual_override(tmp
         "get_ndx_pe_and_earnings_yield",
         "get_equity_risk_premium",
     }
+    invariants = data["strict_backtest_invariants"]
+    assert invariants["effective_date"] == "2025-04-09"
+    assert any(item["invariant_id"] == "observation_dates_lte_effective_date" for item in invariants["hard_enforced"])
+    assert any(item["invariant_id"] == "alfred_first_vintage_not_enforced" for item in invariants["declared_limitations"])
+    assert invariants["research_candidate_policy"]["status"] == "manual_review_required"
 
 
 def test_backtest_manual_ndx_valuation_still_overrides_skip(tmp_path, monkeypatch):

@@ -1,12 +1,12 @@
 # vNext 数据覆盖复盘
 
-更新日期：2026-05-18
+更新日期：2026-05-19
 
 本文回答一个朴素问题：系统现在到底靠哪些数据推理，哪些数据可靠，哪些数据还薄弱。
 
 结论先说：
 
-> 2026-05-18 的回测修复确认：实时模式下，Damodaran、WorldPERatio、Trendonify sidecar、蛋卷等仍可作为当前估值交叉校验；历史回测模式下，当前网页和 yfinance 成分股基本面批量代理默认不能当作当时可见数据。缺口必须写入 `backtest_data_boundaries`，后续通过人工/Wind、可信历史源或研究助理候选证据包逐步补齐。
+> 2026-05-19 的严格回测 invariant 第一版确认：实时模式下，Damodaran、WorldPERatio、Trendonify sidecar、蛋卷等仍可作为当前估值交叉校验；历史回测模式下，当前网页和 yfinance 成分股基本面批量代理默认不能当作当时可见数据。缺口必须写入 `backtest_data_boundaries`，ALFRED vintage、first-reported、point-in-time universe 和 LLM 后验知识等未强制项必须写入 `strict_backtest_invariants.declared_limitations`。
 
 ---
 
@@ -18,7 +18,7 @@
 | 回测修复依据 | 2025-04-09 回测污染审查与 2026-05-18 回测跳过策略 |
 | 模型 | 实际运行仍默认 `deepseek-v4-flash`；`deepseek-v4-pro` 只是备用 |
 | 当前回测底线 | 进入 agent 上下文的数据日期不得晚于回测日；不承诺 first-vintage |
-| 最新测试结果 | 2026-05-18 全量测试达到 `288 passed` |
+| 最新测试结果 | 2026-05-19 全量测试达到 `308 passed` |
 
 ---
 
@@ -49,6 +49,7 @@
 - 代理指标只能说明方向或压力，不能当成官方事实。
 - 估值指标不能自动推出看空结论，必须和盈利、利率、流动性一起看。
 - 当前网页只能说明“当前页面怎么写”，不能自动说明“历史回测日当时能看到什么”。
+- `strict_backtest_invariants.hard_enforced` 只能列已经工程化强制的边界；尚未接入 ALFRED vintage、财报 first-reported、point-in-time universe 的地方必须作为 declared limitation，而不是把 observation date 裁剪包装成完整 point-in-time 回测。
 
 ---
 

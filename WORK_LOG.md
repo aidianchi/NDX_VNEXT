@@ -6,6 +6,55 @@
 
 ## 2026-05-19
 
+### 2025-04-09 新 run 复盘与 yfinance 回测稳定性窄修
+
+完成内容：
+
+- 按审计剩余项重新生成 `2025-04-09` 数据和 vNext artifacts：`output/analysis/vnext/20250409/analysis_packet.json`、`data_integrity_report.json`、`logic_vnext.json`、`chart_time_series.json`、`news_event_ledger.json`、`news_event_data_links.json`、`news_layer_analysis.json`。
+- 修复真实采集暴露的 `get_crowdedness_dashboard(end_date=...)` 异常：yfinance 单 ticker 返回 MultiIndex 时先用 `clean_yfinance_dataframe()` 标准化，再读取 `close`，避免 pandas Series truth-value 报错；回测模式仍不使用当前期权链和当前 short interest。
+- 修复回测模式下不必要的当前 yfinance 刷新：VIX、铜/金、XLY/XLP 在有覆盖回测日的本地历史缓存时直接读取历史缓存；只有缓存缺失或明显未覆盖 effective date 时，才按 `end_date` 拉取历史窗口，避免为了历史日触发当前日期的 10s/60s 长退避。
+- 真实复盘结果：修复前 `2025-04-09 --collect-only` 中 Crowdedness 失败，铜/金触发 HG=F / GC=F rate-limit retry，yfinance backoff 合计 `140.0s`；修复后同一采集只有 `cache_hit_recent=20`、`total_backoff_seconds=0.0`，且没有 failed / retry。
+- 新 `2025-04-09` vNext run 通过 DataIntegrity：`publish_status=publishable`，`future_date_violations={}`，最终 `final_stance=中性偏谨慎`、`approval_status=approved_with_reservations`。
+- 生成 native 产物：`output/reports/vnext_brief_20260519_1849_20250409_0000.html` 和 `output/reports/vnext_workbench_20260519_1849_20250409_0000.html`；brief 已展示 DataIntegrity、YF Diagnostics、`backtest_data_boundaries`、`strict_backtest_invariants` 和买方动作层。
+- `--enable-news` 完整 run 复盘：`news_event_data_links.json` 保持 sidecar policy，未进入 L1-L5，不成为 `evidence_ref`；本次 2025-04-09 run 的 `links=[]`，没有噪声连接需要调阈值。
+
+验证结果：
+
+- `python3 -m pytest tests/test_l4_data_authority.py::test_crowdedness_dashboard_backtest_does_not_use_current_option_or_info_snapshots tests/test_l4_data_authority.py::test_crowdedness_dashboard_backtest_handles_yfinance_multiindex_skew tests/test_runtime_resilience.py::test_get_vix_backtest_reads_historical_cache_without_current_refresh tests/test_runtime_resilience.py::test_copper_gold_backtest_reads_historical_cache_without_current_refresh -q`：通过。
+- `python3 -m py_compile src/tools_L1.py src/tools_L4.py`：通过。
+- `python3 src/main.py --collect-only --date 2025-04-09 --enable-news`：通过；yfinance diagnostics 为 `cache_hit_recent=20`，`total_backoff_seconds=0.0`。
+- `python3 src/main.py --date 2025-04-09 --data-json output/data/data_collected_v9_20250409.json --models deepseek-v4-flash --skip-report --disable-charts --enable-news`：通过。
+- `python3 src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20250409 --template brief`：通过。
+- `python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/20250409 --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity`：通过。
+- 递归检查 `analysis_packet.json`、`chart_time_series.json`、`news_event_ledger.json`、`news_event_data_links.json`：排除采集/生成时间戳后，未发现晚于 `2025-04-09` 的业务日期引用。
+- `python3 -m pytest -q`：308 passed，4 warnings。
+
+剩余边界：
+
+- 本次真实 run 没有复现 SQLite / 文件句柄异常；runtime diagnostics 已能识别这类失败，后续若在实时或高并发采集中再次出现，应基于具体日志继续收敛 cache 写入和批量下载策略。
+- L3 回测仍使用最新成分股作为 proxy，并由 `strict_backtest_invariants.declared_limitations.point_in_time_universe_not_enforced` 明示；这不是完整 point-in-time universe 数据源接入。
+
+### 严格回测 invariant 第一版：强制项与明示限制入包
+
+完成内容：
+
+- Collector 在回测模式写出 `strict_backtest_invariants`：把已工程化强制的 observation date 递归闸门、latest-only 成分股基本面/持仓自动跳过、inactive manual 隔离列入 `hard_enforced`。
+- ALFRED first-vintage、财报 first-reported、point-in-time NDX universe 和 LLM 后验知识列入 `declared_limitations`，明确它们不是 `2026-05-15` 这类硬未来数据污染，但必须在发布审计中保留，不能伪装成完整 point-in-time 回测。
+- DataIntegrity 把 strict invariant metadata 原样写入报告，并在 notes 中提示这些限制已明示；它们不会单独阻断发布，真正晚于回测日的观察日期仍由 existing blocking gate 阻断。
+- AnalysisPacket 的 `meta/context`、`run_summary.json` / collect-only summary 和 native brief 审计区都携带 strict invariant metadata，方便重新生成 `2025-04-09` run 时直接检查。
+- 同步 `NEXT_STEPS.md`、`RUN_REVIEW_CHECKLIST.md`、`DATA_COVERAGE_REVIEW.md` 和本次审计文档，把严格回测 invariant 从未完成项移出，留下 L3/yfinance 真实日志复盘和重新生成 2025-04-09 run。
+
+验证结果：
+
+- `python3 -m pytest tests/test_main_collect_only.py tests/test_collector_manual_valuation_checks.py tests/test_core_checker.py tests/test_vnext_packet_builder.py::test_packet_builder_hides_inactive_manual_metric_values_and_carries_backtest_boundaries tests/test_vnext_reporter.py::test_vnext_reporter_generates_native_ui -q`：17 passed，4 warnings。
+- `python3 -m py_compile src/core/collector.py src/core/checker.py src/agent_analysis/packet_builder.py src/agent_analysis/vnext_reporter.py src/main.py`：通过。
+- `python3 -m pytest -q`：305 passed，4 warnings。
+
+剩余边界：
+
+- 本轮是 invariant 方案和 metadata 闭环，不是 ALFRED / first-reported / point-in-time universe 数据源接入；后者仍需独立数据工程。
+- 尚未重新生成新的 `2025-04-09` 完整 run；下一步应使用当前代码生成并复盘 DataIntegrity、analysis packet、native brief 和 workbench。
+
 ### audit 剩余项第二轮：yfinance 诊断产品化与买方动作层
 
 完成内容：

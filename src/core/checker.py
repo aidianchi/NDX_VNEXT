@@ -103,6 +103,10 @@ class DataIntegrity:
                 violations.append(f"{key}={str(value)[:10]}")
         return sorted(set(violations))
 
+    def _strict_backtest_invariants(self, data_json: Dict[str, Any]) -> Dict[str, Any]:
+        invariants = data_json.get("strict_backtest_invariants") if isinstance(data_json, dict) else {}
+        return invariants if isinstance(invariants, dict) else {}
+
     def run(self, data_json: Dict[str, Any]) -> Dict[str, Any]:
         indicators = data_json.get("indicators", [])
         total = len(indicators)
@@ -155,6 +159,19 @@ class DataIntegrity:
         else:
             if not failed_metrics and not unavailable and not partial:
                 notes.append("所有采集指标均返回有效值。")
+        strict_backtest_invariants = self._strict_backtest_invariants(data_json)
+        declared_limitations = strict_backtest_invariants.get("declared_limitations", []) if strict_backtest_invariants else []
+        if backtest_date and declared_limitations:
+            limitation_labels = [
+                str(item.get("invariant_id"))
+                for item in declared_limitations
+                if isinstance(item, dict) and item.get("invariant_id")
+            ]
+            notes.append(
+                "严格回测限制已明示: "
+                + ", ".join(limitation_labels[:4])
+                + "；这些不是硬未来数据污染，但需要在发布审计中保留。"
+            )
         runtime_diagnostics = data_json.get("runtime_diagnostics") if isinstance(data_json, dict) else {}
         yf_diag = runtime_diagnostics.get("yfinance") if isinstance(runtime_diagnostics, dict) else {}
         yf_status = yf_diag.get("by_status", {}) if isinstance(yf_diag, dict) else {}
@@ -222,6 +239,7 @@ class DataIntegrity:
                     "total_backoff_seconds": yf_backoff,
                 }
             },
+            "strict_backtest_invariants": strict_backtest_invariants,
         }
         logging.info("Data integrity: %.1f%%", confidence)
         return report

@@ -1,6 +1,6 @@
 # Run Review Checklist：真实运行复盘清单
 
-最近更新：2026-05-18
+最近更新：2026-05-19
 用途：每次跑完真实模型后，用同一套标准判断系统是否真的变稳，而不是只看“有没有生成报告”。
 
 阅读方式：最新运行记录放在最上面；通用检查表放在后面。
@@ -201,6 +201,8 @@
 | --- | --- |
 | 回测有效日期 | 所有进入 agent 上下文的数据、新闻、图表行都不晚于 `backtest_date` / `effective_date`。 |
 | 跳过项是否明示 | `backtest_data_boundaries` 列出被跳过的指标、原因和未来升级路径。 |
+| 严格回测 invariant 是否入包 | `strict_backtest_invariants` 同时出现在数据包、DataIntegrity、AnalysisPacket / run summary 和 native brief 审计区。 |
+| 强制项与限制项是否分清 | `hard_enforced` 只列已工程化强制的规则；ALFRED vintage、first-reported、point-in-time universe、LLM 后验知识应留在 `declared_limitations`，不能伪装成已解决。 |
 | 当前网页是否误入回测 | bb browser、Trendonify、蛋卷、WorldPERatio 等当前网页数据没有在历史回测中默认充当当时证据。 |
 | yfinance 成分股代理 | 回测模式未自动触发 yfinance 成分股基本面批量代理；如使用人工/Wind 覆盖，必须有来源和数据日期。 |
 | 新闻侧栏 | 新闻只作为辅助 sidecar，不进入 L1-L5，不成为 `evidence_ref`；发布日期不得晚于回测日。 |
