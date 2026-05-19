@@ -28,6 +28,7 @@ try:
     from .deep_research_canon import L3_STRUCTURAL_PRIORITY_FUNCTIONS, build_layer_canon_prompt, get_indicator_canon
     from .few_shot import build_layer_few_shot_prompt
     from .llm_engine import LLMEngine
+    from .packet_builder import indicator_payload_unavailable_reason
 except ImportError:
     from contracts import (
         AnalysisPacket,
@@ -49,6 +50,7 @@ except ImportError:
     from deep_research_canon import L3_STRUCTURAL_PRIORITY_FUNCTIONS, build_layer_canon_prompt, get_indicator_canon
     from few_shot import build_layer_few_shot_prompt
     from llm_engine import LLMEngine
+    from packet_builder import indicator_payload_unavailable_reason
 
 logger = logging.getLogger(__name__)
 
@@ -979,6 +981,43 @@ class VNextOrchestrator:
                     bad.append(ref_text)
             return bad
 
+        def _composite_submetric_issue(conflict: Any) -> Optional[str]:
+            severity = str(getattr(getattr(conflict, "severity", ""), "value", getattr(conflict, "severity", ""))).lower()
+            refs = [str(ref) for ref in getattr(conflict, "evidence_refs", []) or []]
+            if severity != "high" or "L2.get_cnn_fear_greed_index" not in refs:
+                return None
+            text = " ".join(
+                str(getattr(conflict, field, "") or "")
+                for field in ("conflict_id", "conflict_type", "description", "mechanism", "implication")
+            ).lower()
+            submetric_tokens = (
+                "market momentum",
+                "put/call",
+                "safe haven",
+                "junk bond",
+                "stock price strength",
+                "stock price breadth",
+                "market volatility",
+                "子项",
+                "分项",
+            )
+            aggregate_tokens = (
+                "total score",
+                "overall",
+                "aggregate",
+                "headline",
+                "总分",
+                "综合",
+                "整体",
+                "总指标",
+            )
+            if any(token in text for token in submetric_tokens) and not any(token in text for token in aggregate_tokens):
+                return (
+                    "high severity conflict uses CNN Fear & Greed sub-metric without aggregate-score semantics; "
+                    "treat sub-metric divergence as internal tension unless independently supported."
+                )
+            return None
+
         if len(layer_cards) != 5:
             structural_issues.append(f"Expected 5 layer cards, got {len(layer_cards)}.")
 
@@ -1056,6 +1095,12 @@ class VNextOrchestrator:
                         consistency_issues.append(
                             f"BridgeMemo[{memo_index}].typed_conflicts[{conflict_id}].evidence_refs invalid: "
                             + ", ".join(bad_refs[:5])
+                        )
+                    composite_issue = _composite_submetric_issue(conflict)
+                    if composite_issue:
+                        consistency_issues.append(
+                            f"BridgeMemo[{memo_index}].typed_conflicts[{conflict_id}] composite sub-metric over-promotion: "
+                            + composite_issue
                         )
                 for chain in memo.resonance_chains:
                     chain_id = str(chain.chain_id or "resonance_chain")
@@ -1162,16 +1207,7 @@ class VNextOrchestrator:
         return required
 
     def _indicator_unavailable_for_analysis(self, payload: Dict[str, Any]) -> bool:
-        if payload.get("error"):
-            return True
-        if payload.get("backtest_skipped"):
-            return True
-        if payload.get("value") is None and payload.get("skip_reason"):
-            return True
-        data_quality = payload.get("data_quality")
-        if isinstance(data_quality, dict) and data_quality.get("availability") == "backtest_skipped":
-            return True
-        return False
+        return indicator_payload_unavailable_reason(payload) is not None
 
     def _compose_prompt(self, stage_key: str, model_cls: Type[Any], payload: Dict[str, Any]) -> str:
         prompt_payload = self._sanitize_prompt_payload(stage_key, payload)
@@ -1234,6 +1270,7 @@ class VNextOrchestrator:
             "- indicator_analyses: 对每一个 analysis_required=true 的指标输出一条原生分析。\n"
             "- indicator_analyses[].function_id 必须等于输入 function_id。\n"
             "- indicator_analyses[].metric 必须优先等于输入 metric_name。\n"
+            "- indicator_analyses[].evidence_refs 必须是字符串数组，例如 [\"L2.get_vix\"]，不得输出对象/dict。\n"
             "- indicator_analyses[].narrative 是可进入最终报告的典范化解读。\n"
             "- indicator_analyses[].reasoning_process 必须展示从当前读数、分位/趋势到局部判断的因果推理。\n"
             "- indicator_analyses[].first_principles_chain 用列表写出机制链，例如 利率上升 -> 折现率上升 -> 成长股估值受压。\n"
@@ -1614,10 +1651,7 @@ class VNextOrchestrator:
             "falsifiers",
         ):
             value = normalized.get(key)
-            if value is None:
-                normalized[key] = []
-            elif not isinstance(value, list):
-                normalized[key] = [str(value)]
+            normalized[key] = self._coerce_string_list(value)
         if not normalized["evidence_refs"] and layer_label and normalized["function_id"] != "unknown":
             normalized["evidence_refs"] = [f"{layer_label}.{normalized['function_id']}"]
         normalized["confidence"] = self._normalize_confidence(normalized.get("confidence"))
@@ -1737,10 +1771,7 @@ class VNextOrchestrator:
         normalized["implication"] = str(normalized.get("implication") or normalized["description"])
         for key in ("involved_layers", "evidence_refs", "falsifiers"):
             value = normalized.get(key)
-            if value is None:
-                normalized[key] = []
-            elif not isinstance(value, list):
-                normalized[key] = [str(value)]
+            normalized[key] = self._coerce_string_list(value)
         normalized["event_refs"] = self._coerce_event_refs_list(normalized.get("event_refs"))
         status = str(normalized.get("status") or "unresolved").lower()
         normalized["status"] = status if status in {"unresolved", "confirmed", "weakened"} else "unresolved"
@@ -1757,10 +1788,7 @@ class VNextOrchestrator:
             normalized["involved_layers"] = normalized.get("layers")
         for key in ("involved_layers", "evidence_refs", "confirming_indicators", "falsifiers"):
             value = normalized.get(key)
-            if value is None:
-                normalized[key] = []
-            elif not isinstance(value, list):
-                normalized[key] = [str(value)]
+            normalized[key] = self._coerce_string_list(value)
         normalized["event_refs"] = self._coerce_event_refs_list(normalized.get("event_refs"))
         return normalized
 
@@ -1773,10 +1801,7 @@ class VNextOrchestrator:
         normalized["implication"] = str(normalized.get("implication") or "")
         normalized["confidence"] = self._normalize_confidence(normalized.get("confidence"))
         value = normalized.get("evidence_refs")
-        if value is None:
-            normalized["evidence_refs"] = []
-        elif not isinstance(value, list):
-            normalized["evidence_refs"] = [str(value)]
+        normalized["evidence_refs"] = self._coerce_string_list(value)
         value = normalized.get("event_refs")
         normalized["event_refs"] = self._coerce_event_refs_list(value)
         return normalized
@@ -1806,6 +1831,36 @@ class VNextOrchestrator:
         if isinstance(value, dict):
             return [str(key) for key in value.keys()]
         return [str(value)]
+
+    def _coerce_string_list(self, value: Any) -> List[str]:
+        if value is None:
+            return []
+        items = value if isinstance(value, list) else [value]
+        coerced: List[str] = []
+        for item in items:
+            if item is None:
+                continue
+            if isinstance(item, str):
+                text = item.strip()
+            elif isinstance(item, dict):
+                layer = str(item.get("layer") or "").strip().upper()
+                function_id = str(item.get("function_id") or item.get("metric_id") or "").strip()
+                if layer and function_id:
+                    text = f"{layer}.{function_id}"
+                else:
+                    text = str(
+                        item.get("ref")
+                        or item.get("evidence_ref")
+                        or item.get("function_id")
+                        or item.get("id")
+                        or item.get("metric")
+                        or ""
+                    ).strip()
+            else:
+                text = str(item).strip()
+            if text:
+                coerced.append(text)
+        return coerced
 
     def _normalize_confidence(self, confidence: Any) -> str:
         if not isinstance(confidence, str):

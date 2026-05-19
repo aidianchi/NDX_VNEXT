@@ -1,17 +1,18 @@
 # AGENTS.md
 
-本文件用于指导 Codex 和其他代码 agent 在 `ndx_vnext` 仓库中工作。
+本文件是 `ndx_vnext` 的仓库级 agent 提示词。它应保持短、稳定、高信号：只放每次工作都必须遵守的原则、红线和文档路由。当前待办、历史记录、命令大全、环境异常和调试细节不要放进这里。
 
-## 项目目标
+## 项目北极星
 
-`ndx_vnext` 是 NDX 研究系统的下一代流水线。它的目标不是简单生成一份 HTML 报告，而是生成一条可审计、可展开、可交互阅读的投研推理链：
+`ndx_vnext` 不是把旧报告换模型重跑，也不是只生成一份 HTML。它要生成一条可审计、可展开、可交互阅读的 NDX 投研推理链。
 
-1. 采集并标准化市场数据。
-2. 隔离 L1-L5 五层上下文。
-3. 让每层产出原生指标级分析。
-4. 显式识别跨层冲突、共振和传导机制。
-5. 构建最终 thesis，同时保留未解决张力。
-6. 用原生 vNext UI 展示完整证据链，而不是只依赖 legacy HTML。
+每个重要市场结论都应能回答：
+
+1. 判断对象是什么。
+2. 哪些证据有发言权。
+3. 哪些证据确认它。
+4. 哪些证据反驳它。
+5. 出现什么情况需要改变判断。
 
 核心架构原则：
 
@@ -19,183 +20,56 @@
 
 Agent 拆分的理由是上下文隔离和认知变换边界，而不是模仿人类职位分工。
 
-## 当前优先级
+## 不可破坏红线
 
-当前阶段目标是把 vNext 打磨成高质量第一版：
+- 不得回退 L1-L5 上下文隔离：L1-L5 可以知道静态五层本体、投资对象定义和本层指标法典，但不能接收其他层的运行时数据、摘要、结论、候选跨层关系，或 Bridge / Thesis 的当前判断。
+- 不得让 `legacy_adapter.py` 成为主要认知生产者。legacy 只能做兼容导出和兜底映射；主要分析必须来自 vNext artifacts。
+- 不得为了报告顺滑而抹平冲突。跨层冲突、反证、未解决张力是 vNext 的核心资产。
+- 不得让指标越权发言。代理指标不能冒充官方事实，技术指标不能证明估值便宜，复合指标的子项不能绕过总分语义被升格为强结论。
+- 不得把新闻、浏览器采集、登录态工具或 sidecar 结果直接混入 L1-L5 主证据链。它们默认只能作为隔离观察、候选证据或人工复核材料；未升级为正式数据源前，不得成为 `evidence_ref`。
+- 回测和快照模式必须尊重有效日期。进入 agent 上下文的数据、新闻、图表行不得晚于回测日或 `effective_date`；缺口必须写入数据边界，不能用当前网页、当前成分股基本面或联网搜索结果伪装成历史当时可见事实。
+- 不得编造历史胜率、回测收益、样本期、概率数字或点位阈值。除非输入 evidence refs 明确提供，否则只能表达为待验证假设或风险观察。
+- DataIntegrity / publish status 是发布闸门。若产物被标记为 blocked / unpublishable，不得继续把报告当作可发布结论处理。
 
-- L1-L5 必须产出原生 `indicator_analyses`、`layer_synthesis`、`internal_conflict_analysis`、`cross_layer_hooks` 和 `quality_self_check`。
-- Bridge 必须消费 Layer 输出，并生成显式跨层冲突、共振和传导逻辑。
-- Thesis、Critic、Risk、Reviser、Final 必须保留高严重度冲突和风险边界。
-- 原生 vNext UI 必须直接消费 v2 artifacts，不能继续依赖 legacy adapter 拼出的主要叙事。
+## 文档路由
 
-后续工作按三类组织：
+不要把所有背景塞进当前对话。按任务读取最小必要文档：
 
-1. 核心系统：推理链、上下文隔离、跨层关系、治理校验。
-2. 数据基础：数据采集、标准化、数据源覆盖、缺口和置信度边界。
-3. 输出体验：native HTML、未来交互系统、审美、排版和连续阅读体验。
+- 当前要做什么：读 `NEXT_STEPS.md`，以顶部待办为准。
+- 主架构和不可破坏原则：读 `ARCHITECTURE.md`。
+- 指标判读、市场状态和跨层推理标准：读 `RESEARCH_CANON.md`。
+- 真实 run、回测或快照复盘：读 `RUN_REVIEW_CHECKLIST.md`。
+- 数据源覆盖、fallback、回测数据边界：读 `DATA_COVERAGE_REVIEW.md`。
+- 已完成记录：读 `WORK_LOG.md`，并在重要改动完成后按最新在上追加记录。
+- 普通读者说明：用户要求“解释给普通人听”“写说明”“少黑话”时，使用通俗解释报告风格；细节参考已有 `PLAIN_LANGUAGE_*.md`，不要把模板全文复制到本文件。
 
-最新任务以 `NEXT_STEPS.md` 为准；完成记录写入 `WORK_LOG.md`，两者都按最新在上排列。
+如果文档之间出现冲突：长期架构以 `ARCHITECTURE.md` 为准；当前任务以 `NEXT_STEPS.md` 为准；已经发生的完成记录以 `WORK_LOG.md` 为准。但本文件的红线不能被普通待办覆盖，除非用户明确要求改变系统原则。
 
-## 重要路径
+## 执行纪律
 
-- `src/agent_analysis/orchestrator.py`：vNext 编排逻辑和 prompt 注入。
-- `src/agent_analysis/contracts.py`：所有 vNext artifact 的 Pydantic 合约。
-- `src/agent_analysis/prompts/`：L1-L5、Bridge、Thesis、Critic、Risk、Reviser、Final prompts。
-- `src/agent_analysis/few_shot.py`：按 layer-local function_id 注入 few-shot。
-- `src/prompt_examples.py`：按 `function_id` 组织的 4C 范例。
-- `src/agent_analysis/vnext_reporter.py`：原生 vNext self-contained HTML UI 原型。
-- `src/agent_analysis/legacy_adapter.py`：过渡期兼容路径，不应承担主要推理。
-- `src/chart_time_series_artifacts.py`：把同一次 run 的交互图时间序列写入 `chart_time_series.json`。
-- `src/interactive_chart_workbench.py`：生成 Lightweight Charts 看盘式交互 workbench。
-- `src/research_console.py`：生成 self-contained 研究控制台，用于人工数据、模型、运行命令和 workbench 模块选择。
-- `src/report_visual_regression.py`：对 native brief 和 workbench 做桌面/移动截图与基础布局风险检查。
-- `NEXT_STEPS.md`：当前下一步计划，按核心系统、数据基础、输出体验三类组织。
-- `ARCHITECTURE.md`：当前主架构与不可破坏原则。
-- `RESEARCH_CANON.md`：指标判读、市场状态诊断和跨层级推理的权威研究语料。
-- `DATA_COVERAGE_REVIEW.md`：数据覆盖、弱项和 fallback 优先级复盘。
-- `RUN_REVIEW_CHECKLIST.md`：真实运行后的复盘表。
-- `WORK_LOG.md`：已完成事项，按时间倒序记录。
-- `output/analysis/vnext/<run_id>/`：每次 vNext run 的完整 artifacts。
-- `output/reports/`：生成的 HTML 报告和 UI 原型。
-
-## 文档分层与解释风格
-
-本仓库同时维护两类文档：
-
-1. 架构与实施文档  
-   面向代码 agent、开发者和未来维护者，用来定义系统结构、合约、优先级和实现路线。  
-   代表文档：`ARCHITECTURE.md`、`NEXT_STEPS.md`。
-
-2. 通俗解释报告  
-   面向非金融、非软件工程背景读者，用来解释“这次到底做了什么、为什么重要、怎么验证、普通人该怎么看”。  
-   代表文档：`PLAIN_LANGUAGE_CHANGE_REPORT.md`。
-
-两类文档必须并行存在，不能互相替代：
-
-- 架构文档必须保持准确、完整、可执行。
-- 通俗报告必须保持清楚、克制、少黑话、少中英夹杂。
-- 通俗报告可以简化表达，但不能简化事实，不能抹平风险、冲突和不确定性。
-
-当完成跨模块重要改动，或用户要求“解释给普通人听”“写一份说明”“不要行业黑话”时，agent 应优先使用通俗解释报告风格。
-
-通俗解释报告建议包含：
-
-1. 一句话说明。
-2. 为什么要改。
-3. 实际做了什么。
-4. 修改后有什么变化。
-5. 刻意没有做什么。
-6. 如何验证有效。
-7. 普通读者该怎么看。
-8. 简单词汇表。
-9. 后续最重要的观察点。
-10. 最后总结。
-
-写作要求：
-
-- 默认使用中文。
-- 避免不必要的英文术语；无法避免时，第一次出现要用中文解释。
-- 少用行业黑话，少用缩写堆叠。
-- 用“这解决什么问题”来解释技术改动，而不是只列文件名。
-- 对金融判断保持边界感：说明证据、反证、冲突和未解决张力。
-- 对工程判断保持透明：说明改了哪里、没改哪里、怎么验证。
-- 不为了让文本顺滑而隐藏风险或冲突。
-
-推荐命名：
-
-`PLAIN_LANGUAGE_<主题>.md` 或 `YYYY-MM-DD_PLAIN_LANGUAGE_<主题>.md`
-
-## Agent 执行准则
-
-所有代码 agent 在本仓库工作时，默认遵循“先判断、再最小修改、最后验证”的纪律：
-
+- 先判断、再最小修改、最后验证。
 - 不确定时先说清假设、歧义和取舍；如果合理假设会带来明显风险，先向用户确认。
-- 多种实现路径都可行时，优先选最简单、最贴近现有架构、最容易验证的一种，并说明为什么。
-- 不做用户没有要求的功能、抽象、配置项或防御性复杂化；如果实现明显变重，先收缩方案。
-- 修改必须外科手术式收敛：只改完成任务所需的位置，匹配既有风格，不顺手重构、不清理无关旧代码。
+- 多种实现路径都可行时，优先选最简单、最贴近现有架构、最容易验证的一种。
+- 修改必须外科手术式收敛：只改完成任务所需的位置，匹配既有风格，不顺手重构，不清理无关旧代码。
 - 如果本次改动制造了未使用的导入、变量、函数或文档残留，必须同步清理；不要删除本来就存在的无关死代码。
-- 每个非平凡任务都要有可验证的成功标准：修 bug 要能复现并确认消失，改合约要有测试或 artifact 校验，改 UI 要能生成并检查目标页面。
+- 每个非平凡任务都要有可验证的成功标准。修 bug 要能复现并确认消失；改合约要有测试或 artifact 校验；改 UI 要能生成并检查目标页面。
 - 交付前必须说明验证结果；如果没有运行某项合理验证，要说明原因和剩余风险。
 
-## 开发规则
+## 工作取向
 
-- 优先做小而清晰的补丁，不要一次性混入无关重构。
-- 当前默认只测试和运行 DeepSeek：先 `deepseek-v4-flash`，跑不通再 `deepseek-v4-pro`；不要把其他模型作为常规验证路径。
-- 不得回退上下文隔离：L1-L5 可以知道静态五层本体，但不能接收其他层的运行时数据、摘要、结论或候选跨层关系。
-- 不得让 `legacy_adapter.py` 成为主要认知生产者。它可以映射和兜底，但主要分析必须来自 vNext artifacts。
-- 不得为了报告顺滑而抹平冲突。冲突是 vNext 的核心资产。
-- 在信息架构确认之前，UI 原型优先保持 self-contained HTML，不急于正式前端框架化。
-- 原生 UI 默认模板为 `brief`，因为它最接近可连续阅读的投研报告，同时保留 evidence ref 跳转和审计能力。
+- 改 L1-L5：优先检查 context isolation 是否仍成立。
+- 改 Bridge：重点增强 typed conflict / resonance / transmission map，不增加泛泛总结。
+- 改 Thesis / Governance：减少上下文污染和 token 膨胀，同时保留高严重度冲突和风险边界。
+- 改数据层：说明数据源、频率、fallback、有效日期和置信度边界。
+- 改回测：优先证明没有未来数据进入 packet / prompt / chart / news sidecar；不能证明的历史数据只能降级或明示。
+- 改 UI：先判断属于 `brief` 连续阅读、底稿/市场图谱图表，还是交互 workbench。控制台负责运行前配置，不替代报告。
+- 改文档：让 `AGENTS.md` 保持瘦身；易变信息放 `NEXT_STEPS.md`、`WORK_LOG.md`、`RUN_REVIEW_CHECKLIST.md` 或专门设计文档。
 
-## 推荐工作顺序
+## 验证原则
 
-1. 先阅读 `NEXT_STEPS.md`，确认当前里程碑、优先级和本次任务的成功标准。
-2. 再阅读 `ARCHITECTURE.md`，确认不可破坏原则；如有歧义，先写明假设再继续。
-3. 如果改 L1-L5，先检查 context isolation 是否仍成立。
-4. 如果改 Bridge，重点增强 typed conflict / resonance map，而不是增加泛泛总结。
-5. 如果改 Thesis/Governance，重点减少上下文污染和 token 膨胀，同时保留高严重度冲突。
-6. 如果改数据层，先说明数据源、频率、fallback 和置信度边界。
-7. 如果改 UI，先判断属于三层中的哪一层：`brief` 连续阅读、底稿/市场图谱图表、还是交互 workbench。workbench 按“共享时间轴 + 共同研究问题”组织，不机械按 L1-L5 分页；控制台负责运行前配置，不替代报告。
-8. 每次重要改动后运行与改动范围匹配的验证，并尽可能用最新 run artifacts 生成 native UI。
+按改动范围选择验证，而不是在本文件维护命令大全。常用命令以 `NEXT_STEPS.md` 和 `README.md` 为准。
 
-## 验证命令
-
-macOS / Linux：
-
-```bash
-python -m pytest -q
-```
-
-```bash
-python src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/<run_id> --template brief
-```
-
-```bash
-python src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts
-```
-
-```bash
-python src/research_console.py
-```
-
-```bash
-python src/interactive_chart_workbench.py --run-dir output/analysis/vnext/<run_id> --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity
-```
-
-Windows PowerShell：
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-```
-
-生成全部 native UI 原型：
-
-```powershell
-.\.venv\Scripts\python.exe src\agent_analysis\vnext_reporter.py --run-dir output\analysis\vnext\<run_id> --template all --output output\reports\vnext_ui_template.html
-```
-
-预期输出：
-
-- `output/reports/vnext_ui_template_cockpit.html`
-- `output/reports/vnext_ui_template_brief.html`
-- `output/reports/vnext_ui_template_atlas.html`
-- `output/reports/vnext_ui_template_workbench.html`
-
-生成默认 `brief` 模板：
-
-```powershell
-.\.venv\Scripts\python.exe src\agent_analysis\vnext_reporter.py --run-dir output\analysis\vnext\<run_id> --template brief
-```
-
-## 已知环境问题
-
-如果 PowerShell 在命令执行前直接报 `8009001d`，这通常是 Windows PowerShell / Crypto Provider 初始化问题，不是仓库权限问题，也不是 Codex 文件权限不足。
-
-临时绕过方式：用 `cmd.exe` 运行同样的 Python 命令。
-
-长期修复方向：
-
-- 测试 `powershell.exe -NoProfile` 是否可启动。
-- 检查 PowerShell profile 是否损坏。
-- 检查 Cryptographic Services。
-- 必要时运行 `sfc /scannow` 和 `DISM /Online /Cleanup-Image /RestoreHealth`。
+- 代码合约和核心逻辑改动：运行相关单元测试，必要时运行全量测试。
+- 数据、回测、快照改动：检查 DataIntegrity、`run_summary.json`、`backtest_data_boundaries`、数据日期和发布状态。
+- vNext artifact 或报告改动：用最新合适 run 生成 native `brief`，检查 evidence refs、冲突保留和审计区。
+- workbench / console / UI 改动：生成目标页面，并做桌面和移动布局检查。

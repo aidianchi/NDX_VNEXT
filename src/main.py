@@ -117,6 +117,73 @@ def collector_output_path(backtest_date: Optional[str]) -> str:
     return os.path.join(path_config.data_dir, "data_collected_v9_live.json")
 
 
+def _runtime_diagnostics_summary(data_json: Dict[str, Any]) -> Dict[str, Any]:
+    diagnostics = data_json.get("runtime_diagnostics") if isinstance(data_json, dict) else {}
+    yf_diag = diagnostics.get("yfinance") if isinstance(diagnostics, dict) else {}
+    if not isinstance(yf_diag, dict):
+        return {}
+    events = yf_diag.get("events") if isinstance(yf_diag.get("events"), list) else []
+    notable = [
+        {
+            "operation": event.get("operation"),
+            "ticker": event.get("ticker"),
+            "status": event.get("status"),
+            "failure_type": event.get("failure_type"),
+            "backoff_seconds": event.get("backoff_seconds"),
+            "elapsed_ms": event.get("elapsed_ms"),
+        }
+        for event in events
+        if isinstance(event, dict) and event.get("status") in {"retry_scheduled", "cache_fallback", "failed"}
+    ]
+    return {
+        "yfinance": {
+            "event_count": yf_diag.get("event_count", len(events)),
+            "by_status": yf_diag.get("by_status", {}),
+            "by_failure_type": yf_diag.get("by_failure_type", {}),
+            "total_backoff_seconds": yf_diag.get("total_backoff_seconds", 0),
+            "notable_events": notable[-12:],
+        }
+    }
+
+
+def _data_quality_summary(data_json: Dict[str, Any]) -> Dict[str, Any]:
+    indicators = data_json.get("indicators", []) if isinstance(data_json, dict) else []
+    failure_breakdown: Dict[str, int] = {}
+    slowest: List[Dict[str, Any]] = []
+    total_duration = 0.0
+    degraded = []
+    for item in indicators:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("raw_data") if isinstance(item.get("raw_data"), dict) else {}
+        data_quality = raw.get("data_quality") if isinstance(raw.get("data_quality"), dict) else {}
+        duration = raw.get("collection_duration_ms") or data_quality.get("collection_duration_ms")
+        if isinstance(duration, (int, float)):
+            total_duration += float(duration)
+            slowest.append({
+                "function_id": item.get("function_id"),
+                "metric_name": item.get("metric_name"),
+                "duration_ms": round(float(duration), 1),
+            })
+        failure_type = raw.get("failure_type") or data_quality.get("failure_type")
+        if failure_type:
+            key = str(failure_type)
+            failure_breakdown[key] = failure_breakdown.get(key, 0) + 1
+            degraded.append({
+                "function_id": item.get("function_id"),
+                "metric_name": item.get("metric_name"),
+                "failure_type": key,
+                "failure_reason": raw.get("error") or data_quality.get("failure_reason"),
+            })
+    slowest = sorted(slowest, key=lambda item: item.get("duration_ms", 0), reverse=True)[:10]
+    return {
+        "collection_duration_ms": round(total_duration, 1),
+        "failure_breakdown_by_type": failure_breakdown,
+        "slowest_indicators": slowest,
+        "degraded_indicators": degraded[:20],
+    }
+
+
 def run_collect_only(args: argparse.Namespace) -> Dict[str, Any]:
     backtest_date = validate_date(args.date)
     if args.data_json:
@@ -128,6 +195,8 @@ def run_collect_only(args: argparse.Namespace) -> Dict[str, Any]:
         "data_json": collector_output_path(backtest_date),
         "indicator_count": len(data_json.get("indicators", [])),
         "backtest_date": backtest_date,
+        "runtime_diagnostics": _runtime_diagnostics_summary(data_json),
+        "data_quality_summary": _data_quality_summary(data_json),
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return summary
@@ -169,6 +238,8 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
             "models": available_models,
             "blocked": True,
             "blocking_reasons": integrity_report.get("blocking_reasons", []),
+            "runtime_diagnostics": _runtime_diagnostics_summary(data_json),
+            "data_quality_summary": _data_quality_summary(data_json),
         }
         with open(os.path.join(run_dir, "run_summary.json"), "w", encoding="utf-8") as handle:
             json.dump(summary, handle, ensure_ascii=False, indent=2, default=str)
@@ -244,6 +315,8 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
         "approval_status": _enum_value(getattr(artifacts["final_adjudication"], "approval_status", "")),
         "models": available_models,
+        "runtime_diagnostics": _runtime_diagnostics_summary(data_json),
+        "data_quality_summary": _data_quality_summary(data_json),
     }
     with open(os.path.join(run_dir, "run_summary.json"), "w", encoding="utf-8") as handle:
         json.dump(summary, handle, ensure_ascii=False, indent=2, default=str)

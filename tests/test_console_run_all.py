@@ -94,3 +94,28 @@ def test_trusted_trendonify_sidecar_refresh_merges_partial_success(tmp_path, mon
     assert '"value": 38.07' in refreshed
     assert '"value": 23.8' in refreshed
     assert "preserved_existing_page_types" in refreshed
+
+
+def test_console_summary_syncs_native_paths_back_to_run_summary(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run_summary.json").write_text(
+        '{"run_dir":"' + str(run_dir) + '","report_path":"","final_stance":"test"}',
+        encoding="utf-8",
+    )
+
+    console_run_all._sync_run_summary(
+        str(run_dir),
+        {
+            "report_path": "/tmp/native_brief.html",
+            "native_brief": "/tmp/native_brief.html",
+            "workbench": "/tmp/workbench.html",
+        },
+    )
+
+    updated = (run_dir / "run_summary.json").read_text(encoding="utf-8")
+    assert '"final_stance": "test"' in updated
+    assert '"report_path": "/tmp/native_brief.html"' in updated
+    assert '"native_brief": "/tmp/native_brief.html"' in updated
+    assert '"workbench": "/tmp/workbench.html"' in updated
+    assert "console_run_summary.json" in updated

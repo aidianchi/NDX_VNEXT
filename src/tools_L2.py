@@ -17,6 +17,23 @@ try:
 except ImportError:
     from tools_L3 import get_ndx100_components
 
+
+def _yf_daily_end_inclusive(effective_date: datetime) -> datetime:
+    """yfinance daily end is exclusive; request T+1 then filter back to T."""
+    return effective_date + timedelta(days=1)
+
+
+def _filter_daily_frame_to_effective_date(df: pd.DataFrame, effective_date: datetime) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    filtered = df.copy()
+    if not isinstance(filtered.index, pd.DatetimeIndex):
+        filtered.index = pd.to_datetime(filtered.index)
+    filtered.index = filtered.index.tz_localize(None)
+    effective = pd.Timestamp(effective_date).tz_localize(None)
+    return filtered[filtered.index <= effective]
+
+
 # =====================================================
 # 第2层函数
 # =====================================================
@@ -36,11 +53,12 @@ def _get_ndx100_common_price_data(
     data = cached_yf_download(
         ndx100_components,
         start=common_start,
-        end=effective_date,
+        end=_yf_daily_end_inclusive(effective_date),
         interval="1d",
         progress=False,
         auto_adjust=False,
     )
+    data = _filter_daily_frame_to_effective_date(data, effective_date)
     return ndx100_components, data
 
 
@@ -57,11 +75,11 @@ def get_qqq_qqew_ratio(end_date: str = None) -> Dict[str, Any]:
             # 拉长历史长度用于10年百分位评估
             start_date = effective_date - timedelta(days=365 * 11)
 
-            qqq = cached_yf_download('QQQ', start=start_date, end=effective_date, progress=False, auto_adjust=False)
-            qqew = cached_yf_download('QQEW', start=start_date, end=effective_date, progress=False, auto_adjust=False)
+            qqq = cached_yf_download('QQQ', start=start_date, end=_yf_daily_end_inclusive(effective_date), progress=False, auto_adjust=False)
+            qqew = cached_yf_download('QQEW', start=start_date, end=_yf_daily_end_inclusive(effective_date), progress=False, auto_adjust=False)
 
-            qqq = clean_yfinance_dataframe(qqq)
-            qqew = clean_yfinance_dataframe(qqew)
+            qqq = _filter_daily_frame_to_effective_date(clean_yfinance_dataframe(qqq), effective_date)
+            qqew = _filter_daily_frame_to_effective_date(clean_yfinance_dataframe(qqew), effective_date)
 
             if not qqq.empty and not qqew.empty and 'close' in qqq.columns and 'close' in qqew.columns:
                 df = pd.concat(

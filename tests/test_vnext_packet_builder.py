@@ -401,6 +401,49 @@ def test_l3_state_reads_current_percent_above_ma_fields():
     assert packet.facts_by_layer["L3"].state == "healthy"
 
 
+def test_l3_unavailable_nested_none_payload_is_not_promoted_to_core_fact():
+    data = {
+        "timestamp_utc": "2026-05-02T00:00:00Z",
+        "backtest_date": "2025-04-09",
+        "indicators": [
+            {
+                "layer": 3,
+                "metric_name": "Advance Decline Line",
+                "function_id": "get_advance_decline_line",
+                "raw_data": {
+                    "name": "Advance Decline Line",
+                    "value": {"level": None, "date": None, "momentum": None},
+                    "notes": "Failed to calculate advance decline line",
+                },
+                "error": None,
+                "collection_timestamp_utc": "2026-05-02T00:00:01Z",
+            },
+            {
+                "layer": 3,
+                "metric_name": "% Stocks Above MA",
+                "function_id": "get_percent_above_ma",
+                "raw_data": {
+                    "name": "% Stocks Above MA",
+                    "value": {"level": {"percent_above_50d": None, "percent_above_200d": None}},
+                    "source_tier": "unavailable",
+                },
+                "error": None,
+                "collection_timestamp_utc": "2026-05-02T00:00:02Z",
+            },
+        ],
+    }
+
+    packet = AnalysisPacketBuilder().build(data, manual_overrides={"active": False, "metrics": {}})
+    l3 = packet.facts_by_layer["L3"]
+
+    assert "get_advance_decline_line" not in l3.key_metrics
+    assert "get_percent_above_ma" not in l3.key_metrics
+    assert l3.state == "insufficient_data"
+    assert "值={'level': None" not in l3.summary
+    failed = next(signal for signal in l3.core_signals if signal["metric"] == "get_advance_decline_line")
+    assert failed["error"] == "unavailable_payload"
+
+
 def test_l5_price_volume_quality_is_native_packet_metric():
     data = {
         "timestamp_utc": "2026-05-04T00:00:00Z",

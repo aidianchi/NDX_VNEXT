@@ -11,6 +11,7 @@ import json
 import hashlib
 import logging
 import requests
+import threading
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -109,6 +110,78 @@ YF_FRAME_CACHE_PREFER_MAX_AGE_SECONDS = 60 * 60 * 12
 # 2026-05 多次 run 显示：2 秒间隔的重试都落在 Yahoo cooldown 窗口内，反复撞墙。
 YF_DOWNLOAD_RETRY_DELAYS_SECONDS = (10, 60)
 TWELVE_DATA_PRIORITY_TICKERS = {"QQQ", "HYG", "QQEW", "XLY", "XLP"}
+YF_RUNTIME_EVENT_LIMIT = 200
+
+_YF_RUNTIME_EVENTS: List[Dict[str, Any]] = []
+_YF_RUNTIME_LOCK = threading.Lock()
+
+
+def reset_yfinance_runtime_diagnostics() -> None:
+    """Clear per-run yfinance diagnostics before a collector run."""
+    with _YF_RUNTIME_LOCK:
+        _YF_RUNTIME_EVENTS.clear()
+
+
+def _classify_yfinance_failure(message: Optional[str]) -> str:
+    text = str(message or "").lower()
+    if not text:
+        return "unknown"
+    if "too many open files" in text or "errno 24" in text:
+        return "file_descriptor_exhausted"
+    if "sqlite" in text or "database is locked" in text or "database disk image is malformed" in text:
+        return "sqlite_cache_error"
+    if "429" in text or "rate limit" in text or "ratelimit" in text or "too many requests" in text:
+        return "rate_limited"
+    if "nameresolutionerror" in text or "temporary failure in name resolution" in text or "nodename nor servname" in text or "dns" in text:
+        return "dns_or_network"
+    if "empty frame" in text or "empty dataframe" in text or "empty history" in text or "empty info" in text:
+        return "empty_response"
+    if "yfinance not available" in text or "yfinance unavailable" in text:
+        return "provider_unavailable"
+    return "provider_error"
+
+
+def classify_yfinance_failure(message: Optional[str]) -> str:
+    return _classify_yfinance_failure(message)
+
+
+def _record_yfinance_runtime_event(event: Dict[str, Any]) -> None:
+    payload = {
+        "timestamp_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        **event,
+    }
+    with _YF_RUNTIME_LOCK:
+        _YF_RUNTIME_EVENTS.append(payload)
+        if len(_YF_RUNTIME_EVENTS) > YF_RUNTIME_EVENT_LIMIT:
+            del _YF_RUNTIME_EVENTS[: len(_YF_RUNTIME_EVENTS) - YF_RUNTIME_EVENT_LIMIT]
+
+
+def get_yfinance_runtime_diagnostics() -> Dict[str, Any]:
+    """Return a compact, serializable summary of yfinance/cache behavior."""
+    with _YF_RUNTIME_LOCK:
+        events = [dict(item) for item in _YF_RUNTIME_EVENTS]
+    by_status: Dict[str, int] = {}
+    by_failure_type: Dict[str, int] = {}
+    total_backoff_seconds = 0.0
+    for event in events:
+        status = str(event.get("status") or "unknown")
+        by_status[status] = by_status.get(status, 0) + 1
+        failure_type = event.get("failure_type")
+        if failure_type:
+            failure_key = str(failure_type)
+            by_failure_type[failure_key] = by_failure_type.get(failure_key, 0) + 1
+        delay = event.get("backoff_seconds")
+        if isinstance(delay, (int, float)):
+            total_backoff_seconds += float(delay)
+    return {
+        "yfinance": {
+            "event_count": len(events),
+            "by_status": by_status,
+            "by_failure_type": by_failure_type,
+            "total_backoff_seconds": round(total_backoff_seconds, 2),
+            "events": events,
+        }
+    }
 
 
 def get_fred_api_key() -> str:
@@ -461,12 +534,20 @@ def cached_yf_download(
     )
 
     def _fetch() -> pd.DataFrame:
+        started = time.monotonic()
         recent = _read_yf_frame_cache(
             cache_key,
             max_age_seconds=YF_FRAME_CACHE_PREFER_MAX_AGE_SECONDS,
             requested_tickers=requested_tickers,
         )
         if not recent.empty:
+            _record_yfinance_runtime_event({
+                "operation": "download",
+                "ticker": ticker_key,
+                "status": "cache_hit_recent",
+                "source": "persistent_cache",
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+            })
             return recent
 
         if _is_twelve_data_priority_download(tickers, interval, auto_adjust):
@@ -474,12 +555,37 @@ def cached_yf_download(
             if not frame.empty:
                 logging.info("Using Twelve Data priority daily frame for %s", ticker_key)
                 _write_yf_frame_cache(cache_key, frame, requested_tickers=requested_tickers)
+                _record_yfinance_runtime_event({
+                    "operation": "download",
+                    "ticker": ticker_key,
+                    "status": "provider_success",
+                    "source": "twelve_data_priority",
+                    "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                })
                 return frame
 
         if not YF_AVAILABLE:
             stale = _read_yf_frame_cache(cache_key, requested_tickers=requested_tickers)
             if not stale.empty:
+                _record_yfinance_runtime_event({
+                    "operation": "download",
+                    "ticker": ticker_key,
+                    "status": "cache_fallback",
+                    "source": "persistent_cache",
+                    "failure_type": "provider_unavailable",
+                    "failure_reason": "yfinance not available",
+                    "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                })
                 return stale
+            _record_yfinance_runtime_event({
+                "operation": "download",
+                "ticker": ticker_key,
+                "status": "failed",
+                "source": "yfinance",
+                "failure_type": "provider_unavailable",
+                "failure_reason": "yfinance not available",
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+            })
             return pd.DataFrame()
 
         last_error: Optional[Exception] = None
@@ -496,6 +602,14 @@ def cached_yf_download(
                 )
                 if _yf_frame_cache_usable(frame, requested_tickers=requested_tickers):
                     _write_yf_frame_cache(cache_key, frame, requested_tickers=requested_tickers)
+                    _record_yfinance_runtime_event({
+                        "operation": "download",
+                        "ticker": ticker_key,
+                        "status": "provider_success",
+                        "source": "yfinance",
+                        "attempt": attempt + 1,
+                        "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                    })
                     return frame
                 # yfinance 1.3+ 内部 catch 了 YFRateLimitError 后只返回 empty df 并 log error。
                 # 必须把这种 silent 失败视同 exception 来进入退避，否则限流时一次就放弃。
@@ -505,9 +619,32 @@ def cached_yf_download(
                 empty_reason = f"yfinance raised: {exc}"
             stale = _read_yf_frame_cache(cache_key, requested_tickers=requested_tickers)
             if not stale.empty:
+                failure_type = _classify_yfinance_failure(empty_reason)
+                _record_yfinance_runtime_event({
+                    "operation": "download",
+                    "ticker": ticker_key,
+                    "status": "cache_fallback",
+                    "source": "persistent_cache",
+                    "attempt": attempt + 1,
+                    "failure_type": failure_type,
+                    "failure_reason": str(empty_reason)[:240],
+                    "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                })
                 return stale
             if attempt < len(YF_DOWNLOAD_RETRY_DELAYS_SECONDS):
                 delay = YF_DOWNLOAD_RETRY_DELAYS_SECONDS[attempt]
+                failure_type = _classify_yfinance_failure(empty_reason)
+                _record_yfinance_runtime_event({
+                    "operation": "download",
+                    "ticker": ticker_key,
+                    "status": "retry_scheduled",
+                    "source": "yfinance",
+                    "attempt": attempt + 1,
+                    "failure_type": failure_type,
+                    "failure_reason": str(empty_reason)[:240],
+                    "backoff_seconds": delay,
+                    "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                })
                 logging.warning(
                     "yfinance fetch unusable for %s: %s; retrying in %ss",
                     ticker_key,
@@ -521,6 +658,17 @@ def cached_yf_download(
                 ticker_key,
                 empty_reason,
             )
+            failure_type = _classify_yfinance_failure(empty_reason)
+            _record_yfinance_runtime_event({
+                "operation": "download",
+                "ticker": ticker_key,
+                "status": "failed",
+                "source": "yfinance",
+                "attempt": attempt + 1,
+                "failure_type": failure_type,
+                "failure_reason": str(empty_reason)[:240],
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+            })
             return pd.DataFrame()
         if last_error:
             logging.warning(f"yfinance download failed for {ticker_key}: {last_error}")
@@ -535,6 +683,13 @@ def cached_yf_download(
 
     cached_value = cache.get(cache_key)
     if _yf_frame_cache_usable(cached_value, requested_tickers=requested_tickers):
+        _record_yfinance_runtime_event({
+            "operation": "download",
+            "ticker": ticker_key,
+            "status": "cache_hit_memory",
+            "source": "memory_cache",
+            "elapsed_ms": 0.0,
+        })
         return cached_value.copy()
 
     fetched = _fetch()
@@ -547,24 +702,61 @@ def cached_yf_download(
 def get_yf_ticker_info_with_retry(ticker: str, attempts: int = 2, pause_seconds: float = 0.8) -> Dict[str, Any]:
     """涓哄鏄撳け璐ョ殑 yfinance.Ticker.info 鎻愪緵杞婚噺閲嶈瘯銆?"""
     if not YF_AVAILABLE:
+        _record_yfinance_runtime_event({
+            "operation": "ticker.info",
+            "ticker": ticker,
+            "status": "failed",
+            "source": "yfinance",
+            "failure_type": "provider_unavailable",
+            "failure_reason": "yfinance not available",
+        })
         raise RuntimeError("yfinance not available")
 
     cache_key = f"yf.info:{ticker}"
     last_error: Optional[Exception] = None
+    started = time.monotonic()
     for attempt in range(attempts):
         try:
             info = yf.Ticker(ticker).info
             if info and isinstance(info, dict):
                 _write_yf_info_cache(cache_key, info)
+                _record_yfinance_runtime_event({
+                    "operation": "ticker.info",
+                    "ticker": ticker,
+                    "status": "provider_success",
+                    "source": "yfinance",
+                    "attempt": attempt + 1,
+                    "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                })
                 return info
             raise ValueError(f"Empty info for {ticker}")
         except Exception as exc:
             last_error = exc
+            _record_yfinance_runtime_event({
+                "operation": "ticker.info",
+                "ticker": ticker,
+                "status": "retry_scheduled" if attempt < attempts - 1 else "failed",
+                "source": "yfinance",
+                "attempt": attempt + 1,
+                "failure_type": _classify_yfinance_failure(exc),
+                "failure_reason": str(exc)[:240],
+                "backoff_seconds": pause_seconds if attempt < attempts - 1 else 0,
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+            })
             if attempt < attempts - 1:
                 time.sleep(pause_seconds)
 
     cached_info = _read_yf_info_cache(cache_key, max_age_seconds=60 * 60 * 24)
     if cached_info:
+        _record_yfinance_runtime_event({
+            "operation": "ticker.info",
+            "ticker": ticker,
+            "status": "cache_fallback",
+            "source": "persistent_cache",
+            "failure_type": _classify_yfinance_failure(last_error),
+            "failure_reason": str(last_error)[:240] if last_error else "",
+            "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+        })
         return cached_info
     raise last_error or RuntimeError(f"Failed to fetch info for {ticker}")
 

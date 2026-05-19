@@ -33,6 +33,25 @@ def test_data_integrity_some_failures():
     assert "数据完整性偏低" in report["notes"]
 
 
+def test_data_integrity_reports_yfinance_runtime_diagnostics():
+    data = {
+        "indicators": [
+            {"function_id": "get_vix", "metric_name": "VIX", "value": 18.0},
+        ],
+        "runtime_diagnostics": {
+            "yfinance": {
+                "by_status": {"retry_scheduled": 2, "cache_fallback": 1, "failed": 1},
+                "by_failure_type": {"rate_limited": 2, "sqlite_cache_error": 1},
+                "total_backoff_seconds": 70,
+            }
+        },
+    }
+    report = DataIntegrity().run(data)
+    assert "yfinance 运行诊断" in report["notes"]
+    assert "retry=2" in report["notes"]
+    assert report["runtime_diagnostics"]["yfinance"]["by_failure_type"]["sqlite_cache_error"] == 1
+
+
 def test_data_integrity_empty_indicators():
     report = DataIntegrity().run({"indicators": []})
     assert report["confidence_percent"] == 0.0

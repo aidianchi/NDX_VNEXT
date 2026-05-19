@@ -52,8 +52,9 @@ def get_qqq_price_data(lookback_days: int = 365, end_date: Optional[str] = None)
         effective_end = effective_end.tz_localize(None) if effective_end.tzinfo else effective_end
         start_date = effective_end - pd.Timedelta(days=lookback_days + 100)  # 多取一些数据用于计算均线
         
-        # 获取历史数据
-        df = cached_yf_download("QQQ", start=start_date, end=effective_end, progress=False, auto_adjust=False)
+        # yfinance daily end is exclusive, so request T+1 and filter back to T.
+        yf_end = effective_end + pd.Timedelta(days=1)
+        df = cached_yf_download("QQQ", start=start_date, end=yf_end, progress=False, auto_adjust=False)
         
         if df.empty:
             logging.warning("QQQ数据为空")

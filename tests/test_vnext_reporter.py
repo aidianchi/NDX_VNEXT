@@ -99,6 +99,10 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
             "must_preserve_risks": ["估值压缩风险"],
             "adjudicator_notes": "保留核心冲突。",
             "evidence_refs": ["Risk report"],
+            "token_usage": {
+                "l1": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                "bridge": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+            },
         },
     )
     _write_json(
@@ -418,7 +422,17 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
         },
     )
     _write_json(run_dir / "critique.json", {"overall_assessment": "可用", "cross_layer_issues": []})
-    _write_json(run_dir / "risk_boundary_report.json", {"failure_conditions": [], "must_preserve_risks": []})
+    _write_json(
+        run_dir / "risk_boundary_report.json",
+        {
+            "failure_conditions": [],
+            "must_preserve_risks": ["valuation_compression"],
+            "boundary_status": {
+                "liquidity_shock": "safe",
+                "valuation_compression": "warning",
+            },
+        },
+    )
     _write_json(run_dir / "schema_guard_report.json", {"passed": True})
     _write_json(run_dir / "data_integrity_report.json", {"publish_status": "publishable", "blocking_reasons": []})
 
@@ -454,10 +468,26 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert "Coverage" in html
     assert "NDX Simple Yield Gap" in html
     assert "Confirming Indicators" in html
+    assert "买方动作层" in html
+    assert "加仓" in html
+    assert "减仓" in html
+    assert "等待" in html
+    assert "观察窗口" in html
     assert "回测数据边界" in html
     assert "get_ndx_forward_earnings_quality" in html
     assert "historical source required" in html
-    assert "publishable" in html
+    assert "可发布" in html
+    assert "可控" in html
+    assert "需关注" in html
+    assert "<b>safe</b>" not in html
+    assert "<b>warning</b>" not in html
+    assert "2 个阶段；输入 30，输出 15，合计 45" in html
+    assert "{&#x27;prompt_tokens&#x27;:" not in html
+    assert "分析目标日" in html
+    assert "观察日期范围" in html
+    assert "采集时间" in html
+    assert "生成时间" in html
+    assert "YF Diagnostics" in html
     assert 'data-typed-conflict="real_rate_vs_valuation"' in html
     assert 'data-transmission-path="rates_to_valuation"' in html
     assert 'data-resonance-chain="risk_off_resonance"' in html

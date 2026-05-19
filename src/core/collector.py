@@ -11,6 +11,7 @@ core.collector
 import os
 import json
 import logging
+import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
@@ -26,6 +27,11 @@ try:
     from ..config import path_config
 except ImportError:
     from config import path_config
+
+try:
+    from ..tools_common import classify_yfinance_failure, get_yfinance_runtime_diagnostics, reset_yfinance_runtime_diagnostics
+except ImportError:
+    from tools_common import classify_yfinance_failure, get_yfinance_runtime_diagnostics, reset_yfinance_runtime_diagnostics
 
 class DataCollector:
     """负责从tools.py收集、缓存和格式化所有市场数据。"""
@@ -139,6 +145,7 @@ class DataCollector:
 
     def _collect_single_indicator(self, func_name: str, end_date: Optional[str] = None) -> dict:
         """安全地调用单个数据函数并处理异常。"""
+        started = time.monotonic()
         try:
             if func_name not in TOOLS_REGISTRY:
                 raise ValueError(f"函数 {func_name} 未在 tools.py 中定义。")
@@ -147,7 +154,7 @@ class DataCollector:
             if end_date and func_name in self.BACKTEST_UNSUPPORTED_FUNCTIONS:
                 skip_meta = self.BACKTEST_UNSUPPORTED_FUNCTIONS[func_name]
                 logging.warning(f"  - 跳过 {func_name}... ⊘ (回测模式下不支持历史数据，避免前瞻偏差)")
-                return {
+                result = {
                     "name": func_name.replace('_', ' ').title(),
                     "value": None,
                     "error": "backtest_skipped_unsupported_function",
@@ -159,6 +166,7 @@ class DataCollector:
                         "anomalies": skip_meta.get("anomalies", ["latest_only_source_not_used_in_backtest"]),
                     },
                 }
+                return self._finalize_indicator_result(result, started)
             
             result = TOOLS_REGISTRY[func_name](end_date=end_date)
             
@@ -167,12 +175,43 @@ class DataCollector:
                 result['error'] = "Upstream data source returned None."
             else:
                 logging.info(f"  - 调用 {func_name}... ✔")
-            return result
+            return self._finalize_indicator_result(result, started)
             
         except Exception as e:
             error_msg = str(e)[:150]
             logging.error(f"  - 调用 {func_name}... ✗ (异常: {error_msg})")
-            return {"name": func_name.replace('_', ' ').title(), "value": None, "error": error_msg}
+            return self._finalize_indicator_result(
+                {"name": func_name.replace('_', ' ').title(), "value": None, "error": error_msg},
+                started,
+            )
+
+    def _finalize_indicator_result(self, result: Dict[str, Any], started: float) -> Dict[str, Any]:
+        duration_ms = round((time.monotonic() - started) * 1000, 1)
+        result["collection_duration_ms"] = duration_ms
+        error = result.get("error")
+        data_quality = result.get("data_quality") if isinstance(result.get("data_quality"), dict) else {}
+        data_quality["collection_duration_ms"] = duration_ms
+        if error and not result.get("backtest_skipped"):
+            failure_type = classify_yfinance_failure(error)
+            if failure_type == "provider_error":
+                failure_type = "upstream_error"
+            result["failure_type"] = failure_type
+            result["failure_stage"] = "collection"
+            data_quality["availability"] = data_quality.get("availability") or "unavailable"
+            data_quality["failure_type"] = failure_type
+            data_quality["failure_reason"] = str(error)[:240]
+            anomalies = list(data_quality.get("anomalies") or [])
+            marker = f"collection_{failure_type}"
+            if marker not in anomalies:
+                anomalies.append(marker)
+            data_quality["anomalies"] = anomalies
+        elif result.get("backtest_skipped"):
+            result["failure_type"] = "backtest_skipped"
+            result["failure_stage"] = "visibility_gate"
+        else:
+            data_quality["availability"] = data_quality.get("availability") or "available"
+        result["data_quality"] = data_quality
+        return result
 
     def run(self, backtest_date: Optional[str] = None, enable_news: bool = False) -> Dict[str, Any]:
         """
@@ -182,6 +221,7 @@ class DataCollector:
             backtest_date: 回测日期（可选）
             enable_news: 是否启用新闻采集（默认False，非侵入性）
         """
+        reset_yfinance_runtime_diagnostics()
         # --- 【新增逻辑】: 尝试导入手动数据模块 ---
         try:
             # 确保能从 src/ 目录导入 manual_data
@@ -303,6 +343,7 @@ class DataCollector:
             "backtest_date": backtest_date,
             "indicators": indicators,
             "backtest_data_boundaries": backtest_data_boundaries,
+            "runtime_diagnostics": get_yfinance_runtime_diagnostics(),
         }
         
         # News/events are intentionally handled as a sidecar artifact by src/main.py.

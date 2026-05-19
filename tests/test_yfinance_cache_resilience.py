@@ -17,6 +17,7 @@ def _disable_twelve_data(monkeypatch):
 
 def test_cached_yf_download_uses_stale_persistent_cache_when_live_fetch_empty(tmp_path: Path, monkeypatch):
     _disable_twelve_data(monkeypatch)
+    tools_common.reset_yfinance_runtime_diagnostics()
     monkeypatch.setattr(tools_common.path_config, "cache_dir", str(tmp_path))
     monkeypatch.setattr(tools_common, "YF_AVAILABLE", True)
     monkeypatch.setattr(tools_common, "CACHE_AVAILABLE", False)
@@ -70,6 +71,7 @@ def test_cached_yf_download_retries_with_long_backoff_when_empty_and_no_stale(
     """限流场景：yfinance 静默返回 empty df 且无 stale 缓存时，
     cached_yf_download 应进入长退避重试，而不是 2 秒撞墙后立即放弃。"""
     _disable_twelve_data(monkeypatch)
+    tools_common.reset_yfinance_runtime_diagnostics()
     monkeypatch.setattr(tools_common.path_config, "cache_dir", str(tmp_path))
     monkeypatch.setattr(tools_common, "YF_AVAILABLE", True)
     monkeypatch.setattr(tools_common, "CACHE_AVAILABLE", False)
@@ -92,6 +94,11 @@ def test_cached_yf_download_retries_with_long_backoff_when_empty_and_no_stale(
     assert result.empty
     assert call_count["n"] == 3
     assert sleeps == [10, 60]
+    diag = tools_common.get_yfinance_runtime_diagnostics()["yfinance"]
+    assert diag["by_status"]["retry_scheduled"] == 2
+    assert diag["by_status"]["failed"] == 1
+    assert diag["by_failure_type"]["rate_limited"] == 3
+    assert diag["total_backoff_seconds"] == 70
 
 
 def test_cached_yf_download_prefers_recent_persistent_cache_before_network(tmp_path: Path, monkeypatch):
@@ -247,3 +254,10 @@ def test_ticker_info_retry_uses_recent_persistent_cache(tmp_path: Path, monkeypa
     monkeypatch.setattr(tools_common, "yf", _YF)
 
     assert tools_common.get_yf_ticker_info_with_retry("MSFT", attempts=1)["marketCap"] == 123
+
+
+def test_yfinance_runtime_diagnostics_classify_file_handle_and_sqlite():
+    tools_common.reset_yfinance_runtime_diagnostics()
+
+    assert tools_common.classify_yfinance_failure("OSError: [Errno 24] Too many open files") == "file_descriptor_exhausted"
+    assert tools_common.classify_yfinance_failure("sqlite3.OperationalError: database is locked") == "sqlite_cache_error"

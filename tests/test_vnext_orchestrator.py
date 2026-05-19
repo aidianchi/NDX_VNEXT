@@ -164,6 +164,34 @@ def test_backtest_skipped_indicator_is_not_analysis_required(tmp_path: Path):
     assert skipped["analysis_required"] is False
 
 
+def test_unavailable_nested_none_indicator_is_not_analysis_required(tmp_path: Path):
+    data_json = {
+        "timestamp_utc": "2026-05-17T00:00:00Z",
+        "backtest_date": "2025-04-09",
+        "indicators": [
+            {
+                "layer": 3,
+                "metric_name": "Advance Decline Line",
+                "function_id": "get_advance_decline_line",
+                "raw_data": {
+                    "name": "Advance Decline Line",
+                    "value": {"level": None, "date": None, "momentum": None},
+                    "notes": "Failed to calculate advance decline line",
+                },
+                "error": None,
+                "collection_timestamp_utc": "2026-05-17T00:00:00Z",
+            }
+        ],
+    }
+    packet = AnalysisPacketBuilder().build(data_json)
+    orchestrator = VNextOrchestrator(available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({}))
+
+    assert "get_advance_decline_line" not in orchestrator._analysis_required_function_ids(packet, "L3")
+    manifest = orchestrator._layer_indicator_manifest(packet.raw_data["L3"])
+    failed = [item for item in manifest if item["function_id"] == "get_advance_decline_line"][0]
+    assert failed["analysis_required"] is False
+
+
 def test_historical_percentile_string_is_sanitized(tmp_path: Path):
     orchestrator = VNextOrchestrator(available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({}))
 
@@ -807,6 +835,83 @@ def test_schema_guard_rejects_bridge_dead_refs_and_bad_transmission_paths(tmp_pa
     assert "implication is required" in joined
 
 
+def test_schema_guard_rejects_cnn_submetric_high_conflict_without_aggregate_semantics(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    packet = AnalysisPacketBuilder().build(
+        {
+            "timestamp_utc": "2026-04-24T00:00:00Z",
+            "indicators": [
+                {
+                    "layer": 2,
+                    "metric_name": "CNN Fear & Greed",
+                    "function_id": "get_cnn_fear_greed_index",
+                    "raw_data": {
+                        "name": "CNN Fear & Greed",
+                        "value": {
+                            "score": 20,
+                            "rating": "extreme fear",
+                            "sub_metrics": {
+                                "Market Momentum (S&P500)": {"score": 98.2, "rating": "extreme greed"}
+                            },
+                        },
+                    },
+                },
+                {
+                    "layer": 5,
+                    "metric_name": "QQQ Technical",
+                    "function_id": "get_qqq_technical_indicators",
+                    "raw_data": {"name": "QQQ Technical", "value": {"sma_position": "below_200"}},
+                },
+            ],
+        },
+        manual_overrides={"active": False, "metrics": {}},
+    )
+    bridge = BridgeMemo.model_validate(
+        {
+            "bridge_type": "breadth_trend",
+            "layers_connected": ["L2", "L5"],
+            "cross_layer_claims": [],
+            "typed_conflicts": [
+                {
+                    "conflict_id": "fgi_market_momentum_vs_trend",
+                    "conflict_type": "sentiment_submetric_vs_price_trend",
+                    "severity": "high",
+                    "description": "Market Momentum 子项显示 extreme greed，但 L5 趋势疲弱。",
+                    "mechanism": "单个情绪子项与价格趋势相反。",
+                    "implication": "不应直接作为高严重度跨层冲突。",
+                    "involved_layers": ["L2", "L5"],
+                    "evidence_refs": ["L2.get_cnn_fear_greed_index", "L5.get_qqq_technical_indicators"],
+                }
+            ],
+            "implication_for_ndx": "测试。",
+        }
+    )
+
+    report = orchestrator._run_schema_guard(
+        packet,
+        [],
+        [bridge],
+        ThesisDraft.model_validate(
+            {
+                "environment_assessment": "测试。",
+                "valuation_assessment": "测试。",
+                "timing_assessment": "测试。",
+                "main_thesis": "测试。",
+                "overall_confidence": "medium",
+            }
+        ),
+        Critique.model_validate({"overall_assessment": "测试。", "revision_direction": "测试。"}),
+        RiskBoundaryReport.model_validate({"must_preserve_risks": ["测试风险"]}),
+    )
+
+    joined = "\n".join(report.consistency_issues)
+    assert "composite sub-metric over-promotion" in joined
+
+
 def test_layer_indicator_manifest_carries_data_quality(tmp_path: Path):
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
@@ -858,6 +963,39 @@ def test_layer_payload_normalization_backfills_indicator_evidence_refs(tmp_path:
     )
 
     assert normalized["indicator_analyses"][0]["evidence_refs"] == ["L3.get_advance_decline_line"]
+
+
+def test_layer_payload_normalization_coerces_dict_evidence_refs(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    normalized = orchestrator._normalize_payload(
+        "l2_analyst",
+        {
+            "layer": "L2",
+            "confidence": "medium",
+            "indicator_analyses": [
+                {
+                    "function_id": "get_cnn_fear_greed_index",
+                    "metric": "CNN Fear & Greed",
+                    "narrative": "情绪偏弱。",
+                    "reasoning_process": "总分低于 25。",
+                    "evidence_refs": [
+                        {"layer": "L2", "function_id": "get_cnn_fear_greed_index"},
+                        {"ref": "L2.get_vix"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    assert normalized["indicator_analyses"][0]["evidence_refs"] == [
+        "L2.get_cnn_fear_greed_index",
+        "L2.get_vix",
+    ]
 
 
 def test_layer_payload_normalization_wraps_core_facts_string(tmp_path: Path):

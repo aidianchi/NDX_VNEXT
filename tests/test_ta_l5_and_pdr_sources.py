@@ -85,6 +85,44 @@ def test_l5_price_volume_quality_reuses_technical_indicator_payload(monkeypatch)
     assert "不单独给买卖结论" in result["notes"]
 
 
+def test_l5_yfinance_requests_include_effective_date_for_daily_history(monkeypatch):
+    captured = {}
+    frame = _ohlcv_frame()
+    frame.index = pd.bdate_range(end="2025-04-09", periods=len(frame))
+
+    def fake_download(ticker, **kwargs):
+        captured["ticker"] = ticker
+        captured["end"] = kwargs.get("end")
+        return frame.copy()
+
+    monkeypatch.setattr(tools_L5, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_L5, "cached_yf_download", fake_download)
+
+    result = tools_L5.get_qqq_technical_indicators("2025-04-09")
+
+    assert captured["ticker"] == "QQQ"
+    assert pd.Timestamp(captured["end"]).date().isoformat() == "2025-04-10"
+    assert result["date"] == "2025-04-09"
+
+
+def test_l5_multi_scale_ma_requests_include_effective_date(monkeypatch):
+    captured = {}
+    frame = _ohlcv_frame()
+    frame.index = pd.bdate_range(end="2025-04-09", periods=len(frame))
+
+    def fake_download(ticker, **kwargs):
+        captured["end"] = kwargs.get("end")
+        return frame.copy()
+
+    monkeypatch.setattr(tools_L5, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_L5, "cached_yf_download", fake_download)
+
+    result = tools_L5.get_multi_scale_ma_position("2025-04-09")
+
+    assert pd.Timestamp(captured["end"]).date().isoformat() == "2025-04-10"
+    assert result["value"]["date"] == "2025-04-09"
+
+
 def test_pandas_datareader_fred_fallback_normalizes_to_date_value(monkeypatch):
     dates = pd.to_datetime(["2025-01-01", "2025-01-02"])
 

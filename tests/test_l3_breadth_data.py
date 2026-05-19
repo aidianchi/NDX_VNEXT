@@ -174,3 +174,24 @@ def test_realtime_breadth_does_not_request_historical_constituents(monkeypatch):
     assert components == ["AAA", "BBB", "CCC"]
     assert not data.empty
     assert requested["end_date"] is None
+
+
+def test_qqq_qqew_ratio_yfinance_request_includes_effective_date(monkeypatch):
+    calls = []
+    dates = pd.date_range("2024-04-10", "2025-04-09", freq="B")
+
+    def fake_download(ticker, **kwargs):
+        calls.append((ticker, kwargs.get("end")))
+        close = pd.Series(range(100, 100 + len(dates)), index=dates, dtype=float)
+        if ticker == "QQEW":
+            close = close * 0.9
+        return pd.DataFrame({"Close": close}, index=dates)
+
+    monkeypatch.setattr(tools_L2, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_L2, "cached_yf_download", fake_download)
+
+    result = tools_L2.get_qqq_qqew_ratio("2025-04-09")
+
+    assert {ticker for ticker, _end in calls} == {"QQQ", "QQEW"}
+    assert {pd.Timestamp(end).date().isoformat() for _ticker, end in calls} == {"2025-04-10"}
+    assert result["value"]["date"] == "2025-04-09"

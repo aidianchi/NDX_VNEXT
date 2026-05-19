@@ -58,6 +58,27 @@ def _write_json(path: str, payload: Dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def _sync_run_summary(run_dir: str, console_summary: Dict[str, Any]) -> None:
+    summary_path = os.path.join(run_dir, "run_summary.json")
+    existing: Dict[str, Any] = {}
+    if os.path.exists(summary_path):
+        try:
+            with open(summary_path, "r", encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, dict):
+                existing = loaded
+        except Exception:
+            existing = {}
+    merged = {
+        **existing,
+        "report_path": console_summary.get("report_path") or console_summary.get("native_brief") or existing.get("report_path", ""),
+        "native_brief": console_summary.get("native_brief", existing.get("native_brief", "")),
+        "workbench": console_summary.get("workbench", existing.get("workbench", "")),
+        "console_run_summary": os.path.join(run_dir, "console_run_summary.json"),
+    }
+    _write_json(summary_path, merged)
+
+
 def _maybe_refresh_trendonify_sidecar() -> str:
     manual = load_manual_data()
     sidecar = manual.get("browser_sidecar") if isinstance(manual, dict) else {}
@@ -136,6 +157,7 @@ def main() -> int:
     run_summary_path = os.path.join(run_dir, "console_run_summary.json")
     latest_summary_path = os.path.join(path_config.logs_dir, "control_service", "latest_console_run.json")
     _write_json(run_summary_path, console_summary)
+    _sync_run_summary(run_dir, console_summary)
     _write_json(latest_summary_path, console_summary)
     logging.info("Console product flow complete: %s", json.dumps(console_summary, ensure_ascii=False, default=str))
     return 0

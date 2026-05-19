@@ -6,6 +6,62 @@
 
 ## 2026-05-19
 
+### audit 剩余项第二轮：yfinance 诊断产品化与买方动作层
+
+完成内容：
+
+- 新增 yfinance 运行诊断：`cached_yf_download()` 和 `get_yf_ticker_info_with_retry()` 记录 provider success、memory/recent cache hit、stale cache fallback、retry scheduled、failed、退避秒数和耗时。
+- yfinance 失败类型结构化：区分 `rate_limited`、`empty_response`、`dns_or_network`、`sqlite_cache_error`、`file_descriptor_exhausted`、`provider_unavailable`、`provider_error`，避免只在日志里留下难复盘的文本。
+- Collector 每次 run 会重置并收集 `runtime_diagnostics`；单指标结果写入 `collection_duration_ms`、`failure_type`、`failure_stage`，并同步到 `data_quality` 的 availability / anomalies / failure_reason。
+- `run_summary.json` 和 collect-only summary 新增 `runtime_diagnostics`、`data_quality_summary`、`failure_breakdown_by_type`、`slowest_indicators`、`degraded_indicators`；DataIntegrity notes 也会汇总 yfinance retry/cache fallback/failed 和 backoff 秒数。
+- Native brief 审计区展示 YF Diagnostics；指标 data quality box 展示可用性、采集耗时和失败类型。
+- Native brief 新增“买方动作层”：把上游风险边界和失效条件映射到加仓、减仓、等待、观察窗口四个动作桶，并明确不新增未经 evidence refs 支持的点位、概率或历史胜率。
+
+验证结果：
+
+- `python3 -m pytest tests/test_yfinance_cache_resilience.py tests/test_core_checker.py tests/test_vnext_reporter.py -q`：31 passed，4 warnings。
+- `python3 -m pytest -q`：304 passed，4 warnings。
+
+剩余边界：
+
+- 本轮把 yfinance/SQLite/文件句柄问题产品化为可审计诊断，但没有通过真实失败日志证明根因已经消除；L3 数据源系统性失败仍需真实 run 复盘和必要的采集策略调整。
+- 严格回测 invariant、新闻事件连接器真实 run 复盘、重新生成 2025-04-09 run 仍未完成。
+
+### AGENTS.md 仓库级提示词瘦身
+
+完成内容：
+
+- 按第一性原理重写 `AGENTS.md`：明确它是每次加载的仓库级提示词，只保留稳定、高信号的北极星、红线、文档路由、执行纪律、工作取向和验证原则。
+- 删除当前优先级摘要、重要路径长清单、通俗报告模板全文、验证命令大全和 Windows PowerShell 环境问题，避免把易变信息和低频调试信息塞进常驻上下文。
+- 将新闻/sidecar 隔离、回测有效日期、DataIntegrity 发布闸门、指标越权和无证据历史概率等高代价错误收敛为不可破坏红线。
+- 明确当前任务、架构、复盘、数据边界和完成记录分别路由到 `NEXT_STEPS.md`、`ARCHITECTURE.md`、`RUN_REVIEW_CHECKLIST.md`、`DATA_COVERAGE_REVIEW.md` 和 `WORK_LOG.md`。
+
+验证结果：
+
+- 人工复读 `AGENTS.md`，确认已无 Windows / PowerShell / `8009001d` 环境问题段，也不再维护命令大全。
+
+### 2025-04-09 回测综合审计剩余项第一轮收敛
+
+完成内容：
+
+- L3 缺口识别集中化：AnalysisPacket 现在统一识别 `source_tier=unavailable`、`availability=unavailable`、`data_quality.availability=unavailable/backtest_skipped`、notes 中失败信息，以及嵌套 `value` 全 None 的 payload；这类指标不再计入成功、不进入 `key_metrics`，也不会在 context brief / layer prompt 中被当成 `analysis_required=true`。
+- L3 状态不再把证据不足包装成 `neutral`：缺少可用结构证据且没有明确健康/恶化信号时，状态落到 `insufficient_data`，summary 写缺口而不是写 `值={'level': None...}`。
+- L5 / QQQ / QQEW 回测日频口径统一：yfinance 日频 `end` 按排他边界处理，请求 `effective_date + 1 day` 后再过滤到 `effective_date`；覆盖 QQQ 技术指标、多尺度均线、ADX 备用路径、QQQ/QQEW、L2/L3 成分股批量价格和 chart adapter 的 QQQ OHLCV。
+- Native brief 信息架构第一轮修复：首屏显示发布状态、分析目标日、回测日、观察日期范围、采集时间、生成时间和指标覆盖；`safe/warning/breached` 中文化；token usage 改为阶段数和输入/输出/合计摘要，不再展示原始 dict；必须保留风险只在“风险边界”主展示，首屏/判断/Governance 改成数量摘要。
+- console full run 会把 `native_brief`、`workbench` 和 native fallback `report_path` 回写同目录 `run_summary.json`，外部脚本不再只能从 `console_run_summary.json` 找 native 产物。
+- 复合指标升格治理：Bridge prompt 明确 CNN Fear & Greed / Crowdedness 等复合指标要先读总分/总状态；Schema Guard 对 high severity typed conflict 增加检查，若只围绕 `L2.get_cnn_fear_greed_index` 子项如 Market Momentum 展开、没有说明总分语义，则判为 composite sub-metric over-promotion。
+- L2 schema retry 稳定性：Layer prompt 明确 `indicator_analyses[].evidence_refs` 必须是字符串数组；normalizer 会把模型偶发输出的 dict / dict 列表收敛为标准字符串 ref，减少首轮 `string_type` 失败。
+
+验证结果：
+
+- `python3 -m pytest tests/test_vnext_packet_builder.py tests/test_vnext_orchestrator.py::test_unavailable_nested_none_indicator_is_not_analysis_required tests/test_vnext_orchestrator.py::test_backtest_skipped_indicator_is_not_analysis_required tests/test_ta_l5_and_pdr_sources.py tests/test_l3_breadth_data.py::test_qqq_qqew_ratio_yfinance_request_includes_effective_date tests/test_vnext_reporter.py::test_vnext_reporter_generates_native_ui tests/test_console_run_all.py -q`：26 passed，4 warnings。
+- `python3 -m pytest tests/test_vnext_orchestrator.py::test_schema_guard_rejects_cnn_submetric_high_conflict_without_aggregate_semantics -q`：1 passed，4 warnings。
+- `python3 -m pytest tests/test_vnext_orchestrator.py::test_layer_payload_normalization_coerces_dict_evidence_refs tests/test_vnext_orchestrator.py::test_layer_payload_normalization_backfills_indicator_evidence_refs -q`：2 passed，4 warnings。
+
+剩余边界：
+
+- `2026-05-19_0409_BACKTEST_SYNTHESIS_AUDIT.md` 仍未完成：L3/yfinance/SQLite/文件句柄运行稳定性专项、报告买方动作层、yfinance 长退避和 cache 异常产品化、first-reported / vintage 严格回测 invariant。
+
 ### 2025-04-09 回测综合审计 P0/P1 闸门修复
 
 完成内容：

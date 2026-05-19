@@ -155,6 +155,21 @@ class DataIntegrity:
         else:
             if not failed_metrics and not unavailable and not partial:
                 notes.append("所有采集指标均返回有效值。")
+        runtime_diagnostics = data_json.get("runtime_diagnostics") if isinstance(data_json, dict) else {}
+        yf_diag = runtime_diagnostics.get("yfinance") if isinstance(runtime_diagnostics, dict) else {}
+        yf_status = yf_diag.get("by_status", {}) if isinstance(yf_diag, dict) else {}
+        yf_failures = yf_diag.get("by_failure_type", {}) if isinstance(yf_diag, dict) else {}
+        yf_backoff = yf_diag.get("total_backoff_seconds", 0) if isinstance(yf_diag, dict) else 0
+        yf_retry_count = int(yf_status.get("retry_scheduled", 0) or 0) if isinstance(yf_status, dict) else 0
+        yf_fallback_count = int(yf_status.get("cache_fallback", 0) or 0) if isinstance(yf_status, dict) else 0
+        yf_failed_count = int(yf_status.get("failed", 0) or 0) if isinstance(yf_status, dict) else 0
+        if yf_retry_count or yf_fallback_count or yf_failed_count:
+            failure_summary = ", ".join(f"{key}={value}" for key, value in sorted(yf_failures.items())) or "unknown"
+            notes.append(
+                "yfinance 运行诊断: "
+                f"retry={yf_retry_count}, cache_fallback={yf_fallback_count}, failed={yf_failed_count}, "
+                f"backoff_seconds={yf_backoff}, failure_types={failure_summary}"
+            )
         if confidence < 90:
             notes.append("数据完整性偏低，最终结论需要更保守。")
 
@@ -199,6 +214,13 @@ class DataIntegrity:
                 "total": tp_total,
                 "available": tp_available,
                 "confidence": round((tp_available / tp_total) * 100, 1) if tp_total else 0.0,
+            },
+            "runtime_diagnostics": {
+                "yfinance": {
+                    "by_status": yf_status if isinstance(yf_status, dict) else {},
+                    "by_failure_type": yf_failures if isinstance(yf_failures, dict) else {},
+                    "total_backoff_seconds": yf_backoff,
+                }
             },
         }
         logging.info("Data integrity: %.1f%%", confidence)

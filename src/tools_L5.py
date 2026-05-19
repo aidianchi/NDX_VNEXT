@@ -92,6 +92,20 @@ def _manual_adx(high: pd.Series, low: pd.Series, close: pd.Series, window: int =
     adx = dx.ewm(alpha=alpha, adjust=False, min_periods=window).mean()
     return adx, plus_di, minus_di
 
+
+def _yf_daily_end_inclusive(effective_date: datetime) -> datetime:
+    """yfinance daily end is exclusive; request T+1 then filter back to T."""
+    return effective_date + timedelta(days=1)
+
+
+def _filter_daily_frame_to_effective_date(df: pd.DataFrame, effective_date: datetime) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    filtered = df.copy()
+    filtered.index = pd.to_datetime(filtered.index).tz_localize(None)
+    effective = pd.Timestamp(effective_date).tz_localize(None)
+    return filtered[filtered.index <= effective]
+
 # =====================================================
 # 第5层函数
 # =====================================================
@@ -373,10 +387,11 @@ def get_qqq_technical_indicators(end_date: str = None) -> Dict[str, Any]:
     if YF_AVAILABLE:
         try:
             # 使用yfinance获取数据
-            df = cached_yf_download('QQQ', start=start_date, end=effective_date, interval="1d", progress=False, auto_adjust=False)
+            df = cached_yf_download('QQQ', start=start_date, end=_yf_daily_end_inclusive(effective_date), interval="1d", progress=False, auto_adjust=False)
 
             # 清理数据
             df = clean_yfinance_dataframe(df)
+            df = _filter_daily_frame_to_effective_date(df, effective_date)
 
             if df.empty or len(df) < 200:  # 至少需要200个数据点计算EMA200
                 raise Exception(f"数据不足：仅{len(df)}个交易日")
@@ -547,8 +562,9 @@ def get_adx_qqq(end_date: str = None) -> Dict[str, Any]:
     try:
         # 1. 下载yfinance数据并进行严格检查
         try:
-            df = cached_yf_download('QQQ', start=start_date, end=effective_date, interval="1d", progress=False, auto_adjust=False)
+            df = cached_yf_download('QQQ', start=start_date, end=_yf_daily_end_inclusive(effective_date), interval="1d", progress=False, auto_adjust=False)
             df = clean_yfinance_dataframe(df) # 标准化列名等
+            df = _filter_daily_frame_to_effective_date(df, effective_date)
         except Exception as e:
             return {"name": "ADX QQQ", "value": None, "error": f"yfinance data download failed: {e}"}
 
@@ -794,8 +810,9 @@ def get_multi_scale_ma_position(end_date: str = None) -> Dict[str, Any]:
     
     try:
         # 下载数据
-        df = cached_yf_download('QQQ', start=start_date, end=effective_date, interval="1d", progress=False, auto_adjust=False)
+        df = cached_yf_download('QQQ', start=start_date, end=_yf_daily_end_inclusive(effective_date), interval="1d", progress=False, auto_adjust=False)
         df = clean_yfinance_dataframe(df)
+        df = _filter_daily_frame_to_effective_date(df, effective_date)
         
         if df.empty or len(df) < 200:
             raise Exception(f"数据不足：仅{len(df)}个交易日，需要至少200天")

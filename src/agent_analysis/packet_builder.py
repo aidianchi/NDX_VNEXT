@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+import pandas as pd
+
 try:
     from .contracts import AnalysisPacket, CandidateCrossLayerLink, LayerFacts
 except ImportError:
@@ -85,13 +87,115 @@ LAYER_FUNCTIONS = {
 }
 
 
+_MEANINGFUL_VALUE_META_KEYS = {
+    "date",
+    "data_date",
+    "as_of",
+    "asof",
+    "timestamp",
+    "collection_timestamp_utc",
+    "source",
+    "source_name",
+    "source_tier",
+    "metric_name",
+    "function_id",
+    "name",
+    "unit",
+    "notes",
+    "note",
+    "unavailable_reason",
+    "skip_reason",
+}
+
+
+def _has_meaningful_observation_value(value: Any, *, parent_key: str = "") -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return not pd.isna(value)
+        except Exception:
+            return True
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return False
+        if parent_key.lower() in _MEANINGFUL_VALUE_META_KEYS:
+            return False
+        return text.lower() not in {"none", "null", "nan", "n/a", "unavailable", "failed"}
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_l = str(key).lower()
+            if key_l in _MEANINGFUL_VALUE_META_KEYS:
+                continue
+            if _has_meaningful_observation_value(item, parent_key=key_l):
+                return True
+        return False
+    if isinstance(value, (list, tuple)):
+        return any(_has_meaningful_observation_value(item, parent_key=parent_key) for item in value)
+    return True
+
+
+def _payload_unavailable_reason(payload: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return "invalid_payload"
+    if payload.get("error"):
+        return str(payload.get("error"))
+    if payload.get("backtest_skipped"):
+        return "backtest_skipped_unsupported_function"
+    data_quality = payload.get("data_quality")
+    availability = str(payload.get("availability") or "").lower()
+    source_tier = str(payload.get("source_tier") or "").lower()
+    if isinstance(data_quality, dict):
+        availability = availability or str(data_quality.get("availability") or "").lower()
+        source_tier = source_tier or str(data_quality.get("source_tier") or "").lower()
+    if availability in {"unavailable", "backtest_skipped", "skipped", "failed"}:
+        return availability
+    if source_tier in {"unavailable", "backtest_skipped", "skipped", "failed"}:
+        return source_tier
+    if payload.get("value") is None and (payload.get("skip_reason") or payload.get("unavailable_reason")):
+        return str(payload.get("skip_reason") or payload.get("unavailable_reason"))
+
+    value_has_observation = _has_meaningful_observation_value(payload.get("value"))
+    if not value_has_observation:
+        reason_text = " ".join(
+            str(payload.get(key) or "")
+            for key in ("notes", "note", "unavailable_reason", "skip_reason")
+        ).lower()
+        failed_tokens = (
+            "failed",
+            "unable",
+            "unavailable",
+            "insufficient",
+            "too many open files",
+            "empty frame",
+            "no valid",
+            "not available",
+        )
+        if any(token in reason_text for token in failed_tokens):
+            return "unavailable_payload"
+        if payload.get("value") is None:
+            return None
+        return "empty_observation_payload"
+    return None
+
+
+def indicator_payload_unavailable_reason(payload: Dict[str, Any]) -> Optional[str]:
+    """Public helper for prompt orchestration to share packet availability rules."""
+    return _payload_unavailable_reason(payload)
+
+
 def _indicator_error(indicator: Dict[str, Any], raw_payload: Optional[Dict[str, Any]] = None) -> Optional[str]:
     error = indicator.get("error")
     if error:
         return str(error)
     payload = raw_payload if isinstance(raw_payload, dict) else indicator.get("raw_data")
-    if isinstance(payload, dict) and payload.get("backtest_skipped"):
-        return "backtest_skipped_unsupported_function"
+    if isinstance(payload, dict):
+        reason = _payload_unavailable_reason(payload)
+        if reason:
+            return reason
     if indicator.get("backtest_skipped"):
         return "backtest_skipped_unsupported_function"
     return None
@@ -101,10 +205,10 @@ def _indicator_successful(indicator: Dict[str, Any]) -> bool:
     if _indicator_error(indicator):
         return False
     raw = indicator.get("raw_data") if isinstance(indicator.get("raw_data"), dict) else {}
-    if raw.get("backtest_skipped"):
+    if _payload_unavailable_reason(raw):
         return False
     if "value" in raw:
-        return raw.get("value") is not None
+        return _has_meaningful_observation_value(raw.get("value"))
     return indicator.get("value") is not None or bool(raw)
 
 
@@ -408,13 +512,20 @@ class AnalysisPacketBuilder:
             ),
         )
         state = self._infer_layer_state(layer, metrics)
-        key_metrics = [signal["metric"] for signal in core_signals if not signal.get("error")][:5]
-        summary_parts = [signal["summary"] for signal in core_signals if signal.get("summary") and not signal.get("error")][:3]
+        usable_signals = [signal for signal in core_signals if not signal.get("error")]
+        unavailable_signals = [signal for signal in core_signals if signal.get("error")]
+        key_metrics = [signal["metric"] for signal in usable_signals][:5]
+        summary_parts = [signal["summary"] for signal in usable_signals if signal.get("summary")][:3]
         if not summary_parts:
             summary_parts = ["关键指标不完整"]
+        if unavailable_signals:
+            summary_parts.append(
+                "缺口="
+                + ",".join(signal["metric"] for signal in unavailable_signals[:3])
+            )
         summary = f"{LAYER_NAMES[layer]}状态: {state}。关键事实: {'；'.join(summary_parts)}。"
         return LayerFacts(
-            core_signals=core_signals[:8],
+            core_signals=(usable_signals + unavailable_signals)[:8],
             state=state,
             key_metrics=key_metrics,
             summary=summary,
@@ -624,6 +735,7 @@ class AnalysisPacketBuilder:
             return "neutral"
 
         if layer == "L3":
+            usable_count = sum(1 for payload in metrics.values() if not _payload_unavailable_reason(payload))
             breadth_ratio_pct = self._metric_level(metrics, "get_qqq_qqew_ratio", "percentile_10y", "percentile_1y", "percentile")
             top10_weight = self._metric_level(metrics, "get_qqq_top10_concentration", "top10_weight_pct")
             ad_line_trend = self._metric_text(metrics, "get_advance_decline_line", "trend", "direction")
@@ -645,6 +757,8 @@ class AnalysisPacketBuilder:
                 return "deteriorating"
             if pct_above is not None and pct_above >= 60:
                 return "healthy"
+            if usable_count < 2:
+                return "insufficient_data"
             return "neutral"
 
         if layer == "L4":

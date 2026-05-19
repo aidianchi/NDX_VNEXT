@@ -44,10 +44,10 @@ TEMPLATE_DESCRIPTIONS = {
 }
 
 TEMPLATE_ORDER = {
-    "cockpit": ["decision", "evidence", "news", "conflicts", "layers", "governance", "audit"],
-    "brief": ["decision", "evidence", "news", "risks", "conflicts", "layers", "governance", "audit"],
-    "atlas": ["evidence", "news", "conflicts", "decision", "layers", "governance", "audit"],
-    "workbench": ["layers", "news", "conflicts", "evidence", "decision", "governance", "audit"],
+    "cockpit": ["decision", "actions", "evidence", "news", "conflicts", "layers", "governance", "audit"],
+    "brief": ["decision", "actions", "evidence", "news", "risks", "conflicts", "layers", "governance", "audit"],
+    "atlas": ["evidence", "news", "conflicts", "decision", "actions", "layers", "governance", "audit"],
+    "workbench": ["layers", "news", "conflicts", "evidence", "decision", "actions", "governance", "audit"],
 }
 
 # ---------------------------------------------------------------------------
@@ -85,7 +85,20 @@ LABELS: Dict[str, Dict[str, str]] = {
         "rejected": "否决",
     },
     "confidence": {"low": "低", "medium": "中", "high": "高"},
-    "severity": {"low": "低", "medium": "中", "high": "高"},
+    "severity": {
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "safe": "可控",
+        "warning": "需关注",
+        "breached": "已突破",
+    },
+    "publish_status": {
+        "publishable": "可发布",
+        "blocked": "不可发布",
+        "unpublishable": "不可发布",
+        "not recorded": "未记录",
+    },
     "availability": {"available": "可用", "unavailable": "不可用"},
     "boundary": {
         "valuation_compression": "估值压缩",
@@ -311,15 +324,80 @@ def _confidence_class(value: Any) -> str:
 
 def _severity_class(value: Any) -> str:
     text = str(value or "").lower()
-    if "high" in text:
+    if "high" in text or "breached" in text or "blocked" in text or "unpublishable" in text:
         return "bad"
-    if "low" in text:
+    if "low" in text or "safe" in text or "publishable" in text:
         return "good"
     return "watch"
 
 
 def _as_list(value: Any) -> List[Any]:
     return value if isinstance(value, list) else []
+
+
+def _format_timestamp(value: Any) -> str:
+    if not value:
+        return "N/A"
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.strftime("%Y-%m-%d %H:%M UTC")
+    except ValueError:
+        return str(value)
+
+
+def _observation_date_range(raw_data: Any) -> str:
+    keys = {
+        "date",
+        "data_date",
+        "effective_date",
+        "observation_date",
+        "as_of",
+        "asof",
+    }
+    skip_tokens = ("collection", "generated", "timestamp", "expiry", "expiration")
+    found: List[str] = []
+
+    def visit(value: Any, key: str = "") -> None:
+        key_l = str(key).lower()
+        if isinstance(value, dict):
+            for child_key, child_value in value.items():
+                visit(child_value, str(child_key))
+            return
+        if isinstance(value, list):
+            for item in value:
+                visit(item, key_l)
+            return
+        if key_l not in keys or any(token in key_l for token in skip_tokens):
+            return
+        text = str(value or "").strip()
+        match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", text)
+        if match:
+            found.append(match.group(1))
+
+    visit(raw_data)
+    unique = sorted(set(found))
+    if not unique:
+        return "N/A"
+    if unique[0] == unique[-1]:
+        return unique[0]
+    return f"{unique[0]} 至 {unique[-1]}"
+
+
+def _token_usage_summary(token_usage: Any) -> str:
+    if not isinstance(token_usage, dict) or not token_usage:
+        return "未记录"
+    prompt = completion = total = 0
+    stages = 0
+    for value in token_usage.values():
+        if not isinstance(value, dict):
+            continue
+        stages += 1
+        prompt += int(value.get("prompt_tokens") or 0)
+        completion += int(value.get("completion_tokens") or 0)
+        total += int(value.get("total_tokens") or 0)
+    if not stages:
+        return "未记录"
+    return f"{stages} 个阶段；输入 {prompt:,}，输出 {completion:,}，合计 {total:,}"
 
 
 # CSS styles are loaded from external files in report_styles/ directory.
@@ -676,7 +754,7 @@ class VNextReportGenerator:
   <a class="skip-link" href="#main">跳到主内容</a>
   <span class="sr-only">NDX vNext Native Artifact UI Layer Workbench Source Tier Coverage Confirming Indicators</span>
   <div class="shell">
-    {self._hero(final, meta, run_path, template)}
+    {self._hero(final, meta, run_path, template, artifacts)}
     {self._navigation()}
     {self._template_intro(template)}
     <main id="main">{self._main_sections(template, run_path, artifacts, final, payload_json)}</main>
@@ -780,6 +858,7 @@ class VNextReportGenerator:
     ) -> str:
         renderers = {
             "decision": lambda: self._decision_section(final),
+            "actions": lambda: self._actions_section(artifacts),
             "evidence": lambda: self._evidence_section(final),
             "news": lambda: self._news_section(artifacts),
             "risks": lambda: self._risks_section(artifacts),
@@ -793,15 +872,27 @@ class VNextReportGenerator:
     def _template_intro(self, template: str) -> str:
         return ""
 
-    def _hero(self, final: Dict[str, Any], meta: Dict[str, Any], run_path: Path, template: str) -> str:
+    def _hero(
+        self,
+        final: Dict[str, Any],
+        meta: Dict[str, Any],
+        run_path: Path,
+        template: str,
+        artifacts: Dict[str, Any],
+    ) -> str:
         confidence = final.get("confidence", "medium")
         approval = final.get("approval_status", "")
         success = f"{meta.get('indicator_successful', '?')}/{meta.get('indicator_total', '?')}"
         template_name = TEMPLATE_DESCRIPTIONS[template]["name"]
-        risks = "".join(
-            f"<li>{_escape(_label(item, 'risk_flag'))}</li>"
-            for item in _as_list(final.get("must_preserve_risks"))[:4]
-        )
+        analysis_packet = artifacts.get("analysis_packet", {}) or {}
+        analysis_meta = analysis_packet.get("meta", {}) or {}
+        integrity = artifacts.get("data_integrity_report", {}) or {}
+        publish_status = integrity.get("publish_status") or ("blocked" if integrity.get("blocked") else "not recorded")
+        generated_at = meta.get("generated_at") or analysis_meta.get("generated_at")
+        collector_timestamp = meta.get("collector_timestamp_utc") or analysis_meta.get("collector_timestamp_utc")
+        backtest_date = meta.get("backtest_date") or analysis_meta.get("backtest_date") or "N/A"
+        observation_range = _observation_date_range(analysis_packet.get("raw_data", {}))
+        risk_count = len(_as_list(final.get("must_preserve_risks")))
         return f"""
 <header class="hero" id="top">
   <div class="eyebrow">NDX vNext Native Artifact UI · {_escape(template_name)}</div>
@@ -813,13 +904,18 @@ class VNextReportGenerator:
     <aside class="verdict-card" aria-label="最终判断核心字段">
       <div class="verdict-row"><span>审批</span><strong>{_escape(_label(approval, 'approval'))}</strong></div>
       <div class="verdict-row"><span>置信度</span><strong class="pill {_confidence_class(confidence)}">{_escape(_label(confidence, 'confidence'))}</strong></div>
-      <div class="verdict-row"><span>数据日期</span><strong class="mono">{_escape(meta.get('data_date', 'N/A'))}</strong></div>
+      <div class="verdict-row"><span>发布状态</span><strong class="pill {_severity_class(publish_status)}">{_escape(_label(publish_status, 'publish_status'))}</strong></div>
+      <div class="verdict-row"><span>分析目标日</span><strong class="mono">{_escape(meta.get('data_date', 'N/A'))}</strong></div>
+      <div class="verdict-row"><span>回测日</span><strong class="mono">{_escape(backtest_date)}</strong></div>
+      <div class="verdict-row"><span>观察日期范围</span><strong class="mono">{_escape(observation_range)}</strong></div>
+      <div class="verdict-row"><span>采集时间</span><strong class="mono">{_escape(_format_timestamp(collector_timestamp))}</strong></div>
+      <div class="verdict-row"><span>生成时间</span><strong class="mono">{_escape(_format_timestamp(generated_at))}</strong></div>
       <div class="verdict-row"><span>指标覆盖</span><strong class="mono">{_escape(success)}</strong></div>
     </aside>
   </div>
   <div class="hero-risks">
-    <span>不能淡化的风险</span>
-    <ul>{risks or '<li>无</li>'}</ul>
+    <span>风险主展示</span>
+    <p>本次有 {_escape(risk_count)} 条必须保留风险；完整清单在“风险边界”章节，只在一处展开，避免重复放大。</p>
   </div>
   <div class="run-path">{_escape(run_path)}</div>
 </header>
@@ -829,6 +925,7 @@ class VNextReportGenerator:
         return """
 <nav class="nav" aria-label="章节导航">
   <a href="#decision">判断</a>
+  <a href="#actions">动作</a>
   <a href="#evidence">依据</a>
   <a href="#news">新闻</a>
   <a href="#risks">风险</a>
@@ -840,11 +937,8 @@ class VNextReportGenerator:
 """
 
     def _decision_section(self, final: Dict[str, Any]) -> str:
-        risks = "".join(
-            f"<li>{_escape(_label(item, 'risk_flag'))}</li>"
-            for item in _as_list(final.get("must_preserve_risks"))
-        )
         refs = self._ref_chips(final.get("evidence_refs", []))
+        risk_count = len(_as_list(final.get("must_preserve_risks")))
         return f"""
 <section class="panel decision-panel" id="decision">
   <div class="section-kicker">01 · 最终判断</div>
@@ -857,8 +951,90 @@ class VNextReportGenerator:
       <div class="ref-row">{refs}</div>
     </div>
     <div class="risk-list">
-      <h3>不能淡化的风险</h3>
-      <ul>{risks or '<li>无</li>'}</ul>
+      <h3>风险摘要</h3>
+      <p>本轮必须保留风险 {_escape(risk_count)} 条；完整清单见“风险边界”。</p>
+    </div>
+  </div>
+</section>
+"""
+
+    def _actions_section(self, artifacts: Dict[str, Any]) -> str:
+        final = artifacts.get("final_adjudication", {}) or {}
+        risk = artifacts.get("risk_boundary_report", {}) or {}
+        boundary = risk.get("boundary_status", {}) if isinstance(risk.get("boundary_status"), dict) else {}
+        stance = str(final.get("final_stance", "") or "")
+        confidence = str(final.get("confidence", "medium") or "medium")
+        must_risks = [_label(item, "risk_flag") for item in _as_list(risk.get("must_preserve_risks"))]
+        failure_conditions = []
+        for item in _as_list(risk.get("failure_conditions")):
+            if isinstance(item, dict):
+                text = item.get("condition") or item.get("impact") or ""
+                if text:
+                    failure_conditions.append(str(text))
+            elif item:
+                failure_conditions.append(str(item))
+        breached = [name for name, status in boundary.items() if str(status).lower() == "breached"]
+        warnings = [name for name, status in boundary.items() if str(status).lower() == "warning"]
+
+        add_bias = "只有小幅试探或等待确认"
+        if confidence == "high" and not breached and any(key in stance.lower() for key in ["bull", "constructive", "positive", "看多", "偏多"]):
+            add_bias = "可在证据继续确认时分批增加"
+        reduce_bias = "风险触发时优先降低暴露"
+        if breached:
+            reduce_bias = "已有边界突破，优先降风险"
+        wait_bias = "等待关键证据确认"
+        if confidence == "low" or warnings or breached:
+            wait_bias = "等待数据质量、广度或失效条件修复"
+
+        action_cards = [
+            (
+                "加仓",
+                add_bias,
+                "需要看到支撑链继续成立，且风险边界未进一步恶化；不能用单一技术反弹替代估值、广度和流动性确认。",
+            ),
+            (
+                "减仓",
+                reduce_bias,
+                "若失效条件触发、边界状态转为已突破，或必须保留风险开始互相确认，应先降低组合对 NDX/QQQ 的单边暴露。",
+            ),
+            (
+                "等待",
+                wait_bias,
+                "当置信度不足、数据覆盖不完整或冲突仍未解决时，保持观察优先于把模糊信号包装成明确方向。",
+            ),
+            (
+                "观察窗口",
+                "围绕失效条件复核",
+                "优先复核 Risk Sentinel 的 failure conditions、L3 广度/集中度、L4 估值安全垫和 L5 趋势失效触发。",
+            ),
+        ]
+        cards = "".join(
+            f"""
+<article class="trigger-card">
+  <h3>{_escape(title)}</h3>
+  <p><b>{_escape(headline)}</b></p>
+  <p>{_escape(body)}</p>
+</article>
+"""
+            for title, headline, body in action_cards
+        )
+        watch_items = failure_conditions[:6] or must_risks[:6] or ["暂无结构化触发条件。"]
+        watch_html = "".join(f"<li>{_escape(item)}</li>" for item in watch_items)
+        boundary_text = ", ".join(_label(item, "boundary") for item in breached + warnings) or "无 breached/warning 边界"
+        return f"""
+<section class="panel" id="actions">
+  <div class="section-kicker">02 · 买方动作层</div>
+  <h2>把判断落到动作框架</h2>
+  <p class="section-note">这里只把上游证据和风险边界转成条件化动作，不新增未经 evidence refs 支持的点位、概率或回测胜率。</p>
+  <div class="trigger-grid">{cards}</div>
+  <div class="risk-board">
+    <div class="risk-list">
+      <h3>观察清单</h3>
+      <ul>{watch_html}</ul>
+    </div>
+    <div class="risk-list">
+      <h3>当前边界</h3>
+      <p>{_escape(boundary_text)}</p>
     </div>
   </div>
 </section>
@@ -885,7 +1061,7 @@ class VNextReportGenerator:
             )
         return f"""
 <section class="panel" id="evidence">
-  <div class="section-kicker">02 · 结论依据</div>
+  <div class="section-kicker">03 · 结论依据</div>
   <h2>主论点证据链</h2>
   <p class="section-note">每条证据链对应一个判断支点。点击证据会打开指标、读数、来源、反证和完整底稿入口。</p>
   <div class="chain-grid">{''.join(chains) or '<p>无证据链。</p>'}</div>
@@ -2120,6 +2296,10 @@ class VNextReportGenerator:
     <p>{_escape(data_quality.get('source_tier', ''))}</p>
     <h5>数据日期 / 采集时间</h5>
     <p>{_escape(data_quality.get('data_date', ''))} · {_escape(data_quality.get('collected_at_utc', ''))}</p>
+    <h5>可用性 / 耗时</h5>
+    <p>{_escape(_label(data_quality.get('availability', ''), 'availability'))} · {_escape(data_quality.get('collection_duration_ms', ''))} ms</p>
+    <h5>失败类型</h5>
+    <p>{_escape(data_quality.get('failure_type', ''))}</p>
     <h5>公式口径</h5>
     <p>{_escape(data_quality.get('formula', ''))}</p>
     {coverage_html}
@@ -2215,10 +2395,7 @@ class VNextReportGenerator:
             f"<li>{_escape(item.get('condition', item))} <span>{_escape(item.get('impact', '')) if isinstance(item, dict) else ''}</span></li>"
             for item in _as_list(risk.get("failure_conditions"))
         )
-        must = "".join(
-            f"<li>{_escape(_label(item, 'risk_flag'))}</li>"
-            for item in _as_list(risk.get("must_preserve_risks"))
-        )
+        must_count = len(_as_list(risk.get("must_preserve_risks")))
         issues = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(critique.get("cross_layer_issues")))
         tensions = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(firewall.get("unresolved_tensions")))
         firewall_warnings = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(firewall.get("warnings")))
@@ -2238,7 +2415,7 @@ class VNextReportGenerator:
       <h4>Failure Conditions</h4>
       <ul>{failures or '<li>无</li>'}</ul>
       <h4>Must Preserve</h4>
-      <ul>{must or '<li>无</li>'}</ul>
+      <p>完整清单见“风险边界”；此处仅记录 Risk Sentinel 要求保留 {_escape(must_count)} 条风险。</p>
     </article>
     <article>
       <h3>Schema Guard</h3>
@@ -2265,10 +2442,11 @@ class VNextReportGenerator:
         token_usage = artifacts["final_adjudication"].get("token_usage", {})
         meta = artifacts.get("synthesis_packet", {}).get("packet_meta", {}) or {}
         analysis_meta = artifacts.get("analysis_packet", {}).get("meta", {}) or {}
+        analysis_packet = artifacts.get("analysis_packet", {}) or {}
         boundaries = (
             meta.get("backtest_data_boundaries")
             or analysis_meta.get("backtest_data_boundaries")
-            or artifacts.get("analysis_packet", {}).get("context", {}).get("backtest_data_boundaries")
+            or analysis_packet.get("context", {}).get("backtest_data_boundaries")
             or []
         )
         integrity = artifacts.get("data_integrity_report", {}) or {}
@@ -2287,15 +2465,30 @@ class VNextReportGenerator:
             boundary_rows = "<li><b>无</b><span>本次没有记录回测跳过项。</span></li>"
         integrity_status = integrity.get("publish_status") or ("blocked" if integrity.get("blocked") else "not recorded")
         blocking_reasons = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(integrity.get("blocking_reasons")))
+        runtime_diag = integrity.get("runtime_diagnostics", {}).get("yfinance", {}) if isinstance(integrity.get("runtime_diagnostics"), dict) else {}
+        runtime_summary = ""
+        if isinstance(runtime_diag, dict) and runtime_diag:
+            runtime_summary = (
+                f"status={runtime_diag.get('by_status', {})}; "
+                f"failure_type={runtime_diag.get('by_failure_type', {})}; "
+                f"backoff_seconds={runtime_diag.get('total_backoff_seconds', 0)}"
+            )
+        observation_range = _observation_date_range(analysis_packet.get("raw_data", {}))
+        collector_timestamp = meta.get("collector_timestamp_utc") or analysis_meta.get("collector_timestamp_utc")
+        generated_at = meta.get("generated_at") or analysis_meta.get("generated_at")
         return f"""
 <section class="panel" id="audit">
   <div class="section-kicker">08 · Audit Trail</div>
   <h2>审计与原始 artifact</h2>
   <div class="audit-grid">
     <div><b>Run Dir</b><p>{_escape(run_path)}</p></div>
-    <div><b>Token Usage</b><p>{_escape(token_usage)}</p></div>
-    <div><b>Data Integrity</b><p>{_escape(integrity_status)}</p></div>
+    <div><b>Token Usage</b><p>{_escape(_token_usage_summary(token_usage))}</p></div>
+    <div><b>Data Integrity</b><p>{_escape(_label(integrity_status, 'publish_status'))}</p></div>
     <div><b>Backtest Date</b><p>{_escape(meta.get('backtest_date') or analysis_meta.get('backtest_date') or 'N/A')}</p></div>
+    <div><b>Observation Range</b><p>{_escape(observation_range)}</p></div>
+    <div><b>Collected At</b><p>{_escape(_format_timestamp(collector_timestamp))}</p></div>
+    <div><b>Generated At</b><p>{_escape(_format_timestamp(generated_at))}</p></div>
+    <div><b>YF Diagnostics</b><p>{_escape(runtime_summary or '无异常记录')}</p></div>
   </div>
   <div class="audit-boundaries">
     <h3>回测数据边界</h3>
