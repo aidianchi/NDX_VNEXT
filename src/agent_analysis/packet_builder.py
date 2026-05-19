@@ -120,6 +120,21 @@ def _model_dump(value: Any) -> Any:
     return value
 
 
+def _sanitize_manual_overrides(manual_overrides: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep inactive manual config auditable without exposing metric values to agents."""
+    overrides = deepcopy(manual_overrides if isinstance(manual_overrides, dict) else {})
+    metrics = overrides.get("metrics") if isinstance(overrides.get("metrics"), dict) else {}
+    if overrides.get("active"):
+        return overrides
+    return {
+        "active": False,
+        "date": overrides.get("date", ""),
+        "metrics": {},
+        "inactive_metric_count": len(metrics),
+        "inactive_metrics_hidden": bool(metrics),
+    }
+
+
 def _round_if_float(value: Any) -> Any:
     return round(value, 4) if isinstance(value, float) else value
 
@@ -215,7 +230,9 @@ class AnalysisPacketBuilder:
         event_ledger_path: Optional[str] = None,
         output_path: Optional[str] = None,
     ) -> AnalysisPacket:
-        manual_overrides = deepcopy(manual_overrides if manual_overrides is not None else load_manual_data())
+        manual_overrides = _sanitize_manual_overrides(
+            manual_overrides if manual_overrides is not None else load_manual_data()
+        )
         grouped_raw_data = self._group_raw_data(data_json, manual_overrides)
         facts_by_layer = {
             layer: self._build_layer_facts(layer, grouped_raw_data.get(layer, {}))
@@ -316,6 +333,7 @@ class AnalysisPacketBuilder:
             "indicator_successful": successful_indicators,
             "manual_override_count": manual_count,
             "manual_override_active": bool(manual_overrides.get("active")),
+            "backtest_data_boundaries": data_json.get("backtest_data_boundaries", []),
         }
 
     def _build_context(
@@ -327,6 +345,7 @@ class AnalysisPacketBuilder:
         context = {
             "source_timestamp_utc": data_json.get("timestamp_utc"),
             "backtest_date": data_json.get("backtest_date"),
+            "backtest_data_boundaries": data_json.get("backtest_data_boundaries", []),
             "layer_states": {layer: facts.state for layer, facts in facts_by_layer.items()},
             "layer_summaries": {layer: facts.summary for layer, facts in facts_by_layer.items()},
         }

@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-05-19
+
+### 2025-04-09 回测综合审计 P0/P1 闸门修复
+
+完成内容：
+
+- 修复 `get_net_liquidity_momentum(end_date=...)`：净流动性主值、组件、4 周动量和历史统计都先裁剪到回测日可见序列，再进入 raw packet / agent prompt。
+- 修复 `get_crowdedness_dashboard(end_date=...)`：SKEW 回测只取不晚于回测日的历史行；QQQ 当前期权链 OI 和当前 `Ticker.info` short interest 在回测模式下明确 `backtest_unavailable`，不再伪标为回测日证据。
+- 修复 Damodaran monthly series：`monthly_series` 与主 `data_date` 一样按 `target_date` 裁剪，避免 2025-04-09 回测看到 2025-05 至 2026-05 的后续月份。
+- 修复 inactive manual 泄漏：`manual_overrides.active=false` 时，AnalysisPacket 和各层 prompt 只保留 inactive 计数/隐藏标记，不暴露 PE、分位等具体人工数值；active=true 时仍按 layer-local 过滤。
+- DataIntegrity 从浅层提示器升级为递归闸门：递归扫描 dict/list 中的数据观察日期，解析 notes/reason 里的 `YYYY-MM-DD`，发现晚于回测日的数据即标记 `blocked/unpublishable`，并在主流程中停止 LLM/报告生成，同时写出 `data_integrity_report.json` 和 blocked `run_summary.json`。
+- `backtest_data_boundaries` 进入 `analysis_packet.meta/context` 和 native report 审计区；brief 审计面板现在展示回测日期、DataIntegrity 状态、跳过项、原因和 future upgrade。
+- Schema Guard 补强 Bridge 可审计性：校验 `supporting_facts`、typed conflict / resonance / transmission path 的 evidence refs 必须是可定位的 `LX.function_id`；校验 transmission path 重复 `path_id`、空 `evidence_refs`、空 `implication`。
+
+验证结果：
+
+- `python3 -m pytest -q`：294 passed，4 warnings。
+- 旧污染采集包 `output/data/data_collected_v9_20250409.json` 经新 DataIntegrity 复核为 `blocked=true` / `publish_status=blocked`，阻断原因覆盖 Net Liquidity `2026-05-15`、Crowdedness SKEW / 期权 notes 未来日期、Damodaran `monthly_series` 未来月份。
+- `python3 -m pytest -q tests/test_vnext_reporter.py`：13 passed，4 warnings；native audit section 已覆盖回测数据边界展示。
+
+剩余边界：
+
+- 本轮堵住硬未来数据、inactive manual 泄漏和 Bridge ref 死链闸门；尚未完整重做报告首页信息架构、买方动作层、L3 数据源稳定性和 yfinance/SQLite 文件句柄问题。
+- 严格 point-in-time 回测仍需后续设计 ALFRED vintage、财报 first-reported、历史成分股 universe 和数据发布时间语义；这不与本轮硬未来泄漏修复混为一谈。
+
 ## 2026-05-18
 
 ### 回测模式 L4 yfinance 成分股代理宁缺勿错

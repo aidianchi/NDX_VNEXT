@@ -367,12 +367,25 @@ def get_crowdedness_dashboard(end_date: str = None) -> Dict[str, Any]:
     crowdedness_data = {}
     print("  - 获取拥挤度仪表盘...", end="", flush=True)
 
-    # 1. SKEW Index (尾部风险指标) - 使用yfinance获取^SKEW
+    # 1. SKEW Index (尾部风险指标) - 回测模式只取回测日可见的历史行。
     skew_val = None
     skew_date = None
     if YF_AVAILABLE:
         try:
-            skew_hist = get_yf_ticker_history_with_retry("^SKEW", period="5d", attempts=3, pause_seconds=1.0)
+            if end_date:
+                skew_start = effective_date - timedelta(days=30)
+                skew_hist = cached_yf_download(
+                    "^SKEW",
+                    start=skew_start,
+                    end=effective_date + timedelta(days=1),
+                    interval="1d",
+                    progress=False,
+                    auto_adjust=False,
+                )
+                if not skew_hist.empty:
+                    skew_hist = skew_hist[skew_hist.index <= effective_date]
+            else:
+                skew_hist = get_yf_ticker_history_with_retry("^SKEW", period="5d", attempts=3, pause_seconds=1.0)
             if not skew_hist.empty:
                 skew_val = round(skew_hist['Close'].iloc[-1], 2)
                 skew_date = skew_hist.index[-1].strftime("%Y-%m-%d")
@@ -391,7 +404,10 @@ def get_crowdedness_dashboard(end_date: str = None) -> Dict[str, Any]:
     pc_source = "unavailable"
     pc_notes = ""
 
-    if YF_AVAILABLE:
+    if end_date:
+        pc_source = "backtest_unavailable"
+        pc_notes = "回测模式未接入历史可见的 QQQ 期权 OI 快照；当前期权链不得伪标为回测日证据。"
+    elif YF_AVAILABLE:
         try:
             opt_date, opt_chain = get_yf_option_chain_with_retry("QQQ", attempts=3, pause_seconds=1.0)
 
@@ -412,14 +428,22 @@ def get_crowdedness_dashboard(end_date: str = None) -> Dict[str, Any]:
 
     crowdedness_data["qqq_put_call_ratio_oi"] = {
         "value": pc_ratio,
-        "date": effective_date.strftime("%Y-%m-%d"),
+        "date": None if end_date else effective_date.strftime("%Y-%m-%d"),
         "source": pc_source,
         "notes": pc_notes if pc_notes else "期权数据获取失败",
         "interpretation": ">1.2: 看空情绪主导; <0.8: 看多情绪主导"
     }
 
     # 3. QQQ空仓率 (Short Interest)
-    if YF_AVAILABLE:
+    if end_date:
+        crowdedness_data["qqq_short_interest_percent"] = {
+            "value": None,
+            "date": None,
+            "source": "backtest_unavailable",
+            "interpretation": ">2%: 空仓拥挤 (看空情绪浓); <1%: 空仓稀少 (看空情绪弱)",
+            "notes": "回测模式未接入历史可见的 ETF short-interest 快照；当前 info 不进入回测证据。"
+        }
+    elif YF_AVAILABLE:
         try:
             qqq_info = get_yf_ticker_info_with_retry("QQQ", attempts=3, pause_seconds=1.0)
             short_percent = qqq_info.get("shortPercentOfFloat")
@@ -1455,7 +1479,10 @@ def _parse_damodaran_monthly_erp_excel(content: bytes, *, target_date: Optional[
             series_frame["_date_key"] = series_frame[date_col].apply(
                 lambda value: _format_damodaran_date(value, date1904=bool(table.attrs.get("date1904")))
             )
-        series_frame = series_frame.dropna(subset=["_date_key"]).tail(120)
+        series_frame = series_frame.dropna(subset=["_date_key"])
+        if target_date:
+            series_frame = series_frame[series_frame["_date_key"] <= target_date]
+        series_frame = series_frame.tail(120)
         monthly_series = []
         for _, row in series_frame.iterrows():
             monthly_series.append(

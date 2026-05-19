@@ -753,6 +753,12 @@ class VNextOrchestrator:
     def _build_layer_manual_overrides(self, packet: AnalysisPacket, layer: str) -> Dict[str, Any]:
         """Filter manual overrides so layer analysts only see metrics in their own layer."""
         overrides = packet.manual_overrides if isinstance(packet.manual_overrides, dict) else {}
+        if not overrides.get("active"):
+            return {
+                "active": False,
+                "date": overrides.get("date", ""),
+                "metrics": {},
+            }
         layer_data = packet.raw_data.get(layer, {})
         layer_function_ids = set(layer_data.keys()) if isinstance(layer_data, dict) else set()
         metrics = overrides.get("metrics", {}) if isinstance(overrides.get("metrics"), dict) else {}
@@ -958,6 +964,20 @@ class VNextOrchestrator:
         suggested_fixes: List[str] = []
         soft_canon_warnings: List[str] = []
         l3_structural_warnings: List[str] = []
+        valid_evidence_refs = {
+            f"{layer}.{function_id}"
+            for layer, metrics in packet.raw_data.items()
+            if isinstance(metrics, dict)
+            for function_id in metrics.keys()
+        }
+
+        def _bad_refs(refs: List[str]) -> List[str]:
+            bad: List[str] = []
+            for ref in refs or []:
+                ref_text = str(ref)
+                if not re.fullmatch(r"L[1-5]\.[A-Za-z_][A-Za-z0-9_]*", ref_text) or ref_text not in valid_evidence_refs:
+                    bad.append(ref_text)
+            return bad
 
         if len(layer_cards) != 5:
             structural_issues.append(f"Expected 5 layer cards, got {len(layer_cards)}.")
@@ -1018,6 +1038,48 @@ class VNextOrchestrator:
             total_conflicts = sum(len(memo.conflicts) for memo in bridge_memos)
             if total_conflicts == 0:
                 consistency_issues.append("Bridge stage produced zero conflicts; this usually means tension was flattened.")
+            for memo_index, memo in enumerate(bridge_memos):
+                seen_path_ids: set[str] = set()
+                for claim_index, claim in enumerate(memo.cross_layer_claims):
+                    bad_refs = _bad_refs(claim.supporting_facts)
+                    if bad_refs:
+                        consistency_issues.append(
+                            f"BridgeMemo[{memo_index}].cross_layer_claims[{claim_index}].supporting_facts invalid: "
+                            + ", ".join(bad_refs[:5])
+                        )
+                for conflict in memo.typed_conflicts:
+                    conflict_id = str(conflict.conflict_id or "typed_conflict")
+                    if not conflict.evidence_refs:
+                        consistency_issues.append(f"BridgeMemo[{memo_index}].typed_conflicts[{conflict_id}].evidence_refs must not be empty.")
+                    bad_refs = _bad_refs(conflict.evidence_refs)
+                    if bad_refs:
+                        consistency_issues.append(
+                            f"BridgeMemo[{memo_index}].typed_conflicts[{conflict_id}].evidence_refs invalid: "
+                            + ", ".join(bad_refs[:5])
+                        )
+                for chain in memo.resonance_chains:
+                    chain_id = str(chain.chain_id or "resonance_chain")
+                    bad_refs = _bad_refs(chain.evidence_refs)
+                    if bad_refs:
+                        consistency_issues.append(
+                            f"BridgeMemo[{memo_index}].resonance_chains[{chain_id}].evidence_refs invalid: "
+                            + ", ".join(bad_refs[:5])
+                        )
+                for path in memo.transmission_paths:
+                    path_id = str(path.path_id or "transmission_path")
+                    if path_id in seen_path_ids:
+                        consistency_issues.append(f"BridgeMemo[{memo_index}].transmission_paths[{path_id}] duplicate path_id.")
+                    seen_path_ids.add(path_id)
+                    if not path.evidence_refs:
+                        consistency_issues.append(f"BridgeMemo[{memo_index}].transmission_paths[{path_id}].evidence_refs must not be empty.")
+                    if not str(path.implication or "").strip():
+                        consistency_issues.append(f"BridgeMemo[{memo_index}].transmission_paths[{path_id}].implication is required.")
+                    bad_refs = _bad_refs(path.evidence_refs)
+                    if bad_refs:
+                        consistency_issues.append(
+                            f"BridgeMemo[{memo_index}].transmission_paths[{path_id}].evidence_refs invalid: "
+                            + ", ".join(bad_refs[:5])
+                        )
 
         if not thesis.main_thesis:
             missing_fields.append("thesis.main_thesis")

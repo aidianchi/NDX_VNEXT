@@ -126,3 +126,42 @@ def test_data_integrity_penalizes_skips_partial_coverage_and_future_dates():
     assert "覆盖率不足" in report["notes"]
     assert "晚于回测日" in report["notes"]
     assert "前瞻风险被跳过" in report["notes"]
+
+
+def test_data_integrity_recursively_blocks_future_observation_dates_and_note_dates():
+    data = {
+        "backtest_date": "2025-04-09",
+        "indicators": [
+            {
+                "layer": 4,
+                "function_id": "get_damodaran_us_implied_erp",
+                "metric_name": "Damodaran ERP",
+                "raw_data": {
+                    "value": {
+                        "data_date": "2025-04-01",
+                        "monthly_series": [
+                            {"data_date": "2025-04-01", "level": 4.43},
+                            {"data_date": "2026-05-01", "level": 4.24},
+                        ],
+                    }
+                },
+            },
+            {
+                "layer": 2,
+                "function_id": "get_crowdedness_dashboard",
+                "metric_name": "Crowdedness",
+                "raw_data": {
+                    "value": {"skew_index": {"date": "2025-04-09", "value": 120.0}},
+                    "notes": "基于到期日: 2026-05-18 的期权持仓量",
+                },
+            },
+        ],
+    }
+
+    report = DataIntegrity().run(data)
+
+    assert report["blocked"] is True
+    assert report["unpublishable"] is True
+    assert report["publish_status"] == "blocked"
+    assert "value.monthly_series[1].data_date=2026-05-01" in report["future_date_violations"]["Damodaran ERP"]
+    assert "notes[text_date]=2026-05-18" in report["future_date_violations"]["Crowdedness"]

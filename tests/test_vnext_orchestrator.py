@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from agent_analysis.contracts import BridgeMemo, Critique, RiskBoundaryReport, ThesisDraft
 from agent_analysis.orchestrator import VNextOrchestrator
 from agent_analysis.packet_builder import AnalysisPacketBuilder
 
@@ -287,7 +288,7 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
                 "cross_layer_claims": [
                     {
                         "claim": "盈利韧性暂时支撑价格",
-                        "supporting_facts": ["L4.pe", "L5.trend"],
+                        "supporting_facts": ["L4.get_ndx_pe_and_earnings_yield", "L5.get_qqq_technical_indicators"],
                         "confidence": "medium",
                         "mechanism": "盈利预期尚未崩塌，价格得以维持。",
                     }
@@ -299,6 +300,7 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
                         "description": "高利率与高估值并存。",
                         "implication": "估值压缩风险较高。",
                         "involved_layers": ["L1", "L4"],
+                        "evidence_refs": ["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
                     }
                 ],
                 "implication_for_ndx": "环境与估值不匹配，需要谨慎。",
@@ -313,7 +315,7 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
                 "timing_assessment": "趋势仍在但质量存疑。",
                 "main_thesis": "中性偏谨慎。",
                 "key_support_chains": [
-                    {"chain_description": "趋势尚未破坏", "evidence_refs": ["L5.trend"], "weight": 0.3}
+                    {"chain_description": "趋势尚未破坏", "evidence_refs": ["L5.get_qqq_technical_indicators"], "weight": 0.3}
                 ],
                 "retained_conflicts": [
                     {
@@ -322,6 +324,7 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
                         "description": "高利率与高估值并存。",
                         "implication": "估值压缩风险较高。",
                         "involved_layers": ["L1", "L4"],
+                        "evidence_refs": ["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
                     }
                 ],
                 "dependencies": ["盈利韧性"],
@@ -358,7 +361,7 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
                     "timing_assessment": "趋势仍在但质量存疑。",
                     "main_thesis": "中性偏谨慎。",
                     "key_support_chains": [
-                        {"chain_description": "趋势尚未破坏", "evidence_refs": ["L5.trend"], "weight": 0.3}
+                        {"chain_description": "趋势尚未破坏", "evidence_refs": ["L5.get_qqq_technical_indicators"], "weight": 0.3}
                     ],
                     "retained_conflicts": [
                         {
@@ -379,6 +382,7 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
                         "description": "高利率与高估值并存。",
                         "implication": "估值压缩风险较高。",
                         "involved_layers": ["L1", "L4"],
+                        "evidence_refs": ["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
                     }
                 ],
             },
@@ -390,12 +394,12 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
                 "final_stance": "中性偏谨慎",
                 "confidence": "medium",
                 "key_support_chains": [
-                    {"chain_description": "趋势尚未破坏", "evidence_refs": ["L5.trend"], "weight": 0.3}
+                    {"chain_description": "趋势尚未破坏", "evidence_refs": ["L5.get_qqq_technical_indicators"], "weight": 0.3}
                 ],
                 "must_preserve_risks": ["估值压缩风险", "趋势脆弱性"],
                 "blocking_issues": [],
                 "adjudicator_notes": "可以放行，但必须保留风险边界。",
-                "evidence_refs": ["Bridge conflict", "Risk report"],
+                "evidence_refs": ["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
             },
             ensure_ascii=False,
         ),
@@ -509,6 +513,7 @@ def test_layer_v2_contract_gap_retries_before_bridge_consumes_card(tmp_path: Pat
                         "description": "高利率与高估值并存。",
                         "implication": "估值压缩风险较高。",
                         "involved_layers": ["L1", "L4"],
+                        "evidence_refs": ["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
                     }
                 ],
                 "implication_for_ndx": "环境与估值不匹配，需要谨慎。",
@@ -673,8 +678,133 @@ def test_layer_manual_overrides_are_layer_local(tmp_path: Path):
     l1_overrides = orchestrator._build_layer_manual_overrides(packet, "L1")
     l4_overrides = orchestrator._build_layer_manual_overrides(packet, "L4")
 
+    assert l1_overrides["metrics"] == {}
+    assert l4_overrides["metrics"] == {}
+
+
+def test_layer_manual_overrides_are_layer_local_when_active(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    data_json = {
+        "timestamp_utc": "2026-04-24T00:00:00Z",
+        "indicators": [
+            {
+                "layer": 1,
+                "metric_name": "Fed Funds Rate",
+                "function_id": "get_fed_funds_rate",
+                "raw_data": {"name": "Fed Funds Rate", "value": {"level": 5.25}},
+            },
+            {
+                "layer": 4,
+                "metric_name": "NDX Valuation",
+                "function_id": "get_ndx_pe_and_earnings_yield",
+                "raw_data": {"name": "NDX Valuation", "value": {"PE_TTM": 32.5}},
+            },
+        ],
+    }
+    packet = AnalysisPacketBuilder().build(
+        data_json,
+        manual_overrides={
+            "active": True,
+            "date": "2026-04-24",
+            "metrics": {
+                "get_fed_funds_rate": {"value": {"level": 5.25}},
+                "get_ndx_pe_and_earnings_yield": {"value": {"PE_TTM": 32.5}},
+            },
+        },
+    )
+
+    l1_overrides = orchestrator._build_layer_manual_overrides(packet, "L1")
+    l4_overrides = orchestrator._build_layer_manual_overrides(packet, "L4")
+
     assert list(l1_overrides["metrics"].keys()) == ["get_fed_funds_rate"]
     assert list(l4_overrides["metrics"].keys()) == ["get_ndx_pe_and_earnings_yield"]
+
+
+def test_schema_guard_rejects_bridge_dead_refs_and_bad_transmission_paths(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    packet = _mock_packet()
+    bridge = BridgeMemo.model_validate(
+        {
+            "bridge_type": "macro_valuation",
+            "layers_connected": ["L1", "L4"],
+            "cross_layer_claims": [
+                {
+                    "claim": "自由文本 ref 不可审计",
+                    "supporting_facts": ["L1.净流动性收缩"],
+                    "confidence": "medium",
+                    "mechanism": "无法定位到真实指标卡。",
+                }
+            ],
+            "typed_conflicts": [
+                {
+                    "conflict_id": "bad_conflict",
+                    "conflict_type": "valuation_discount_rate",
+                    "severity": "high",
+                    "description": "引用不存在的证据。",
+                    "implication": "应阻断 schema guard。",
+                    "involved_layers": ["L1", "L4"],
+                    "evidence_refs": ["L1.get_fake_metric"],
+                }
+            ],
+            "transmission_paths": [
+                {
+                    "path_id": "transmission_path",
+                    "source_layer": "L1",
+                    "target_layer": "L4",
+                    "mechanism": "折现率传导",
+                    "evidence_refs": [],
+                    "implication": "",
+                },
+                {
+                    "path_id": "transmission_path",
+                    "source_layer": "L1",
+                    "target_layer": "L4",
+                    "mechanism": "重复 ID",
+                    "evidence_refs": ["L1.get_fed_funds_rate"],
+                    "implication": "重复 ID 不可审计。",
+                },
+            ],
+            "implication_for_ndx": "不可放行。",
+        }
+    )
+
+    report = orchestrator._run_schema_guard(
+        packet,
+        [],
+        [bridge],
+        ThesisDraft.model_validate(
+            {
+                "environment_assessment": "环境偏紧。",
+                "valuation_assessment": "估值偏高。",
+                "timing_assessment": "趋势待确认。",
+                "main_thesis": "测试。",
+                "overall_confidence": "medium",
+            }
+        ),
+        Critique.model_validate(
+            {
+                "overall_assessment": "测试。",
+                "revision_direction": "测试。",
+            }
+        ),
+        RiskBoundaryReport.model_validate({"must_preserve_risks": ["测试风险"]}),
+    )
+
+    joined = "\n".join(report.consistency_issues)
+    assert report.passed is False
+    assert "supporting_facts invalid" in joined
+    assert "evidence_refs invalid" in joined
+    assert "duplicate path_id" in joined
+    assert "evidence_refs must not be empty" in joined
+    assert "implication is required" in joined
 
 
 def test_layer_indicator_manifest_carries_data_quality(tmp_path: Path):

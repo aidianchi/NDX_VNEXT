@@ -627,6 +627,7 @@ class VNextReportGenerator:
             "critique": _load_json(run_path / "critique.json", {}),
             "risk_boundary_report": _load_json(run_path / "risk_boundary_report.json", {}),
             "schema_guard_report": _load_json(run_path / "schema_guard_report.json", {}),
+            "data_integrity_report": _load_json(run_path / "data_integrity_report.json", {}),
             "context_brief": _load_json(run_path / "context_brief.json", {}),
             "news_event_ledger": _load_json(run_path / "news_event_ledger.json", {}),
             "news_event_data_links": _load_json(run_path / "news_event_data_links.json", {}),
@@ -656,6 +657,7 @@ class VNextReportGenerator:
             "news_layer_analysis": artifacts.get("news_layer_analysis", {}),
             "critique": artifacts["critique"],
             "schema_guard_report": artifacts["schema_guard_report"],
+            "data_integrity_report": artifacts.get("data_integrity_report", {}),
         }
         payload_json = _json_for_script(payload)
         fonts_url = STYLE_FONTS.get(style, STYLE_FONTS["slate_v2"])
@@ -2261,6 +2263,30 @@ class VNextReportGenerator:
 
     def _audit_section(self, run_path: Path, artifacts: Dict[str, Any], payload_json: str) -> str:
         token_usage = artifacts["final_adjudication"].get("token_usage", {})
+        meta = artifacts.get("synthesis_packet", {}).get("packet_meta", {}) or {}
+        analysis_meta = artifacts.get("analysis_packet", {}).get("meta", {}) or {}
+        boundaries = (
+            meta.get("backtest_data_boundaries")
+            or analysis_meta.get("backtest_data_boundaries")
+            or artifacts.get("analysis_packet", {}).get("context", {}).get("backtest_data_boundaries")
+            or []
+        )
+        integrity = artifacts.get("data_integrity_report", {}) or {}
+        boundary_rows = "".join(
+            f"""
+    <li>
+      <b>{_escape(item.get('function_id') or item.get('metric_name') or 'unknown')}</b>
+      <span>{_escape(item.get('reason') or item.get('skip_reason') or item.get('availability') or '')}</span>
+      <small>{_escape(item.get('future_upgrade') or '')}</small>
+    </li>
+"""
+            for item in _as_list(boundaries)
+            if isinstance(item, dict)
+        )
+        if not boundary_rows:
+            boundary_rows = "<li><b>无</b><span>本次没有记录回测跳过项。</span></li>"
+        integrity_status = integrity.get("publish_status") or ("blocked" if integrity.get("blocked") else "not recorded")
+        blocking_reasons = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(integrity.get("blocking_reasons")))
         return f"""
 <section class="panel" id="audit">
   <div class="section-kicker">08 · Audit Trail</div>
@@ -2268,6 +2294,16 @@ class VNextReportGenerator:
   <div class="audit-grid">
     <div><b>Run Dir</b><p>{_escape(run_path)}</p></div>
     <div><b>Token Usage</b><p>{_escape(token_usage)}</p></div>
+    <div><b>Data Integrity</b><p>{_escape(integrity_status)}</p></div>
+    <div><b>Backtest Date</b><p>{_escape(meta.get('backtest_date') or analysis_meta.get('backtest_date') or 'N/A')}</p></div>
+  </div>
+  <div class="audit-boundaries">
+    <h3>回测数据边界</h3>
+    <ul>{boundary_rows}</ul>
+  </div>
+  <div class="audit-boundaries">
+    <h3>阻断原因</h3>
+    <ul>{blocking_reasons or '<li>无</li>'}</ul>
   </div>
   <details class="raw-json">
     <summary>展开页面使用的原生 JSON</summary>

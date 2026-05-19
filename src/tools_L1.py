@@ -606,6 +606,7 @@ def get_net_liquidity_momentum(end_date: str = None) -> Dict[str, Any]:
             "notes": "FRED_API_KEY 不可用，无法计算净流动性。"
         }
 
+    effective_date = pd.to_datetime(end_date, errors="coerce") if end_date else None
     net_liq_df, walcl_s, tga_s, rrp_s = _build_net_liquidity_series()
 
     if net_liq_df.empty:
@@ -613,6 +614,18 @@ def get_net_liquidity_momentum(end_date: str = None) -> Dict[str, Any]:
             "name": "Net Liquidity (Fed - TGA - RRP)",
             "value": None,
             "notes": "无法获取完整的 WALCL/WTREGEN/RRPONTSYD 序列。"
+        }
+    if effective_date is not None and not pd.isna(effective_date):
+        net_liq_df = net_liq_df[net_liq_df["date"] <= effective_date]
+        walcl_s = walcl_s[walcl_s.index <= effective_date]
+        tga_s = tga_s[tga_s.index <= effective_date]
+        rrp_s = rrp_s[rrp_s.index <= effective_date]
+
+    if net_liq_df.empty or walcl_s.empty or tga_s.empty or rrp_s.empty:
+        return {
+            "name": "Net Liquidity (Fed - TGA - RRP)",
+            "value": None,
+            "notes": f"净流动性在 {end_date} 之前没有完整可见数据。"
         }
 
     latest_date = net_liq_df["date"].iloc[-1]

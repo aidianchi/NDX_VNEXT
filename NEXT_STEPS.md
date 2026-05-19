@@ -1,6 +1,6 @@
 # vNext 下一步
 
-更新日期：2026-05-18  
+更新日期：2026-05-19  
 阅读方式：本文件只放“接下来要做什么”和少量已完成快照。详细完成记录写入 `WORK_LOG.md`，按时间倒序。
 
 ---
@@ -23,6 +23,12 @@
 ## 已完成快照
 
 这里只保留最近完成事项的摘要，详细内容见 `WORK_LOG.md`。
+
+### 2026-05-19
+
+- 按 `2026-05-19_0409_BACKTEST_SYNTHESIS_AUDIT.md` 完成 P0/P1 闸门修复：Net Liquidity、Crowdedness、Damodaran monthly series 都按回测日裁剪或明确 unavailable；inactive manual metrics 不再进入 packet/prompt；DataIntegrity 递归扫描嵌套日期与 notes 日期，并对未来数据写出 blocked/unpublishable 状态、阻断主流程；Bridge/schema guard 校验死链 refs、重复 transmission path 和空关键字段。
+- `backtest_data_boundaries` 进入 `analysis_packet.meta/context` 和 native report 审计区，brief 可直接展示回测跳过项、原因和 future upgrade。
+- 验证：旧 `output/data/data_collected_v9_20250409.json` 被新 DataIntegrity 判定为 blocked；`python3 -m pytest -q` 为 294 passed。
 
 ### 2026-05-18
 

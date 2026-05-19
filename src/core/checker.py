@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -54,30 +55,53 @@ class DataIntegrity:
         except Exception:
             return None
 
+    def _is_observation_date_key(self, key: Any) -> bool:
+        key_l = str(key).lower()
+        if "timestamp" in key_l or "generated_at" in key_l or "collection" in key_l:
+            return False
+        return key_l in {
+            "date",
+            "data_date",
+            "effective_date",
+            "observation_date",
+            "as_of",
+            "asof",
+            "expiry",
+            "expiration",
+            "expiration_date",
+            "opt_date",
+            "option_date",
+            "published_at",
+        }
+
+    def _dates_in_note(self, text: str) -> Iterable[str]:
+        for match in re.finditer(r"\b(20\d{2}-\d{2}-\d{2})\b", text):
+            yield match.group(1)
+
+    def _iter_future_date_candidates(self, value: Any, *, path: str = "") -> Iterable[tuple[str, Any]]:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                child_path = f"{path}.{key}" if path else str(key)
+                if self._is_observation_date_key(key):
+                    yield child_path, item
+                if isinstance(item, str) and str(key).lower() in {"note", "notes", "reason", "unavailable_reason"}:
+                    for date_text in self._dates_in_note(item):
+                        yield f"{child_path}[text_date]", date_text
+                yield from self._iter_future_date_candidates(item, path=child_path)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                yield from self._iter_future_date_candidates(item, path=f"{path}[{index}]")
+
     def _future_date_violations(self, item: Dict[str, Any], backtest_date: Optional[str]) -> List[str]:
         effective = self._parse_date(backtest_date)
         if effective is None:
             return []
-        raw = self._raw_data(item)
-        candidates = []
-        for key in ("date", "data_date", "effective_date"):
-            if raw.get(key):
-                candidates.append((key, raw.get(key)))
-        value = raw.get("value")
-        if isinstance(value, dict):
-            for key in ("date", "data_date", "effective_date"):
-                if value.get(key):
-                    candidates.append((f"value.{key}", value.get(key)))
-        data_quality = raw.get("data_quality") if isinstance(raw.get("data_quality"), dict) else {}
-        for key in ("date", "data_date", "effective_date"):
-            if data_quality.get(key):
-                candidates.append((f"data_quality.{key}", data_quality.get(key)))
         violations = []
-        for key, value in candidates:
+        for key, value in self._iter_future_date_candidates(self._raw_data(item)):
             parsed = self._parse_date(value)
             if parsed is not None and parsed > effective:
                 violations.append(f"{key}={str(value)[:10]}")
-        return violations
+        return sorted(set(violations))
 
     def run(self, data_json: Dict[str, Any]) -> Dict[str, Any]:
         indicators = data_json.get("indicators", [])
@@ -99,6 +123,12 @@ class DataIntegrity:
         if future_violations:
             weighted_success = max(0.0, weighted_success - len(future_violations))
         confidence = round((weighted_success / total) * 100, 1) if total else 0.0
+        blocking_reasons = []
+        if future_violations:
+            examples = [f"{name}: {', '.join(values[:2])}" for name, values in list(future_violations.items())[:3]]
+            blocking_reasons.append(
+                "future_data_after_backtest_date: " + "；".join(examples)
+            )
 
         failed_metrics = [
             item.get("metric_name") or item.get("function_id")
@@ -152,6 +182,11 @@ class DataIntegrity:
         report = {
             "confidence_percent": confidence,
             "notes": "；".join(notes),
+            "blocked": bool(blocking_reasons),
+            "unpublishable": bool(blocking_reasons),
+            "publish_status": "blocked" if blocking_reasons else "publishable",
+            "blocking_reasons": blocking_reasons,
+            "future_date_violations": future_violations,
             "layer_breakdown": {
                 layer: {
                     "total": stats["total"],

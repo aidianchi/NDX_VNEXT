@@ -72,6 +72,26 @@ def test_net_liquidity_repairs_2007_2008_tga_mixed_cache_units(monkeypatch):
     assert float(net_df.loc[net_df["date"] == pd.Timestamp("2008-01-02"), "value"].iloc[0]) > 0
 
 
+def test_net_liquidity_momentum_respects_backtest_end_date(monkeypatch):
+    import tools_L1
+
+    dates = pd.date_range("2025-03-01", periods=80, freq="D")
+    net_values = [6000.0 + idx for idx in range(len(dates))]
+    walcl = pd.Series([7000.0 + idx for idx in range(len(dates))], index=dates)
+    tga = pd.Series([500.0 for _ in dates], index=dates)
+    rrp = pd.Series([100.0 for _ in dates], index=dates)
+    net_df = pd.DataFrame({"date": dates, "value": net_values})
+
+    monkeypatch.setattr(tools_L1, "get_fred_api_key", lambda: "test-key")
+    monkeypatch.setattr(tools_L1, "_build_net_liquidity_series", lambda: (net_df.copy(), walcl.copy(), tga.copy(), rrp.copy()))
+
+    result = tools_L1.get_net_liquidity_momentum(end_date="2025-04-09")
+
+    assert result["value"]["date"] == "2025-04-09"
+    assert result["value"]["level"] == 6039.0
+    assert result["value"]["components"]["fed_assets"] == 7039.0
+
+
 # ---------------------------------------------------------------------------
 # tools_L4 — data cleaning / parsing helpers
 # ---------------------------------------------------------------------------

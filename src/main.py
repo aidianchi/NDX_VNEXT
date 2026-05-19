@@ -153,6 +153,27 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         news_event_ledger_payload = NewsEventLedgerBuilder(effective_date=backtest_date).build(news_event_ledger_path)
 
     integrity_report = DataIntegrity().run(data_json)
+    os.makedirs(run_dir, exist_ok=True)
+    integrity_path = os.path.join(run_dir, "data_integrity_report.json")
+    with open(integrity_path, "w", encoding="utf-8") as handle:
+        json.dump(integrity_report, handle, ensure_ascii=False, indent=2, default=str)
+        handle.write("\n")
+    if integrity_report.get("blocked") or integrity_report.get("unpublishable"):
+        summary = {
+            "run_dir": run_dir,
+            "data_integrity_report": integrity_path,
+            "report_path": "",
+            "chart_time_series": "",
+            "final_stance": "",
+            "approval_status": "blocked_by_data_integrity",
+            "models": available_models,
+            "blocked": True,
+            "blocking_reasons": integrity_report.get("blocking_reasons", []),
+        }
+        with open(os.path.join(run_dir, "run_summary.json"), "w", encoding="utf-8") as handle:
+            json.dump(summary, handle, ensure_ascii=False, indent=2, default=str)
+            handle.write("\n")
+        raise RuntimeError("DataIntegrity blocked this run: " + "；".join(summary["blocking_reasons"]))
     builder = AnalysisPacketBuilder()
     packet = builder.build(
         data_json,

@@ -101,6 +101,33 @@ def test_packet_builder_groups_data_and_generates_candidate_links():
     assert "L3_L5" in link_types
 
 
+def test_packet_builder_hides_inactive_manual_metric_values_and_carries_backtest_boundaries():
+    data = _mock_data_json()
+    data["backtest_date"] = "2025-04-09"
+    data["backtest_data_boundaries"] = [
+        {
+            "function_id": "get_ndx_pe_and_earnings_yield",
+            "reason": "latest-only source",
+            "future_upgrade": "historical source",
+        }
+    ]
+    packet = AnalysisPacketBuilder().build(
+        data,
+        manual_overrides={
+            "active": False,
+            "date": "2025-04-09",
+            "metrics": {
+                "get_ndx_pe_and_earnings_yield": {"value": {"PE_TTM": 36.6, "PE_TTM_percentile_10y": 90}}
+            },
+        },
+    )
+
+    assert packet.manual_overrides["metrics"] == {}
+    assert packet.manual_overrides["inactive_metric_count"] == 1
+    assert packet.meta["backtest_data_boundaries"][0]["function_id"] == "get_ndx_pe_and_earnings_yield"
+    assert packet.context["backtest_data_boundaries"][0]["future_upgrade"] == "historical source"
+
+
 def test_packet_builder_keeps_event_refs_separate_from_layer_data():
     builder = AnalysisPacketBuilder()
     event_ledger = {

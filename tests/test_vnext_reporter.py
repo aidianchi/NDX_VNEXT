@@ -106,8 +106,16 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
         {
             "packet_meta": {
                 "data_date": "2026-04-23",
+                "backtest_date": "2025-04-09",
                 "indicator_total": 34,
                 "indicator_successful": 34,
+                "backtest_data_boundaries": [
+                    {
+                        "function_id": "get_ndx_forward_earnings_quality",
+                        "reason": "latest-only source",
+                        "future_upgrade": "historical source required",
+                    }
+                ],
             },
             "objective_firewall_summary": {
                 "object_clear": True,
@@ -412,6 +420,7 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     _write_json(run_dir / "critique.json", {"overall_assessment": "可用", "cross_layer_issues": []})
     _write_json(run_dir / "risk_boundary_report.json", {"failure_conditions": [], "must_preserve_risks": []})
     _write_json(run_dir / "schema_guard_report.json", {"passed": True})
+    _write_json(run_dir / "data_integrity_report.json", {"publish_status": "publishable", "blocking_reasons": []})
 
     reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
     report_path = reporter.run(run_dir)
@@ -445,6 +454,10 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert "Coverage" in html
     assert "NDX Simple Yield Gap" in html
     assert "Confirming Indicators" in html
+    assert "回测数据边界" in html
+    assert "get_ndx_forward_earnings_quality" in html
+    assert "historical source required" in html
+    assert "publishable" in html
     assert 'data-typed-conflict="real_rate_vs_valuation"' in html
     assert 'data-transmission-path="rates_to_valuation"' in html
     assert 'data-resonance-chain="risk_off_resonance"' in html

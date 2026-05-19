@@ -1879,6 +1879,38 @@ details ul { font-size: 13px; padding-left: 18px; margin: 6px 0; }
   color: var(--ink-soft);
   margin: 0;
 }
+.audit-boundaries {
+  border: 1px solid var(--rule);
+  background: var(--paper-raised);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-top: 12px;
+}
+.audit-boundaries h3 {
+  font-family: var(--sans);
+  font-size: 13px;
+  margin: 0 0 8px;
+}
+.audit-boundaries ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.audit-boundaries li {
+  display: grid;
+  gap: 3px;
+}
+.audit-boundaries b,
+.audit-boundaries small {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.audit-boundaries span,
+.audit-boundaries small {
+  color: var(--ink-soft);
+}
 .raw-json {
   margin-top: 16px;
   border: 1px solid var(--rule);
