@@ -696,6 +696,11 @@ class VNextReportGenerator:
             for path in sorted(bridge_dir.glob("*.json"))
             if path.is_file()
         ]
+        layer_context_dir = run_path / "layer_context_briefs"
+        layer_contexts = {
+            layer: _load_json(layer_context_dir / f"{layer}.json", {})
+            for layer in ["L1", "L2", "L3", "L4", "L5"]
+        }
         return {
             "analysis_packet": _load_json(run_path / "analysis_packet.json", {}),
             "final_adjudication": _load_json(run_path / "final_adjudication.json", {}),
@@ -707,6 +712,8 @@ class VNextReportGenerator:
             "schema_guard_report": _load_json(run_path / "schema_guard_report.json", {}),
             "data_integrity_report": _load_json(run_path / "data_integrity_report.json", {}),
             "context_brief": _load_json(run_path / "context_brief.json", {}),
+            "layer_context_briefs": layer_contexts,
+            "llm_stage_diagnostics": _load_json(run_path / "llm_stage_diagnostics.json", {}),
             "news_event_ledger": _load_json(run_path / "news_event_ledger.json", {}),
             "news_event_data_links": _load_json(run_path / "news_event_data_links.json", {}),
             "news_layer_analysis": _load_json(run_path / "news_layer_analysis.json", {}),
@@ -736,6 +743,9 @@ class VNextReportGenerator:
             "critique": artifacts["critique"],
             "schema_guard_report": artifacts["schema_guard_report"],
             "data_integrity_report": artifacts.get("data_integrity_report", {}),
+            "context_brief": artifacts.get("context_brief", {}),
+            "layer_context_briefs": artifacts.get("layer_context_briefs", {}),
+            "llm_stage_diagnostics": artifacts.get("llm_stage_diagnostics", {}),
         }
         payload_json = _json_for_script(payload)
         fonts_url = STYLE_FONTS.get(style, STYLE_FONTS["slate_v2"])
@@ -857,7 +867,7 @@ class VNextReportGenerator:
         payload_json: str,
     ) -> str:
         renderers = {
-            "decision": lambda: self._decision_section(final),
+            "decision": lambda: self._decision_section(artifacts),
             "actions": lambda: self._actions_section(artifacts),
             "evidence": lambda: self._evidence_section(final),
             "news": lambda: self._news_section(artifacts),
@@ -871,6 +881,44 @@ class VNextReportGenerator:
 
     def _template_intro(self, template: str) -> str:
         return ""
+
+    def _reader_final(self, final: Dict[str, Any]) -> Dict[str, Any]:
+        reader = final.get("reader_final")
+        if isinstance(reader, dict) and any(reader.get(key) for key in ("one_liner", "three_reasons", "action_summary")):
+            return reader
+        reasons = []
+        for item in _as_list(final.get("key_support_chains"))[:3]:
+            if isinstance(item, dict) and item.get("chain_description"):
+                reasons.append(str(item.get("chain_description")))
+        return {
+            "one_liner": final.get("final_stance", ""),
+            "three_reasons": reasons,
+            "time_horizon_summary": final.get("time_horizon_views", []),
+            "action_summary": final.get("portfolio_actions", []),
+            "invalidation_summary": final.get("invalidation_conditions", []),
+            "evidence_refs": final.get("evidence_refs", []),
+        }
+
+    def _reader_note(self, final: Dict[str, Any]) -> str:
+        reader = self._reader_final(final)
+        reasons = _as_list(reader.get("three_reasons"))
+        if reasons:
+            return "；".join(str(item) for item in reasons[:3])
+        if final.get("payoff_assessment"):
+            return str(final.get("payoff_assessment"))
+        return "读者结论尚未结构化；内部裁决说明保留在治理/审计区。"
+
+    def _decision_surface(self, final: Dict[str, Any], thesis: Dict[str, Any]) -> Dict[str, Any]:
+        reader = self._reader_final(final)
+        return {
+            "state_diagnosis": final.get("state_diagnosis") or thesis.get("state_diagnosis") or final.get("final_stance", ""),
+            "priced_narrative": final.get("priced_narrative") or thesis.get("priced_narrative") or "",
+            "payoff_assessment": final.get("payoff_assessment") or thesis.get("payoff_assessment") or "",
+            "time_horizon_views": final.get("time_horizon_views") or reader.get("time_horizon_summary") or thesis.get("time_horizon_views") or [],
+            "portfolio_actions": final.get("portfolio_actions") or reader.get("action_summary") or thesis.get("portfolio_actions") or [],
+            "confirmation_cost": final.get("confirmation_cost") or thesis.get("confirmation_cost") or "",
+            "invalidation_conditions": final.get("invalidation_conditions") or reader.get("invalidation_summary") or thesis.get("invalidation_conditions") or [],
+        }
 
     def _hero(
         self,
@@ -893,13 +941,16 @@ class VNextReportGenerator:
         backtest_date = meta.get("backtest_date") or analysis_meta.get("backtest_date") or "N/A"
         observation_range = _observation_date_range(analysis_packet.get("raw_data", {}))
         risk_count = len(_as_list(final.get("must_preserve_risks")))
+        reader = self._reader_final(final)
+        hero_title = reader.get("one_liner") or final.get("final_stance", "N/A")
+        hero_note = self._reader_note(final)
         return f"""
 <header class="hero" id="top">
   <div class="eyebrow">NDX vNext Native Artifact UI · {_escape(template_name)}</div>
   <div class="hero-grid">
     <div>
-      <h1>{_escape(final.get('final_stance', 'N/A'))}</h1>
-      <p class="hero-note">{_escape(final.get('adjudicator_notes', ''))}</p>
+      <h1>{_escape(hero_title)}</h1>
+      <p class="hero-note">{_escape(hero_note)}</p>
     </div>
     <aside class="verdict-card" aria-label="最终判断核心字段">
       <div class="verdict-row"><span>审批</span><strong>{_escape(_label(approval, 'approval'))}</strong></div>
@@ -936,24 +987,76 @@ class VNextReportGenerator:
 </nav>
 """
 
-    def _decision_section(self, final: Dict[str, Any]) -> str:
+    def _decision_section(self, artifacts: Dict[str, Any]) -> str:
+        final = artifacts.get("final_adjudication", {}) or {}
+        thesis = artifacts.get("thesis_draft", {}) or {}
+        surface = self._decision_surface(final, thesis)
+        reader = self._reader_final(final)
         refs = self._ref_chips(final.get("evidence_refs", []))
         risk_count = len(_as_list(final.get("must_preserve_risks")))
+        reasons = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(reader.get("three_reasons"))[:3])
+        horizon_rows = "".join(
+            f"""
+      <article>
+        <h3>{_escape(item.get('horizon', 'time horizon'))}</h3>
+        <p>{_escape(item.get('view', ''))}</p>
+        <small>{_escape(item.get('action_implication', ''))}</small>
+      </article>
+"""
+            for item in _as_list(surface.get("time_horizon_views"))[:3]
+            if isinstance(item, dict)
+        )
+        action_rows = "".join(
+            f"""
+      <article>
+        <h3>{_escape(item.get('bucket', 'position'))}</h3>
+        <p>{_escape(item.get('action', ''))}</p>
+        <small>{_escape(item.get('rationale', ''))}</small>
+      </article>
+"""
+            for item in _as_list(surface.get("portfolio_actions"))[:3]
+            if isinstance(item, dict)
+        )
+        invalidations = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(surface.get("invalidation_conditions"))[:5])
         return f"""
 <section class="panel decision-panel" id="decision">
   <div class="section-kicker">01 · 最终判断</div>
-  <h2>先读结论，再打开证据</h2>
+  <h2>先读读者结论，再打开证据</h2>
   <div class="decision-layout">
     <div class="statement">
-      <span>当前立场</span>
-      <strong>{_escape(final.get('final_stance', 'N/A'))}</strong>
-      <p>{_escape(final.get('adjudicator_notes', ''))}</p>
+      <span>读者结论</span>
+      <strong>{_escape(reader.get('one_liner') or final.get('final_stance', 'N/A'))}</strong>
+      <p>{_escape(surface.get('state_diagnosis', ''))}</p>
       <div class="ref-row">{refs}</div>
     </div>
     <div class="risk-list">
       <h3>风险摘要</h3>
       <p>本轮必须保留风险 {_escape(risk_count)} 条；完整清单见“风险边界”。</p>
     </div>
+  </div>
+  <div class="governance-grid">
+    <article>
+      <h3>价格正在定价什么</h3>
+      <p>{_escape(surface.get('priced_narrative', ''))}</p>
+    </article>
+    <article>
+      <h3>赔率判断</h3>
+      <p>{_escape(surface.get('payoff_assessment', ''))}</p>
+    </article>
+    <article>
+      <h3>等待确认的成本</h3>
+      <p>{_escape(surface.get('confirmation_cost', ''))}</p>
+    </article>
+    <article>
+      <h3>三条理由</h3>
+      <ul>{reasons or '<li>暂无结构化 reader_final.three_reasons。</li>'}</ul>
+    </article>
+  </div>
+  <div class="trigger-grid">{horizon_rows or '<article><h3>时间尺度</h3><p>暂无结构化 time_horizon_views。</p></article>'}</div>
+  <div class="trigger-grid">{action_rows or '<article><h3>组合动作</h3><p>暂无结构化 portfolio_actions。</p></article>'}</div>
+  <div class="risk-list">
+    <h3>失效条件</h3>
+    <ul>{invalidations or '<li>暂无结构化失效条件。</li>'}</ul>
   </div>
 </section>
 """
@@ -964,6 +1067,39 @@ class VNextReportGenerator:
         boundary = risk.get("boundary_status", {}) if isinstance(risk.get("boundary_status"), dict) else {}
         stance = str(final.get("final_stance", "") or "")
         confidence = str(final.get("confidence", "medium") or "medium")
+        structured_actions = _as_list(final.get("portfolio_actions") or self._reader_final(final).get("action_summary"))
+        if structured_actions:
+            cards = "".join(
+                f"""
+<article class="trigger-card">
+  <h3>{_escape(item.get('bucket', 'position') if isinstance(item, dict) else '动作')}</h3>
+  <p><b>{_escape(item.get('action', item) if isinstance(item, dict) else item)}</b></p>
+  <p>{_escape(item.get('rationale', '') if isinstance(item, dict) else '')}</p>
+</article>
+"""
+                for item in structured_actions[:4]
+            )
+            invalidations = _as_list(final.get("invalidation_conditions") or self._reader_final(final).get("invalidation_summary"))
+            watch_html = "".join(f"<li>{_escape(item)}</li>" for item in invalidations[:6]) or "<li>暂无结构化失效条件。</li>"
+            boundary_text = ", ".join(_label(name, "boundary") for name, status in boundary.items() if str(status).lower() in {"breached", "warning"}) or "无 breached/warning 边界"
+            return f"""
+<section class="panel" id="actions">
+  <div class="section-kicker">02 · 买方动作层</div>
+  <h2>核心仓、战术仓、等待者分开处理</h2>
+  <p class="section-note">这里优先展示 Final.reader_final / portfolio_actions，不把内部审批话术当成买方动作。</p>
+  <div class="trigger-grid">{cards}</div>
+  <div class="risk-board">
+    <div class="risk-list">
+      <h3>失效/复核清单</h3>
+      <ul>{watch_html}</ul>
+    </div>
+    <div class="risk-list">
+      <h3>当前边界</h3>
+      <p>{_escape(boundary_text)}</p>
+    </div>
+  </div>
+</section>
+"""
         must_risks = [_label(item, "risk_flag") for item in _as_list(risk.get("must_preserve_risks"))]
         failure_conditions = []
         for item in _as_list(risk.get("failure_conditions")):
@@ -2386,6 +2522,14 @@ class VNextReportGenerator:
             return "; ".join(parts[:5])
         return f"{len(value)} fields"
 
+    def _summarize_value(self, value: Any) -> str:
+        if isinstance(value, dict):
+            keys = list(value.keys())
+            return f"{len(keys)} keys: {', '.join(str(key) for key in keys[:6])}"
+        if isinstance(value, list):
+            return f"{len(value)} items"
+        return "" if value is None else str(value)
+
     def _governance_section(self, artifacts: Dict[str, Any]) -> str:
         critique = artifacts.get("critique", {}) or {}
         risk = artifacts.get("risk_boundary_report", {}) or {}
@@ -2437,6 +2581,182 @@ class VNextReportGenerator:
   </div>
 </section>
 """
+
+    def _agent_io_audit_section(self, run_path: Path, artifacts: Dict[str, Any]) -> str:
+        layers = artifacts.get("layers", {}) or {}
+        layer_contexts = artifacts.get("layer_context_briefs", {}) or {}
+        analysis_packet = artifacts.get("analysis_packet", {}) or {}
+        raw_data = analysis_packet.get("raw_data", {}) if isinstance(analysis_packet, dict) else {}
+        downstream_blob = json.dumps(
+            {
+                "bridges": artifacts.get("bridges", []),
+                "synthesis_packet": artifacts.get("synthesis_packet", {}),
+                "thesis_draft": artifacts.get("thesis_draft", {}),
+                "analysis_revised": artifacts.get("analysis_revised", {}),
+                "risk_boundary_report": artifacts.get("risk_boundary_report", {}),
+                "final_adjudication": artifacts.get("final_adjudication", {}),
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+
+        layer_cards = []
+        for layer in ["L1", "L2", "L3", "L4", "L5"]:
+            card = layers.get(layer, {}) if isinstance(layers, dict) else {}
+            context = layer_contexts.get(layer, {}) if isinstance(layer_contexts, dict) else {}
+            input_refs = sorted((raw_data.get(layer, {}) or {}).keys()) if isinstance(raw_data.get(layer, {}), dict) else []
+            allowed_inputs = [
+                "ObjectCanon",
+                f"{layer} IndicatorCanon",
+                f"{layer} runtime context",
+                "static layer responsibility map",
+            ]
+            actual_inputs = [
+                f"layer_context_briefs/{layer}.json",
+                f"analysis_packet.raw_data.{layer}",
+                f"layer_cards/{layer}.json output artifact",
+            ]
+            forbidden_checks = self._layer_forbidden_checks(layer, context)
+            forbidden_rows = "".join(
+                f"<li><b>{_escape(label)}</b><span class=\"pill {_severity_class(status)}\">{_escape(status)}</span></li>"
+                for label, status in forbidden_checks
+            )
+            evidence_refs = self._collect_evidence_refs(card)
+            used_refs = [ref for ref in evidence_refs if ref and ref in downstream_blob]
+            generic_flags = self._generic_label_flags(card)
+            quality_flags = []
+            quality_flags.append("has_evidence" if evidence_refs else "missing_evidence")
+            quality_flags.append("used_downstream" if used_refs else "not_used_downstream")
+            if generic_flags:
+                quality_flags.append("generic_label")
+            flags_html = "".join(f"<span class=\"ref-chip muted\">{_escape(flag)}</span>" for flag in quality_flags)
+            layer_cards.append(
+                f"""
+<article class="chain-card agent-audit-card">
+  <div class="chain-index">{_escape(layer)}</div>
+  <div class="chain-body">
+    <h3>{_escape(LAYER_TITLES.get(layer, layer))}</h3>
+    <p><b>输入边界</b>：{_escape(', '.join(actual_inputs))}</p>
+    <p><b>允许输入</b>：{_escape(', '.join(allowed_inputs))}</p>
+    <p><b>本层 raw input</b>：{_escape(', '.join(input_refs[:8]) or '无')}</p>
+    <h4>禁止输入检查</h4>
+    <ul>{forbidden_rows}</ul>
+    <h4>输出摘要</h4>
+    <p>{_escape(card.get('layer_synthesis') or card.get('local_conclusion') or '')}</p>
+    <p><b>evidence refs</b>：{_escape(len(evidence_refs))} · <b>downstream used</b>：{_escape(len(used_refs))}</p>
+    <div class="ref-row">{flags_html}</div>
+  </div>
+</article>
+"""
+            )
+
+        stage_cards = self._agent_stage_cards(run_path, artifacts, downstream_blob)
+        return f"""
+  <div class="audit-boundaries agent-io-audit" id="agent-io-audit">
+    <h3>Agent IO Audit</h3>
+    <p>只读视图：展示每个 agent 收到什么、输出什么、哪些字段有证据和下游痕迹；不改写主链路，也不作为发布闸门。</p>
+    <h4>L1-L5 输入边界卡</h4>
+    <div class="chain-grid">{''.join(layer_cards)}</div>
+    <h4>Pipeline 输出与下游去向</h4>
+    <div class="chain-grid">{stage_cards}</div>
+  </div>
+"""
+
+    def _layer_forbidden_checks(self, layer: str, context: Dict[str, Any]) -> List[Tuple[str, str]]:
+        highlights = context.get("layer_highlights", {}) if isinstance(context, dict) else {}
+        present_layers = set(highlights.keys()) if isinstance(highlights, dict) else set()
+        other_layers = {item for item in ["L1", "L2", "L3", "L4", "L5"] if item != layer}
+        cross_signals = context.get("apparent_cross_layer_signals", []) if isinstance(context, dict) else []
+        checks = [
+            ("other layer runtime highlights absent", "safe" if not (present_layers & other_layers) else "breached"),
+            ("global apparent_cross_layer_signals absent", "safe" if not cross_signals else "breached"),
+            ("bridge memo absent from L1-L5 input", "safe"),
+            ("thesis/final absent from L1-L5 input", "safe"),
+        ]
+        if not context:
+            checks[0] = ("layer_context_brief missing; cannot prove isolation from artifact", "warning")
+        return checks
+
+    def _collect_evidence_refs(self, payload: Any) -> List[str]:
+        refs: List[str] = []
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                if key == "evidence_refs":
+                    refs.extend(str(item) for item in _as_list(value))
+                else:
+                    refs.extend(self._collect_evidence_refs(value))
+        elif isinstance(payload, list):
+            for item in payload:
+                refs.extend(self._collect_evidence_refs(item))
+        return list(dict.fromkeys(refs))
+
+    def _generic_label_flags(self, payload: Any) -> List[str]:
+        labels = {"fear", "risk_on", "expensive", "momentum_positive", "neutral", "watch closely", "market stress elevated", "valuation pressure", "breadth divergence"}
+        found: List[str] = []
+        blob = json.dumps(payload, ensure_ascii=False, default=str).lower()
+        for label in labels:
+            if label in blob:
+                found.append(label)
+        return found
+
+    def _agent_stage_cards(self, run_path: Path, artifacts: Dict[str, Any], downstream_blob: str) -> str:
+        stages: List[Tuple[str, str, Dict[str, Any], str]] = [
+            ("Bridge", "bridge_memos/bridge_0.json", (artifacts.get("bridges") or [{}])[0] if artifacts.get("bridges") else {}, "synthesis_packet/thesis/final"),
+            ("Thesis", "thesis_draft.json", artifacts.get("thesis_draft", {}) or {}, "critic/risk/reviser/final"),
+            ("Risk", "risk_boundary_report.json", artifacts.get("risk_boundary_report", {}) or {}, "reviser/final/brief"),
+            ("Reviser", "analysis_revised.json", artifacts.get("analysis_revised", {}) or {}, "final"),
+            ("Final", "final_adjudication.json", artifacts.get("final_adjudication", {}) or {}, "brief"),
+        ]
+        cards = []
+        for name, path, payload, downstream in stages:
+            refs = self._collect_evidence_refs(payload)
+            summary = self._stage_summary(name, payload)
+            used_refs = [ref for ref in refs if ref and ref in downstream_blob]
+            cards.append(
+                f"""
+<article class="chain-card agent-audit-card">
+  <div class="chain-index">{_escape(name[:2].upper())}</div>
+  <div class="chain-body">
+    <h3>{_escape(name)}</h3>
+    <p><b>artifact</b>：{_escape(path)}</p>
+    <p><b>summary</b>：{_escape(summary)}</p>
+    <p><b>downstream target</b>：{_escape(downstream)}</p>
+    <p><b>evidence refs</b>：{_escape(len(refs))} · <b>traceable refs</b>：{_escape(len(used_refs))}</p>
+  </div>
+</article>
+"""
+            )
+        diagnostics = artifacts.get("llm_stage_diagnostics", {})
+        if diagnostics:
+            cards.append(
+                f"""
+<article class="chain-card agent-audit-card">
+  <div class="chain-index">DG</div>
+  <div class="chain-body">
+    <h3>Stage Diagnostics</h3>
+    <p><b>artifact</b>：llm_stage_diagnostics.json</p>
+    <p>{_escape(self._summarize_value(diagnostics))}</p>
+  </div>
+</article>
+"""
+            )
+        return "".join(cards)
+
+    def _stage_summary(self, name: str, payload: Dict[str, Any]) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        if name == "Bridge":
+            return payload.get("implication_for_ndx") or "; ".join(payload.get("unresolved_questions", [])[:2])
+        if name == "Thesis":
+            return payload.get("reader_conclusion", {}).get("one_liner") if isinstance(payload.get("reader_conclusion"), dict) else payload.get("main_thesis", "")
+        if name == "Risk":
+            return "; ".join(_as_list(payload.get("must_preserve_risks"))[:2])
+        if name == "Reviser":
+            return payload.get("revision_summary", "")
+        if name == "Final":
+            reader = self._reader_final(payload)
+            return reader.get("one_liner") or payload.get("final_stance", "")
+        return ""
 
     def _audit_section(self, run_path: Path, artifacts: Dict[str, Any], payload_json: str) -> str:
         token_usage = artifacts["final_adjudication"].get("token_usage", {})
@@ -2526,6 +2846,7 @@ class VNextReportGenerator:
     <h3>阻断原因</h3>
     <ul>{blocking_reasons or '<li>无</li>'}</ul>
   </div>
+  {self._agent_io_audit_section(run_path, artifacts)}
   <details class="raw-json">
     <summary>展开页面使用的原生 JSON</summary>
     <pre>{_escape(payload_json)}</pre>

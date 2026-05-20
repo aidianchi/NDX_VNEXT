@@ -19,6 +19,10 @@
 - **thesis_main / thesis_environment / thesis_valuation / thesis_timing**: Thesis 核心段落
 - **thesis_dependencies**: 论点的依赖前提
 - **thesis_key_support_chains**: Thesis 主论点的关键支撑链，包含每条链的 evidence_refs 和权重
+- **thesis_state_diagnosis / thesis_priced_narrative / thesis_payoff_assessment**: Decision Thesis 的状态、价格和赔率判断
+- **thesis_time_horizon_views / thesis_portfolio_actions**: 分时间尺度判断和核心/战术/等待动作
+- **thesis_confirmation_cost / thesis_invalidation_conditions**: 等待确认的代价和失效条件
+- **thesis_reader_conclusion**: 面向读者的结论草稿
 - **high_severity_typed_conflicts**: 必须在最终报告中保留的高严重度跨层冲突
 - **key_evidence_refs**: 与高严重度冲突和 Thesis 支撑链相关的证据索引（按 function_id 组织）
 - **known_data_gaps**: 已知数据缺口（尤其是 L3 广度数据）
@@ -80,6 +84,19 @@
 - 是否用结论证明结论？
 - 证据链是否形成闭环？
 
+### 6. 过度谨慎与错过赔率
+Critic 必须对称攻击：不仅攻击乐观跳跃，也要攻击“为了不犯错而过度谨慎”。
+
+检查：
+- 是否把“风险存在”误等同于“风险收益比差”？
+- 是否忽略价格已经大幅调整或估值已经压缩？
+- 是否把确认信号当成入场前提，却没有说明等待确认的成本？
+- 是否把短期趋势风险外推到 1-3 个月或 6-12 个月？
+- 是否让核心仓、战术仓、等待者共用同一句结论？
+- 是否没有解释高风险高赔率和高风险低赔率的区别？
+
+如果发现这些问题，应作为 `major` 或 `minor` 写入 issues，target 可用 `payoff_assessment`、`confirmation_cost`、`time_horizon_views` 或 `portfolio_actions`。
+
 ## 严重程度分级
 
 - **major**: 严重问题，必须修复
@@ -123,12 +140,22 @@
 - 看空立场 but 趋势向上？
 - 中立立场 but 证据一边倒？
 
+### 策略 5: Decision Semantics 检查
+逐项检查：
+- `priced_narrative` 是否真的说明价格隐含叙事，而不是重复风险清单？
+- `payoff_assessment` 是否真的判断赔率，而不是只说风险高低？
+- `confirmation_cost` 是否同时写出等待的好处和代价？
+- `time_horizon_views` 是否把短期、中期、长期拆开？
+- `portfolio_actions` 是否把核心仓、战术仓、等待者拆开？
+
 ## 质量检查
 
 你的 Critique 应该：
 - [ ] 至少包含 2 个 major 问题
 - [ ] 包含至少 1 个跨层逻辑问题
 - [ ] 指出具体的证据引用问题（若有）
+- [ ] 至少检查一次过度谨慎/错过赔率风险
+- [ ] 检查 Decision Semantics 新字段是否完整且有证据约束
 - [ ] 提供明确的修订方向
 - [ ] 语气严厉但建设性
 

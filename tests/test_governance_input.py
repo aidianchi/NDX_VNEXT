@@ -18,6 +18,7 @@ from agent_analysis.contracts import (
     KeySupportChain,
     LayerCard,
     ObjectiveFirewallSummary,
+    RiskBoundaryReport,
     SynthesisPacket,
     ThesisDraft,
     TypedConflict,
@@ -330,6 +331,71 @@ def test_governance_input_preserves_thesis_support_chain_evidence_outside_confli
     ]
     assert "L1.get_10y_real_rate" in gov_input.key_evidence_refs
     assert "L4.get_ndx_pe_and_earnings_yield" in gov_input.key_evidence_refs
+
+
+def test_governance_input_carries_decision_semantics_fields(tmp_path: Path):
+    orchestrator = _orchestrator(tmp_path)
+    synthesis = SynthesisPacket(
+        evidence_index={
+            "L4.get_ndx_pe_and_earnings_yield": {"metric": "valuation"},
+            "L5.get_ta_indicators": {"metric": "trend"},
+        }
+    )
+    thesis = ThesisDraft(
+        main_thesis="高风险高赔率候选。",
+        environment_assessment="风险偏高。",
+        valuation_assessment="估值压缩。",
+        timing_assessment="趋势未确认。",
+        overall_confidence=Confidence.MEDIUM,
+        state_diagnosis="恐慌冲击后。",
+        priced_narrative="坏消息可能部分计入价格。",
+        payoff_assessment="高风险高赔率候选。",
+        time_horizon_views=[
+            {
+                "horizon": "one_to_three_months",
+                "view": "赔率改善但信用未确认。",
+                "action_implication": "战术仓分批。",
+                "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+            }
+        ],
+        portfolio_actions=[
+            {
+                "bucket": "tactical_position",
+                "action": "分批试探。",
+                "rationale": "等待确认有机会成本。",
+                "evidence_refs": ["L5.get_ta_indicators"],
+            }
+        ],
+        confirmation_cost="等待全部确认可能错过赔率窗口。",
+        invalidation_conditions=["信用继续恶化"],
+        reader_conclusion={
+            "one_liner": "风险高，但赔率可能改善。",
+            "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+        },
+    )
+    risk = RiskBoundaryReport(
+        must_preserve_risks=["信用继续恶化风险"],
+        opportunity_costs=[{"condition": "等待全部确认", "missed_payoff": "错过反弹"}],
+        confirmation_costs=[{"wait_for": "趋势确认", "cost": "赔率变薄"}],
+        false_safety_risks=["风险消失时价格也可能不便宜"],
+    )
+
+    gov_input = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+        risk_report=risk,
+    )
+
+    assert gov_input.thesis_payoff_assessment == "高风险高赔率候选。"
+    assert gov_input.thesis_time_horizon_views[0]["horizon"] == "one_to_three_months"
+    assert gov_input.thesis_portfolio_actions[0]["bucket"] == "tactical_position"
+    assert gov_input.thesis_confirmation_cost == "等待全部确认可能错过赔率窗口。"
+    assert gov_input.thesis_reader_conclusion["one_liner"] == "风险高，但赔率可能改善。"
+    assert gov_input.opportunity_costs[0]["missed_payoff"] == "错过反弹"
+    assert gov_input.confirmation_costs[0]["cost"] == "赔率变薄"
+    assert gov_input.false_safety_risks == ["风险消失时价格也可能不便宜"]
+    assert "L4.get_ndx_pe_and_earnings_yield" in gov_input.key_evidence_refs
+    assert "L5.get_ta_indicators" in gov_input.key_evidence_refs
 
 
 # ── 护栏测试：governance prompt 中继续禁止编造历史概率 ──

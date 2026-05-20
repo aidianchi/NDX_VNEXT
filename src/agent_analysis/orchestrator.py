@@ -70,11 +70,11 @@ PROMPT_FILES = {
 
 INLINE_PROMPTS = {
     "bridge": "你负责显式识别跨层支撑关系、冲突关系与关键不确定性。只返回合法 JSON。",
-    "thesis": "你负责基于 LayerCards 与 BridgeMemo 构建主论点，并保留未解决冲突。只返回合法 JSON。",
-    "critic": "你负责攻击 ThesisDraft 的逻辑弱点与证据跳跃。只返回合法 JSON。",
-    "risk": "你负责保留风险边界、失效条件与必须保留的风险提示。只返回合法 JSON。",
-    "reviser": "你负责吸收 critique/risk/schema 反馈后修订 thesis，但不能抹平冲突。只返回合法 JSON。",
-    "final": "你负责独立裁决是否放行本次分析，并明确最终立场与必须保留的风险。只返回合法 JSON。",
+    "thesis": "你负责把 synthesis_packet 整合成状态、价格、赔率、动作和失效条件，并保留未解决冲突。只返回合法 JSON。",
+    "critic": "你负责攻击 ThesisDraft 的逻辑弱点、证据跳跃和过度谨慎导致的错过赔率风险。只返回合法 JSON。",
+    "risk": "你负责保留下行风险、踏空风险、确认成本、失效条件与必须保留的风险提示。只返回合法 JSON。",
+    "reviser": "你负责吸收 critique/risk/schema 反馈后修订 thesis，保留决策语义和冲突，不能自动改得更保守。只返回合法 JSON。",
+    "final": "你负责分离内部 quality_gate 与 reader_final，给出状态、价格、赔率、动作和失效条件。只返回合法 JSON。",
 }
 
 
@@ -597,6 +597,13 @@ class VNextOrchestrator:
         for chain in thesis.key_support_chains:
             all_evidence_refs.update(chain.evidence_refs)
             all_event_refs.update(getattr(chain, "event_refs", []) or [])
+        for action in getattr(thesis, "portfolio_actions", []) or []:
+            all_evidence_refs.update(getattr(action, "evidence_refs", []) or [])
+        for view in getattr(thesis, "time_horizon_views", []) or []:
+            all_evidence_refs.update(getattr(view, "evidence_refs", []) or [])
+        reader_conclusion = _model_dump(getattr(thesis, "reader_conclusion", {}) or {})
+        if isinstance(reader_conclusion, dict):
+            all_evidence_refs.update(reader_conclusion.get("evidence_refs", []) or [])
 
         key_evidence_refs: Dict[str, Dict[str, Any]] = {}
         for ref in sorted(all_evidence_refs):
@@ -645,6 +652,9 @@ class VNextOrchestrator:
 
         # ── Must-preserve risks (from Risk Sentinel, if available) ──
         must_preserve_risks = list(risk_report.must_preserve_risks) if risk_report is not None else []
+        opportunity_costs = [_model_dump(item) for item in getattr(risk_report, "opportunity_costs", [])] if risk_report is not None else []
+        confirmation_costs = [_model_dump(item) for item in getattr(risk_report, "confirmation_costs", [])] if risk_report is not None else []
+        false_safety_risks = list(getattr(risk_report, "false_safety_risks", []) or []) if risk_report is not None else []
 
         # ── Critique summary (for reviser / final) ──
         critique_overall = critique.overall_assessment if critique is not None else None
@@ -668,6 +678,14 @@ class VNextOrchestrator:
             thesis_dependencies=list(thesis.dependencies) if thesis.dependencies else [],
             thesis_key_support_chains=thesis_key_support_chains,
             retained_conflict_types=retained_conflict_types,
+            thesis_state_diagnosis=getattr(thesis, "state_diagnosis", "") or "",
+            thesis_priced_narrative=getattr(thesis, "priced_narrative", "") or "",
+            thesis_payoff_assessment=getattr(thesis, "payoff_assessment", "") or "",
+            thesis_time_horizon_views=[_model_dump(item) for item in getattr(thesis, "time_horizon_views", []) or []],
+            thesis_portfolio_actions=[_model_dump(item) for item in getattr(thesis, "portfolio_actions", []) or []],
+            thesis_confirmation_cost=getattr(thesis, "confirmation_cost", "") or "",
+            thesis_invalidation_conditions=list(getattr(thesis, "invalidation_conditions", []) or []),
+            thesis_reader_conclusion=reader_conclusion if isinstance(reader_conclusion, dict) else {},
             high_severity_typed_conflicts=high_severity_typed,
             objective_firewall_summary=obj_firewall,
             schema_passed=schema_passed,
@@ -675,6 +693,9 @@ class VNextOrchestrator:
             schema_consistency_issues=list(schema_consistency),
             schema_missing_fields=list(schema_missing),
             must_preserve_risks=must_preserve_risks,
+            opportunity_costs=opportunity_costs,
+            confirmation_costs=confirmation_costs,
+            false_safety_risks=false_safety_risks,
             key_evidence_refs=key_evidence_refs,
             key_event_refs=key_event_refs,
             known_data_gaps=list(dict.fromkeys(known_data_gaps)),  # 去重
@@ -1341,10 +1362,10 @@ class VNextOrchestrator:
 
     def _compose_thesis_prompt(self, prompt_body: str) -> str:
         thesis_contract = (
-            "## vNext v2 Thesis Contract\n"
+            "## vNext v2 Decision Thesis Contract\n"
             "你现在只消费 synthesis_packet。不要重新分析原始数据，不要替 L1-L5 补写单指标推理。"
             "你的职责是把 layer_summaries、bridge_summaries、high_severity_conflicts 与 evidence_index "
-            "整合成主论点、支撑链、保留冲突和依赖前提。\n\n"
+            "整合成主论点、支撑链、保留冲突、依赖前提，以及定价与赔率判断面。\n\n"
             "key_support_chains[].evidence_refs 应引用 synthesis_packet.evidence_index 的键或 Bridge 摘要。"
             "retained_conflicts 必须包含 synthesis_packet.high_severity_conflicts 中的所有高严重度冲突。"
         )
@@ -1354,6 +1375,14 @@ class VNextOrchestrator:
             "不得给出强结论，必须降低 confidence 并在 dependencies/retained_conflicts 中保留相应边界。"
             "如果使用 synthesis_packet.event_index，只能把 event_refs 写成催化剂、背景或观察事项；"
             "不得让 event_refs 替代 key_support_chains[].evidence_refs。"
+            "\n\nDecision Semantics 必填语义："
+            "state_diagnosis 说明当前市场状态；priced_narrative 说明价格正在定价什么、哪些坏消息已/未反映；"
+            "payoff_assessment 必须区分高风险高赔率、高风险低赔率、低风险低赔率等；"
+            "time_horizon_views 至少覆盖数日、1-3个月、6-12个月；"
+            "portfolio_actions 至少覆盖 core_position、tactical_position、waiting_cash；"
+            "confirmation_cost 必须说明等待确认降低什么风险、可能错过什么；"
+            "invalidation_conditions 必须是可观察条件；reader_conclusion 面向普通读者，不能写内部审批话术。"
+            "不要把“风险存在”自动等同于“赔率不利”，也不要把“估值改善”自动等同于可以买。"
         )
         return f"{thesis_contract}\n\n{prompt_body}"
 

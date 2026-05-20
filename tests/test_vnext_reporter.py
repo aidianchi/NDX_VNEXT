@@ -99,12 +99,69 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
             "must_preserve_risks": ["估值压缩风险"],
             "adjudicator_notes": "保留核心冲突。",
             "evidence_refs": ["Risk report"],
+            "state_diagnosis": "高风险但赔率可能改善。",
+            "priced_narrative": "价格已反映部分坏消息。",
+            "payoff_assessment": "高风险高赔率候选。",
+            "time_horizon_views": [
+                {
+                    "horizon": "one_to_three_months",
+                    "view": "赔率改善但趋势未确认。",
+                    "action_implication": "战术仓分批。",
+                    "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+                }
+            ],
+            "portfolio_actions": [
+                {
+                    "bucket": "tactical_position",
+                    "action": "分批试探。",
+                    "rationale": "等待确认有机会成本。",
+                    "evidence_refs": ["L5.get_ta_indicators"],
+                }
+            ],
+            "confirmation_cost": "等待全部确认可能错过主要反弹段。",
+            "invalidation_conditions": ["信用继续恶化"],
+            "reader_final": {
+                "one_liner": "这不是低风险环境，但可能是高风险高赔率候选。",
+                "three_reasons": [
+                    "风险仍在。",
+                    "估值已有压缩。",
+                    "等待确认有机会成本。",
+                ],
+                "invalidation_summary": ["信用继续恶化"],
+                "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+            },
             "token_usage": {
                 "l1": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
                 "bridge": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
             },
         },
     )
+    _write_json(
+        run_dir / "context_brief.json",
+        {
+            "data_summary": "global brief",
+            "layer_highlights": {
+                "L1": ["global L1"],
+                "L2": ["global L2"],
+                "L3": ["global L3"],
+                "L4": ["global L4"],
+                "L5": ["global L5"],
+            },
+            "apparent_cross_layer_signals": ["global cross-layer signal"],
+            "task_description": "global task",
+        },
+    )
+    for layer in ["L1", "L2", "L3", "L4", "L5"]:
+        _write_json(
+            run_dir / "layer_context_briefs" / f"{layer}.json",
+            {
+                "data_summary": f"{layer} local brief",
+                "layer_highlights": {layer: [f"{layer} local highlight"]},
+                "apparent_cross_layer_signals": [],
+                "task_description": f"{layer} local task",
+            },
+        )
+    _write_json(run_dir / "llm_stage_diagnostics.json", {"stages": {"L1": {"status": "ok"}}})
     _write_json(
         run_dir / "synthesis_packet.json",
         {
@@ -485,10 +542,13 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert "NDX Simple Yield Gap" in html
     assert "Confirming Indicators" in html
     assert "买方动作层" in html
-    assert "加仓" in html
-    assert "减仓" in html
-    assert "等待" in html
-    assert "观察窗口" in html
+    assert "核心仓、战术仓、等待者分开处理" in html
+    assert "这不是低风险环境，但可能是高风险高赔率候选。" in html
+    assert "价格已反映部分坏消息。" in html
+    assert "高风险高赔率候选。" in html
+    assert "tactical_position" in html
+    assert "分批试探。" in html
+    assert "失效/复核清单" in html
     assert "回测数据边界" in html
     assert "get_ndx_forward_earnings_quality" in html
     assert "historical source required" in html
@@ -507,6 +567,16 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert "采集时间" in html
     assert "生成时间" in html
     assert "YF Diagnostics" in html
+    assert "Agent IO Audit" in html
+    assert "L1-L5 输入边界卡" in html
+    assert "layer_context_briefs/L1.json" in html
+    assert "bridge_memos/bridge_0.json" in html
+    assert "thesis_draft.json" in html
+    assert "final_adjudication.json" in html
+    assert "other layer runtime highlights absent" in html
+    assert "global apparent_cross_layer_signals absent" in html
+    assert "bridge memo absent from L1-L5 input" in html
+    assert "llm_stage_diagnostics.json" in html
     assert 'data-typed-conflict="real_rate_vs_valuation"' in html
     assert 'data-transmission-path="rates_to_valuation"' in html
     assert 'data-resonance-chain="risk_off_resonance"' in html

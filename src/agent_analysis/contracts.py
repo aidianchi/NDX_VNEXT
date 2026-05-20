@@ -670,6 +670,51 @@ class KeySupportChain(BaseModel):
     )
 
 
+class TimeHorizonView(BaseModel):
+    """Decision Semantics: one conclusion per investment horizon."""
+    model_config = {"extra": "allow"}
+
+    horizon: str = Field(..., description="时间尺度，如 same_day_or_days / one_to_three_months / six_to_twelve_months")
+    view: str = Field(..., description="该时间尺度下的判断")
+    action_implication: str = Field("", description="该时间尺度对应的行动含义")
+    evidence_refs: List[str] = Field(default_factory=list, description="支撑该时间尺度判断的证据")
+    invalidation_conditions: List[str] = Field(default_factory=list, description="会推翻该时间尺度判断的条件")
+
+
+class PortfolioAction(BaseModel):
+    """Decision Semantics: action split by investor bucket, not a single stance."""
+    model_config = {"extra": "allow"}
+
+    bucket: str = Field(..., description="动作桶，如 core_position / tactical_position / waiting_cash")
+    action: str = Field(..., description="建议动作或等待方式")
+    rationale: str = Field("", description="为什么这样行动")
+    conditions: List[str] = Field(default_factory=list, description="执行或升级/降级条件")
+    evidence_refs: List[str] = Field(default_factory=list, description="支撑该动作的证据")
+
+
+class ReaderFinal(BaseModel):
+    """Reader-facing final answer, separated from internal quality gate notes."""
+    model_config = {"extra": "allow"}
+
+    one_liner: str = Field("", description="给普通读者的一句话结论")
+    three_reasons: List[str] = Field(default_factory=list, description="三条最重要理由")
+    time_horizon_summary: List[TimeHorizonView] = Field(default_factory=list, description="分时间尺度判断")
+    action_summary: List[PortfolioAction] = Field(default_factory=list, description="核心仓/战术仓/等待者动作")
+    invalidation_summary: List[str] = Field(default_factory=list, description="最重要失效条件")
+    evidence_refs: List[str] = Field(default_factory=list, description="读者结论引用的关键证据")
+
+
+class QualityGate(BaseModel):
+    """Internal publishing gate. This is audit material, not reader copy."""
+    model_config = {"extra": "allow"}
+
+    approval_status: ApprovalStatus = Field(..., description="内部质量闸门状态")
+    blocking_issues: List[str] = Field(default_factory=list, description="阻塞发布的问题")
+    evidence_ref_issues: List[str] = Field(default_factory=list, description="证据引用问题")
+    preserved_risks_check: str = Field("", description="必须保留风险是否完整")
+    notes: str = Field("", description="内部裁决说明，不应进入 brief 首屏")
+
+
 class ThesisDraft(BaseModel):
     """
     论点草稿 - Thesis Builder 的输出
@@ -731,6 +776,44 @@ class ThesisDraft(BaseModel):
     dependencies: List[str] = Field(
         default_factory=list,
         description="该论点依赖哪些前提条件"
+    )
+
+    # Decision Semantics v1：定价与赔率判断面
+    state_diagnosis: str = Field(
+        "",
+        description="当前市场状态诊断，不等同于最终买卖立场",
+        max_length=600,
+    )
+    priced_narrative: str = Field(
+        "",
+        description="当前价格正在定价什么、哪些坏消息可能已反映、哪些仍未反映",
+        max_length=800,
+    )
+    payoff_assessment: str = Field(
+        "",
+        description="风险补偿/赔率判断，如高风险高赔率、高风险低赔率等",
+        max_length=600,
+    )
+    time_horizon_views: List[TimeHorizonView] = Field(
+        default_factory=list,
+        description="短期、中期、长期分时间尺度判断"
+    )
+    portfolio_actions: List[PortfolioAction] = Field(
+        default_factory=list,
+        description="核心仓、战术仓、等待者的动作含义"
+    )
+    confirmation_cost: str = Field(
+        "",
+        description="等待更多确认降低什么风险、付出什么机会成本",
+        max_length=600,
+    )
+    invalidation_conditions: List[str] = Field(
+        default_factory=list,
+        description="哪些可观察证据会推翻当前定价/赔率判断"
+    )
+    reader_conclusion: ReaderFinal = Field(
+        default_factory=ReaderFinal,
+        description="面向读者的一句话结论、理由、动作和失效条件"
     )
 
     # 置信度
@@ -809,6 +892,20 @@ class RiskBoundaryReport(BaseModel):
         description="13种冲突矩阵的检查结果"
     )
 
+    # Decision Semantics v1：双向风险与确认成本
+    opportunity_costs: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="过度谨慎、踏空或错过高赔率窗口的风险"
+    )
+    confirmation_costs: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="等待更多确认降低的风险与付出的机会成本"
+    )
+    false_safety_risks: List[str] = Field(
+        default_factory=list,
+        description="风险看似下降但赔率也已变薄的假安全风险"
+    )
+
 
 class SchemaGuardReport(BaseModel):
     """
@@ -864,6 +961,14 @@ class GovernanceInputPacket(BaseModel):
         description="Thesis 主论点的关键支撑链，保留 evidence_refs 以供治理阶段核验"
     )
     retained_conflict_types: List[str] = Field(default_factory=list, description="已保留的冲突类型名")
+    thesis_state_diagnosis: str = Field("", description="Decision Thesis 状态诊断")
+    thesis_priced_narrative: str = Field("", description="Decision Thesis 价格隐含叙事")
+    thesis_payoff_assessment: str = Field("", description="Decision Thesis 赔率判断")
+    thesis_time_horizon_views: List[Dict[str, Any]] = Field(default_factory=list, description="分时间尺度判断")
+    thesis_portfolio_actions: List[Dict[str, Any]] = Field(default_factory=list, description="核心/战术/等待动作")
+    thesis_confirmation_cost: str = Field("", description="等待确认的成本")
+    thesis_invalidation_conditions: List[str] = Field(default_factory=list, description="失效条件")
+    thesis_reader_conclusion: Dict[str, Any] = Field(default_factory=dict, description="读者结论草稿")
 
     # ── 必须不丢失的高严重度冲突 ──
     high_severity_typed_conflicts: List[Dict[str, Any]] = Field(
@@ -884,6 +989,9 @@ class GovernanceInputPacket(BaseModel):
 
     # ── Risk Sentinel 必须保留的风险（reviser / final） ──
     must_preserve_risks: List[str] = Field(default_factory=list, description="必须保留的风险警示")
+    opportunity_costs: List[Dict[str, Any]] = Field(default_factory=list, description="Risk Sentinel 识别的踏空/机会成本")
+    confirmation_costs: List[Dict[str, Any]] = Field(default_factory=list, description="Risk Sentinel 识别的确认成本")
+    false_safety_risks: List[str] = Field(default_factory=list, description="Risk Sentinel 识别的假安全风险")
 
     # ── 关键证据引用 ──
     key_evidence_refs: Dict[str, Dict[str, Any]] = Field(
@@ -1016,6 +1124,23 @@ class FinalAdjudication(BaseModel):
         default=None,
         description="LLM Token 使用统计"
     )
+
+    # Decision Semantics v1：内部质量闸门与读者结论分离
+    quality_gate: Optional[QualityGate] = Field(
+        default=None,
+        description="内部质量闸门；供审计区展示，不进入 brief 首屏"
+    )
+    reader_final: ReaderFinal = Field(
+        default_factory=ReaderFinal,
+        description="读者可见最终结论；brief 首屏优先消费"
+    )
+    state_diagnosis: str = Field("", description="最终状态诊断")
+    priced_narrative: str = Field("", description="最终价格隐含叙事")
+    payoff_assessment: str = Field("", description="最终赔率判断")
+    time_horizon_views: List[TimeHorizonView] = Field(default_factory=list, description="最终分时间尺度判断")
+    portfolio_actions: List[PortfolioAction] = Field(default_factory=list, description="最终组合动作含义")
+    confirmation_cost: str = Field("", description="最终确认成本")
+    invalidation_conditions: List[str] = Field(default_factory=list, description="最终失效条件")
 
     model_config = {"extra": "allow"}
 

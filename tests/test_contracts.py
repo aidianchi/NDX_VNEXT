@@ -16,6 +16,7 @@ from agent_analysis.contracts import (
     RiskBoundaryReport,
     AnalysisRevised,
     FinalAdjudication,
+    ReaderFinal,
 )
 
 
@@ -172,3 +173,53 @@ def test_final_adjudication_serialization_roundtrip():
     assert restored.approval_status == ApprovalStatus.APPROVED_WITH_RESERVATIONS
     assert len(restored.key_support_chains) == 1
     assert restored.key_support_chains[0].weight == 0.3
+
+
+def test_decision_semantics_fields_roundtrip():
+    thesis = ThesisDraft(
+        environment_assessment="风险偏高。",
+        valuation_assessment="估值已有压缩。",
+        timing_assessment="趋势尚未确认。",
+        main_thesis="高风险高赔率候选。",
+        overall_confidence=Confidence.MEDIUM,
+        state_diagnosis="恐慌冲击后的高风险环境。",
+        priced_narrative="价格已反映一部分坏消息。",
+        payoff_assessment="高风险高赔率候选。",
+        time_horizon_views=[
+            {
+                "horizon": "one_to_three_months",
+                "view": "赔率改善但信用未确认。",
+                "action_implication": "战术仓分批。",
+            }
+        ],
+        portfolio_actions=[
+            {
+                "bucket": "tactical_position",
+                "action": "分批试探。",
+                "rationale": "等待确认有机会成本。",
+            }
+        ],
+        confirmation_cost="等待全部确认会错过主要反弹段。",
+        invalidation_conditions=["信用继续恶化"],
+        reader_conclusion={"one_liner": "风险高，但赔率可能改善。"},
+    )
+    data = thesis.model_dump()
+    restored = ThesisDraft.model_validate(data)
+    assert restored.payoff_assessment == "高风险高赔率候选。"
+    assert restored.time_horizon_views[0].horizon == "one_to_three_months"
+    assert restored.portfolio_actions[0].bucket == "tactical_position"
+    assert restored.reader_conclusion.one_liner == "风险高，但赔率可能改善。"
+
+    final = FinalAdjudication(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="高风险高赔率候选",
+        confidence=Confidence.MEDIUM,
+        key_support_chains=[],
+        must_preserve_risks=["信用继续恶化风险"],
+        blocking_issues=[],
+        evidence_refs=[],
+        adjudicator_notes="内部质量说明。",
+        reader_final=ReaderFinal(one_liner="读者结论。"),
+        payoff_assessment="高风险高赔率候选。",
+    )
+    assert FinalAdjudication.model_validate(final.model_dump()).reader_final.one_liner == "读者结论。"

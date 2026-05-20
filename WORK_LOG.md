@@ -6,6 +6,31 @@
 
 ## 2026-05-20
 
+### Decision Semantics 第一轮实现 + Agent IO Audit 最小原型
+
+完成内容：
+
+- 扩展 `src/agent_analysis/contracts.py`：新增 `TimeHorizonView`、`PortfolioAction`、`ReaderFinal`、`QualityGate`；`ThesisDraft` 现在可表达 `state_diagnosis`、`priced_narrative`、`payoff_assessment`、分时间尺度视图、组合动作、确认成本、失效条件和读者结论。
+- 扩展 `RiskBoundaryReport` 与 `GovernanceInputPacket`：治理链现在会携带 `opportunity_costs`、`confirmation_costs`、`false_safety_risks`，并把 Decision Thesis 新字段传给 Critic / Risk / Reviser / Final。
+- 改写/增强 `thesis_builder.md`、`critic.md`、`risk_sentinel.md`、`reviser.md`、`final_adjudicator.md`：从“单一立场”升级为状态、价格、赔率、时间尺度、动作和失效条件；Critic 增加过度谨慎/错过赔率检查；Final 分离 `quality_gate` 与 `reader_final`。
+- 改造 native brief 首屏：优先展示 `reader_final` 和 Decision Surface，不再把 `adjudicator_notes` 当作首屏读者文案；动作层优先展示核心仓/战术仓/等待者的结构化动作。
+- 在 `vnext_reporter.py` 实现只读 `Agent IO Audit` 最小原型：加载 `layer_context_briefs/Lx.json` 和 `llm_stage_diagnostics.json`，在审计区展示 L1-L5 输入边界卡、禁止输入检查、输出 evidence refs、下游痕迹和主 pipeline artifact 摘要。
+- 增加测试覆盖：contracts 新字段 roundtrip、governance packet 新字段传递、native brief 展示 reader_final 与 Agent IO Audit。
+
+验证结果：
+
+- `python3 -m pytest tests/test_contracts.py tests/test_governance_input.py tests/test_vnext_reporter.py -q`：34 passed，4 warnings。
+- `python3 -m pytest tests/test_vnext_orchestrator.py tests/test_prompt_guardrails.py tests/test_objective_firewall.py tests/test_deep_research_canon.py -q`：43 passed，4 warnings。
+- `python3 -m pytest -q`：310 passed，4 warnings。
+- `python3 src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20250409 --template brief`：通过，生成 `output/reports/vnext_brief_20260519_2233_20250409_0000.html`。
+- 文本检查确认该 brief 包含 `Agent IO Audit`、`layer_context_briefs/L1.json`、L1-L5 `other layer runtime highlights absent` 与 `global apparent_cross_layer_signals absent`。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_brief_20260519_2233_20250409_0000.html --workbench-html output/reports/vnext_workbench_20260519_2233_20250409_0000.html --console-html output/reports/vnext_research_console.html --output-dir output/visual_regression/decision_semantics_agent_io_audit`：passed；desktop/mobile brief/workbench/console layout checks 均无 issues。
+
+剩余边界：
+
+- 本轮实现了合同、prompt、治理输入、reader brief 优先展示和只读审计原型；尚未重新跑完整 LLM 分析链生成带新字段的 fresh `2025-04-09` run。
+- Agent IO Audit 的下游使用判断仍是第一版轻量追踪，不是复杂语义相似度裁判，也不是发布闸门。
+
 ### Agent 输入/输出审计视图研究文档
 
 完成内容：
