@@ -15,8 +15,7 @@
 
 | 优先级 | 类别 | 待办 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
-| P0 | 核心系统 | Decision Semantics 架构改革第一轮 | 2025-04-09 回测说明最终综合层把“风险未解除”误写成“赔率不利”；需要从单一 stance 升级为“证据解释价格、价格决定赔率、赔率约束行动”。方向见 `docs/2026-05-20_DECISION_SEMANTICS_ARCHITECTURE_REFORM.md` | Thesis / Final contracts 和 prompts 能输出状态诊断、价格隐含叙事、赔率判断、分时间尺度结论、核心/战术动作、确认成本和失效条件；brief 首屏不再展示 adjudicator notes；2025-04-09 样本不再被压扁成无解释的“中性偏谨慎” |
-| P1 | 核心系统 / 输出体验 | Agent 输入/输出审计视图原型 | 用只读方式让人直观看到每个 agent 收到什么、输出什么、下游用了什么；先验证 context isolation 和字段价值，避免过早堆复杂自动审计规则；方向见 `docs/2026-05-20_AGENT_IO_AUDIT_VIEW_RESEARCH.md` | Native brief 或独立审计页按阶段展示 input 摘要、output 核心字段、evidence refs、字段质量提示和下游消费去向；明确全局 `context_brief` 与 `layer_context_briefs/Lx` 的区别，证明 L1-L5 没有看到其他层运行时 highlights |
+| P0 | 核心系统 | Mao 思想路线主链第二轮重构 | Decision Semantics 第一轮已经把状态、价格、赔率、动作和失效条件写入合同与 brief；下一步要让 `docs/2026-05-20_MAO_THOUGHT_ANTIFRAGILE_FRAMEWORK_PLAIN.md` 的原则真正统帅 Bridge / Thesis / Risk / Final / Review，而不是停留在字段和提示词层 | Bridge 能输出主要矛盾、次要矛盾、价格反映程度和矛盾转化信号；Thesis / Final 能在 fresh run 中用人话说明主要矛盾、赔率、核心/战术动作和失效条件；Risk Sentinel 同时写下行风险与踏空/过度谨慎风险；Review 能把错判归因写回数据、Bridge、Thesis、Risk、Final 或表达层 |
 | P1 | 数据基础 | yfinance 盈利质量代理实时模式审计 | 回测模式已自动跳过 yfinance 成分股基本面批量代理；实时模式仍可把它作为 sanity check 使用，但必须确认字段来源、公式和 stale cache 边界 | 针对 `get_ndx_pe_and_earnings_yield`、`get_ndx_forward_earnings_quality` 输出审计结论；字段覆盖率、公式、缓存新鲜度、失败 fallback 和不能证明什么都写入 data_quality / prompt / brief |
 | P1 | 数据基础 | 历史数据研究助理 skill 原型 | 回测缺口不能靠主分析链临场补；需要独立联网研究助理持续寻找候选历史数据源，并把“如何找到”的经验沉淀成可复用规则 | 读取 `backtest_data_boundaries` 生成候选证据包；输出链接、发布时间、数据日期、摘录/截图、适用风险和置信度；默认标记 `research_candidate` / `manual_review_required`，不得直接进入 L1-L5 |
 | P2 | 数据基础 | 采集机 / 快照模式产品化 | yfinance/Yahoo 与 DeepSeek 的最佳网络路径可能不同；采集与推理解耦能减少半截数据、半截分析、难复现的问题 | `collect-only` 产物包含不可变数据快照、chart/news sidecar、校验摘要和数据边界；主电脑可选择快照只跑 LLM/报告；文档说明同机分流与双机采集两种运行法 |
@@ -31,9 +30,10 @@
 ### 核心推理
 
 - 保持 L1-L5 context isolation 为硬红线：L1-L5 可以知道静态职责边界，但不能看到其他层本轮运行时数据、摘要、结论、候选跨层关系或 Thesis / Bridge 当前判断。
-- Decision Semantics 改造应服务读者判断，而不是新增更多术语：最终报告要解释“市场已经定价了什么、什么还没解除、赔率和行动如何分层”。
-- Bridge v2 的 typed map 继续强化字段质量：`typed_conflicts`、`resonance_chains`、`transmission_paths` 必须有具体 evidence refs、机制、反证和未解决问题。
-- 自动字段质量扫描可以作为第二步，不应先于只读审计视图。先让人看清 agent 链路，再决定哪些检查值得自动化。
+- Decision Semantics 后续改造应服务读者判断，而不是新增更多术语：最终报告要解释“市场已经定价了什么、什么还没解除、赔率和行动如何分层”。
+- Bridge v2 应从 typed map 继续升级为矛盾地图：`typed_conflicts`、`resonance_chains`、`transmission_paths` 必须有具体 evidence refs、机制、反证和未解决问题，并进一步判断主要矛盾、次要矛盾、价格是否已反映、什么条件会让矛盾转化。
+- Agent IO Audit 已有最小只读原型；下一阶段先把它当成验收仪表盘，用来检查 context isolation、字段是否产生、下游是否消费，不急着扩展复杂自动评分。
+- 自动字段质量扫描可以作为后续第二步，不应抢在 Mao 思想路线主链第二轮重构之前。
 
 ### 数据基础
 
@@ -62,6 +62,7 @@
 
 - OpenBB：暂缓整个平台接入，只吸收 provider metadata、coverage discovery 和数据治理思路。
 - Trendonify：真实浏览器 sidecar 已落地；主链仍不硬绕 403，不静默退回 yfinance。
+- Agent IO Audit 复杂化：最小只读原型已完成；在主链重构完成前，暂缓语义相似度裁判、复杂字段评分和发布闸门化。
 - 正式前端框架化：在 brief / console / workbench 信息架构稳定前继续保持 self-contained HTML。
 - 新闻 LLM 解读：当前只做官方事件底账和事件-数据时间邻近连接，不做泛新闻情绪和摘要。
 - 交易执行、组合建议、自动下单：不属于 vNext 当前范围。
