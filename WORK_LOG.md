@@ -6,6 +6,26 @@
 
 ## 2026-05-20
 
+### Agent 输入/输出审计视图研究文档
+
+完成内容：
+
+- 新增 `docs/2026-05-20_AGENT_IO_AUDIT_VIEW_RESEARCH.md`，把 Agent 输入/输出审计视图的目的、好处、产品形态、判断标准和后续实现边界写成面向人类与后续 AI 的 research 文档。
+- 明确该视图第一版应优先做只读透明链路，而不是复杂自动审计脚本：先让人看到每个 agent 收到了什么、输出了什么、下游用了什么。
+- 定义第一版最小展示：run 总览、pipeline 节点、agent 输入清单、输出摘要、evidence refs、字段质量提示、下游消费状态和 L1-L5 禁止输入检查。
+- 明确 L1-L5 context isolation 的可见证明方式：`允许输入 / 实际输入 / 禁止输入检查` 三栏，不依赖模型自述。
+- 定义“有价值字段”和“垃圾标签字段”的白话判断标准，并要求字段去向区分 direct / merged / counterevidence / not used。
+- 同步 `NEXT_STEPS.md`，把该 research 文档作为 P1 审计视图原型的方向依据。
+
+验证结果：
+
+- 人工复读新增文档，确认它是产品方向与判断标准文档，不要求后续 AI 立即写复杂自动审计规则。
+- 人工确认文档没有改变 L1-L5 context isolation、sidecar policy、DataIntegrity 发布闸门等现有架构红线。
+
+剩余边界：
+
+- 本轮只完成 research 文档和待办链接，尚未实现审计页面、字段追踪逻辑或 UI。
+
 ### 毛泽东思想与反脆弱性通俗架构总纲
 
 完成内容：

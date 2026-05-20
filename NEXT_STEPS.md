@@ -16,7 +16,7 @@
 | 优先级 | 类别 | 待办 | 为什么重要 | 完成标准 |
 | --- | --- | --- | --- | --- |
 | P0 | 核心系统 | Decision Semantics 架构改革第一轮 | 2025-04-09 回测说明最终综合层把“风险未解除”误写成“赔率不利”；需要从单一 stance 升级为“证据解释价格、价格决定赔率、赔率约束行动”。方向见 `docs/2026-05-20_DECISION_SEMANTICS_ARCHITECTURE_REFORM.md` | Thesis / Final contracts 和 prompts 能输出状态诊断、价格隐含叙事、赔率判断、分时间尺度结论、核心/战术动作、确认成本和失效条件；brief 首屏不再展示 adjudicator notes；2025-04-09 样本不再被压扁成无解释的“中性偏谨慎” |
-| P1 | 核心系统 / 输出体验 | Agent 输入/输出审计视图原型 | 用只读方式让人直观看到每个 agent 收到什么、输出什么、下游用了什么；先验证 context isolation 和字段价值，避免过早堆复杂自动审计规则 | Native brief 或独立审计页按阶段展示 input 摘要、output 核心字段、evidence refs、字段质量提示和下游消费去向；明确全局 `context_brief` 与 `layer_context_briefs/Lx` 的区别，证明 L1-L5 没有看到其他层运行时 highlights |
+| P1 | 核心系统 / 输出体验 | Agent 输入/输出审计视图原型 | 用只读方式让人直观看到每个 agent 收到什么、输出什么、下游用了什么；先验证 context isolation 和字段价值，避免过早堆复杂自动审计规则；方向见 `docs/2026-05-20_AGENT_IO_AUDIT_VIEW_RESEARCH.md` | Native brief 或独立审计页按阶段展示 input 摘要、output 核心字段、evidence refs、字段质量提示和下游消费去向；明确全局 `context_brief` 与 `layer_context_briefs/Lx` 的区别，证明 L1-L5 没有看到其他层运行时 highlights |
 | P1 | 数据基础 | yfinance 盈利质量代理实时模式审计 | 回测模式已自动跳过 yfinance 成分股基本面批量代理；实时模式仍可把它作为 sanity check 使用，但必须确认字段来源、公式和 stale cache 边界 | 针对 `get_ndx_pe_and_earnings_yield`、`get_ndx_forward_earnings_quality` 输出审计结论；字段覆盖率、公式、缓存新鲜度、失败 fallback 和不能证明什么都写入 data_quality / prompt / brief |
 | P1 | 数据基础 | 历史数据研究助理 skill 原型 | 回测缺口不能靠主分析链临场补；需要独立联网研究助理持续寻找候选历史数据源，并把“如何找到”的经验沉淀成可复用规则 | 读取 `backtest_data_boundaries` 生成候选证据包；输出链接、发布时间、数据日期、摘录/截图、适用风险和置信度；默认标记 `research_candidate` / `manual_review_required`，不得直接进入 L1-L5 |
 | P2 | 数据基础 | 采集机 / 快照模式产品化 | yfinance/Yahoo 与 DeepSeek 的最佳网络路径可能不同；采集与推理解耦能减少半截数据、半截分析、难复现的问题 | `collect-only` 产物包含不可变数据快照、chart/news sidecar、校验摘要和数据边界；主电脑可选择快照只跑 LLM/报告；文档说明同机分流与双机采集两种运行法 |
