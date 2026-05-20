@@ -24,6 +24,8 @@
 - `thesis_time_horizon_views / thesis_portfolio_actions`
 - `thesis_confirmation_cost / thesis_invalidation_conditions`
 - `thesis_reader_conclusion`
+- `thesis_principal_contradiction / thesis_secondary_contradictions / thesis_price_reflection_map`
+- `principal_contradictions`
 - `thesis_key_support_chains`
 - `retained_conflict_types`
 - `high_severity_typed_conflicts`
@@ -99,6 +101,21 @@
     "信用利差继续加速走阔",
     "价格跌破恐慌低点且风险偏好同步恶化"
   ],
+  "principal_contradiction": {
+    "contradiction_id": "panic_priced_vs_unconfirmed_risk",
+    "summary": "风险仍未解除，但部分坏消息可能已经进入价格，真正问题是风险补偿是否足以支持分批战术动作。",
+    "why_principal": "它决定系统是过度谨慎、冒进抄底，还是用纪律换取高赔率窗口。",
+    "dominant_side": "风险未解除，不能无纪律满仓。",
+    "secondary_side": "价格和估值已经反映部分坏消息，等待确认有成本。",
+    "price_reflection": "partially_reflected",
+    "action_implication": "核心仓守纪律，战术仓分批，等待现金明确复核条件。",
+    "conflict_refs": ["panic_priced_vs_unconfirmed_risk"],
+    "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield", "L5.get_ta_indicators"],
+    "transformation_signals": [],
+    "unresolved_questions": []
+  },
+  "secondary_contradictions": [],
+  "price_reflection_map": [],
   "reader_final": {
     "one_liner": "这不是低风险环境，但可能是高风险高赔率候选，动作要按时间尺度和仓位拆开。",
     "three_reasons": [
@@ -139,12 +156,13 @@
 读者结论必须回答：
 
 1. 现在市场处在什么状态？
-2. 价格已经反映了什么？
-3. 赔率是否变好？
-4. 核心仓、战术仓、等待者分别怎么做？
-5. 最大风险是什么？
-6. 等待确认的代价是什么？
-7. 什么证据会让我们改主意？
+2. 当前真正支配收益风险的主要矛盾是什么？
+3. 价格已经反映了什么？
+4. 赔率是否变好？
+5. 核心仓、战术仓、等待者分别怎么做？
+6. 最大风险是什么？
+7. 等待确认的代价是什么？
+8. 什么证据会让我们改主意？
 
 ### Step 3: 双向风险
 
@@ -175,6 +193,8 @@
 - `state_diagnosis`、`priced_narrative`、`payoff_assessment` 必须非空。
 - `time_horizon_views` 至少覆盖数日、1-3个月、6-12个月。
 - `portfolio_actions` 至少覆盖核心仓、战术仓、等待者。
+- `principal_contradiction` 必须非空，除非 quality_gate.blocking_issues 明确说明 Bridge/Thesis 缺少足够证据。
+- `reader_final.one_liner` 或 three_reasons 必须用人话体现主要矛盾，不能只写“批准/保留/完整”。
 - `confirmation_cost` 必须说明等待确认的收益和代价。
 - `invalidation_conditions` 必须可观察。
 - `must_preserve_risks` 必须非空，除非 blocking_issues 明确说明为什么无法发布。
@@ -184,6 +204,7 @@
 - reader_final 是否能直接给普通读者看？
 - quality_gate 是否没有混进读者结论？
 - 是否区分状态、价格、赔率、动作和失效条件？
+- 是否说清楚主要矛盾，而不是把高严重度冲突机械堆成清单？
 - 是否避免把风险存在直接写成赔率不利？
 - 是否避免把等待确认写成无成本默认答案？
 - evidence_refs 是否可追溯？

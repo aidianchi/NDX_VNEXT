@@ -32,6 +32,8 @@ from .contracts import (
     SchemaGuardReport,
     AnalysisRevised,
     FinalAdjudication,
+    RunReviewFinding,
+    RunReviewReport,
     AnalysisPacket,
 )
 
@@ -68,5 +70,7 @@ __all__ = [
     "SchemaGuardReport",
     "AnalysisRevised",
     "FinalAdjudication",
+    "RunReviewFinding",
+    "RunReviewReport",
     "AnalysisPacket",
 ]

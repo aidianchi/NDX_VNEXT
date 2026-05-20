@@ -30,6 +30,7 @@
 - `bridge_summaries`
 - `high_severity_conflicts`
 - `high_severity_typed_conflicts`
+- `principal_contradictions`
 - `objective_firewall_summary`
 - `evidence_index`
 - `event_index`
@@ -107,6 +108,45 @@
     "invalidation_summary": ["最重要失效条件"],
     "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"]
   },
+  "principal_contradiction": {
+    "contradiction_id": "valuation_discount_rate",
+    "summary": "风险仍高，但价格可能已经反映一部分坏消息，当前关键是风险补偿是否足以支持战术动作。",
+    "why_principal": "它同时决定估值、趋势和仓位节奏；如果只看风险会过度保守，如果只看便宜会过度冒进。",
+    "dominant_side": "风险未解除，核心仓不能升级为无纪律进攻。",
+    "secondary_side": "估值压缩和恐慌交易使战术赔率变厚。",
+    "price_reflection": "partially_reflected",
+    "action_implication": "核心仓不因恐慌被动砍掉，战术仓可小比例分批，等待者必须承认确认成本。",
+    "conflict_refs": ["valuation_discount_rate"],
+    "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield", "L5.get_ta_indicators"],
+    "transformation_signals": [
+      {
+        "signal": "信用继续恶化且价格跌破恐慌低点",
+        "direction": "转向风险未充分反映",
+        "implication": "战术动作降级。",
+        "evidence_refs": ["L2.get_credit_spreads", "L5.get_ta_indicators"],
+        "event_refs": []
+      }
+    ],
+    "unresolved_questions": ["盈利预期是否会继续下修？"]
+  },
+  "secondary_contradictions": [
+    {
+      "contradiction_id": "breadth_vs_index_trend",
+      "summary": "反弹质量仍受广度约束。",
+      "why_secondary": "它限制加仓速度，但不是当前定价赔率判断的唯一主导项。",
+      "action_constraint": "不支持一次性大幅提高战术仓。",
+      "evidence_refs": ["L3.get_market_breadth"]
+    }
+  ],
+  "price_reflection_map": [
+    {
+      "target": "valuation_discount_rate",
+      "reflected_state": "partially_reflected",
+      "rationale": "价格下杀和估值压缩说明坏消息已有进入价格，但信用和盈利压力仍需验证。",
+      "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+      "missing_evidence": ["更完整的 point-in-time 盈利预期"]
+    }
+  ],
   "key_support_chains": [
     {
       "chain_description": "支撑链描述。",
@@ -137,7 +177,16 @@
 
 ### Step 2: 抓主要矛盾
 
-从 `high_severity_typed_conflicts` 和 Bridge 摘要中找出当前主导收益/风险的矛盾。不要把冲突压平。
+从 `principal_contradictions`、`bridge_summaries[].principal_contradiction`、`high_severity_typed_conflicts` 和 Bridge 摘要中找出当前主导收益/风险的矛盾。不要把冲突压平。
+
+必须输出 `principal_contradiction`，并说明：
+- 为什么它是主要矛盾。
+- 当前哪一面占支配地位。
+- 另一面为什么不能忽略。
+- 风险/坏消息是否已被价格反映。
+- 它对核心仓、战术仓、等待现金的行动含义。
+
+如果 Bridge 给出的主要矛盾不充分，Thesis 可以修正，但必须说明依据，不能跳过主要矛盾判断。
 
 ### Step 3: 判断价格与赔率
 
@@ -183,6 +232,9 @@
 - `portfolio_actions` 是否至少覆盖核心仓、战术仓、等待者？
 - `confirmation_cost` 是否同时说明降低的风险和付出的机会成本？
 - `reader_conclusion` 是否是读者语言，而不是内部审批话术？
+- `principal_contradiction` 是否来自 Bridge 矛盾地图，并解释主要矛盾、价格反映和行动含义？
+- `secondary_contradictions` 是否保留会约束行动的次要矛盾？
+- `price_reflection_map` 是否说明关键风险/叙事进入价格的程度？
 - `key_support_chains` 是否使用有效 evidence refs？
 - `retained_conflicts` 是否保留所有高严重度冲突？
 - `overall_confidence` 是否避免过度自信？

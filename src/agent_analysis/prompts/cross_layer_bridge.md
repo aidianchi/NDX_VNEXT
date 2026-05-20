@@ -48,6 +48,54 @@
       "involved_layers": ["L1", "L4"]
     }
   ],
+  "principal_contradiction": {
+    "contradiction_id": "valuation_discount_rate",
+    "summary": "估值修复愿望与高真实利率约束同时存在。",
+    "why_principal": "它决定 L4 估值能否转化为可行动赔率，也约束 L5 反弹能否升级为更高置信度配置。",
+    "dominant_side": "高真实利率和信用未确认仍在压制核心仓置信度。",
+    "secondary_side": "估值压缩和恐慌交易可能已经提高战术赔率。",
+    "price_reflection": "partially_reflected",
+    "action_implication": "核心仓守纪律，战术仓只能在失效条件清楚时分批试探。",
+    "conflict_refs": ["real_rate_vs_valuation"],
+    "evidence_refs": ["L1.get_10y_real_rate", "L4.get_ndx_pe_and_earnings_yield"],
+    "transformation_signals": [
+      {
+        "signal": "信用利差不再走阔且价格守住恐慌低点",
+        "direction": "从风险约束主导转向赔率修复主导",
+        "implication": "战术仓可提高一级，但仍需保留估值边界。",
+        "evidence_refs": ["L2.get_credit_spreads", "L5.get_ta_indicators"],
+        "event_refs": []
+      }
+    ],
+    "unresolved_questions": ["盈利预期能否抵消折现率压力？"]
+  },
+  "secondary_contradictions": [
+    {
+      "contradiction_id": "breadth_vs_index_trend",
+      "summary": "指数反弹与内部广度不足并存。",
+      "why_secondary": "它约束反弹质量，但当前主要行动问题仍是风险是否已被价格反映。",
+      "action_constraint": "限制战术仓加速，不支持无纪律满仓。",
+      "evidence_refs": ["L3.get_market_breadth", "L5.get_ta_indicators"]
+    }
+  ],
+  "price_reflection_map": [
+    {
+      "target": "valuation_discount_rate",
+      "reflected_state": "partially_reflected",
+      "rationale": "估值压缩说明部分坏消息已进入价格，但信用和盈利压力未完全解除。",
+      "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+      "missing_evidence": ["更完整的 first-reported 盈利预期历史"]
+    }
+  ],
+  "contradiction_transformation_signals": [
+    {
+      "signal": "信用继续恶化且价格跌破恐慌低点",
+      "direction": "从高风险高赔率候选转向风险未充分反映",
+      "implication": "停止战术进攻，降低动作等级。",
+      "evidence_refs": ["L2.get_credit_spreads", "L5.get_ta_indicators"],
+      "event_refs": []
+    }
+  ],
   "implication_for_ndx": "宏观环境对高估值的支撑正在减弱，需警惕估值压缩风险。但若盈利增速超预期，估值可维持。",
   "key_uncertainties": [
     "美联储政策转向时间",
@@ -122,6 +170,20 @@
 - 关键不确定性因素
 - 需要进一步验证的假设
 
+### Step 5: 抓主要矛盾（Mao Thought 主链）
+
+Bridge 必须从 typed_conflicts、resonance_chains 和 transmission_paths 中选出一个 `principal_contradiction`。
+
+判断标准：
+- 解决或转化它以后，其他冲突是否随之缓解？
+- 它是否决定当前价格是“风险尚未反映”还是“风险已部分进入价格、赔率变厚”？
+- 它是否决定核心仓、战术仓、等待现金的动作差异？
+
+同时写出：
+- `secondary_contradictions`：不是主导项但会约束行动的次要矛盾。
+- `price_reflection_map`：关键风险/叙事进入价格的程度。
+- `contradiction_transformation_signals`：哪些可观察信号会让主要矛盾或其主导方面转化。
+
 ## 关键约束
 
 ### 绝对禁止
@@ -134,6 +196,8 @@
 - ✅ 必须解释因果机制（第一性原理）
 - ✅ 必须评估严重程度
 - ✅ conflicts 字段不能为空列表
+- ✅ principal_contradiction 必须非空，除非输入 Layer Cards 严重不足且必须在 unresolved_questions 说明原因
+- ✅ price_reflection_map 必须说明“风险是否已经被价格反映”，不能只重复风险清单
 
 ## 质量检查清单
 
@@ -145,6 +209,8 @@
 - [ ] 每个 conflict 是否有 severity 评估？
 - [ ] implication_for_ndx 是否简洁明确？
 - [ ] key_uncertainties 是否列出关键不确定因素？
+- [ ] principal_contradiction 是否说明 why_principal、price_reflection 和 action_implication？
+- [ ] contradiction_transformation_signals 是否具体、可观察？
 - [ ] 输出是否是有效的 JSON？
 
 ## 示例

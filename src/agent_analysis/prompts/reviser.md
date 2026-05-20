@@ -21,6 +21,8 @@
 - **thesis_time_horizon_views / thesis_portfolio_actions**: 原始分时间尺度判断和核心/战术/等待动作
 - **thesis_confirmation_cost / thesis_invalidation_conditions**: 原始等待确认成本和失效条件
 - **thesis_reader_conclusion**: 原始读者结论
+- **thesis_principal_contradiction / thesis_secondary_contradictions / thesis_price_reflection_map**: 原始主要矛盾、次要矛盾和价格反映地图
+- **principal_contradictions**: Bridge 主要矛盾候选
 - **thesis_key_support_chains**: 原始 Thesis 的关键支撑链；修订时可调整，但不能丢失其可追溯 evidence_refs
 - **high_severity_typed_conflicts**: 必须在最终报告中保留的高严重度跨层冲突
 - **objective_firewall_summary**: 客观性防火墙摘要（对象、发言权、反证）
@@ -64,6 +66,9 @@
     "confirmation_cost": "等待确认的收益和机会成本",
     "invalidation_conditions": [...],
     "reader_conclusion": {...},
+    "principal_contradiction": {...},
+    "secondary_contradictions": [...],
+    "price_reflection_map": [...],
     "overall_confidence": "medium"
   },
   "remaining_conflicts": [
@@ -155,12 +160,17 @@
 13. confirmation_cost
 14. invalidation_conditions
 15. reader_conclusion
+16. principal_contradiction
+17. secondary_contradictions
+18. price_reflection_map
 
 ### Step 4: 显式保留冲突
 
 检查 retained_conflicts：
 - 是否包含所有 high severity 冲突？
 - 每个冲突是否有 why_retained 解释？
+- principal_contradiction 是否保留或合理修正了 Bridge 的主要矛盾？
+- price_reflection_map 是否保留“风险是否已进入价格”的判断，而不是退回风险清单？
 
 ### Step 5: 撰写修订说明
 

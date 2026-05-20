@@ -24,6 +24,8 @@
 - **thesis_state_diagnosis / thesis_priced_narrative / thesis_payoff_assessment**: 状态、价格和赔率判断
 - **thesis_time_horizon_views / thesis_portfolio_actions**: 分时间尺度判断和核心/战术/等待动作
 - **thesis_confirmation_cost / thesis_invalidation_conditions**: 等待确认的代价和失效条件
+- **thesis_principal_contradiction / thesis_secondary_contradictions / thesis_price_reflection_map**: Thesis 对主要矛盾、次要矛盾和价格反映的判断
+- **principal_contradictions**: Bridge v3 给出的主要矛盾候选，必须检查 Thesis 是否保留或合理修正
 - **high_severity_typed_conflicts**: 必须在最终报告中保留的高严重度跨层冲突
 - **key_evidence_refs**: 与高严重度冲突和 Thesis 支撑链相关的证据索引
 - **known_data_gaps**: 已知数据缺口（哪一层少了什么数据）
@@ -143,6 +145,15 @@ Risk Sentinel 必须额外列出：
 
 注意：这不是要求系统冒进，而是要求风险报告完整。不能只防亏钱，也要防把“等待确认”当成无成本默认答案。
 
+### 3.6 主要矛盾风险检查
+
+Risk Sentinel 必须检查 Thesis 是否正确处理主要矛盾：
+
+- 若 `thesis_principal_contradiction` 为空，而 `principal_contradictions` 或高严重度冲突存在，必须把“主要矛盾缺失”写入 `must_preserve_risks` 或 `failure_conditions`。
+- 若 Thesis 只强调主要矛盾的一面，例如只讲下行风险、不讲价格已反映和确认成本，必须写入 `opportunity_costs` / `false_safety_risks`。
+- 若 Thesis 只讲赔率变厚、不讲主要矛盾的支配方面和失效条件，必须写入 `must_preserve_risks`。
+- `thesis_price_reflection_map` 若为 unclear 或缺证据，最终风险里必须保留“价格反映程度不确定”的边界。
+
 ### 4. 冲突矩阵检查
 
 检查 13 种冲突矩阵（A-M）中哪些被触发：
@@ -199,6 +210,7 @@ Risk Sentinel 必须额外列出：
 - [ ] opportunity_costs 是否检查了踏空/过度谨慎？
 - [ ] confirmation_costs 是否说明等待确认的收益和代价？
 - [ ] false_safety_risks 是否覆盖“低风险但低赔率”？
+- [ ] 是否检查了主要矛盾缺失、主要方面误判和价格反映不确定？
 - [ ] 每条风险是否具体且有数据支撑？
 - [ ] conflict_matrix_check 是否检查了 A、B、C、K 等关键冲突？
 - [ ] 输出是否是有效的 JSON？

@@ -710,6 +710,7 @@ class VNextReportGenerator:
             "critique": _load_json(run_path / "critique.json", {}),
             "risk_boundary_report": _load_json(run_path / "risk_boundary_report.json", {}),
             "schema_guard_report": _load_json(run_path / "schema_guard_report.json", {}),
+            "run_review_report": _load_json(run_path / "run_review_report.json", {}),
             "data_integrity_report": _load_json(run_path / "data_integrity_report.json", {}),
             "context_brief": _load_json(run_path / "context_brief.json", {}),
             "layer_context_briefs": layer_contexts,
@@ -742,6 +743,7 @@ class VNextReportGenerator:
             "news_layer_analysis": artifacts.get("news_layer_analysis", {}),
             "critique": artifacts["critique"],
             "schema_guard_report": artifacts["schema_guard_report"],
+            "run_review_report": artifacts.get("run_review_report", {}),
             "data_integrity_report": artifacts.get("data_integrity_report", {}),
             "context_brief": artifacts.get("context_brief", {}),
             "layer_context_briefs": artifacts.get("layer_context_briefs", {}),
@@ -918,6 +920,9 @@ class VNextReportGenerator:
             "portfolio_actions": final.get("portfolio_actions") or reader.get("action_summary") or thesis.get("portfolio_actions") or [],
             "confirmation_cost": final.get("confirmation_cost") or thesis.get("confirmation_cost") or "",
             "invalidation_conditions": final.get("invalidation_conditions") or reader.get("invalidation_summary") or thesis.get("invalidation_conditions") or [],
+            "principal_contradiction": final.get("principal_contradiction") or thesis.get("principal_contradiction") or {},
+            "secondary_contradictions": final.get("secondary_contradictions") or thesis.get("secondary_contradictions") or [],
+            "price_reflection_map": final.get("price_reflection_map") or thesis.get("price_reflection_map") or [],
         }
 
     def _hero(
@@ -1018,6 +1023,12 @@ class VNextReportGenerator:
             if isinstance(item, dict)
         )
         invalidations = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(surface.get("invalidation_conditions"))[:5])
+        principal = surface.get("principal_contradiction") if isinstance(surface.get("principal_contradiction"), dict) else {}
+        price_rows = "".join(
+            f"<li><b>{_escape(item.get('target', 'price'))}</b>: {_escape(item.get('reflected_state', 'unclear'))} · {_escape(item.get('rationale', ''))}</li>"
+            for item in _as_list(surface.get("price_reflection_map"))[:4]
+            if isinstance(item, dict)
+        )
         return f"""
 <section class="panel decision-panel" id="decision">
   <div class="section-kicker">01 · 最终判断</div>
@@ -1040,6 +1051,11 @@ class VNextReportGenerator:
       <p>{_escape(surface.get('priced_narrative', ''))}</p>
     </article>
     <article>
+      <h3>主要矛盾</h3>
+      <p>{_escape(principal.get('summary') or '暂无结构化 principal_contradiction。')}</p>
+      <small>{_escape(principal.get('price_reflection') or principal.get('action_implication') or '')}</small>
+    </article>
+    <article>
       <h3>赔率判断</h3>
       <p>{_escape(surface.get('payoff_assessment', ''))}</p>
     </article>
@@ -1050,6 +1066,10 @@ class VNextReportGenerator:
     <article>
       <h3>三条理由</h3>
       <ul>{reasons or '<li>暂无结构化 reader_final.three_reasons。</li>'}</ul>
+    </article>
+    <article>
+      <h3>价格反映地图</h3>
+      <ul>{price_rows or '<li>暂无结构化 price_reflection_map。</li>'}</ul>
     </article>
   </div>
   <div class="trigger-grid">{horizon_rows or '<article><h3>时间尺度</h3><p>暂无结构化 time_horizon_views。</p></article>'}</div>
@@ -2534,6 +2554,7 @@ class VNextReportGenerator:
         critique = artifacts.get("critique", {}) or {}
         risk = artifacts.get("risk_boundary_report", {}) or {}
         schema = artifacts.get("schema_guard_report", {}) or {}
+        review = artifacts.get("run_review_report", {}) or {}
         firewall = artifacts.get("synthesis_packet", {}).get("objective_firewall_summary", {}) or {}
         failures = "".join(
             f"<li>{_escape(item.get('condition', item))} <span>{_escape(item.get('impact', '')) if isinstance(item, dict) else ''}</span></li>"
@@ -2543,6 +2564,12 @@ class VNextReportGenerator:
         issues = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(critique.get("cross_layer_issues")))
         tensions = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(firewall.get("unresolved_tensions")))
         firewall_warnings = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(firewall.get("warnings")))
+        review_findings = _as_list(review.get("attribution_findings"))[:6]
+        review_rows = "".join(
+            f"<li><b>{_escape(item.get('category', 'review'))}</b> · {_escape(item.get('severity', 'observe'))}: {_escape(item.get('finding', ''))}</li>"
+            for item in review_findings
+            if isinstance(item, dict)
+        )
         return f"""
 <section class="panel" id="governance">
   <div class="section-kicker">07 · Governance</div>
@@ -2577,6 +2604,11 @@ class VNextReportGenerator:
       <ul>{tensions or '<li>None</li>'}</ul>
       <h4>Warnings</h4>
       <ul>{firewall_warnings or '<li>None</li>'}</ul>
+    </article>
+    <article>
+      <h3>Run Review</h3>
+      <p>{_escape(review.get('review_mode', 'not generated'))}</p>
+      <ul>{review_rows or '<li>暂无 run_review_report.json。</li>'}</ul>
     </article>
   </div>
 </section>
@@ -2706,6 +2738,7 @@ class VNextReportGenerator:
             ("Risk", "risk_boundary_report.json", artifacts.get("risk_boundary_report", {}) or {}, "reviser/final/brief"),
             ("Reviser", "analysis_revised.json", artifacts.get("analysis_revised", {}) or {}, "final"),
             ("Final", "final_adjudication.json", artifacts.get("final_adjudication", {}) or {}, "brief"),
+            ("Review", "run_review_report.json", artifacts.get("run_review_report", {}) or {}, "next run/docs"),
         ]
         cards = []
         for name, path, payload, downstream in stages:

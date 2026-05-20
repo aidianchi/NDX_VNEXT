@@ -316,6 +316,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "news_layer_analysis": news_layer_analysis_path,
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
         "approval_status": _enum_value(getattr(artifacts["final_adjudication"], "approval_status", "")),
+        "run_review_report": os.path.join(run_dir, "run_review_report.json"),
         "models": available_models,
         "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),
         "runtime_diagnostics": _runtime_diagnostics_summary(data_json),

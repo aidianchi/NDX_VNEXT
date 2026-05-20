@@ -10,12 +10,16 @@ from agent_analysis.contracts import (
     BridgeMemo,
     BridgeSynthesisItem,
     Confidence,
+    ContradictionTransformationSignal,
     Conflict,
     ConflictSeverity,
     ContextBrief,
     CoreFact,
     LayerCard,
+    PriceReflectionAssessment,
+    PrincipalContradiction,
     ResonanceChain,
+    SecondaryContradiction,
     TransmissionPath,
     TypedConflict,
 )
@@ -67,6 +71,51 @@ def test_bridge_memo_accepts_v2_typed_map_fields():
                 confidence="medium",
             )
         ],
+        principal_contradiction=PrincipalContradiction(
+            contradiction_id="real_rate_vs_valuation",
+            summary="高真实利率与估值修复并存。",
+            why_principal="它决定估值压缩风险是否已转化为可行动赔率。",
+            dominant_side="高真实利率仍压制核心仓置信度。",
+            secondary_side="估值压缩可能提高战术赔率。",
+            price_reflection="partially_reflected",
+            action_implication="战术仓分批，核心仓守纪律。",
+            conflict_refs=["real_rate_vs_valuation"],
+            evidence_refs=["L1.get_10y_real_rate", "L4.get_ndx_pe_and_earnings_yield"],
+            transformation_signals=[
+                ContradictionTransformationSignal(
+                    signal="信用不再恶化且趋势守住恐慌低点",
+                    direction="toward_payoff_repair",
+                    implication="战术仓可提高一级。",
+                    evidence_refs=["L2.get_credit_spreads", "L5.get_ta_indicators"],
+                )
+            ],
+            unresolved_questions=["盈利能否抵消高真实利率？"],
+        ),
+        secondary_contradictions=[
+            SecondaryContradiction(
+                contradiction_id="breadth_vs_trend",
+                summary="反弹质量仍受广度约束。",
+                why_secondary="当前不是估值赔率判断的主导项。",
+                action_constraint="限制加仓速度。",
+                evidence_refs=["L3.get_market_breadth"],
+            )
+        ],
+        price_reflection_map=[
+            PriceReflectionAssessment(
+                target="real_rate_vs_valuation",
+                reflected_state="partially_reflected",
+                rationale="估值压缩说明部分坏消息进入价格。",
+                evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+            )
+        ],
+        contradiction_transformation_signals=[
+            ContradictionTransformationSignal(
+                signal="信用继续恶化",
+                direction="toward_risk_not_reflected",
+                implication="战术仓降级。",
+                evidence_refs=["L2.get_credit_spreads"],
+            )
+        ],
         unresolved_questions=["盈利能否抵消高真实利率？"],
         implication_for_ndx="需要保留利率-估值冲突。",
     )
@@ -77,6 +126,8 @@ def test_bridge_memo_accepts_v2_typed_map_fields():
     assert memo.resonance_chains[0].confirming_indicators == ["get_vix", "get_qqq_technical_indicators"]
     assert memo.resonance_chains[0].falsifiers == ["波动重新上行且价格跌破关键均线。"]
     assert memo.transmission_paths[0].source_layer == "L1"
+    assert memo.principal_contradiction.contradiction_id == "real_rate_vs_valuation"
+    assert memo.price_reflection_map[0].reflected_state == "partially_reflected"
 
 
 def test_orchestrator_derives_typed_conflicts_from_legacy_bridge_payload(tmp_path: Path):
@@ -105,6 +156,9 @@ def test_orchestrator_derives_typed_conflicts_from_legacy_bridge_payload(tmp_pat
 
     assert normalized["typed_conflicts"][0]["conflict_id"] == "L1_restrictive_vs_L4_expensive"
     assert normalized["typed_conflicts"][0]["evidence_refs"] == []
+    assert normalized["principal_contradiction"]["contradiction_id"] == "L1_restrictive_vs_L4_expensive"
+    assert normalized["principal_contradiction"]["price_reflection"] == "unclear"
+    assert normalized["price_reflection_map"][0]["target"] == "L1_restrictive_vs_L4_expensive"
 
 
 def test_synthesis_packet_carries_bridge_v2_typed_map(tmp_path: Path):
@@ -163,6 +217,34 @@ def test_synthesis_packet_carries_bridge_v2_typed_map(tmp_path: Path):
         transmission_paths=[],
         unresolved_questions=["盈利能否抵消？"],
         event_refs=["event:fomc"],
+        principal_contradiction=PrincipalContradiction(
+            contradiction_id="L1_restrictive_vs_L4_expensive",
+            summary="高真实利率与高估值并存。",
+            why_principal="它决定估值风险是否压倒赔率修复。",
+            dominant_side="折现率压力仍在。",
+            secondary_side="估值压缩带来赔率改善可能。",
+            price_reflection="unclear",
+            action_implication="保持战术动作纪律。",
+            conflict_refs=["L1_restrictive_vs_L4_expensive"],
+            evidence_refs=["L1.get_10y_real_rate", "L4.get_ndx_pe_and_earnings_yield"],
+        ),
+        secondary_contradictions=[
+            SecondaryContradiction(
+                contradiction_id="trend_vs_breadth",
+                summary="趋势与广度仍需验证。",
+                why_secondary="不是当前估值冲突主导项。",
+                action_constraint="限制加仓速度。",
+                evidence_refs=["L5.get_ta_indicators"],
+            )
+        ],
+        price_reflection_map=[
+            PriceReflectionAssessment(
+                target="L1_restrictive_vs_L4_expensive",
+                reflected_state="unclear",
+                rationale="Bridge 仍缺价格反映证据。",
+                evidence_refs=["L1.get_10y_real_rate"],
+            )
+        ],
         implication_for_ndx="需要保留冲突。",
     )
 
@@ -172,6 +254,10 @@ def test_synthesis_packet_carries_bridge_v2_typed_map(tmp_path: Path):
     assert isinstance(summary, BridgeSynthesisItem)
     assert summary.typed_conflicts[0]["conflict_id"] == "L1_restrictive_vs_L4_expensive"
     assert summary.event_refs == ["event:fomc"]
+    assert summary.principal_contradiction["contradiction_id"] == "L1_restrictive_vs_L4_expensive"
+    assert summary.secondary_contradictions[0]["contradiction_id"] == "trend_vs_breadth"
+    assert summary.price_reflection_map[0]["reflected_state"] == "unclear"
+    assert packet_out.principal_contradictions[0].contradiction_id == "L1_restrictive_vs_L4_expensive"
     assert packet_out.event_index["event:fomc"]["title"] == "FOMC statement"
     assert packet_out.high_severity_typed_conflicts[0].conflict_id == "L1_restrictive_vs_L4_expensive"
 
@@ -190,6 +276,9 @@ def test_bridge_prompt_requests_v2_typed_map(tmp_path: Path):
     assert "confirming_indicators" in prompt
     assert "falsifiers" in prompt
     assert "transmission_paths" in prompt
+    assert "principal_contradiction" in prompt
+    assert "price_reflection_map" in prompt
+    assert "contradiction_transformation_signals" in prompt
     assert "unresolved_questions" in prompt
     assert "event_refs" in prompt
 

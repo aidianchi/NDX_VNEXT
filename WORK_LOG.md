@@ -6,6 +6,63 @@
 
 ## 2026-05-20
 
+### Mao 思想路线主链第二轮第二段：Review 复盘闭环
+
+完成内容：
+
+- 新增 `RunReviewFinding` / `RunReviewReport` 合同，建立运行后复盘 artifact 的稳定结构：把问题归因到 `data`、`bridge`、`thesis`、`risk`、`final`、`expression` 六类。
+- 新增 `src/agent_analysis/run_review.py`：可从 run artifacts 生成 `run_review_report.json`，检查 DataIntegrity、回测边界、Bridge 主要矛盾、价格反映地图、Thesis 价格/赔率语义、Risk 双向风险、Final 主要矛盾保留和 reader_final 内部审批话术。
+- 接入 `VNextOrchestrator.run()`：以后新 run 会自动保存 `run_review_report.json`，并在返回 artifacts 中包含 `run_review_report`。
+- 接入 native brief：Governance 区展示 Run Review 的归因发现；Agent IO Audit 阶段链路新增 Review artifact。
+- 为现有 `2025-04-09` run 生成复盘产物：`output/analysis/vnext/20250409/run_review_report.json`。由于该 run 来自本轮字段落地前，Review 正确归因出 Bridge / Thesis / Risk / Final / expression 缺少新主链字段，数据边界与 DataIntegrity 则为通过。
+- 使用真实 DeepSeek Flash 在独立目录 `output/analysis/vnext/20250409_mao_fresh` 跑通 fresh LLM 主链；Bridge 原生输出 `principal_contradiction` 与 `price_reflection_map`，Thesis / Final 保留主要矛盾，Risk 输出踏空/确认成本，Review 对 fresh run 的 data / bridge / thesis / risk / final / expression 六类检查均为 pass。
+- fresh run 暴露相对路径 output_dir 下 Layer/Bridge 子目录会被重复拼接的问题；已将 `VNextOrchestrator.output_dir` 统一 resolve 为绝对路径，并新增回归测试。
+- 增加 `tests/test_run_review.py`，覆盖缺字段归因和主链字段齐备时的通过路径；扩展 orchestrator 测试，确认新 run 会写出 `run_review_report.json`。
+
+验证结果：
+
+- `python3 -m py_compile src/agent_analysis/contracts.py src/agent_analysis/orchestrator.py src/agent_analysis/run_review.py src/agent_analysis/vnext_reporter.py src/main.py`：通过。
+- `python3 -m pytest tests/test_run_review.py tests/test_vnext_orchestrator.py tests/test_vnext_reporter.py -q`：34 passed，4 warnings。
+- `python3 src/agent_analysis/run_review.py --run-dir output/analysis/vnext/20250409`：通过，写出 `output/analysis/vnext/20250409/run_review_report.json`。
+- `python3 src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20250409 --template brief`：通过，brief 中可见 `Run Review` 区块。
+- `python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/20250409 --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity`：通过。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_brief_20260519_2233_20250409_0000.html --workbench-html output/reports/vnext_workbench_20260519_2233_20250409_0000.html --console-html output/reports/vnext_research_console.html --output-dir output/visual_regression/mao_review_loop`：passed；desktop/mobile brief/workbench/console layout checks 均无 issues。
+- `python3 - <<'PY' ... VNextOrchestrator(... output_dir='output/analysis/vnext/20250409_mao_fresh').run(packet) ... PY`：真实 DeepSeek Flash fresh run 通过；最终 `final_stance=中性偏谨慎：风险未解除但估值低位，核心守纪律，战术分批，等待者接受确认成本。`。
+- `python3 src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20250409_mao_fresh --template brief`：通过。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_brief_20260519_2233_20250409_0000.html --workbench-html output/reports/vnext_workbench_20260519_2233_20250409_0000.html --console-html output/reports/vnext_research_console.html --output-dir output/visual_regression/mao_fresh_run`：passed；desktop/mobile brief/workbench/console layout checks 均无 issues。
+- `python3 -m pytest tests/test_vnext_orchestrator.py tests/test_run_review.py -q`：22 passed，4 warnings。
+- `python3 -m pytest -q`：313 passed，4 warnings。
+
+剩余边界：
+
+- Review 当前是 artifact self-review，能检查本轮产物是否满足主链语义；还不是带后续市场结果的 outcome review。真正“错判后归因到数据/Bridge/Thesis/Risk/Final/表达层并沉淀规则”的市场结果复盘，仍需要后续接入结果窗口或人工输入后再扩展。
+- Fresh run 使用既有 `2025-04-09` analysis packet，没有重新采集数据；这是对主链语义的模型验收，不是一次新的数据采集验收。
+
+### Mao 思想路线主链第二轮第一段：Bridge / Thesis / Risk / Final
+
+完成内容：
+
+- 扩展 `src/agent_analysis/contracts.py`：新增 `PrincipalContradiction`、`SecondaryContradiction`、`PriceReflectionAssessment`、`ContradictionTransformationSignal`，并接入 `BridgeMemo`、`SynthesisPacket`、`ThesisDraft`、`GovernanceInputPacket`、`FinalAdjudication`。
+- 改造 `src/agent_analysis/orchestrator.py`：Bridge 输出缺少主要矛盾时，会从最高严重度 typed conflict 兜底推导；SynthesisPacket / GovernanceInputPacket 会把主要矛盾、次要矛盾和价格反映地图传给 Thesis、Risk、Reviser、Final。
+- 强化 `cross_layer_bridge.md`、`thesis_builder.md`、`risk_sentinel.md`、`reviser.md`、`final_adjudicator.md`：主链必须回答主要矛盾、价格是否反映风险、赔率、行动和失效条件；Risk 必须检查主要矛盾缺失、主要方面误判、价格反映不确定和双向风险；Final 必须把主要矛盾写进读者结论而不是内部审批话术。
+- 更新 `vnext_reporter.py`：native brief 的 Decision Surface 新增“主要矛盾”和“价格反映地图”，优先展示 Final 字段，缺失时回退 Thesis 字段。
+- 增加测试覆盖：合同 roundtrip、Bridge v3 字段、legacy Bridge 兜底推导、SynthesisPacket 传递、GovernanceInputPacket 传递和 prompt 护栏。
+
+验证结果：
+
+- `python3 -m py_compile src/agent_analysis/contracts.py src/agent_analysis/orchestrator.py src/agent_analysis/vnext_reporter.py`：通过。
+- `python3 -m pytest tests/test_contracts.py tests/test_bridge_v2.py tests/test_governance_input.py tests/test_prompt_guardrails.py -q`：36 passed，4 warnings。
+- `python3 -m pytest tests/test_vnext_reporter.py tests/test_vnext_orchestrator.py -q`：32 passed，4 warnings。
+- `python3 -m pytest -q`：310 passed，4 warnings。
+- `python3 src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20250409 --template brief`：通过，生成 `output/reports/vnext_brief_20260519_2233_20250409_0000.html`。
+- `python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/20250409 --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity`：通过，生成 `output/reports/vnext_workbench_20260519_2233_20250409_0000.html`。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_brief_20260519_2233_20250409_0000.html --workbench-html output/reports/vnext_workbench_20260519_2233_20250409_0000.html --console-html output/reports/vnext_research_console.html --output-dir output/visual_regression/mao_main_chain_steps_1_4`：passed；desktop/mobile brief/workbench/console layout checks 均无 issues。
+
+剩余边界：
+
+- 本轮完成用户指定的第一至四步：Bridge、Thesis、Risk、Final 主链语义和展示面；尚未新增独立 Review artifact / prompt。当前仓库没有独立 Review 运行时形态，后续应在进入实践复盘闭环时单独落地，避免和 Critic/Reviser 职责混杂。
+- 本轮使用现有 `2025-04-09` artifact 验证 reporter 与布局；尚未重新跑完整 LLM fresh run 生成带新字段的 2025-04-09 分析链。
+
 ### NEXT_STEPS 收敛到 Mao 思想路线第二轮
 
 完成内容：

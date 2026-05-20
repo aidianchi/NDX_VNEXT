@@ -444,6 +444,9 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
     assert result["schema_guard_report"].passed is True
     assert "L1.get_fed_funds_rate" in result["synthesis_packet"].evidence_index
     assert (tmp_path / "final_adjudication.json").exists()
+    assert (tmp_path / "run_review_report.json").exists()
+    review = json.loads((tmp_path / "run_review_report.json").read_text(encoding="utf-8"))
+    assert any(item["category"] == "bridge" for item in review["attribution_findings"])
     assert (tmp_path / "synthesis_packet.json").exists()
     assert (tmp_path / "layer_cards" / "L1.json").exists()
     l1_context = json.loads((tmp_path / "layer_context_briefs" / "L1.json").read_text(encoding="utf-8"))
@@ -451,6 +454,20 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
     assert l1_context["apparent_cross_layer_signals"] == []
     assert "L1 本层" in l1_context["data_summary"]
     assert "共" not in l1_context["data_summary"]
+
+
+def test_orchestrator_resolves_relative_output_dir_before_saving_nested_paths(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir="relative_run",
+        llm_engine=object(),
+    )
+
+    orchestrator._save_json(orchestrator.bridge_dir / "bridge_0.json", {"ok": True})
+
+    assert (tmp_path / "relative_run" / "bridge_memos" / "bridge_0.json").exists()
+    assert not (tmp_path / "relative_run" / "relative_run" / "bridge_memos" / "bridge_0.json").exists()
 
 
 def test_layer_v2_contract_gap_retries_before_bridge_consumes_card(tmp_path: Path):

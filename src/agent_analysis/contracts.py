@@ -494,6 +494,62 @@ class TransmissionPath(BaseModel):
     lag_hint: Optional[str] = Field(None, description="传导可能的时间滞后")
 
 
+class ContradictionTransformationSignal(BaseModel):
+    """A concrete signal that can change the contradiction map."""
+    model_config = {"extra": "allow"}
+
+    signal: str = Field(..., description="可观察的矛盾转化信号")
+    direction: str = Field("", description="该信号会让矛盾向哪个方向转化")
+    implication: str = Field("", description="对 NDX 判断或行动的含义")
+    evidence_refs: List[str] = Field(default_factory=list, description="支撑或观察该信号的证据")
+    event_refs: List[str] = Field(default_factory=list, description="可选事件 refs，仅作触发/背景")
+
+
+class PriceReflectionAssessment(BaseModel):
+    """Bridge assessment of whether a conflict is already reflected in price."""
+    model_config = {"extra": "allow"}
+
+    target: str = Field(..., description="被评估的风险、冲突或叙事")
+    reflected_state: str = Field(
+        ...,
+        description="价格反映程度，如 not_reflected / partially_reflected / largely_reflected / over_reflected / unclear",
+    )
+    rationale: str = Field("", description="为什么这样判断")
+    evidence_refs: List[str] = Field(default_factory=list, description="支撑该定价判断的证据")
+    missing_evidence: List[str] = Field(default_factory=list, description="仍缺少的证据")
+
+
+class PrincipalContradiction(BaseModel):
+    """The main contradiction that should dominate synthesis."""
+    model_config = {"extra": "allow"}
+
+    contradiction_id: str = Field("", description="稳定 ID；优先引用 typed_conflicts[].conflict_id")
+    summary: str = Field("", description="主要矛盾的白话摘要")
+    why_principal: str = Field("", description="为什么它是当前主导矛盾")
+    dominant_side: str = Field("", description="当前占支配地位的一面")
+    secondary_side: str = Field("", description="被压制但不能忽略的一面")
+    price_reflection: str = Field("", description="风险/叙事是否已被价格反映")
+    action_implication: str = Field("", description="对核心仓、战术仓或等待者的行动含义")
+    conflict_refs: List[str] = Field(default_factory=list, description="关联 typed_conflicts/conflicts ID")
+    evidence_refs: List[str] = Field(default_factory=list, description="支撑主要矛盾判断的证据")
+    transformation_signals: List[ContradictionTransformationSignal] = Field(
+        default_factory=list,
+        description="会让主要矛盾或其主导方面转化的信号",
+    )
+    unresolved_questions: List[str] = Field(default_factory=list, description="必须留给 Thesis/Risk/Final 的未解问题")
+
+
+class SecondaryContradiction(BaseModel):
+    """A non-principal contradiction that still constrains the final action."""
+    model_config = {"extra": "allow"}
+
+    contradiction_id: str = Field("", description="稳定 ID")
+    summary: str = Field("", description="次要矛盾摘要")
+    why_secondary: str = Field("", description="为什么当前不是主要矛盾")
+    action_constraint: str = Field("", description="它对行动力度、节奏或置信度的约束")
+    evidence_refs: List[str] = Field(default_factory=list, description="支撑该次要矛盾的证据")
+
+
 class BridgeMemo(BaseModel):
     """
     跨层桥接备忘录 - Bridge Agent 的输出
@@ -548,6 +604,26 @@ class BridgeMemo(BaseModel):
         description="Bridge v2 transmission paths"
     )
 
+    principal_contradiction: Optional[PrincipalContradiction] = Field(
+        None,
+        description="Bridge v3 矛盾地图：当前主导 NDX 收益/风险判断的主要矛盾",
+    )
+
+    secondary_contradictions: List[SecondaryContradiction] = Field(
+        default_factory=list,
+        description="Bridge v3 矛盾地图：必须保留但不是当前主导项的次要矛盾",
+    )
+
+    price_reflection_map: List[PriceReflectionAssessment] = Field(
+        default_factory=list,
+        description="Bridge v3：风险、冲突或叙事是否已经进入价格",
+    )
+
+    contradiction_transformation_signals: List[ContradictionTransformationSignal] = Field(
+        default_factory=list,
+        description="Bridge v3：会改变主要/次要矛盾关系的可观察信号",
+    )
+
     unresolved_questions: List[str] = Field(
         default_factory=list,
         description="仍需下游保留或验证的问题"
@@ -598,6 +674,13 @@ class BridgeSynthesisItem(BaseModel):
     typed_conflicts: List[Dict[str, Any]] = Field(default_factory=list, description="Bridge v2 typed conflicts")
     resonance_chains: List[Dict[str, Any]] = Field(default_factory=list, description="Bridge v2 resonance chains")
     transmission_paths: List[Dict[str, Any]] = Field(default_factory=list, description="Bridge v2 transmission paths")
+    principal_contradiction: Optional[Dict[str, Any]] = Field(None, description="Bridge v3 principal contradiction")
+    secondary_contradictions: List[Dict[str, Any]] = Field(default_factory=list, description="Bridge v3 secondary contradictions")
+    price_reflection_map: List[Dict[str, Any]] = Field(default_factory=list, description="Bridge v3 price reflection map")
+    contradiction_transformation_signals: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Bridge v3 contradiction transformation signals",
+    )
     unresolved_questions: List[str] = Field(default_factory=list, description="Bridge v2 unresolved questions")
     event_refs: List[str] = Field(default_factory=list, description="Bridge 使用的事件引用")
     implication_for_ndx: str = Field("", description="对 NDX 的综合影响")
@@ -623,6 +706,10 @@ class SynthesisPacket(BaseModel):
     high_severity_typed_conflicts: List[TypedConflict] = Field(
         default_factory=list,
         description="Bridge v2 必须保留的高严重度 typed conflicts"
+    )
+    principal_contradictions: List[PrincipalContradiction] = Field(
+        default_factory=list,
+        description="Bridge v3 主要矛盾候选；Thesis 必须显式消费并选择/解释主导项",
     )
     objective_firewall_summary: Optional[ObjectiveFirewallSummary] = Field(
         None,
@@ -816,6 +903,20 @@ class ThesisDraft(BaseModel):
         description="面向读者的一句话结论、理由、动作和失效条件"
     )
 
+    # Mao thought main-chain semantics: contradiction map consumed from Bridge.
+    principal_contradiction: Optional[PrincipalContradiction] = Field(
+        None,
+        description="当前主导投资判断的主要矛盾；必须说明价格反映和行动含义",
+    )
+    secondary_contradictions: List[SecondaryContradiction] = Field(
+        default_factory=list,
+        description="仍需保留的次要矛盾及其行动约束",
+    )
+    price_reflection_map: List[PriceReflectionAssessment] = Field(
+        default_factory=list,
+        description="风险、冲突或叙事进入价格的程度",
+    )
+
     # 置信度
     overall_confidence: Confidence = Field(..., description="整体置信度")
 
@@ -969,11 +1070,27 @@ class GovernanceInputPacket(BaseModel):
     thesis_confirmation_cost: str = Field("", description="等待确认的成本")
     thesis_invalidation_conditions: List[str] = Field(default_factory=list, description="失效条件")
     thesis_reader_conclusion: Dict[str, Any] = Field(default_factory=dict, description="读者结论草稿")
+    thesis_principal_contradiction: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Thesis 选定的主要矛盾",
+    )
+    thesis_secondary_contradictions: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Thesis 保留的次要矛盾",
+    )
+    thesis_price_reflection_map: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Thesis 消费/修正后的价格反映地图",
+    )
 
     # ── 必须不丢失的高严重度冲突 ──
     high_severity_typed_conflicts: List[Dict[str, Any]] = Field(
         default_factory=list,
         description="Bridge v2 高严重度 typed conflicts（必须保留）"
+    )
+    principal_contradictions: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Bridge v3 主要矛盾候选，治理阶段必须检查是否被保留",
     )
 
     # ── 客观性防火墙 ──
@@ -1141,8 +1258,55 @@ class FinalAdjudication(BaseModel):
     portfolio_actions: List[PortfolioAction] = Field(default_factory=list, description="最终组合动作含义")
     confirmation_cost: str = Field("", description="最终确认成本")
     invalidation_conditions: List[str] = Field(default_factory=list, description="最终失效条件")
+    principal_contradiction: Optional[PrincipalContradiction] = Field(
+        None,
+        description="最终保留给读者的主要矛盾；用于说明当前真正决定收益风险的关键张力",
+    )
+    secondary_contradictions: List[SecondaryContradiction] = Field(
+        default_factory=list,
+        description="最终保留的次要矛盾",
+    )
+    price_reflection_map: List[PriceReflectionAssessment] = Field(
+        default_factory=list,
+        description="最终价格反映判断地图",
+    )
 
     model_config = {"extra": "allow"}
+
+
+# ============================================================================
+# Run Review - 实践复盘闭环
+# ============================================================================
+
+class RunReviewFinding(BaseModel):
+    """One post-run finding attributed to the stage that should learn from it."""
+    model_config = {"extra": "allow"}
+
+    category: Literal["data", "bridge", "thesis", "risk", "final", "expression"] = Field(
+        ...,
+        description="问题归因层：数据、Bridge、Thesis、Risk、Final 或表达层",
+    )
+    severity: Literal["pass", "observe", "fail"] = Field(..., description="复盘结论")
+    finding: str = Field(..., description="具体发现")
+    artifact_refs: List[str] = Field(default_factory=list, description="相关 artifact 路径或字段")
+    evidence_refs: List[str] = Field(default_factory=list, description="相关 evidence refs")
+    recommended_rule_update: str = Field("", description="下一轮应沉淀的规则或检查")
+
+
+class RunReviewReport(BaseModel):
+    """Post-run learning artifact. It does not change the current conclusion."""
+    model_config = {"extra": "allow"}
+
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    review_mode: str = Field("artifact_self_review", description="复盘模式")
+    run_dir: str = Field("", description="被复盘的 run 目录")
+    backtest_date: Optional[str] = Field(None, description="回测日")
+    final_stance: str = Field("", description="最终立场")
+    approval_status: str = Field("", description="审批状态")
+    publish_status: str = Field("", description="DataIntegrity 发布状态")
+    attribution_findings: List[RunReviewFinding] = Field(default_factory=list, description="按责任层归因的发现")
+    learning_updates: List[str] = Field(default_factory=list, description="可沉淀到架构/提示词/测试的学习点")
+    next_run_checks: List[str] = Field(default_factory=list, description="下一轮真实 run 必查项")
 
 
 # ============================================================================

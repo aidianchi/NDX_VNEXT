@@ -13,12 +13,15 @@ from agent_analysis.contracts import (
     Conflict,
     ContextBrief,
     CoreFact,
+    PriceReflectionAssessment,
+    PrincipalContradiction,
     GovernanceInputPacket,
     IndicatorAnalysis,
     KeySupportChain,
     LayerCard,
     ObjectiveFirewallSummary,
     RiskBoundaryReport,
+    SecondaryContradiction,
     SynthesisPacket,
     ThesisDraft,
     TypedConflict,
@@ -339,7 +342,19 @@ def test_governance_input_carries_decision_semantics_fields(tmp_path: Path):
         evidence_index={
             "L4.get_ndx_pe_and_earnings_yield": {"metric": "valuation"},
             "L5.get_ta_indicators": {"metric": "trend"},
-        }
+        },
+        principal_contradictions=[
+            PrincipalContradiction(
+                contradiction_id="panic_priced_vs_unconfirmed_risk",
+                summary="风险未解除但价格可能已反映一部分坏消息。",
+                why_principal="它决定战术仓是否应承认确认成本。",
+                dominant_side="风险未解除。",
+                secondary_side="赔率可能改善。",
+                price_reflection="partially_reflected",
+                action_implication="战术仓分批。",
+                evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+            )
+        ],
     )
     thesis = ThesisDraft(
         main_thesis="高风险高赔率候选。",
@@ -372,6 +387,33 @@ def test_governance_input_carries_decision_semantics_fields(tmp_path: Path):
             "one_liner": "风险高，但赔率可能改善。",
             "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
         },
+        principal_contradiction=PrincipalContradiction(
+            contradiction_id="panic_priced_vs_unconfirmed_risk",
+            summary="风险未解除但价格可能已反映一部分坏消息。",
+            why_principal="它决定动作是分批试探还是等待全部确认。",
+            dominant_side="风险未解除。",
+            secondary_side="赔率可能改善。",
+            price_reflection="partially_reflected",
+            action_implication="战术仓分批，等待现金承认确认成本。",
+            evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+        ),
+        secondary_contradictions=[
+            SecondaryContradiction(
+                contradiction_id="breadth_vs_trend",
+                summary="广度约束反弹质量。",
+                why_secondary="它约束加仓速度。",
+                action_constraint="不支持一次性满仓。",
+                evidence_refs=["L5.get_ta_indicators"],
+            )
+        ],
+        price_reflection_map=[
+            PriceReflectionAssessment(
+                target="panic_priced_vs_unconfirmed_risk",
+                reflected_state="partially_reflected",
+                rationale="估值压缩说明坏消息部分计入价格。",
+                evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+            )
+        ],
     )
     risk = RiskBoundaryReport(
         must_preserve_risks=["信用继续恶化风险"],
@@ -391,6 +433,10 @@ def test_governance_input_carries_decision_semantics_fields(tmp_path: Path):
     assert gov_input.thesis_portfolio_actions[0]["bucket"] == "tactical_position"
     assert gov_input.thesis_confirmation_cost == "等待全部确认可能错过赔率窗口。"
     assert gov_input.thesis_reader_conclusion["one_liner"] == "风险高，但赔率可能改善。"
+    assert gov_input.thesis_principal_contradiction["contradiction_id"] == "panic_priced_vs_unconfirmed_risk"
+    assert gov_input.principal_contradictions[0]["price_reflection"] == "partially_reflected"
+    assert gov_input.thesis_secondary_contradictions[0]["contradiction_id"] == "breadth_vs_trend"
+    assert gov_input.thesis_price_reflection_map[0]["reflected_state"] == "partially_reflected"
     assert gov_input.opportunity_costs[0]["missed_payoff"] == "错过反弹"
     assert gov_input.confirmation_costs[0]["cost"] == "赔率变薄"
     assert gov_input.false_safety_risks == ["风险消失时价格也可能不便宜"]

@@ -22,6 +22,7 @@ try:
         LayerSynthesisItem,
         BridgeSynthesisItem,
         RiskBoundaryReport,
+        RunReviewReport,
         SchemaGuardReport,
         ThesisDraft,
     )
@@ -29,6 +30,7 @@ try:
     from .few_shot import build_layer_few_shot_prompt
     from .llm_engine import LLMEngine
     from .packet_builder import indicator_payload_unavailable_reason
+    from .run_review import build_run_review_report
 except ImportError:
     from contracts import (
         AnalysisPacket,
@@ -44,6 +46,7 @@ except ImportError:
         LayerSynthesisItem,
         BridgeSynthesisItem,
         RiskBoundaryReport,
+        RunReviewReport,
         SchemaGuardReport,
         ThesisDraft,
     )
@@ -51,6 +54,7 @@ except ImportError:
     from few_shot import build_layer_few_shot_prompt
     from llm_engine import LLMEngine
     from packet_builder import indicator_payload_unavailable_reason
+    from run_review import build_run_review_report
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +134,7 @@ class VNextOrchestrator:
         if not llm_engine and not available_models:
             raise ValueError("At least one available model is required.")
         self.available_models = available_models
-        self.output_dir = Path(output_dir)
+        self.output_dir = Path(output_dir).resolve()
         self.prompts_dir = Path(prompts_dir) if prompts_dir else Path(__file__).with_name("prompts")
         self.llm_engine = llm_engine or LLMEngine(available_models=available_models)
         self.max_node_retries = max_node_retries
@@ -256,6 +260,15 @@ class VNextOrchestrator:
         token_report = self.llm_engine.get_token_report() if hasattr(self.llm_engine, "get_token_report") else {}
         final_adjudication.token_usage = token_report
         self._save_json("final_adjudication.json", final_adjudication)
+        run_review_report = self._build_run_review_report(
+            packet_model=packet_model,
+            bridge_memos=bridge_memos,
+            synthesis_packet=synthesis_packet,
+            thesis=thesis,
+            risk_report=risk_report,
+            final_adjudication=final_adjudication,
+        )
+        self._save_json("run_review_report.json", run_review_report)
 
         return {
             "context_brief": context_brief,
@@ -268,8 +281,37 @@ class VNextOrchestrator:
             "schema_guard_report": schema_report,
             "analysis_revised": analysis_revised,
             "final_adjudication": final_adjudication,
+            "run_review_report": run_review_report,
             "output_dir": str(self.output_dir),
         }
+
+    def _build_run_review_report(
+        self,
+        *,
+        packet_model: AnalysisPacket,
+        bridge_memos: List[BridgeMemo],
+        synthesis_packet: SynthesisPacket,
+        thesis: ThesisDraft,
+        risk_report: RiskBoundaryReport,
+        final_adjudication: FinalAdjudication,
+    ) -> RunReviewReport:
+        data_integrity = {}
+        data_integrity_path = self.output_dir / "data_integrity_report.json"
+        if data_integrity_path.exists():
+            try:
+                data_integrity = json.loads(data_integrity_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                data_integrity = {}
+        return build_run_review_report(
+            run_dir=str(self.output_dir),
+            analysis_packet=_model_dump(packet_model),
+            bridges=[_model_dump(memo) for memo in bridge_memos],
+            synthesis_packet=_model_dump(synthesis_packet),
+            thesis_draft=_model_dump(thesis),
+            risk_boundary_report=_model_dump(risk_report),
+            final_adjudication=_model_dump(final_adjudication),
+            data_integrity_report=data_integrity,
+        )
 
     def _run_layer_cards(self, packet: AnalysisPacket, context_brief: ContextBrief) -> List[LayerCard]:
         cards: List[LayerCard] = []
@@ -343,6 +385,7 @@ class VNextOrchestrator:
         bridge_summaries: List[BridgeSynthesisItem] = []
         high_conflicts = []
         high_typed_conflicts = []
+        principal_contradictions = []
         evidence_index: Dict[str, Dict[str, Any]] = {}
 
         for card in layer_cards:
@@ -416,6 +459,8 @@ class VNextOrchestrator:
             high_typed_conflicts.extend(
                 conflict for conflict in memo.typed_conflicts if _severity_is_high_or_medium(conflict)
             )
+            if getattr(memo, "principal_contradiction", None) is not None:
+                principal_contradictions.append(memo.principal_contradiction)
             bridge_summaries.append(
                 BridgeSynthesisItem(
                     bridge_type=memo.bridge_type,
@@ -428,6 +473,10 @@ class VNextOrchestrator:
                     typed_conflicts=[_model_dump(conflict) for conflict in memo.typed_conflicts],
                     resonance_chains=[_model_dump(chain) for chain in memo.resonance_chains],
                     transmission_paths=[_model_dump(path) for path in memo.transmission_paths],
+                    principal_contradiction=_model_dump(memo.principal_contradiction) if getattr(memo, "principal_contradiction", None) is not None else None,
+                    secondary_contradictions=[_model_dump(item) for item in memo.secondary_contradictions],
+                    price_reflection_map=[_model_dump(item) for item in memo.price_reflection_map],
+                    contradiction_transformation_signals=[_model_dump(item) for item in memo.contradiction_transformation_signals],
                     unresolved_questions=memo.unresolved_questions,
                     event_refs=list(dict.fromkeys(getattr(memo, "event_refs", []) or [])),
                     implication_for_ndx=memo.implication_for_ndx,
@@ -447,6 +496,7 @@ class VNextOrchestrator:
             bridge_summaries=bridge_summaries,
             high_severity_conflicts=high_conflicts,
             high_severity_typed_conflicts=high_typed_conflicts,
+            principal_contradictions=principal_contradictions,
             objective_firewall_summary=objective_firewall,
             evidence_index=evidence_index,
             event_index=packet.event_refs,
@@ -454,6 +504,7 @@ class VNextOrchestrator:
                 "必须消费 objective_firewall_summary：若 object_clear、authority_clear、cross_layer_verified 任一为 false，主结论必须降置信度并保留警示。",
                 "Thesis 只能整合 synthesis_packet，不得重新分析原始指标。",
                 "必须保留 high_severity_conflicts，不能为了叙事流畅而抹平张力。",
+                "必须显式消费 principal_contradictions / Bridge principal_contradiction：先判断当前主要矛盾，再判断价格是否已经反映风险，最后才给动作。",
                 "所有 key_support_chains 的 evidence_refs 必须来自 evidence_index 或 bridge_summaries。",
                 "event_refs 与 evidence_refs 分离：事件只能写成解释/触发/观察背景，不能用来证明估值、广度、利率或趋势结论。",
             ],
@@ -604,6 +655,18 @@ class VNextOrchestrator:
         reader_conclusion = _model_dump(getattr(thesis, "reader_conclusion", {}) or {})
         if isinstance(reader_conclusion, dict):
             all_evidence_refs.update(reader_conclusion.get("evidence_refs", []) or [])
+        thesis_principal_contradiction = _model_dump(getattr(thesis, "principal_contradiction", None))
+        if not isinstance(thesis_principal_contradiction, dict):
+            thesis_principal_contradiction = None
+        thesis_secondary_contradictions = [
+            _model_dump(item) for item in getattr(thesis, "secondary_contradictions", []) or []
+        ]
+        thesis_price_reflection_map = [
+            _model_dump(item) for item in getattr(thesis, "price_reflection_map", []) or []
+        ]
+        for item in [thesis_principal_contradiction] + thesis_secondary_contradictions + thesis_price_reflection_map:
+            if isinstance(item, dict):
+                all_evidence_refs.update(item.get("evidence_refs", []) or [])
 
         key_evidence_refs: Dict[str, Dict[str, Any]] = {}
         for ref in sorted(all_evidence_refs):
@@ -668,6 +731,9 @@ class VNextOrchestrator:
 
         # ── Typed conflicts as dicts ──
         high_severity_typed = [_model_dump(conflict) for conflict in synthesis_packet.high_severity_typed_conflicts]
+        principal_contradictions = [
+            _model_dump(item) for item in getattr(synthesis_packet, "principal_contradictions", []) or []
+        ]
 
         return GovernanceInputPacket(
             thesis_main=thesis.main_thesis or "",
@@ -686,7 +752,11 @@ class VNextOrchestrator:
             thesis_confirmation_cost=getattr(thesis, "confirmation_cost", "") or "",
             thesis_invalidation_conditions=list(getattr(thesis, "invalidation_conditions", []) or []),
             thesis_reader_conclusion=reader_conclusion if isinstance(reader_conclusion, dict) else {},
+            thesis_principal_contradiction=thesis_principal_contradiction,
+            thesis_secondary_contradictions=thesis_secondary_contradictions,
+            thesis_price_reflection_map=thesis_price_reflection_map,
             high_severity_typed_conflicts=high_severity_typed,
+            principal_contradictions=principal_contradictions,
             objective_firewall_summary=obj_firewall,
             schema_passed=schema_passed,
             schema_structural_issues=list(schema_structural),
@@ -1349,6 +1419,10 @@ class VNextOrchestrator:
             "- typed_conflicts: 结构化冲突地图，包含 conflict_id、conflict_type、severity、confidence、description、mechanism、implication、involved_layers、evidence_refs、event_refs、falsifiers。\n"
             "- resonance_chains: 跨层共振链，必须包含 involved_layers、evidence_refs、event_refs、mechanism、confirming_indicators、falsifiers、implication；没有证据或确认指标时降低 confidence。\n"
             "- transmission_paths: 跨层传导路径，说明压力或支撑如何从 source_layer 传到 target_layer，可选 event_refs 只能表示催化剂或背景。\n"
+            "- principal_contradiction: 主要矛盾地图，必须说明 contradiction_id、summary、why_principal、dominant_side、secondary_side、price_reflection、action_implication、conflict_refs、evidence_refs、transformation_signals。\n"
+            "- secondary_contradictions: 次要矛盾列表，说明为什么当前不是主导项，以及它如何约束行动力度、节奏或置信度。\n"
+            "- price_reflection_map: 判断关键风险/叙事是否已经进入价格，可用 not_reflected / partially_reflected / largely_reflected / over_reflected / unclear。\n"
+            "- contradiction_transformation_signals: 会让主次矛盾或矛盾主导方面发生转化的可观察信号。\n"
             "- unresolved_questions: 仍需 Thesis/Critic/Risk 保留的问题。\n"
             "旧字段 conflicts 仍要填写，用于兼容；typed_conflicts 是更高优先级的 Bridge v2 产物。\n"
             "如果输入包含 event_refs，Bridge 可以引用 event_ref 解释触发/背景/观察，但不得把事件写成 evidence_ref，也不得说事件“证明”某个数值指标结论。\n"
@@ -1382,6 +1456,8 @@ class VNextOrchestrator:
             "portfolio_actions 至少覆盖 core_position、tactical_position、waiting_cash；"
             "confirmation_cost 必须说明等待确认降低什么风险、可能错过什么；"
             "invalidation_conditions 必须是可观察条件；reader_conclusion 面向普通读者，不能写内部审批话术。"
+            "principal_contradiction 必须来自 synthesis_packet.principal_contradictions 或 bridge_summaries[].principal_contradiction，并说明 why_principal、price_reflection、action_implication；"
+            "secondary_contradictions 和 price_reflection_map 必须保留关键次要矛盾和定价判断。"
             "不要把“风险存在”自动等同于“赔率不利”，也不要把“估值改善”自动等同于可以买。"
         )
         return f"{thesis_contract}\n\n{prompt_body}"
@@ -1629,17 +1705,95 @@ class VNextOrchestrator:
                         for item in normalized["transmission_paths"]
                         if isinstance(item, dict)
                     ]
+                if isinstance(normalized.get("principal_contradiction"), dict):
+                    normalized["principal_contradiction"] = self._normalize_principal_contradiction(
+                        normalized["principal_contradiction"],
+                        typed_conflicts=normalized.get("typed_conflicts", []),
+                    )
+                else:
+                    normalized["principal_contradiction"] = self._derive_principal_contradiction(
+                        normalized.get("typed_conflicts", []),
+                        normalized.get("conflicts", []),
+                    )
+                if isinstance(normalized.get("secondary_contradictions"), list):
+                    normalized["secondary_contradictions"] = [
+                        self._normalize_secondary_contradiction(item)
+                        for item in normalized["secondary_contradictions"]
+                        if isinstance(item, dict)
+                    ]
+                else:
+                    normalized["secondary_contradictions"] = self._derive_secondary_contradictions(
+                        normalized.get("typed_conflicts", []),
+                        normalized.get("principal_contradiction"),
+                    )
+                if isinstance(normalized.get("price_reflection_map"), list):
+                    normalized["price_reflection_map"] = [
+                        self._normalize_price_reflection_assessment(item)
+                        for item in normalized["price_reflection_map"]
+                        if isinstance(item, dict)
+                    ]
+                else:
+                    normalized["price_reflection_map"] = self._derive_price_reflection_map(
+                        normalized.get("principal_contradiction"),
+                    )
+                if isinstance(normalized.get("contradiction_transformation_signals"), list):
+                    normalized["contradiction_transformation_signals"] = [
+                        self._normalize_contradiction_transformation_signal(item)
+                        for item in normalized["contradiction_transformation_signals"]
+                        if isinstance(item, dict)
+                    ]
+                else:
+                    principal = normalized.get("principal_contradiction") or {}
+                    normalized["contradiction_transformation_signals"] = list(principal.get("transformation_signals", []) or [])
                 if not isinstance(normalized.get("unresolved_questions"), list):
                     normalized["unresolved_questions"] = []
                 normalized["event_refs"] = self._coerce_event_refs_list(normalized.get("event_refs"))
+            if stage_key in {"thesis", "reviser"}:
+                thesis_payload = normalized.get("revised_thesis") if stage_key == "reviser" else normalized
+                if isinstance(thesis_payload, dict):
+                    if isinstance(thesis_payload.get("principal_contradiction"), dict):
+                        thesis_payload["principal_contradiction"] = self._normalize_principal_contradiction(
+                            thesis_payload["principal_contradiction"],
+                            typed_conflicts=[],
+                        )
+                    if isinstance(thesis_payload.get("secondary_contradictions"), list):
+                        thesis_payload["secondary_contradictions"] = [
+                            self._normalize_secondary_contradiction(item)
+                            for item in thesis_payload["secondary_contradictions"]
+                            if isinstance(item, dict)
+                        ]
+                    if isinstance(thesis_payload.get("price_reflection_map"), list):
+                        thesis_payload["price_reflection_map"] = [
+                            self._normalize_price_reflection_assessment(item)
+                            for item in thesis_payload["price_reflection_map"]
+                            if isinstance(item, dict)
+                        ]
             if stage_key == "reviser":
                 revised_thesis = normalized.get("revised_thesis")
                 if isinstance(revised_thesis, dict) and isinstance(revised_thesis.get("retained_conflicts"), list):
                     revised_thesis["retained_conflicts"] = [
                         self._normalize_conflict(item) for item in revised_thesis["retained_conflicts"]
                     ]
-        if stage_key == "final" and not isinstance(normalized.get("token_usage"), dict):
-            normalized["token_usage"] = None
+        if stage_key == "final":
+            if not isinstance(normalized.get("token_usage"), dict):
+                normalized["token_usage"] = None
+            if isinstance(normalized.get("principal_contradiction"), dict):
+                normalized["principal_contradiction"] = self._normalize_principal_contradiction(
+                    normalized["principal_contradiction"],
+                    typed_conflicts=[],
+                )
+            if isinstance(normalized.get("secondary_contradictions"), list):
+                normalized["secondary_contradictions"] = [
+                    self._normalize_secondary_contradiction(item)
+                    for item in normalized["secondary_contradictions"]
+                    if isinstance(item, dict)
+                ]
+            if isinstance(normalized.get("price_reflection_map"), list):
+                normalized["price_reflection_map"] = [
+                    self._normalize_price_reflection_assessment(item)
+                    for item in normalized["price_reflection_map"]
+                    if isinstance(item, dict)
+                ]
         return normalized
 
     def _normalize_indicator_analysis(self, item: Dict[str, Any], *, layer_label: Optional[str] = None) -> Dict[str, Any]:
@@ -1834,6 +1988,189 @@ class VNextOrchestrator:
         value = normalized.get("event_refs")
         normalized["event_refs"] = self._coerce_event_refs_list(value)
         return normalized
+
+    def _normalize_contradiction_transformation_signal(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(item)
+        normalized["signal"] = str(normalized.get("signal") or normalized.get("condition") or normalized.get("trigger") or "")
+        normalized["direction"] = str(normalized.get("direction") or normalized.get("turns_toward") or "")
+        normalized["implication"] = str(normalized.get("implication") or normalized.get("action_implication") or "")
+        normalized["evidence_refs"] = self._coerce_string_list(normalized.get("evidence_refs"))
+        normalized["event_refs"] = self._coerce_event_refs_list(normalized.get("event_refs"))
+        return normalized
+
+    def _normalize_price_reflection_assessment(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(item)
+        normalized["target"] = str(
+            normalized.get("target")
+            or normalized.get("conflict_id")
+            or normalized.get("risk")
+            or normalized.get("narrative")
+            or "price_reflection"
+        )
+        reflected = str(
+            normalized.get("reflected_state")
+            or normalized.get("reflection_state")
+            or normalized.get("price_reflection")
+            or "unclear"
+        ).strip().lower()
+        allowed = {"not_reflected", "partially_reflected", "largely_reflected", "over_reflected", "unclear"}
+        normalized["reflected_state"] = reflected if reflected in allowed else "unclear"
+        normalized["rationale"] = str(normalized.get("rationale") or normalized.get("reasoning") or "")
+        normalized["evidence_refs"] = self._coerce_string_list(normalized.get("evidence_refs"))
+        normalized["missing_evidence"] = self._coerce_string_list(normalized.get("missing_evidence"))
+        return normalized
+
+    def _normalize_principal_contradiction(
+        self,
+        item: Dict[str, Any],
+        *,
+        typed_conflicts: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        normalized = dict(item)
+        normalized["contradiction_id"] = str(
+            normalized.get("contradiction_id")
+            or normalized.get("conflict_id")
+            or normalized.get("id")
+            or "principal_contradiction"
+        )
+        normalized["summary"] = str(normalized.get("summary") or normalized.get("description") or "")
+        normalized["why_principal"] = str(normalized.get("why_principal") or normalized.get("rationale") or "")
+        normalized["dominant_side"] = str(normalized.get("dominant_side") or normalized.get("main_side") or "")
+        normalized["secondary_side"] = str(normalized.get("secondary_side") or normalized.get("other_side") or "")
+        normalized["price_reflection"] = str(
+            normalized.get("price_reflection")
+            or normalized.get("price_reflection_assessment")
+            or normalized.get("pricing")
+            or ""
+        )
+        normalized["action_implication"] = str(normalized.get("action_implication") or normalized.get("implication") or "")
+        normalized["conflict_refs"] = self._coerce_string_list(normalized.get("conflict_refs"))
+        if not normalized["conflict_refs"]:
+            conflict_id = normalized["contradiction_id"]
+            normalized["conflict_refs"] = [conflict_id] if conflict_id else []
+        normalized["evidence_refs"] = self._coerce_string_list(normalized.get("evidence_refs"))
+        if not normalized["evidence_refs"] and typed_conflicts:
+            for conflict in typed_conflicts:
+                if conflict.get("conflict_id") in normalized["conflict_refs"]:
+                    normalized["evidence_refs"] = self._coerce_string_list(conflict.get("evidence_refs"))
+                    break
+        signals = normalized.get("transformation_signals")
+        if isinstance(signals, list):
+            normalized["transformation_signals"] = [
+                self._normalize_contradiction_transformation_signal(signal)
+                for signal in signals
+                if isinstance(signal, dict)
+            ]
+        else:
+            normalized["transformation_signals"] = []
+        normalized["unresolved_questions"] = self._coerce_string_list(normalized.get("unresolved_questions"))
+        return normalized
+
+    def _normalize_secondary_contradiction(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(item)
+        normalized["contradiction_id"] = str(
+            normalized.get("contradiction_id")
+            or normalized.get("conflict_id")
+            or normalized.get("id")
+            or "secondary_contradiction"
+        )
+        normalized["summary"] = str(normalized.get("summary") or normalized.get("description") or "")
+        normalized["why_secondary"] = str(normalized.get("why_secondary") or normalized.get("rationale") or "")
+        normalized["action_constraint"] = str(normalized.get("action_constraint") or normalized.get("implication") or "")
+        normalized["evidence_refs"] = self._coerce_string_list(normalized.get("evidence_refs"))
+        return normalized
+
+    def _derive_principal_contradiction(
+        self,
+        typed_conflicts: List[Dict[str, Any]],
+        legacy_conflicts: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        candidates = typed_conflicts if typed_conflicts else [
+            self._normalize_typed_conflict(
+                {
+                    "conflict_id": conflict.get("conflict_type") or f"legacy_conflict_{index}",
+                    "conflict_type": conflict.get("conflict_type") or "legacy_conflict",
+                    "severity": conflict.get("severity", "medium"),
+                    "confidence": conflict.get("confidence", "medium"),
+                    "description": conflict.get("description", ""),
+                    "mechanism": conflict.get("mechanism", ""),
+                    "implication": conflict.get("implication", ""),
+                    "involved_layers": conflict.get("involved_layers", []),
+                    "evidence_refs": conflict.get("evidence_refs", []),
+                    "falsifiers": conflict.get("falsifiers", []),
+                }
+            )
+            for index, conflict in enumerate(legacy_conflicts or [])
+            if isinstance(conflict, dict)
+        ]
+        if not candidates:
+            return None
+
+        severity_rank = {"high": 3, "medium": 2, "low": 1}
+        principal = sorted(
+            candidates,
+            key=lambda item: severity_rank.get(str(item.get("severity", "medium")).lower(), 2),
+            reverse=True,
+        )[0]
+        conflict_id = str(principal.get("conflict_id") or principal.get("conflict_type") or "principal_contradiction")
+        return self._normalize_principal_contradiction(
+            {
+                "contradiction_id": conflict_id,
+                "summary": principal.get("description", ""),
+                "why_principal": "由当前最高严重度跨层冲突兜底推导；Thesis 必须进一步判断其是否真正主导收益风险。",
+                "dominant_side": "unclear_until_thesis",
+                "secondary_side": "",
+                "price_reflection": "unclear",
+                "action_implication": principal.get("implication", ""),
+                "conflict_refs": [conflict_id],
+                "evidence_refs": principal.get("evidence_refs", []),
+                "transformation_signals": [
+                    {"signal": falsifier, "direction": "weaken_principal_contradiction"}
+                    for falsifier in self._coerce_string_list(principal.get("falsifiers"))[:3]
+                ],
+                "unresolved_questions": [],
+            },
+            typed_conflicts=candidates,
+        )
+
+    def _derive_secondary_contradictions(
+        self,
+        typed_conflicts: List[Dict[str, Any]],
+        principal: Optional[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        principal_refs = set((principal or {}).get("conflict_refs", []) or [])
+        secondary = []
+        for conflict in typed_conflicts or []:
+            conflict_id = str(conflict.get("conflict_id") or conflict.get("conflict_type") or "")
+            if conflict_id and conflict_id in principal_refs:
+                continue
+            secondary.append(
+                self._normalize_secondary_contradiction(
+                    {
+                        "contradiction_id": conflict_id,
+                        "summary": conflict.get("description", ""),
+                        "why_secondary": "未被 Bridge 标为当前主要矛盾，但仍约束行动力度或置信度。",
+                        "action_constraint": conflict.get("implication", ""),
+                        "evidence_refs": conflict.get("evidence_refs", []),
+                    }
+                )
+            )
+        return secondary[:4]
+
+    def _derive_price_reflection_map(self, principal: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not principal:
+            return []
+        return [
+            self._normalize_price_reflection_assessment(
+                {
+                    "target": principal.get("contradiction_id") or "principal_contradiction",
+                    "reflected_state": principal.get("price_reflection") or "unclear",
+                    "rationale": "Bridge 未原生提供 price_reflection_map；从主要矛盾价格反映字段兜底生成。",
+                    "evidence_refs": principal.get("evidence_refs", []),
+                    "missing_evidence": [] if principal.get("price_reflection") else ["Bridge 未说明价格反映程度"],
+                }
+            )
+        ]
 
     def _coerce_event_refs_list(self, value: Any) -> List[str]:
         """BridgeMemo.event_refs must be List[str]; defend against AI mirroring the

@@ -16,7 +16,10 @@ from agent_analysis.contracts import (
     RiskBoundaryReport,
     AnalysisRevised,
     FinalAdjudication,
+    PriceReflectionAssessment,
+    PrincipalContradiction,
     ReaderFinal,
+    SecondaryContradiction,
 )
 
 
@@ -202,6 +205,31 @@ def test_decision_semantics_fields_roundtrip():
         confirmation_cost="等待全部确认会错过主要反弹段。",
         invalidation_conditions=["信用继续恶化"],
         reader_conclusion={"one_liner": "风险高，但赔率可能改善。"},
+        principal_contradiction=PrincipalContradiction(
+            contradiction_id="panic_priced_vs_unconfirmed_risk",
+            summary="风险未解除但价格可能部分反映坏消息。",
+            why_principal="它决定战术仓是否承认确认成本。",
+            dominant_side="风险未解除。",
+            secondary_side="赔率可能改善。",
+            price_reflection="partially_reflected",
+            action_implication="战术仓分批。",
+            evidence_refs=["L4.valuation"],
+        ),
+        secondary_contradictions=[
+            SecondaryContradiction(
+                contradiction_id="breadth_vs_trend",
+                summary="广度约束趋势质量。",
+                why_secondary="它约束动作速度。",
+                action_constraint="不支持无纪律满仓。",
+            )
+        ],
+        price_reflection_map=[
+            PriceReflectionAssessment(
+                target="panic_priced_vs_unconfirmed_risk",
+                reflected_state="partially_reflected",
+                rationale="估值压缩说明部分坏消息进入价格。",
+            )
+        ],
     )
     data = thesis.model_dump()
     restored = ThesisDraft.model_validate(data)
@@ -209,6 +237,9 @@ def test_decision_semantics_fields_roundtrip():
     assert restored.time_horizon_views[0].horizon == "one_to_three_months"
     assert restored.portfolio_actions[0].bucket == "tactical_position"
     assert restored.reader_conclusion.one_liner == "风险高，但赔率可能改善。"
+    assert restored.principal_contradiction.price_reflection == "partially_reflected"
+    assert restored.secondary_contradictions[0].contradiction_id == "breadth_vs_trend"
+    assert restored.price_reflection_map[0].target == "panic_priced_vs_unconfirmed_risk"
 
     final = FinalAdjudication(
         approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
@@ -221,5 +252,9 @@ def test_decision_semantics_fields_roundtrip():
         adjudicator_notes="内部质量说明。",
         reader_final=ReaderFinal(one_liner="读者结论。"),
         payoff_assessment="高风险高赔率候选。",
+        principal_contradiction=thesis.principal_contradiction,
+        price_reflection_map=thesis.price_reflection_map,
     )
-    assert FinalAdjudication.model_validate(final.model_dump()).reader_final.one_liner == "读者结论。"
+    restored_final = FinalAdjudication.model_validate(final.model_dump())
+    assert restored_final.reader_final.one_liner == "读者结论。"
+    assert restored_final.principal_contradiction.contradiction_id == "panic_priced_vs_unconfirmed_risk"
