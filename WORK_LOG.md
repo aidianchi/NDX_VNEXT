@@ -4,6 +4,69 @@
 
 ---
 
+## 2026-05-20
+
+### 毛泽东思想与反脆弱性通俗架构总纲
+
+完成内容：
+
+- 新增 `docs/2026-05-20_MAO_THOUGHT_ANTIFRAGILE_FRAMEWORK_PLAIN.md`，作为 `Decision Semantics` 改革的通俗思想总纲。
+- 明确以毛泽东思想为主：实事求是、矛盾论、实践论、持久战、集中优势兵力、群众路线、批评与自我批评；塔勒布反脆弱性作为现代风险语言补充，不喧宾夺主。
+- 把 2025-04-09 回测问题重新表述为思想路线问题：系统看见风险，但没有抓住“风险是否已被价格反映、赔率是否变厚、等待确认是否有成本”这个主要矛盾。
+- 定义目标架构的通俗链路：调查研究 -> 分层侦察 -> 矛盾地图 -> 主要矛盾 -> 价格与赔率 -> 作战方案 -> 纪律检查 -> 读者报告 -> 实践复盘。
+- 给后续 AI 写明工作指令：不要新增孤立“黄金坑 agent”；优先改 Thesis / Final / Risk / Review 的决策语义；Final 禁止内部审批话术进入读者报告；回测复盘必须把错误归因写回架构规则。
+
+验证结果：
+
+- 人工复读全文，确认它以通俗语言服务架构改革，不替代已有技术设计报告；与 `NEXT_STEPS.md` 中 P0 `Decision Semantics 架构改革第一轮` 方向一致。
+
+剩余边界：
+
+- 本轮是思想总纲和后续施工指导，尚未修改 prompts、contracts、reporter 或回测评估逻辑。
+
+### Decision Semantics 架构改革方向报告
+
+完成内容：
+
+- 新增 `docs/2026-05-20_DECISION_SEMANTICS_ARCHITECTURE_REFORM.md`，把 2025-04-09 回测暴露出的核心问题收敛成一份可交给后续 AI 执行的方向性设计报告。
+- 明确改革不是新增“黄金坑候选”补丁，而是把最终综合层从“证据综合成立场”升级为“证据解释价格、价格决定赔率、赔率约束行动”。
+- 报告基于资产定价第一性原理组织：价格由现金流、贴现率和风险补偿共同决定；估值低不等于低风险，但可能意味着未来补偿变厚；价值、动量、流动性和情绪必须在不同维度上共同解释。
+- 明确保留 L1-L5 context isolation、DataIntegrity、IndicatorCanon、Bridge typed conflicts 等底层资产；重塑 Thesis / Final 的职责边界。
+- 提出目标架构：Evidence State -> Bridge Typed Relationships -> Decision Thesis -> Quality Gate -> Reader Brief。
+- 定义 Decision Thesis 应输出状态诊断、价格隐含叙事、赔率判断、分时间尺度视图、核心仓/战术仓/等待者动作、确认成本、失效条件和读者结论。
+- 同步 `NEXT_STEPS.md`，新增 P0 `Decision Semantics 架构改革第一轮`，把报告设为后续实现依据。
+
+验证结果：
+
+- 人工复读新增报告，确认它定方向和功能，不写逐函数施工单；后续 AI 可按报告先改 contracts/prompts，再改 native brief。
+
+剩余边界：
+
+- 本轮只完成架构方向报告和待办登记，尚未修改 contracts、prompts、Final 输出或 brief UI。
+- 后续实现必须避免为 2025-04-09 过拟合；至少用报告中的多情景样本集压测。
+
+---
+
+## 2026-05-20
+
+### vNext Agent 流水线通俗审查报告
+
+完成内容：
+
+- 新增 `PLAIN_LANGUAGE_AGENT_PIPELINE_REVIEW.md`，用非技术读者能读懂的方式逐段说明 vNext 主链路：数据包、Context Brief、Object Canon、L1-L5、Bridge、SynthesisPacket、Objective Firewall、Thesis、Critic、Risk Sentinel、Schema Guard、GovernanceInputPacket、Reviser、Final、DataIntegrity 和输出层。
+- 每个阶段都按“收到什么、怎么分析、输出什么字段、字段价值、垃圾风险、结构判断”展开，重点回应“上游详细分析后下游只收到 fear 这类低价值标签”的担忧。
+- 结合最近 `2025-04-09` run 的真实 artifact 观察，记录当前系统并未只传状态标签，而是保留了 `narrative`、`reasoning_process`、`evidence_refs`、`layer_synthesis`、`internal_conflict_analysis` 等高价值字段；同时点名 `normalized_state`、`risk_flags`、重复 `implication`、空 `description`、泛化 `evidence_refs` 等仍需治理的垃圾风险。
+- 复核 `ContextBrief` 实际生成逻辑：全局 `context_brief.json` 包含五层 `layer_highlights`，但 L1-L5 使用的是 `layer_context_briefs/Lx.json`，只保留本层 highlights 且清空 `apparent_cross_layer_signals`；报告已补充这一点，避免误判为当前实现越权。
+- 在 `NEXT_STEPS.md` 新增 “Agent 输入/输出审计视图原型”，作为低复杂度优先方向：先做只读可视化审计，让用户直观看到每个 agent 的输入、输出、字段价值和下游消费去向，再决定是否做更复杂的自动审计规则。
+- 瘦身 `NEXT_STEPS.md`：删除“已完成快照”、长期流水账和验证命令，只保留当前待完成事项、后续方向思考和暂缓边界；已完成事实继续由 `WORK_LOG.md` 承担。
+
+验证结果：
+
+- 人工复核报告结构，确认覆盖 L1、L2、L3、L4、L5、Bridge、Thesis、Critic、Risk、Schema Guard、Reviser、Final 等主 agent / 主阶段。
+- 用文本搜索确认报告包含关键字段：`indicator_analyses`、`reasoning_process`、`evidence_refs`、`typed_conflicts`、`resonance_chains`、`transmission_paths`、`must_preserve_risks`、`blocking_issues`。
+- 人工复核 `src/agent_analysis/orchestrator.py` 中 `_build_context_brief()`、`_build_layer_context_brief()` 和 `_run_layer_cards()`，确认 L1-L5 payload 使用 layer-local brief。
+- 人工复核 `NEXT_STEPS.md`，确认不再包含“已完成快照”章节。
+
 ## 2026-05-19
 
 ### 2025-04-09 新 run 复盘与 yfinance 回测稳定性窄修
