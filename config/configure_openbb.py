@@ -17,6 +17,8 @@ load_dotenv(BASE_DIR / '.env')
 # OpenBB 配置目录
 OPENBB_DIR = Path.home() / '.openbb'
 OPENBB_DIR.mkdir(exist_ok=True)
+OPENBB_PLATFORM_DIR = Path.home() / '.openbb_platform'
+OPENBB_PLATFORM_DIR.mkdir(exist_ok=True)
 
 # 从 .env 读取 API keys
 api_keys = {
@@ -49,6 +51,22 @@ with open(settings_file, 'w') as f:
     json.dump(settings, f, indent=2)
 
 print(f"\nOpenBB settings written to: {settings_file}")
+platform_settings_file = OPENBB_PLATFORM_DIR / "user_settings.json"
+if platform_settings_file.exists():
+    with open(platform_settings_file) as f:
+        platform_settings = json.load(f)
+else:
+    platform_settings = {}
+
+platform_settings.setdefault("credentials", {})
+platform_settings.setdefault("preferences", {})
+platform_settings.setdefault("defaults", {"commands": {}})
+platform_settings["credentials"].update(api_keys)
+
+with open(platform_settings_file, 'w') as f:
+    json.dump(platform_settings, f, indent=2)
+
+print(f"OpenBB Platform user settings written to: {platform_settings_file}")
 print("\nYou can also set environment variables with OPENBB_ prefix:")
 print("  export OPENBB_API_FMP_KEY=your_key")
 print("  export OPENBB_API_FRED_KEY=your_key")

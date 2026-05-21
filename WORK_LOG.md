@@ -4,6 +4,57 @@
 
 ---
 
+## 2026-05-21
+
+### 历史日期全量试跑：2024-08-05 闸门阻断 + 2025-04-09 对照通过
+
+完成内容：
+
+- 按历史压测样本池先尝试 `2024-08-05` 全量两段式运行：先 collect-only 生成 `output/data/data_collected_v9_20240805.json`，再用该快照进入分析。
+- `2024-08-05` collect-only 成功，但暴露真实数据边界：L3 最新成分股历史价格批量下载被 yfinance 限流拖慢，且 `SNDK` 等当前成分股在回测日没有价格史；`runtime_diagnostics.yfinance.total_backoff_seconds=280.0`，4 个 latest-only 指标在回测中被跳过。
+- `2024-08-05` 分析阶段被 DataIntegrity 正确阻断：`NDX Valuation (Manual)` 的 `data_quality.data_date=2025-04-09` 晚于回测日 `2024-08-05`，触发 `future_data_after_backtest_date`。这说明回测有效日期闸门在工作，不能强行把报告当作可发布结论。
+- 为完成主链试跑，用已知数据边界可通过的 `2025-04-09` 作为对照，使用 `output/data/data_collected_v9_20250409.json` 重新跑完整 vNext 主链。
+- `2025-04-09` 对照 run 输出最终判断：`中性偏谨慎。宏观限制与估值安全边际拉锯，核心仓防守，战术仓轻仓试探。`
+- Final 的主要矛盾为：NDX 估值相对便宜且 ERP 厚，但高实际利率、信用压力等宏观限制仍主导；价格反映为 `partially_reflected`。
+- Risk Sentinel 输出双向风险：包含踏空/确认成本和 false safety risk；Run Review 对 data / bridge / thesis / risk / final / expression 均为 pass。
+- 重新生成 native brief 和 workbench：`output/reports/vnext_brief_20260519_2233_20250409_0000.html`、`output/reports/vnext_workbench_20260519_2233_20250409_0000.html`。
+
+验证结果：
+
+- `python3 src/main.py --collect-only --date 2024-08-05 --models deepseek-v4-flash --skip-report --disable-charts --enable-news`：collect-only 通过，写出 `output/data/data_collected_v9_20240805.json`。
+- `python3 src/main.py --date 2024-08-05 --data-json output/data/data_collected_v9_20240805.json --models deepseek-v4-flash --skip-report --disable-charts --enable-news`：被 DataIntegrity 阻断，原因是未来日期估值数据进入 2024-08-05 回测。
+- `python3 src/main.py --date 2025-04-09 --data-json output/data/data_collected_v9_20250409.json --models deepseek-v4-flash --skip-report --disable-charts --enable-news`：通过，`publish_status=publishable`，`approval_status=approved_with_reservations`。
+- `python3 src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20250409 --template brief`：通过。
+- `python3 src/interactive_chart_workbench.py --run-dir output/analysis/vnext/20250409 --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity`：通过。
+- `python3 src/report_visual_regression.py --brief-html output/reports/vnext_brief_20260519_2233_20250409_0000.html --workbench-html output/reports/vnext_workbench_20260519_2233_20250409_0000.html --console-html output/reports/vnext_research_console.html --output-dir output/visual_regression/test_run_20250409_20260521`：passed；desktop/mobile brief/workbench/console layout checks 均无 issues。
+
+剩余边界：
+
+- `2024-08-05` 要成为正式 P0 样本，必须先解决或显式替换晚于回测日的手工估值输入；否则只能作为“DataIntegrity 应阻断”的负样本。
+- L3 point-in-time universe 仍是主要数据缺口；当前成分股代理会在历史回测中制造幸存者偏差和无价格史问题。
+
+### vNext 历史压测日期事实调查
+
+完成内容：
+
+- 新增 `docs/2026-05-21_VNEXT_HISTORICAL_TEST_DATES_RESEARCH.md`，作为后续 Mao 思想路线主链、Outcome Review 和历史数据研究助理的日期样本池。
+- 基于 `QQQ` 可交易代理、`^NDX` 指数参照和 `^VIX` 波动参照，量化多个候选日期之后约 1 周、1 个月、3 个月、6 个月、12 个月的表现和后续最大下探。
+- 将样本分为 P0 最小压测、P1 扩展压测和 P2 长历史/数据覆盖压测，避免只围绕 `2025-04-09` 过拟合。
+- 覆盖典型样本与不典型反例：恐慌反转、趋势顶部、下跌后风险未释放、政策流动性转向、局部信用压力与政策兜底、龙头抱团与集中度脆弱、VIX 机制性冲击等。
+- 明确边界：本文的后续收益是后验事实，只能用于测试和 Outcome Review，不得泄露进历史回测当日 prompt；事件背景仍需单独证明发布时间和数据日期。
+
+验证结果：
+
+- 使用 Yahoo Finance 历史日线经 `yfinance` 下载，覆盖 1999-03-10 至 2026-05-20。
+- 人工复读新增文档，确认其把价格后验事实、事件背景和正式回测证据边界分开。
+
+剩余边界：
+
+- 尚未为这些日期批量运行 collect-only / vNext fresh run。
+- 早期样本如 2000、2002、2008、2009 的 L3/L4 point-in-time 数据覆盖可能不足，正式纳入前需要先跑数据边界检查。
+
+---
+
 ## 2026-05-20
 
 ### Mao 思想路线主链第二轮第二段：Review 复盘闭环
