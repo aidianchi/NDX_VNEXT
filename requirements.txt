@@ -16,6 +16,12 @@ pandas-datareader>=0.10.0
 # Nasdaq-100 historical constituents (GitHub-only package)
 nasdaq-100-ticker-history @ git+https://github.com/jmccarrell/n100tickers.git
 
+# Optional unified financial data platform used for provider coverage research
+# and candidate replacement probes. These are not wired into the production
+# L1-L5 data path by default.
+openbb[all]==4.7.1
+openbb-polygon==1.5.1
+
 openai>=1.0.0
 google-genai>=1.0.0
 

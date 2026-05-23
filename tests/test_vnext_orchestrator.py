@@ -1252,3 +1252,105 @@ def test_l4_prompt_leaves_short_lists_intact(tmp_path: Path):
     }
     summarized = orchestrator._summarize_l4_raw_data_for_prompt(raw_data)
     assert summarized["get_test"]["value"]["short_series"] == short_list
+
+
+def test_price_reflection_map_is_expanded_to_required_categories(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    normalized = orchestrator._normalize_payload(
+        "bridge",
+        {
+            "bridge_type": "macro_valuation",
+            "layers_connected": ["L1", "L4"],
+            "cross_layer_claims": [],
+            "conflicts": [
+                {
+                    "conflict_type": "rates_vs_valuation",
+                    "severity": "high",
+                    "description": "真实利率仍高但估值压缩。",
+                    "implication": "动作需要分层。",
+                    "involved_layers": ["L1", "L4"],
+                }
+            ],
+            "typed_conflicts": [
+                {
+                    "conflict_id": "rates_vs_valuation",
+                    "conflict_type": "rates_vs_valuation",
+                    "severity": "high",
+                    "description": "真实利率仍高但估值压缩。",
+                    "mechanism": "贴现率与风险补偿拉扯。",
+                    "implication": "动作需要分层。",
+                    "involved_layers": ["L1", "L4"],
+                    "evidence_refs": ["L1.get_10y_real_rate", "L4.get_ndx_pe_and_earnings_yield"],
+                    "falsifiers": ["利率快速回落"],
+                }
+            ],
+            "principal_contradiction": {
+                "contradiction_id": "rates_vs_valuation",
+                "summary": "利率压力与估值修复拉扯。",
+                "price_reflection": "partially_reflected",
+                "evidence_refs": ["L1.get_10y_real_rate", "L4.get_ndx_pe_and_earnings_yield"],
+            },
+            "price_reflection_map": [
+                {
+                    "category": "valuation",
+                    "target": "valuation_risk_premium",
+                    "reflected_state": "partially_reflected",
+                    "rationale": "估值压缩说明坏消息部分进入价格。",
+                    "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+                    "counterevidence": ["盈利继续下修会削弱估值吸引力。"],
+                    "action_implication": "支持战术试探。",
+                }
+            ],
+            "implication_for_ndx": "风险和赔率并存。",
+            "key_uncertainties": ["信用是否恶化"],
+        },
+    )
+
+    categories = {item["category"] for item in normalized["price_reflection_map"]}
+    assert {"credit", "rates", "valuation", "technical_panic", "liquidity"} <= categories
+    assert next(item for item in normalized["price_reflection_map"] if item["category"] == "credit")["reflected_state"] == "unclear"
+
+
+def test_thesis_string_lists_are_normalized_to_structured_views(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    normalized = orchestrator._normalize_payload(
+        "thesis",
+        {
+            "environment_assessment": "环境仍有压力。",
+            "valuation_assessment": "估值压缩。",
+            "timing_assessment": "技术恐慌。",
+            "main_thesis": "高风险高赔率候选。",
+            "time_horizon_views": ["短期高波动", "中期赔率改善", "长期看盈利与利率"],
+            "portfolio_actions": ["核心仓守纪律", "战术仓分批", "等待者承认确认成本"],
+            "reader_conclusion": {
+                "one_liner": "风险仍高但赔率改善。",
+                "three_reasons": ["风险仍在", "估值压缩", "等待有成本"],
+                "time_horizon_summary": ["短期别追涨", "中期分批"],
+                "action_summary": ["核心仓不砍", "战术仓试探"],
+                "invalidation_summary": ["信用恶化"],
+            },
+            "principal_contradiction": {
+                "contradiction_id": "panic_priced_vs_risk",
+                "summary": "风险与赔率拉扯。",
+                "price_reflection": "partially_reflected",
+            },
+            "overall_confidence": "medium",
+        },
+    )
+
+    assert normalized["time_horizon_views"][0]["horizon"] == "same_day_or_days"
+    assert normalized["time_horizon_views"][0]["view"] == "短期高波动"
+    assert normalized["portfolio_actions"][1]["bucket"] == "tactical_position"
+    assert normalized["portfolio_actions"][1]["action"] == "战术仓分批"
+    assert normalized["reader_conclusion"]["time_horizon_summary"][0]["view"] == "短期别追涨"
+    assert normalized["reader_conclusion"]["action_summary"][0]["action"] == "核心仓不砍"

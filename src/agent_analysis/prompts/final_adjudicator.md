@@ -115,7 +115,63 @@
     "unresolved_questions": []
   },
   "secondary_contradictions": [],
-  "price_reflection_map": [],
+  "price_reflection_map": [
+    {
+      "category": "credit",
+      "target": "credit_stress",
+      "reflected_state": "partially_reflected",
+      "rationale": "信用压力已部分进入价格，但若继续走阔会削弱反弹质量。",
+      "evidence_refs": ["L2.get_credit_spreads"],
+      "counterevidence": ["信用继续恶化说明风险未充分反映。"],
+      "counterevidence_refs": ["L2.get_credit_spreads"],
+      "action_implication": "信用未稳定前，战术仓分批，核心仓不升级。",
+      "missing_evidence": []
+    },
+    {
+      "category": "rates",
+      "target": "rates_discount_rate",
+      "reflected_state": "unclear",
+      "rationale": "真实利率压力是否完全进入估值仍需验证。",
+      "evidence_refs": ["L1.get_10y_real_rate"],
+      "counterevidence": ["利率若继续上行，估值修复会被压制。"],
+      "counterevidence_refs": ["L1.get_10y_real_rate"],
+      "action_implication": "限制核心仓加速，只允许有纪律战术动作。",
+      "missing_evidence": []
+    },
+    {
+      "category": "valuation",
+      "target": "valuation_risk_premium",
+      "reflected_state": "partially_reflected",
+      "rationale": "估值压缩提高风险补偿，但不能证明基本面风险消失。",
+      "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+      "counterevidence": ["盈利下修会抵消估值压缩的吸引力。"],
+      "counterevidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+      "action_implication": "支持战术试探，不支持无条件满仓。",
+      "missing_evidence": []
+    },
+    {
+      "category": "technical_panic",
+      "target": "technical_panic_positioning",
+      "reflected_state": "largely_reflected",
+      "rationale": "恐慌和价格下杀可能已反映短期悲观。",
+      "evidence_refs": ["L5.get_ta_indicators"],
+      "counterevidence": ["跌破恐慌低点且量价恶化，说明抛压未释放完。"],
+      "counterevidence_refs": ["L5.get_ta_indicators"],
+      "action_implication": "允许小比例试探，失效条件必须清楚。",
+      "missing_evidence": []
+    },
+    {
+      "category": "liquidity",
+      "target": "liquidity_conditions",
+      "reflected_state": "unclear",
+      "rationale": "政策/市场流动性是否改善仍是反弹能否延续的关键。",
+      "evidence_refs": ["L1.get_fed_funds_rate"],
+      "counterevidence": ["流动性继续收缩会让价格反弹缺少燃料。"],
+      "counterevidence_refs": ["L1.get_fed_funds_rate"],
+      "action_implication": "等待者跟踪流动性转化信号，战术仓保留撤退条件。",
+      "missing_evidence": []
+    }
+  ],
   "reader_final": {
     "one_liner": "这不是低风险环境，但可能是高风险高赔率候选，动作要按时间尺度和仓位拆开。",
     "three_reasons": [
@@ -194,6 +250,7 @@
 - `time_horizon_views` 至少覆盖数日、1-3个月、6-12个月。
 - `portfolio_actions` 至少覆盖核心仓、战术仓、等待者。
 - `principal_contradiction` 必须非空，除非 quality_gate.blocking_issues 明确说明 Bridge/Thesis 缺少足够证据。
+- `price_reflection_map` 必须覆盖 `credit`、`rates`、`valuation`、`technical_panic`、`liquidity` 五类；每类必须有反证和动作影响。缺证据就写 `unclear`，不能省略。
 - `reader_final.one_liner` 或 three_reasons 必须用人话体现主要矛盾，不能只写“批准/保留/完整”。
 - `confirmation_cost` 必须说明等待确认的收益和代价。
 - `invalidation_conditions` 必须可观察。

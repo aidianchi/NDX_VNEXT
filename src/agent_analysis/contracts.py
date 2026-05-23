@@ -509,6 +509,10 @@ class PriceReflectionAssessment(BaseModel):
     """Bridge assessment of whether a conflict is already reflected in price."""
     model_config = {"extra": "allow"}
 
+    category: str = Field(
+        "other",
+        description="价格反映类别：credit / rates / valuation / technical_panic / liquidity / other",
+    )
     target: str = Field(..., description="被评估的风险、冲突或叙事")
     reflected_state: str = Field(
         ...,
@@ -516,6 +520,9 @@ class PriceReflectionAssessment(BaseModel):
     )
     rationale: str = Field("", description="为什么这样判断")
     evidence_refs: List[str] = Field(default_factory=list, description="支撑该定价判断的证据")
+    counterevidence: List[str] = Field(default_factory=list, description="反证或削弱该定价判断的观察")
+    counterevidence_refs: List[str] = Field(default_factory=list, description="反证引用")
+    action_implication: str = Field("", description="对核心仓、战术仓或等待者动作的影响")
     missing_evidence: List[str] = Field(default_factory=list, description="仍缺少的证据")
 
 
@@ -1307,6 +1314,44 @@ class RunReviewReport(BaseModel):
     attribution_findings: List[RunReviewFinding] = Field(default_factory=list, description="按责任层归因的发现")
     learning_updates: List[str] = Field(default_factory=list, description="可沉淀到架构/提示词/测试的学习点")
     next_run_checks: List[str] = Field(default_factory=list, description="下一轮真实 run 必查项")
+
+
+class OutcomeWindowPerformance(BaseModel):
+    """Post-hoc QQQ performance for one review window."""
+    model_config = {"extra": "allow"}
+
+    window: str = Field(..., description="复盘窗口，如 +1w / +1m / +3m / +6m / +12m")
+    target_trading_days: int = Field(..., description="目标交易日间隔")
+    start_date: str = Field("", description="回测日或其后的实际交易日")
+    end_date: str = Field("", description="窗口对应的实际交易日")
+    start_close: Optional[float] = Field(None, description="QQQ 起点收盘价")
+    end_close: Optional[float] = Field(None, description="QQQ 终点收盘价")
+    return_pct: Optional[float] = Field(None, description="窗口收益率百分比")
+    max_drawdown_pct: Optional[float] = Field(None, description="窗口内相对起点最大下探百分比")
+    data_status: str = Field("missing", description="available / missing / incomplete")
+
+
+class OutcomeReviewReport(BaseModel):
+    """Post-hoc market outcome review. It must not feed historical-day prompts."""
+    model_config = {"extra": "allow"}
+
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    review_mode: str = Field("post_hoc_outcome_review", description="复盘模式")
+    run_dir: str = Field("", description="被复盘的 run 目录")
+    backtest_date: Optional[str] = Field(None, description="历史判断日")
+    tradable_proxy: str = Field("QQQ", description="后验表现代理")
+    source: str = Field("", description="后验价格数据来源")
+    leakage_boundary: str = Field(
+        "Outcome Review is generated only after Final; these post-hoc returns are not included in L1-L5, Bridge, Thesis, Risk, Reviser, or Final prompts.",
+        description="后验隔离说明",
+    )
+    windows: List[OutcomeWindowPerformance] = Field(default_factory=list, description="后续表现窗口")
+    market_outcome_label: str = Field("", description="后续市场大涨/下跌/震荡等标签")
+    caution_review: str = Field("", description="后续大涨时，原判断是否过度谨慎")
+    aggression_review: str = Field("", description="后续下跌时，原判断是否过度冒进")
+    attribution_findings: List[RunReviewFinding] = Field(default_factory=list, description="Outcome 角度归因")
+    learning_updates: List[str] = Field(default_factory=list, description="可沉淀的学习点")
+    prompt_leakage_checks: List[str] = Field(default_factory=list, description="确认后验未入当日 prompt 的检查")
 
 
 # ============================================================================

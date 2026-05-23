@@ -103,8 +103,52 @@
   "reader_conclusion": {
     "one_liner": "给普通读者的一句话结论。",
     "three_reasons": ["理由一", "理由二", "理由三"],
-    "time_horizon_summary": [],
-    "action_summary": [],
+    "time_horizon_summary": [
+      {
+        "horizon": "same_day_or_days",
+        "view": "短期仍是高波动，不把单日反抽当作趋势确认。",
+        "action_implication": "只适合小比例试探或等待更清楚的二次确认。",
+        "evidence_refs": ["L5.get_ta_indicators"],
+        "invalidation_conditions": ["跌破恐慌低点且风险偏好同步恶化"]
+      },
+      {
+        "horizon": "one_to_three_months",
+        "view": "若信用不再恶化，估值压缩后的风险补偿可能变厚。",
+        "action_implication": "战术仓可分批，而不是一次性满仓。",
+        "evidence_refs": ["L2.get_credit_spreads", "L4.get_ndx_pe_and_earnings_yield"],
+        "invalidation_conditions": ["信用继续加速恶化"]
+      },
+      {
+        "horizon": "six_to_twelve_months",
+        "view": "长期核心仓取决于盈利和真实利率是否允许估值修复。",
+        "action_implication": "核心仓守纪律，不因恐慌被动砍掉，也不因便宜盲目加满。",
+        "evidence_refs": ["L1.get_10y_real_rate", "L4.get_ndx_pe_and_earnings_yield"],
+        "invalidation_conditions": ["盈利预期结构性下修且真实利率维持高位"]
+      }
+    ],
+    "action_summary": [
+      {
+        "bucket": "core_position",
+        "action": "维持纪律，不因恐慌被动砍掉核心仓。",
+        "rationale": "核心仓服务长期指数质量，但必须接受估值和盈利边界。",
+        "conditions": ["无结构性盈利恶化证据"],
+        "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"]
+      },
+      {
+        "bucket": "tactical_position",
+        "action": "风险不再加速恶化时分批试探。",
+        "rationale": "战术仓可以用可承受小错误换高赔率窗口。",
+        "conditions": ["价格不再跌破恐慌低点", "信用不继续恶化"],
+        "evidence_refs": ["L2.get_credit_spreads", "L5.get_ta_indicators"]
+      },
+      {
+        "bucket": "waiting_cash",
+        "action": "等待者必须明确等待代价和复核条件。",
+        "rationale": "确认信号更安全，但可能牺牲赔率最厚的一段。",
+        "conditions": ["信用和广度同步修复后再提高置信度"],
+        "evidence_refs": ["L3.get_market_breadth"]
+      }
+    ],
     "invalidation_summary": ["最重要失效条件"],
     "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"]
   },
@@ -140,10 +184,14 @@
   ],
   "price_reflection_map": [
     {
+      "category": "valuation",
       "target": "valuation_discount_rate",
       "reflected_state": "partially_reflected",
       "rationale": "价格下杀和估值压缩说明坏消息已有进入价格，但信用和盈利压力仍需验证。",
       "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+      "counterevidence": ["如果盈利继续下修，估值压缩不能单独证明便宜。"],
+      "counterevidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+      "action_implication": "支持战术赔率改善，但不能单独支持核心仓无纪律加仓。",
       "missing_evidence": ["更完整的 point-in-time 盈利预期"]
     }
   ],
@@ -197,6 +245,15 @@
 - 当前承担风险的补偿是否比下跌前更好。
 - 缺少确认是降低仓位和速度的理由，不是自动否定赔率改善的理由。
 
+`price_reflection_map` 至少覆盖五类：`credit`、`rates`、`valuation`、`technical_panic`、`liquidity`。每类都要说明：
+
+- 风险是否未被、部分、充分或过度反映。
+- 支撑证据引用是什么。
+- 反证或削弱判断的证据是什么。
+- 对核心仓、战术仓、等待现金动作有什么影响。
+
+如果某一类证据不足，写 `reflected_state: "unclear"` 和 `missing_evidence`，不要省略该类。
+
 ### Step 4: 拆分时间尺度和仓位动作
 
 至少覆盖：
@@ -230,6 +287,8 @@
 - `state_diagnosis`、`priced_narrative`、`payoff_assessment` 是否非空？
 - `time_horizon_views` 是否至少覆盖数日、1-3个月、6-12个月？
 - `portfolio_actions` 是否至少覆盖核心仓、战术仓、等待者？
+- `reader_conclusion.time_horizon_summary` 和 `reader_conclusion.action_summary` 是否也是对象数组，而不是字符串数组？
+- `price_reflection_map` 是否覆盖信用、利率、估值、技术恐慌、流动性五类，并包含反证和动作影响？
 - `confirmation_cost` 是否同时说明降低的风险和付出的机会成本？
 - `reader_conclusion` 是否是读者语言，而不是内部审批话术？
 - `principal_contradiction` 是否来自 Bridge 矛盾地图，并解释主要矛盾、价格反映和行动含义？

@@ -21,6 +21,8 @@ INTERNAL_READER_PHRASES = [
     "adjudicator",
 ]
 
+REQUIRED_PRICE_REFLECTION_CATEGORIES = {"credit", "rates", "valuation", "technical_panic", "liquidity"}
+
 
 def _load_json(path: Path, default: Any) -> Any:
     if not path.exists():
@@ -186,6 +188,50 @@ def build_run_review_report(
                 recommended_rule_update="Bridge 必须判断关键风险/叙事是否已进入价格。",
             )
         )
+    else:
+        categories = {str(item.get("category") or "") for item in price_map if isinstance(item, dict)}
+        missing_categories = sorted(REQUIRED_PRICE_REFLECTION_CATEGORIES - categories)
+        thin_items = [
+            str(item.get("category") or item.get("target") or "price_reflection")
+            for item in price_map
+            if isinstance(item, dict)
+            and (
+                not item.get("rationale")
+                or (not _as_list(item.get("counterevidence")) and not _as_list(item.get("counterevidence_refs")))
+                or not item.get("action_implication")
+            )
+        ]
+        if missing_categories:
+            findings.append(
+                _finding(
+                    "bridge",
+                    "observe",
+                    "Bridge price_reflection_map 未覆盖五类价格反映："
+                    + ", ".join(missing_categories),
+                    ["bridge_memos/bridge_0.json:price_reflection_map"],
+                    recommended_rule_update="价格反映地图至少拆成 credit/rates/valuation/technical_panic/liquidity 五类。",
+                )
+            )
+        elif thin_items:
+            findings.append(
+                _finding(
+                    "bridge",
+                    "observe",
+                    "Bridge price_reflection_map 覆盖五类，但部分项缺少反证或动作含义："
+                    + ", ".join(thin_items[:5]),
+                    ["bridge_memos/bridge_0.json:price_reflection_map"],
+                    recommended_rule_update="每类价格反映必须同时写 reflected_state、证据、反证和动作影响。",
+                )
+            )
+        else:
+            findings.append(
+                _finding(
+                    "bridge",
+                    "pass",
+                    "Bridge price_reflection_map 已覆盖信用、利率、估值、技术恐慌、流动性五类，并包含反证与动作含义。",
+                    ["bridge_memos/bridge_0.json:price_reflection_map"],
+                )
+            )
 
     thesis_principal = thesis_draft.get("principal_contradiction") if isinstance(thesis_draft.get("principal_contradiction"), dict) else {}
     if not thesis_principal:

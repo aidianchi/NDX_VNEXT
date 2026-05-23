@@ -18,6 +18,7 @@ try:
         GovernanceInputPacket,
         LayerCard,
         ObjectiveFirewallSummary,
+        OutcomeReviewReport,
         SynthesisPacket,
         LayerSynthesisItem,
         BridgeSynthesisItem,
@@ -31,6 +32,7 @@ try:
     from .llm_engine import LLMEngine
     from .packet_builder import indicator_payload_unavailable_reason
     from .run_review import build_run_review_report
+    from .outcome_review import build_outcome_review_report
 except ImportError:
     from contracts import (
         AnalysisPacket,
@@ -42,6 +44,7 @@ except ImportError:
         GovernanceInputPacket,
         LayerCard,
         ObjectiveFirewallSummary,
+        OutcomeReviewReport,
         SynthesisPacket,
         LayerSynthesisItem,
         BridgeSynthesisItem,
@@ -55,6 +58,7 @@ except ImportError:
     from llm_engine import LLMEngine
     from packet_builder import indicator_payload_unavailable_reason
     from run_review import build_run_review_report
+    from outcome_review import build_outcome_review_report
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +103,34 @@ def _enum_value(value: Any) -> Any:
 
 
 _SEVERITY_HIGH_MEDIUM = frozenset({"high", "medium"})
+
+PRICE_REFLECTION_CATEGORIES: Dict[str, Dict[str, str]] = {
+    "credit": {
+        "target": "credit_stress",
+        "label": "信用",
+        "hint": "信用利差、融资压力或信用风险是否已被价格反映",
+    },
+    "rates": {
+        "target": "rates_discount_rate",
+        "label": "利率",
+        "hint": "名义/真实利率和贴现率压力是否已被价格反映",
+    },
+    "valuation": {
+        "target": "valuation_risk_premium",
+        "label": "估值",
+        "hint": "估值压缩、ERP 或盈利风险补偿是否已被价格反映",
+    },
+    "technical_panic": {
+        "target": "technical_panic_positioning",
+        "label": "技术恐慌",
+        "hint": "恐慌、波动、趋势破坏或反抽是否已被价格反映",
+    },
+    "liquidity": {
+        "target": "liquidity_conditions",
+        "label": "流动性",
+        "hint": "政策/市场流动性冲击与修复是否已被价格反映",
+    },
+}
 
 
 def _severity_is_high_or_medium(conflict: Any) -> bool:
@@ -269,6 +301,11 @@ class VNextOrchestrator:
             final_adjudication=final_adjudication,
         )
         self._save_json("run_review_report.json", run_review_report)
+        outcome_review_report = self._build_outcome_review_report(
+            packet_model=packet_model,
+            final_adjudication=final_adjudication,
+        )
+        self._save_json("outcome_review_report.json", outcome_review_report)
 
         return {
             "context_brief": context_brief,
@@ -282,6 +319,7 @@ class VNextOrchestrator:
             "analysis_revised": analysis_revised,
             "final_adjudication": final_adjudication,
             "run_review_report": run_review_report,
+            "outcome_review_report": outcome_review_report,
             "output_dir": str(self.output_dir),
         }
 
@@ -311,6 +349,30 @@ class VNextOrchestrator:
             risk_boundary_report=_model_dump(risk_report),
             final_adjudication=_model_dump(final_adjudication),
             data_integrity_report=data_integrity,
+        )
+
+    def _build_outcome_review_report(
+        self,
+        *,
+        packet_model: AnalysisPacket,
+        final_adjudication: FinalAdjudication,
+    ) -> OutcomeReviewReport:
+        meta = packet_model.meta if isinstance(packet_model.meta, dict) else {}
+        backtest_date = meta.get("backtest_date")
+        if not backtest_date:
+            return OutcomeReviewReport(
+                run_dir=str(self.output_dir),
+                backtest_date=meta.get("data_date"),
+                source="not_run_for_live_or_non_backtest_context",
+                market_outcome_label="not_applicable",
+                caution_review="非历史回测语境，不接入后验 QQQ 表现。",
+                aggression_review="非历史回测语境，不接入后验 QQQ 表现。",
+                prompt_leakage_checks=["Outcome Review skipped because packet has no backtest_date."],
+            )
+        return build_outcome_review_report(
+            run_dir=str(self.output_dir),
+            backtest_date=backtest_date,
+            final_adjudication=_model_dump(final_adjudication),
         )
 
     def _run_layer_cards(self, packet: AnalysisPacket, context_brief: ContextBrief) -> List[LayerCard]:
@@ -1736,6 +1798,11 @@ class VNextOrchestrator:
                     normalized["price_reflection_map"] = self._derive_price_reflection_map(
                         normalized.get("principal_contradiction"),
                     )
+                normalized["price_reflection_map"] = self._ensure_price_reflection_categories(
+                    normalized.get("price_reflection_map", []),
+                    fallback_evidence_refs=(normalized.get("principal_contradiction") or {}).get("evidence_refs", []),
+                    stage_key=stage_key,
+                )
                 if isinstance(normalized.get("contradiction_transformation_signals"), list):
                     normalized["contradiction_transformation_signals"] = [
                         self._normalize_contradiction_transformation_signal(item)
@@ -1768,6 +1835,26 @@ class VNextOrchestrator:
                             for item in thesis_payload["price_reflection_map"]
                             if isinstance(item, dict)
                         ]
+                    else:
+                        thesis_payload["price_reflection_map"] = []
+                    thesis_payload["price_reflection_map"] = self._ensure_price_reflection_categories(
+                        thesis_payload["price_reflection_map"],
+                        fallback_evidence_refs=(thesis_payload.get("principal_contradiction") or {}).get("evidence_refs", []),
+                        stage_key=stage_key,
+                    )
+                    for key in ("time_horizon_views", "portfolio_actions"):
+                        if not isinstance(thesis_payload.get(key), list):
+                            thesis_payload[key] = []
+                    thesis_payload["time_horizon_views"] = [
+                        self._normalize_time_horizon_view(item, index=index)
+                        for index, item in enumerate(thesis_payload.get("time_horizon_views", []))
+                    ]
+                    thesis_payload["portfolio_actions"] = [
+                        self._normalize_portfolio_action(item, index=index)
+                        for index, item in enumerate(thesis_payload.get("portfolio_actions", []))
+                    ]
+                    if isinstance(thesis_payload.get("reader_conclusion"), dict):
+                        thesis_payload["reader_conclusion"] = self._normalize_reader_final(thesis_payload["reader_conclusion"])
             if stage_key == "reviser":
                 revised_thesis = normalized.get("revised_thesis")
                 if isinstance(revised_thesis, dict) and isinstance(revised_thesis.get("retained_conflicts"), list):
@@ -1794,6 +1881,26 @@ class VNextOrchestrator:
                     for item in normalized["price_reflection_map"]
                     if isinstance(item, dict)
                 ]
+            else:
+                normalized["price_reflection_map"] = []
+            normalized["price_reflection_map"] = self._ensure_price_reflection_categories(
+                normalized["price_reflection_map"],
+                fallback_evidence_refs=(normalized.get("principal_contradiction") or {}).get("evidence_refs", []),
+                stage_key=stage_key,
+            )
+            for key in ("time_horizon_views", "portfolio_actions"):
+                if not isinstance(normalized.get(key), list):
+                    normalized[key] = []
+            normalized["time_horizon_views"] = [
+                self._normalize_time_horizon_view(item, index=index)
+                for index, item in enumerate(normalized.get("time_horizon_views", []))
+            ]
+            normalized["portfolio_actions"] = [
+                self._normalize_portfolio_action(item, index=index)
+                for index, item in enumerate(normalized.get("portfolio_actions", []))
+            ]
+            if isinstance(normalized.get("reader_final"), dict):
+                normalized["reader_final"] = self._normalize_reader_final(normalized["reader_final"])
         return normalized
 
     def _normalize_indicator_analysis(self, item: Dict[str, Any], *, layer_label: Optional[str] = None) -> Dict[str, Any]:
@@ -2000,11 +2107,20 @@ class VNextOrchestrator:
 
     def _normalize_price_reflection_assessment(self, item: Dict[str, Any]) -> Dict[str, Any]:
         normalized = dict(item)
+        normalized["category"] = self._normalize_price_reflection_category(
+            normalized.get("category")
+            or normalized.get("type")
+            or normalized.get("dimension")
+            or normalized.get("target")
+            or normalized.get("risk")
+            or normalized.get("narrative")
+        )
         normalized["target"] = str(
             normalized.get("target")
             or normalized.get("conflict_id")
             or normalized.get("risk")
             or normalized.get("narrative")
+            or PRICE_REFLECTION_CATEGORIES.get(normalized["category"], {}).get("target")
             or "price_reflection"
         )
         reflected = str(
@@ -2017,8 +2133,130 @@ class VNextOrchestrator:
         normalized["reflected_state"] = reflected if reflected in allowed else "unclear"
         normalized["rationale"] = str(normalized.get("rationale") or normalized.get("reasoning") or "")
         normalized["evidence_refs"] = self._coerce_string_list(normalized.get("evidence_refs"))
+        normalized["counterevidence"] = self._coerce_string_list(
+            normalized.get("counterevidence")
+            or normalized.get("counter_evidence")
+            or normalized.get("falsifiers")
+            or normalized.get("contrary_evidence")
+        )
+        normalized["counterevidence_refs"] = self._coerce_string_list(
+            normalized.get("counterevidence_refs")
+            or normalized.get("counter_evidence_refs")
+            or normalized.get("contrary_evidence_refs")
+        )
+        normalized["action_implication"] = str(
+            normalized.get("action_implication")
+            or normalized.get("portfolio_implication")
+            or normalized.get("implication")
+            or ""
+        )
         normalized["missing_evidence"] = self._coerce_string_list(normalized.get("missing_evidence"))
         return normalized
+
+    def _normalize_price_reflection_category(self, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        text = text.replace("-", "_").replace(" ", "_")
+        aliases = {
+            "credit": ("credit", "spread", "oas", "hyg", "信用", "利差"),
+            "rates": ("rates", "rate", "yield", "real_rate", "treasury", "discount", "利率", "真实利率", "贴现"),
+            "valuation": ("valuation", "erp", "earnings", "pe", "multiple", "估值", "盈利", "风险补偿"),
+            "technical_panic": ("technical", "panic", "trend", "volatility", "vix", "vxn", "ta", "恐慌", "技术", "波动", "趋势"),
+            "liquidity": ("liquidity", "m2", "fed", "policy", "流动性", "政策", "美联储"),
+        }
+        for category, tokens in aliases.items():
+            if any(token in text for token in tokens):
+                return category
+        return text if text in PRICE_REFLECTION_CATEGORIES else "other"
+
+    def _ensure_price_reflection_categories(
+        self,
+        items: List[Dict[str, Any]],
+        *,
+        fallback_evidence_refs: Any = None,
+        stage_key: str = "",
+    ) -> List[Dict[str, Any]]:
+        normalized_items = [self._normalize_price_reflection_assessment(item) for item in items if isinstance(item, dict)]
+        seen = {item.get("category") for item in normalized_items}
+        fallback_refs = self._coerce_string_list(fallback_evidence_refs)
+        for category, meta in PRICE_REFLECTION_CATEGORIES.items():
+            if category in seen:
+                continue
+            normalized_items.append(
+                self._normalize_price_reflection_assessment(
+                    {
+                        "category": category,
+                        "target": meta["target"],
+                        "reflected_state": "unclear",
+                        "rationale": f"{meta['label']}价格反映未被 {stage_key or 'stage'} 原生拆出；保留为待复核项，不能当作已分析充分。",
+                        "evidence_refs": fallback_refs[:2],
+                        "counterevidence": ["缺少该类别的结构化反证分析"],
+                        "counterevidence_refs": [],
+                        "action_implication": "降低该类别对动作升级/降级的确定性；等待下游或人工复盘补足。",
+                        "missing_evidence": [meta["hint"]],
+                    }
+                )
+            )
+        return normalized_items
+
+    def _normalize_time_horizon_view(self, item: Any, *, index: int = 0) -> Dict[str, Any]:
+        horizons = ["same_day_or_days", "one_to_three_months", "six_to_twelve_months"]
+        if not isinstance(item, dict):
+            text = str(item)
+            return {
+                "horizon": horizons[index] if index < len(horizons) else f"horizon_{index + 1}",
+                "view": text,
+                "action_implication": "模型以字符串输出；归一化层仅保留语义，证据引用仍需结构化补足。",
+                "evidence_refs": [],
+                "invalidation_conditions": [],
+            }
+        normalized = dict(item)
+        default_horizon = horizons[index] if index < len(horizons) else f"horizon_{index + 1}"
+        normalized["horizon"] = str(normalized.get("horizon") or default_horizon)
+        normalized["view"] = str(normalized.get("view") or normalized.get("summary") or normalized.get("thesis") or "")
+        normalized["action_implication"] = str(normalized.get("action_implication") or normalized.get("action") or "")
+        normalized["evidence_refs"] = self._coerce_string_list(normalized.get("evidence_refs"))
+        normalized["invalidation_conditions"] = self._coerce_string_list(normalized.get("invalidation_conditions"))
+        return normalized
+
+    def _normalize_portfolio_action(self, item: Any, *, index: int = 0) -> Dict[str, Any]:
+        buckets = ["core_position", "tactical_position", "waiting_cash"]
+        if not isinstance(item, dict):
+            text = str(item)
+            return {
+                "bucket": buckets[index] if index < len(buckets) else f"bucket_{index + 1}",
+                "action": text,
+                "rationale": "模型以字符串输出；归一化层仅保留语义，证据引用仍需结构化补足。",
+                "conditions": [],
+                "evidence_refs": [],
+            }
+        normalized = dict(item)
+        default_bucket = buckets[index] if index < len(buckets) else f"bucket_{index + 1}"
+        normalized["bucket"] = str(normalized.get("bucket") or normalized.get("position_bucket") or default_bucket)
+        normalized["action"] = str(normalized.get("action") or normalized.get("recommendation") or normalized.get("view") or "")
+        normalized["rationale"] = str(normalized.get("rationale") or normalized.get("reasoning") or "")
+        normalized["conditions"] = self._coerce_string_list(normalized.get("conditions"))
+        normalized["evidence_refs"] = self._coerce_string_list(normalized.get("evidence_refs"))
+        return normalized
+
+    def _normalize_reader_final(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(payload)
+        normalized["three_reasons"] = self._coerce_string_list(normalized.get("three_reasons"))
+        normalized["invalidation_summary"] = self._coerce_string_list(normalized.get("invalidation_summary"))
+        normalized["evidence_refs"] = self._coerce_string_list(normalized.get("evidence_refs"))
+        normalized["time_horizon_summary"] = [
+            self._normalize_time_horizon_view(item, index=index)
+            for index, item in enumerate(self._as_list_for_normalization(normalized.get("time_horizon_summary")))
+        ]
+        normalized["action_summary"] = [
+            self._normalize_portfolio_action(item, index=index)
+            for index, item in enumerate(self._as_list_for_normalization(normalized.get("action_summary")))
+        ]
+        return normalized
+
+    def _as_list_for_normalization(self, value: Any) -> List[Any]:
+        if value is None:
+            return []
+        return value if isinstance(value, list) else [value]
 
     def _normalize_principal_contradiction(
         self,
