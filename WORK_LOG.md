@@ -6,6 +6,58 @@
 
 ## 2026-05-21
 
+### vNext Outcome Review + 五类价格反映地图 + 历史实验目录隔离
+
+完成内容：
+
+- 新增 Outcome Review 合同与实现：`OutcomeWindowPerformance` / `OutcomeReviewReport` 和 `src/agent_analysis/outcome_review.py`，在 Final 之后单独接入 QQQ 后续 `+1w/+1m/+3m/+6m/+12m` 表现，只用于事后复盘，不进入 L1-L5 / Bridge / Thesis / Risk / Reviser / Final prompt。
+- Orchestrator 现在会在历史回测 run 末尾写出 `outcome_review_report.json`；非回测语境跳过后验市场表现，避免 live run 误拉未来窗口。
+- 扩展 `PriceReflectionAssessment` 合同：新增 `category`、`counterevidence`、`counterevidence_refs`、`action_implication`，并在归一化层保证价格反映地图至少覆盖 `credit`、`rates`、`valuation`、`technical_panic`、`liquidity` 五类。模型若输出过薄，会补成 `unclear + missing_evidence`，不假装分析充分。
+- 强化 Bridge / Thesis / Final prompts：要求五类价格反映分别说明价格是否已反映、证据、反证和动作影响；Thesis 示例补全 `reader_conclusion.time_horizon_summary` 和 `reader_conclusion.action_summary` 的对象数组，避免模型第一次输出字符串列表。
+- 增强 Thesis / Final 归一化：常见字符串列表会被稳健转换成 `TimeHorizonView` / `PortfolioAction`，保留原语义并留下证据待补足痕迹；不会把缺证据包装成高置信结论。
+- `run_review.py` 增加五类价格反映质量检查；native brief 的 Decision 和 Governance 区现在展示扩展价格反映地图、Outcome Review 窗口收益和复盘结论。
+- `src/main.py` 新增 `--run-id` / `--output-dir`，并把默认历史 run 目录改成独立实验目录形态，如 `20250409_outcome_test_YYYYMMDD_HHMM`，同名时自动追加后缀，避免覆盖 `output/analysis/vnext/20250409` 基准 run。
+
+验证结果：
+
+- `python3 -m pytest -q`：320 passed，4 warnings。
+- `python3 src/main.py --date 2025-04-09 --data-json output/data/data_collected_v9_20250409.json --models deepseek-v4-flash --skip-report --disable-charts --enable-news --run-id 20250409_outcome_test_20260521_codex`：通过，独立目录为 `output/analysis/vnext/20250409_outcome_test_20260521_codex`，未覆盖基准 run。
+- Fresh run 最终立场：`高风险高赔率候选，核心仓维持纪律，战术仓分批试探，等待者需确认代价`，`approval_status=approved_with_reservations`。
+- Fresh run 产物检查：Bridge / Thesis / Final 的 `price_reflection_map` 均覆盖 `credit`、`rates`、`valuation`、`technical_panic`、`liquidity`；Thesis 覆盖 `same_day_or_days`、`one_to_three_months`、`six_to_twelve_months` 和 `core_position`、`tactical_position`、`waiting_cash`。
+- `run_review_report.json` 对 data / bridge / thesis / risk / final / expression 均为 pass，其中 Bridge 五类价格反映检查为 pass。
+- `outcome_review_report.json` 后验 QQQ 窗口：`+1w -4.68%`、`+1m +4.71%`、`+3m +19.06%`、`+6m +31.35%`、`+12m +33.13%`，标签为 `strong_follow_through_rally`；复盘结论要求检查原判断是否低估确认成本和踏空成本。
+- `python3 src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20250409_outcome_test_20260521_codex --template brief`：通过，生成 `output/reports/vnext_brief_20260519_2233_20250409_2026.html`，brief 可见五类价格反映地图和 Outcome Review。
+- 后验隔离检查：`analysis_packet.json`、`context_brief.json`、`synthesis_packet.json`、`thesis_draft.json`、`risk_boundary_report.json`、`analysis_revised.json`、`final_adjudication.json` 均未出现 `outcome_review`、`post_hoc_outcome`、`return_pct`、`+12m` 后验标记。
+
+剩余边界：
+
+- Outcome Review 当前用 QQQ 后验价格做窗口复盘；它能检查过度谨慎/过度冒进方向，但不会把后验自动写回当日判断。
+- 2025-04-09 run 仍沿用既有数据快照，L3 历史成分股下载存在 yfinance 限流诊断；DataIntegrity 未阻断，但 point-in-time universe 仍是长期数据缺口。
+
+### OpenBB vNext 五层覆盖测绘实验
+
+完成内容：
+
+- 切到 `codex/openbb-provider-research` 分支施工，未在 `main` 上继续改动。
+- 将 OpenBB 研究依赖写入 `requirements.txt`：`openbb[all]==4.7.1` 与 `openbb-polygon==1.5.1`。
+- 更新 `config/configure_openbb.py`：从项目 `.env` 同步 API key 到 legacy OpenBB settings 和 OpenBB Platform `user_settings.json`，只打印脱敏信息。
+- 新增非生产脚本 `scripts/openbb_vnext_coverage_probe.py`：按 L1-L5 `function_id` 输出 OpenBB 候选 provider、命令、运行状态、字段、日期、替代评级和回测适配边界。
+- 生成本地运行产物：`output/openbb_coverage/openbb_vnext_coverage_matrix.json`、`.csv`、`openbb_vnext_coverage_report.md`。
+- 新增研究记录 `docs/2026-05-21_OPENBB_VNEXT_COVERAGE_PROBE.md`，说明 42 行覆盖矩阵的结论和下一步路线。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile scripts/openbb_vnext_coverage_probe.py config/configure_openbb.py`：通过。
+- `.venv/bin/python config/configure_openbb.py`：通过；确认已配置 OpenBB 可识别的现有 key，未把完整 key 写入仓库。
+- `.venv/bin/python scripts/openbb_vnext_coverage_probe.py --effective-date 2026-05-20 --lookback-days 45`：通过，生成 42 行覆盖矩阵；结果为 38 `ok`、2 `error`、2 `not_probed`。
+
+剩余边界：
+
+- OpenBB 结果仍未接入生产 L1-L5 主证据链；本轮只是覆盖测绘和候选验证。
+- QQQ top-10 concentration 的 OpenBB FMP 路径当前返回订阅限制，TMX 路径未找到结果；L3 集中度仍需单独找历史持仓或 point-in-time 权重来源。
+- L3 广度的真正难点仍是 point-in-time NDX universe，不是单纯价格数据。
+- L4 估值/盈利可以从 OpenBB 获得更多实时交叉校验和 SEC facts 线索，但 first-reported / historical visibility 仍需 vNext 自己审计。
+
 ### 历史日期全量试跑：2024-08-05 闸门阻断 + 2025-04-09 对照通过
 
 完成内容：
@@ -52,8 +104,6 @@
 
 - 尚未为这些日期批量运行 collect-only / vNext fresh run。
 - 早期样本如 2000、2002、2008、2009 的 L3/L4 point-in-time 数据覆盖可能不足，正式纳入前需要先跑数据边界检查。
-
----
 
 ## 2026-05-20
 

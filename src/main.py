@@ -45,6 +45,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ndx_vnext first runnable chain")
     parser.add_argument("--date", type=str, help="Backtest date in YYYY-MM-DD format.")
     parser.add_argument("--data-json", type=str, help="Use an existing collector output JSON.")
+    parser.add_argument("--run-id", type=str, help="Run id under output/analysis/vnext. Use for isolated historical experiments.")
+    parser.add_argument("--output-dir", type=str, help="Exact output directory for this vNext run.")
     parser.add_argument("--models", type=str, help="Comma-separated model priority override.")
     parser.add_argument("--collect-only", action="store_true", help="Only collect market data JSON, then exit before any LLM calls.")
     parser.add_argument("--enable-news", action="store_true", help="Write an independent official news/event sidecar artifact.")
@@ -104,11 +106,38 @@ def load_data_json(path: str) -> Dict[str, Any]:
         return json.load(handle)
 
 
-def build_run_dir(backtest_date: Optional[str]) -> str:
-    stamp = backtest_date.replace("-", "") if backtest_date else datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(path_config.analysis_dir, "vnext", stamp)
-    os.makedirs(run_dir, exist_ok=True)
-    return run_dir
+def _unique_run_dir(path: str) -> str:
+    if not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)
+        return path
+    index = 2
+    while True:
+        candidate = f"{path}_{index:02d}"
+        if not os.path.exists(candidate):
+            os.makedirs(candidate, exist_ok=True)
+            return candidate
+        index += 1
+
+
+def build_run_dir(
+    backtest_date: Optional[str],
+    *,
+    run_id: Optional[str] = None,
+    output_dir: Optional[str] = None,
+) -> str:
+    if output_dir:
+        return _unique_run_dir(output_dir)
+    if run_id:
+        safe_run_id = run_id.strip().replace("/", "_")
+        if not safe_run_id:
+            raise ValueError("--run-id cannot be empty.")
+        return _unique_run_dir(os.path.join(path_config.analysis_dir, "vnext", safe_run_id))
+    if backtest_date:
+        date_part = backtest_date.replace("-", "")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M")
+        return _unique_run_dir(os.path.join(path_config.analysis_dir, "vnext", f"{date_part}_outcome_test_{stamp}"))
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return _unique_run_dir(os.path.join(path_config.analysis_dir, "vnext", stamp))
 
 
 def collector_output_path(backtest_date: Optional[str]) -> str:
@@ -215,7 +244,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         collector = DataCollector()
         data_json = collector.run(backtest_date=backtest_date)
 
-    run_dir = build_run_dir(backtest_date)
+    run_dir = build_run_dir(backtest_date, run_id=getattr(args, "run_id", None), output_dir=getattr(args, "output_dir", None))
     news_event_ledger_path = ""
     news_event_ledger_payload = None
     if args.enable_news:
@@ -317,6 +346,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
         "approval_status": _enum_value(getattr(artifacts["final_adjudication"], "approval_status", "")),
         "run_review_report": os.path.join(run_dir, "run_review_report.json"),
+        "outcome_review_report": os.path.join(run_dir, "outcome_review_report.json"),
         "models": available_models,
         "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),
         "runtime_diagnostics": _runtime_diagnostics_summary(data_json),

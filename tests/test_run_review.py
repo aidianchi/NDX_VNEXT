@@ -100,3 +100,47 @@ def test_run_review_passes_when_main_chain_fields_exist():
     assert ("risk", "pass") in categories
     assert ("final", "pass") in categories
     assert ("expression", "pass") in categories
+
+
+def test_run_review_observes_thin_price_reflection_map():
+    report = build_run_review_report(
+        run_dir="output/analysis/vnext/test",
+        analysis_packet={"meta": {"backtest_date": "2025-04-09"}},
+        bridges=[
+            {
+                "principal_contradiction": {"summary": "风险与赔率拉扯。", "price_reflection": "partially_reflected"},
+                "price_reflection_map": [
+                    {
+                        "category": "valuation",
+                        "target": "valuation_risk_premium",
+                        "reflected_state": "partially_reflected",
+                        "rationale": "估值压缩。",
+                    }
+                ],
+            }
+        ],
+        thesis_draft={
+            "principal_contradiction": {"summary": "风险与赔率拉扯。", "price_reflection": "partially_reflected"},
+            "priced_narrative": "坏消息部分进入价格。",
+            "payoff_assessment": "高风险高赔率候选。",
+        },
+        risk_boundary_report={
+            "must_preserve_risks": ["信用恶化风险"],
+            "opportunity_costs": [{"condition": "等待全部确认"}],
+            "confirmation_costs": [{"wait_for": "趋势确认"}],
+        },
+        final_adjudication={
+            "final_stance": "高风险高赔率候选",
+            "approval_status": "approved_with_reservations",
+            "principal_contradiction": {"summary": "风险与赔率拉扯。", "price_reflection": "partially_reflected"},
+            "reader_final": {"one_liner": "风险高，但赔率可能改善。"},
+        },
+        data_integrity_report={"publish_status": "publishable"},
+    )
+
+    assert any(
+        item.category == "bridge"
+        and item.severity == "observe"
+        and "credit" in item.finding
+        for item in report.attribution_findings
+    )

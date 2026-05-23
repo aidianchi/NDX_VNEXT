@@ -34,6 +34,8 @@ from .contracts import (
     FinalAdjudication,
     RunReviewFinding,
     RunReviewReport,
+    OutcomeWindowPerformance,
+    OutcomeReviewReport,
     AnalysisPacket,
 )
 
@@ -72,5 +74,7 @@ __all__ = [
     "FinalAdjudication",
     "RunReviewFinding",
     "RunReviewReport",
+    "OutcomeWindowPerformance",
+    "OutcomeReviewReport",
     "AnalysisPacket",
 ]

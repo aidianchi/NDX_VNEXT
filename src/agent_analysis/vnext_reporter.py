@@ -711,6 +711,7 @@ class VNextReportGenerator:
             "risk_boundary_report": _load_json(run_path / "risk_boundary_report.json", {}),
             "schema_guard_report": _load_json(run_path / "schema_guard_report.json", {}),
             "run_review_report": _load_json(run_path / "run_review_report.json", {}),
+            "outcome_review_report": _load_json(run_path / "outcome_review_report.json", {}),
             "data_integrity_report": _load_json(run_path / "data_integrity_report.json", {}),
             "context_brief": _load_json(run_path / "context_brief.json", {}),
             "layer_context_briefs": layer_contexts,
@@ -744,6 +745,7 @@ class VNextReportGenerator:
             "critique": artifacts["critique"],
             "schema_guard_report": artifacts["schema_guard_report"],
             "run_review_report": artifacts.get("run_review_report", {}),
+            "outcome_review_report": artifacts.get("outcome_review_report", {}),
             "data_integrity_report": artifacts.get("data_integrity_report", {}),
             "context_brief": artifacts.get("context_brief", {}),
             "layer_context_briefs": artifacts.get("layer_context_briefs", {}),
@@ -1025,8 +1027,11 @@ class VNextReportGenerator:
         invalidations = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(surface.get("invalidation_conditions"))[:5])
         principal = surface.get("principal_contradiction") if isinstance(surface.get("principal_contradiction"), dict) else {}
         price_rows = "".join(
-            f"<li><b>{_escape(item.get('target', 'price'))}</b>: {_escape(item.get('reflected_state', 'unclear'))} · {_escape(item.get('rationale', ''))}</li>"
-            for item in _as_list(surface.get("price_reflection_map"))[:4]
+            f"<li><b>{_escape(item.get('category') or item.get('target', 'price'))}</b> · {_escape(item.get('reflected_state', 'unclear'))}: "
+            f"{_escape(item.get('rationale', ''))}"
+            f"<br><small>反证: {_escape('; '.join(str(x) for x in _as_list(item.get('counterevidence'))) or '; '.join(str(x) for x in _as_list(item.get('counterevidence_refs'))) or '未列出')} · "
+            f"动作: {_escape(item.get('action_implication', '未说明'))}</small></li>"
+            for item in _as_list(surface.get("price_reflection_map"))[:6]
             if isinstance(item, dict)
         )
         return f"""
@@ -2555,6 +2560,7 @@ class VNextReportGenerator:
         risk = artifacts.get("risk_boundary_report", {}) or {}
         schema = artifacts.get("schema_guard_report", {}) or {}
         review = artifacts.get("run_review_report", {}) or {}
+        outcome = artifacts.get("outcome_review_report", {}) or {}
         firewall = artifacts.get("synthesis_packet", {}).get("objective_firewall_summary", {}) or {}
         failures = "".join(
             f"<li>{_escape(item.get('condition', item))} <span>{_escape(item.get('impact', '')) if isinstance(item, dict) else ''}</span></li>"
@@ -2569,6 +2575,12 @@ class VNextReportGenerator:
             f"<li><b>{_escape(item.get('category', 'review'))}</b> · {_escape(item.get('severity', 'observe'))}: {_escape(item.get('finding', ''))}</li>"
             for item in review_findings
             if isinstance(item, dict)
+        )
+        outcome_rows = "".join(
+            f"<li><b>{_escape(item.get('window', 'window'))}</b>: {_escape(item.get('return_pct', 'n/a'))}%"
+            f" <small>{_escape(item.get('start_date', ''))} → {_escape(item.get('end_date', ''))}</small></li>"
+            for item in _as_list(outcome.get("windows"))
+            if isinstance(item, dict) and item.get("data_status") == "available"
         )
         return f"""
 <section class="panel" id="governance">
@@ -2609,6 +2621,15 @@ class VNextReportGenerator:
       <h3>Run Review</h3>
       <p>{_escape(review.get('review_mode', 'not generated'))}</p>
       <ul>{review_rows or '<li>暂无 run_review_report.json。</li>'}</ul>
+    </article>
+    <article>
+      <h3>Outcome Review</h3>
+      <p>{_escape(outcome.get('market_outcome_label', 'not generated'))}</p>
+      <ul>{outcome_rows or '<li>暂无 outcome_review_report.json 或后续 QQQ 数据不足。</li>'}</ul>
+      <h4>复盘结论</h4>
+      <p>{_escape(outcome.get('caution_review', ''))}</p>
+      <p>{_escape(outcome.get('aggression_review', ''))}</p>
+      <small>{_escape(outcome.get('leakage_boundary', ''))}</small>
     </article>
   </div>
 </section>
@@ -2739,6 +2760,7 @@ class VNextReportGenerator:
             ("Reviser", "analysis_revised.json", artifacts.get("analysis_revised", {}) or {}, "final"),
             ("Final", "final_adjudication.json", artifacts.get("final_adjudication", {}) or {}, "brief"),
             ("Review", "run_review_report.json", artifacts.get("run_review_report", {}) or {}, "next run/docs"),
+            ("Outcome", "outcome_review_report.json", artifacts.get("outcome_review_report", {}) or {}, "post-hoc review only"),
         ]
         cards = []
         for name, path, payload, downstream in stages:
