@@ -464,6 +464,24 @@ def _damodaran_rows_from_packet(packet: Any) -> List[Dict[str, Any]]:
     return [{key: value for key, value in row.items() if value is not None} for row in rows]
 
 
+def _damodaran_meta_from_packet(packet: Any) -> Dict[str, Any]:
+    packet_data = _packet_dict(packet)
+    l4 = packet_data.get("raw_data", {}).get("L4", {}) if isinstance(packet_data, dict) else {}
+    item = l4.get("get_damodaran_us_implied_erp", {}) if isinstance(l4, dict) else {}
+    value = item.get("value", {}) if isinstance(item, dict) else {}
+    if not isinstance(value, dict):
+        return {}
+    windows = value.get("damodaran_erp_historical_percentiles", {}).get("windows", {})
+    return {
+        "current_value": _safe_number(value.get("erp_t12m_adjusted_payout")),
+        "data_cutoff_date": value.get("data_date"),
+        "damodaran_erp_percentile_5y": _safe_number(value.get("damodaran_erp_percentile_5y")),
+        "damodaran_erp_percentile_10y": _safe_number(value.get("damodaran_erp_percentile_10y")),
+        "damodaran_erp_historical_percentiles": windows if isinstance(windows, dict) else {},
+        "percentile_scope": "Damodaran US implied ERP historical percentile; not NDX PE/PB/Forward PE historical percentile",
+    }
+
+
 def build_chart_time_series_artifact(
     *,
     lookback_days: int = DEFAULT_CHART_LOOKBACK_DAYS,
@@ -525,6 +543,7 @@ def build_chart_time_series_artifact(
             "rows": ratio_rows,
         }
     damodaran_rows, damodaran_meta = _filter_rows_to_effective_date(_damodaran_rows_from_packet(analysis_packet), effective_date)
+    damodaran_value_meta = _damodaran_meta_from_packet(analysis_packet)
     payload["series"]["DAMODARAN_ERP_MONTHLY"] = {
         "label": "Damodaran ERP",
         "provider": "Damodaran ERPbymonth.xlsx",
@@ -533,6 +552,7 @@ def build_chart_time_series_artifact(
         "layer": "L4",
         "function_id": "get_damodaran_us_implied_erp",
         "rows": damodaran_rows,
+        **damodaran_value_meta,
         **damodaran_meta,
     }
     return payload

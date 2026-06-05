@@ -144,3 +144,68 @@ def test_run_review_observes_thin_price_reflection_map():
         and "credit" in item.finding
         for item in report.attribution_findings
     )
+
+
+def test_run_review_reports_damodaran_erp_percentile_boundary():
+    report = build_run_review_report(
+        analysis_packet={
+            "raw_data": {
+                "L4": {
+                    "get_damodaran_us_implied_erp": {
+                        "value": {
+                            "data_date": "2026-05-01",
+                            "erp_t12m_adjusted_payout": 4.24,
+                            "damodaran_erp_historical_percentiles": {
+                                "windows": {
+                                    "5y": {"percentile": 42.7, "status": "available", "sample_count": 60, "required_min_months": 60},
+                                    "10y": {"percentile": 37.5, "status": "available", "sample_count": 120, "required_min_months": 120},
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        },
+        data_integrity_report={"publish_status": "publishable"},
+    )
+
+    assert any(
+        item.category == "data"
+        and item.severity == "pass"
+        and "Damodaran ERP 官方月度分位可用" in item.finding
+        and "5Y=42.7%" in item.finding
+        and "10Y=37.5%" in item.finding
+        for item in report.attribution_findings
+    )
+
+
+def test_run_review_fails_damodaran_erp_percentile_after_backtest_date():
+    report = build_run_review_report(
+        analysis_packet={
+            "meta": {"backtest_date": "2025-04-09"},
+            "raw_data": {
+                "L4": {
+                    "get_damodaran_us_implied_erp": {
+                        "value": {
+                            "data_date": "2026-05-01",
+                            "erp_t12m_adjusted_payout": 4.24,
+                            "damodaran_erp_historical_percentiles": {
+                                "windows": {
+                                    "5y": {"percentile": 42.7, "status": "available", "sample_count": 60, "required_min_months": 60},
+                                    "10y": {"percentile": 37.5, "status": "available", "sample_count": 120, "required_min_months": 120},
+                                }
+                            },
+                        }
+                    }
+                }
+            },
+        },
+        data_integrity_report={"publish_status": "publishable"},
+    )
+
+    assert any(
+        item.category == "data"
+        and item.severity == "fail"
+        and "晚于回测日" in item.finding
+        for item in report.attribution_findings
+    )

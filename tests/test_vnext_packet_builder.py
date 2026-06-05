@@ -101,6 +101,44 @@ def test_packet_builder_groups_data_and_generates_candidate_links():
     assert "L3_L5" in link_types
 
 
+def test_packet_builder_labels_damodaran_erp_percentile_without_ndx_valuation_mixup():
+    data = {
+        "timestamp_utc": "2026-05-01T00:00:00Z",
+        "indicators": [
+            {
+                "layer": 4,
+                "metric_name": "Damodaran US Implied ERP Reference",
+                "function_id": "get_damodaran_us_implied_erp",
+                "raw_data": {
+                    "name": "Damodaran US Implied ERP Reference",
+                    "value": {
+                        "erp_t12m_adjusted_payout": 4.24,
+                        "damodaran_erp_percentile_5y": 42.7,
+                        "damodaran_erp_percentile_10y": 37.5,
+                        "damodaran_erp_historical_percentiles": {
+                            "windows": {
+                                "5y": {"percentile": 42.7, "status": "available", "sample_count": 60},
+                                "10y": {"percentile": 37.5, "status": "available", "sample_count": 120},
+                            }
+                        },
+                    },
+                },
+            }
+        ],
+    }
+
+    packet = AnalysisPacketBuilder().build(data, manual_overrides={"active": False, "metrics": {}})
+    signal = next(
+        item
+        for item in packet.facts_by_layer["L4"].core_signals
+        if item["metric"] == "get_damodaran_us_implied_erp"
+    )
+
+    assert signal["historical_percentile"] == 37.5
+    assert "Damodaran ERP 10Y分位=37.5" in signal["summary"]
+    assert "分位=42.7" not in signal["summary"]
+
+
 def test_packet_builder_hides_inactive_manual_metric_values_and_carries_backtest_boundaries():
     data = _mock_data_json()
     data["backtest_date"] = "2025-04-09"

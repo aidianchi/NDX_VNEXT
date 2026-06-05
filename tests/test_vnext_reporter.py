@@ -969,6 +969,40 @@ def test_l4_manual_erp_visual_does_not_claim_damodaran_monthly(tmp_path: Path):
     assert "T12M adjusted payout" not in html
 
 
+def test_l4_damodaran_visual_shows_official_percentile_windows(tmp_path: Path):
+    reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
+
+    html = reporter._damodaran_indicator_visual(
+        "L4.get_damodaran_us_implied_erp",
+        {
+            "data_date": "2026-05-01",
+            "erp_t12m_adjusted_payout": 4.24,
+            "erp_t12m_cash_yield": 4.36,
+            "source_file": "ERPbymonth.xlsx",
+            "retrieval_method": "monthly_excel",
+            "monthly_series": [
+                {"data_date": "2026-04-01", "erp_t12m_adjusted_payout": 4.1, "us_10y_treasury_rate": 4.05, "expected_return": 8.15},
+                {"data_date": "2026-05-01", "erp_t12m_adjusted_payout": 4.24, "us_10y_treasury_rate": 4.4, "expected_return": 8.55},
+            ],
+            "damodaran_erp_historical_percentiles": {
+                "data_cutoff_date": "2026-05-01",
+                "windows": {
+                    "5y": {"percentile": 42.7, "status": "available", "sample_count": 60, "required_min_months": 60, "window_start": "2021-06-01", "window_end": "2026-05-01"},
+                    "10y": {"percentile": 37.5, "status": "available", "sample_count": 120, "required_min_months": 120, "window_start": "2016-06-01", "window_end": "2026-05-01"},
+                },
+            },
+        },
+    )
+
+    assert "Damodaran ERP monthly lens" in html
+    assert "Damodaran ERP 5Y percentile" in html
+    assert "42.7%" in html
+    assert "60/60 months" in html
+    assert "2021-06-01 - 2026-05-01" in html
+    assert "data_cutoff_date=2026-05-01" in html
+    assert "not NDX PE/PB/Forward PE historical percentile" in html
+
+
 def test_l4_valuation_visual_without_worldperatio_uses_neutral_title(tmp_path: Path):
     reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
 

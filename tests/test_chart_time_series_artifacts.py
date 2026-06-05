@@ -144,6 +144,16 @@ def test_chart_time_series_artifact_adds_workbench_modules_and_research_series()
                 "L4": {
                     "get_damodaran_us_implied_erp": {
                         "value": {
+                            "data_date": "2026-05-01",
+                            "erp_t12m_adjusted_payout": 4.24,
+                            "damodaran_erp_percentile_5y": 42.7,
+                            "damodaran_erp_percentile_10y": 37.5,
+                            "damodaran_erp_historical_percentiles": {
+                                "windows": {
+                                    "5y": {"percentile": 42.7, "status": "available", "sample_count": 60, "window_start": "2021-06-01", "window_end": "2026-05-01", "data_cutoff_date": "2026-05-01"},
+                                    "10y": {"percentile": 37.5, "status": "available", "sample_count": 120, "window_start": "2016-06-01", "window_end": "2026-05-01", "data_cutoff_date": "2026-05-01"},
+                                }
+                            },
                             "monthly_series": [
                                 {"data_date": "2026-04-01", "erp_t12m_adjusted_payout": 4.1},
                                 {"data_date": "2026-05-01", "erp_t12m_adjusted_payout": 4.24},
@@ -162,6 +172,10 @@ def test_chart_time_series_artifact_adds_workbench_modules_and_research_series()
     assert payload["series"]["VIX"]["rows"][1] == {"time": "2026-05-02", "value": 18.2}
     assert payload["series"]["HY_QUALITY_SPREAD"]["rows"][1]["value"] == 6.2
     assert payload["series"]["DAMODARAN_ERP_MONTHLY"]["rows"][1]["value"] == 4.24
+    assert payload["series"]["DAMODARAN_ERP_MONTHLY"]["damodaran_erp_percentile_5y"] == 42.7
+    assert payload["series"]["DAMODARAN_ERP_MONTHLY"]["damodaran_erp_percentile_10y"] == 37.5
+    assert payload["series"]["DAMODARAN_ERP_MONTHLY"]["data_cutoff_date"] == "2026-05-01"
+    assert "not NDX PE/PB/Forward PE" in payload["series"]["DAMODARAN_ERP_MONTHLY"]["percentile_scope"]
     latest_qqq = payload["series"]["QQQ_OHLCV"]["rows"][-1]
     assert payload["series"]["QQQ_OHLCV"]["lookback_days"] == DEFAULT_CHART_LOOKBACK_DAYS
     for key in [

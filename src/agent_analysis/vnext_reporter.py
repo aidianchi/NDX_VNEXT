@@ -842,10 +842,26 @@ class VNextReportGenerator:
                         "source_tier": raw_item.get("source_tier") or raw_item.get("data_quality", {}).get("source_tier"),
                         "metric": raw_item.get("metric_name") or raw_item.get("function_id"),
                         "value": value.get("implied_erp_fcfe", value.get("implied_premium_fcfe")),
+                        "historical_percentile": value.get("damodaran_erp_percentile_10y"),
+                        "percentile_5y": value.get("damodaran_erp_percentile_5y"),
                         "data_date": raw_item.get("date") or raw_item.get("data_quality", {}).get("data_date"),
                         "availability": raw_item.get("availability", "available"),
                         "scope": value.get("scope"),
                         "tbond_rate": value.get("tbond_rate", value.get("t_bond_rate")),
+                    }
+                )
+            elif value.get("erp_t12m_adjusted_payout") is not None or value.get("damodaran_erp_historical_percentiles"):
+                sources.append(
+                    {
+                        "source_name": raw_item.get("source_name", "Damodaran"),
+                        "source_tier": raw_item.get("source_tier") or raw_item.get("data_quality", {}).get("source_tier"),
+                        "metric": "Damodaran US implied ERP historical percentile",
+                        "value": value.get("erp_t12m_adjusted_payout"),
+                        "historical_percentile": value.get("damodaran_erp_percentile_10y"),
+                        "percentile_5y": value.get("damodaran_erp_percentile_5y"),
+                        "data_date": raw_item.get("date") or raw_item.get("data_quality", {}).get("data_date") or value.get("data_date"),
+                        "availability": raw_item.get("availability", "available"),
+                        "scope": "US market ERP reference; not NDX PE/PB/Forward PE percentile",
                     }
                 )
         if not sources and raw_item.get("source_name"):
@@ -2232,12 +2248,39 @@ class VNextReportGenerator:
             f"<span><b>{_escape(label)}</b>{_fmt_number(metric, suffix='%', digits=2)}</span>"
             for label, metric in lenses
         )
+        percentile_block = value.get("damodaran_erp_historical_percentiles") if isinstance(value.get("damodaran_erp_historical_percentiles"), dict) else {}
+        windows = percentile_block.get("windows") if isinstance(percentile_block.get("windows"), dict) else {}
+
+        def percentile_window(label: str, window: Dict[str, Any]) -> str:
+            percentile = _safe_number(window.get("percentile"))
+            status = str(window.get("status") or "")
+            if percentile is None:
+                value_text = _escape(status or "unavailable")
+            else:
+                value_text = _fmt_number(percentile, suffix="%", digits=1)
+            sample = window.get("sample_count")
+            required = window.get("required_min_months")
+            period = " - ".join(str(item) for item in [window.get("window_start"), window.get("window_end")] if item)
+            details = f"{sample}/{required} months"
+            if period:
+                details = f"{details}; {period}"
+            if window.get("reason"):
+                details = f"{details}; {window.get('reason')}"
+            return f"<span><b>{_escape(label)}</b>{value_text}<small>{_escape(details)}</small></span>"
+
+        percentile_html = "".join(
+            percentile_window(label, windows.get(key) if isinstance(windows.get(key), dict) else {})
+            for label, key in (("Damodaran ERP 5Y percentile", "5y"), ("Damodaran ERP 10Y percentile", "10y"))
+        )
+        percentile_strip = f'<div class="metric-strip">{percentile_html}</div>' if percentile_html else ""
         latest = series[-1] if series else value
         files = " / ".join(str(item) for item in [value.get("source_file"), value.get("current_calculator_source_file")] if item)
+        data_cutoff = value.get("data_date") or latest.get("data_date") or percentile_block.get("data_cutoff_date") or ""
         body = f"""
 {svg}
 <div class="metric-strip">{lens_html}</div>
-<p class="chart-footnote">data_date={_escape(value.get('data_date') or latest.get('data_date') or '')} · source={_escape(files or value.get('download_url') or '')}</p>
+{percentile_strip}
+<p class="chart-footnote">data_cutoff_date={_escape(data_cutoff)} · source={_escape(files or value.get('download_url') or '')} · Damodaran US implied ERP historical percentile is a US market risk-premium percentile, not NDX PE/PB/Forward PE historical percentile. In backtests, this lens must use only Damodaran monthly rows not later than the target date.</p>
 """
         return self._wrap_indicator_visual(ref, "damodaran-current", "Damodaran ERP monthly lens", body, details=True, open_by_default=True)
 

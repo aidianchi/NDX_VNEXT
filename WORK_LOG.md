@@ -4,6 +4,25 @@
 
 ---
 
+## 2026-06-05
+
+### Damodaran 官方月度 ERP 历史分位补齐
+
+完成内容：
+
+- 基于 Damodaran 官方 `ERPbymonth.xlsx` 月度序列新增 `damodaran_erp_percentile_5y`、`damodaran_erp_percentile_10y` 与 `damodaran_erp_historical_percentiles.windows`，主口径为 `erp_t12m_adjusted_payout`。
+- 最新模式使用最新可用官方月度行；回测模式先按目标日裁剪月度序列，再计算 5Y/10Y 分位，防止回测日之后的 ERP 行进入 L1-L5 / Bridge / Thesis / Final 当日分析。
+- 样本不足时标记 `insufficient_history`，年度 fallback 标记 `unavailable`，不伪造分位。
+- vNext artifact、chart series metadata、brief 和 run_review 展示当前 ERP、5Y/10Y 分位、样本窗口、样本数、数据截止日和边界说明。
+- L4 prompt、prompt examples 和 packet builder 明确区分 Damodaran US implied ERP historical percentile 与 NDX PE/PB/Forward PE historical percentile，避免把美国市场 ERP 分位混写成 NDX 估值分位。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_l4_data_authority.py tests/test_prompt_guardrails.py tests/test_vnext_reporter.py tests/test_run_review.py tests/test_chart_time_series_artifacts.py tests/test_vnext_packet_builder.py`：59 passed，4 warnings。
+- `python3 -m pytest -q tests/test_core_checker.py tests/test_vnext_orchestrator.py::test_l4_prompt_summarizes_long_series tests/test_vnext_orchestrator.py::test_historical_percentile_string_is_sanitized tests/test_vnext_orchestrator.py::test_backtest_skipped_indicator_is_not_analysis_required`：13 passed，4 warnings。
+- `python3 -m py_compile src/tools_L4.py src/chart_time_series_artifacts.py src/agent_analysis/vnext_reporter.py src/agent_analysis/run_review.py src/agent_analysis/packet_builder.py`：通过。
+- `git diff --check`：通过。
+
 ## 2026-05-21
 
 ### vNext Outcome Review + 五类价格反映地图 + 历史实验目录隔离

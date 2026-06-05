@@ -538,6 +538,8 @@ class AnalysisPacketBuilder:
         percentile = (
             self._extract_l4_valuation_percentile(value, payload=payload)
             if function_id == "get_ndx_pe_and_earnings_yield"
+            else self._extract_damodaran_erp_percentile(value)
+            if function_id == "get_damodaran_us_implied_erp"
             else self._extract_percentile(value)
         )
         trend = self._extract_trend(value)
@@ -547,7 +549,9 @@ class AnalysisPacketBuilder:
         summary_bits = [payload.get("metric_name") or function_id]
         if compact_value is not None:
             summary_bits.append(f"值={compact_value}")
-        if percentile is not None:
+        if percentile is not None and function_id == "get_damodaran_us_implied_erp":
+            summary_bits.append(f"Damodaran ERP 10Y分位={percentile}")
+        elif percentile is not None:
             summary_bits.append(f"分位={percentile}")
         if trend:
             summary_bits.append(f"趋势={trend}")
@@ -602,6 +606,21 @@ class AnalysisPacketBuilder:
 
     def _extract_percentile(self, value: Any) -> Optional[float]:
         return _find_first_number(value, ("percentile_10y", "percentile_5y", "percentile_1y", "percentile"))
+
+    def _extract_damodaran_erp_percentile(self, value: Any) -> Optional[float]:
+        if not isinstance(value, dict):
+            return None
+        percentile = value.get("damodaran_erp_percentile_10y")
+        if isinstance(percentile, (int, float)) and not isinstance(percentile, bool):
+            return float(percentile)
+        windows = value.get("damodaran_erp_historical_percentiles", {}).get("windows", {})
+        if isinstance(windows, dict):
+            window_10y = windows.get("10y")
+            if isinstance(window_10y, dict):
+                percentile = window_10y.get("percentile")
+                if isinstance(percentile, (int, float)) and not isinstance(percentile, bool):
+                    return float(percentile)
+        return None
 
     def _extract_l4_valuation_percentile(self, value: Any, *, payload: Optional[Dict[str, Any]] = None) -> Optional[float]:
         if not isinstance(value, dict):

@@ -94,6 +94,13 @@ def test_l4_prompt_distinguishes_current_monthly_erp_stddev_context_and_true_per
         "不能把 WorldPERatio 的标准差区间、估值标签或回归提示写成 historical percentile",
         "不能把 histimpl.xls 年度历史表写成最新月度 ERP",
         "ERPbymonth.xlsx",
+        "Damodaran US implied ERP historical percentile",
+        "NDX PE/PB/Forward PE historical percentile",
+        "damodaran_erp_percentile_5y",
+        "damodaran_erp_percentile_10y",
+        "damodaran_erp_historical_percentiles.windows",
+        "insufficient_history",
+        "unavailable",
     ]
 
     for fragment in required_fragments:

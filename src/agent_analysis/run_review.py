@@ -64,6 +64,65 @@ def _reader_text(final: Dict[str, Any]) -> str:
     return " ".join(str(part) for part in parts if part)
 
 
+def _parse_date_text(value: Any) -> Optional[str]:
+    if not value:
+        return None
+    text = str(value)[:10]
+    if len(text) != 10:
+        return None
+    return text
+
+
+def _damodaran_erp_payload(analysis_packet: Dict[str, Any]) -> Dict[str, Any]:
+    raw_data = analysis_packet.get("raw_data") if isinstance(analysis_packet.get("raw_data"), dict) else {}
+    l4 = raw_data.get("L4") if isinstance(raw_data.get("L4"), dict) else {}
+    item = l4.get("get_damodaran_us_implied_erp") if isinstance(l4.get("get_damodaran_us_implied_erp"), dict) else {}
+    value = item.get("value") if isinstance(item.get("value"), dict) else {}
+    return value if isinstance(value, dict) else {}
+
+
+def _damodaran_review_finding(analysis_packet: Dict[str, Any], backtest_date: Optional[str]) -> RunReviewFinding:
+    value = _damodaran_erp_payload(analysis_packet)
+    windows = value.get("damodaran_erp_historical_percentiles", {}).get("windows", {}) if isinstance(value, dict) else {}
+    window_5y = windows.get("5y") if isinstance(windows, dict) and isinstance(windows.get("5y"), dict) else {}
+    window_10y = windows.get("10y") if isinstance(windows, dict) and isinstance(windows.get("10y"), dict) else {}
+    cutoff = _parse_date_text(value.get("data_date") or value.get("damodaran_erp_historical_percentiles", {}).get("data_cutoff_date"))
+    if backtest_date and cutoff and cutoff > backtest_date:
+        return _finding(
+            "data",
+            "fail",
+            f"Damodaran ERP 分位数据截止日 {cutoff} 晚于回测日 {backtest_date}，存在前视泄露风险。",
+            ["analysis_packet.json:raw_data.L4.get_damodaran_us_implied_erp"],
+            recommended_rule_update="Damodaran ERP percentile 必须先按 backtest_date 裁剪月度序列再计算。",
+        )
+    statuses = {str(window_5y.get("status") or ""), str(window_10y.get("status") or "")}
+    artifact_ref = ["analysis_packet.json:raw_data.L4.get_damodaran_us_implied_erp.value.damodaran_erp_historical_percentiles"]
+    if not value:
+        return _finding("data", "observe", "Damodaran ERP 数据缺失，无法复盘官方月度 ERP 分位。", artifact_ref)
+    if statuses <= {"available"}:
+        return _finding(
+            "data",
+            "pass",
+            "Damodaran ERP 官方月度分位可用："
+            f"current={value.get('erp_t12m_adjusted_payout')}，"
+            f"5Y={window_5y.get('percentile')}% ({window_5y.get('sample_count')} months)，"
+            f"10Y={window_10y.get('percentile')}% ({window_10y.get('sample_count')} months)，"
+            f"cutoff={cutoff or 'unknown'}。",
+            artifact_ref,
+            recommended_rule_update="报告和 prompt 必须继续把 Damodaran US implied ERP historical percentile 与 NDX PE/PB/Forward PE percentile 分开。",
+        )
+    return _finding(
+        "data",
+        "observe",
+        "Damodaran ERP 官方月度分位不可完整使用："
+        f"5Y status={window_5y.get('status')} sample={window_5y.get('sample_count')}/{window_5y.get('required_min_months')}；"
+        f"10Y status={window_10y.get('status')} sample={window_10y.get('sample_count')}/{window_10y.get('required_min_months')}；"
+        f"cutoff={cutoff or 'unknown'}。",
+        artifact_ref,
+        recommended_rule_update="样本不足或年度 fallback 时不得伪造 Damodaran ERP percentile。",
+    )
+
+
 def _finding(
     category: str,
     severity: str,
@@ -150,6 +209,8 @@ def build_run_review_report(
                     recommended_rule_update="回测产物必须携带数据边界和 invariant 元数据。",
                 )
             )
+
+    findings.append(_damodaran_review_finding(analysis_packet, meta.get("backtest_date") or run_summary.get("backtest_date")))
 
     bridge = bridges[0] if bridges else {}
     typed_conflicts = _as_list(bridge.get("typed_conflicts"))

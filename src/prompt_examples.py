@@ -604,11 +604,21 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
                         "adjusted_riskfree_rate": 4.14,
                         "expected_return": 8.55,
                         "source_file": "ERPbymonth.xlsx",
+                        "damodaran_erp_percentile_5y": 42.7,
+                        "damodaran_erp_percentile_10y": 37.5,
+                        "damodaran_erp_historical_percentiles": {
+                            "metric": "Damodaran US implied ERP historical percentile",
+                            "scope": "US equity market reference, not NDX PE/PB/Forward PE historical percentile",
+                            "windows": {
+                                "5y": {"percentile": 42.7, "status": "available", "sample_count": 60, "window_start": "2021-06-01", "window_end": "2026-05-01", "data_cutoff_date": "2026-05-01"},
+                                "10y": {"percentile": 37.5, "status": "available", "sample_count": 120, "window_start": "2016-06-01", "window_end": "2026-05-01", "data_cutoff_date": "2026-05-01"},
+                            },
+                        },
                     }
                 },
             },
-            "reasoning": "1. 这组数据来自Damodaran月度口径，可以代表当前美国市场风险补偿背景。2. 多个ERP口径回答不同现金流假设，不能只拿一个数字当作唯一真值。3. ERP分位越高通常说明相对历史补偿更厚，不能把高分位解释成估值风险更高。4. 它不是NDX专属估值，也不能替代NDX自身PE、Forward PE、PB或简式收益差距。5. 若只拿到histimpl.xls年度历史表，则应降级为年度背景，不写成最新月度ERP。",
-            "output_narrative": "Damodaran 2026-05-01 月度数据给出的美国市场 implied ERP 约在多个口径之间分布，10年期美债、默认利差和调整后无风险利率共同说明风险补偿背景。它是美国大盘参考锚，不替代NDX自身估值分位或简式收益差距。"
+            "reasoning": "1. 这组数据来自Damodaran月度口径，可以代表当前美国市场风险补偿背景。2. 多个ERP口径回答不同现金流假设，不能只拿一个数字当作唯一真值。3. Damodaran ERP分位越高通常说明美国市场风险补偿相对历史更厚，不能把高分位解释成估值风险更高。4. 它不是NDX专属估值，也不能替代NDX自身PE、Forward PE、PB或简式收益差距。5. 若只拿到histimpl.xls年度历史表，或分位窗口 status 为 insufficient_history/unavailable，则应降级为年度背景或样本不足，不写成官方月度ERP分位。",
+            "output_narrative": "Damodaran 2026-05-01 月度数据给出的美国市场 implied ERP 为4.24%，官方月度序列计算的5年/10年ERP分位分别为42.7%和37.5%。这说明的是美国市场风险补偿的历史位置，不是NDX PE、Forward PE或PB历史分位，也不能替代NDX自身估值或简式收益差距。"
         }
     ],
     "get_qqq_technical_indicators": [

@@ -1502,6 +1502,15 @@ def _parse_damodaran_monthly_erp_excel(content: bytes, *, target_date: Optional[
                 }
             )
         result["monthly_series"] = monthly_series
+        percentiles = _damodaran_erp_percentile_block(
+            monthly_series,
+            current_value=result.get("erp_t12m_adjusted_payout"),
+            current_date=result.get("data_date"),
+            source_file="ERPbymonth.xlsx",
+        )
+        result["damodaran_erp_historical_percentiles"] = percentiles
+        result["damodaran_erp_percentile_5y"] = percentiles["windows"]["5y"].get("percentile")
+        result["damodaran_erp_percentile_10y"] = percentiles["windows"]["10y"].get("percentile")
         if result["us_10y_treasury_rate"] is not None and result["adjusted_riskfree_rate"] is not None:
             result["default_spread"] = _round_or_none(result["us_10y_treasury_rate"] - result["adjusted_riskfree_rate"])
         else:
@@ -1509,6 +1518,93 @@ def _parse_damodaran_monthly_erp_excel(content: bytes, *, target_date: Optional[
         if result["data_date"] and any(value is not None for key, value in result.items() if key.startswith("erp_")):
             return result
     raise ValueError("No monthly Damodaran ERP row found")
+
+
+def _damodaran_erp_percentile_block(
+    monthly_series: List[Dict[str, Any]],
+    *,
+    current_value: Optional[float],
+    current_date: Optional[str],
+    source_file: str,
+) -> Dict[str, Any]:
+    """Calculate Damodaran ERP percentiles from the already date-bounded monthly series."""
+    rows = [
+        row
+        for row in monthly_series
+        if isinstance(row, dict)
+        and row.get("data_date")
+        and _safe_float(row.get("erp_t12m_adjusted_payout")) is not None
+    ]
+    rows = sorted(rows, key=lambda row: str(row.get("data_date")))
+    data_cutoff = str(current_date or (rows[-1].get("data_date") if rows else ""))
+    block = {
+        "metric": "Damodaran US implied ERP historical percentile",
+        "scope": "US equity market reference, not NDX PE/PB/Forward PE historical percentile",
+        "primary_field": "erp_t12m_adjusted_payout",
+        "method": "count(values <= current_value) / sample_count * 100",
+        "data_cutoff_date": data_cutoff or None,
+        "source_file": source_file,
+        "windows": {},
+    }
+
+    for label, required_months in (("5y", 60), ("10y", 120)):
+        window_rows = rows[-required_months:]
+        sample_count = len(window_rows)
+        values = [_safe_float(row.get("erp_t12m_adjusted_payout")) for row in window_rows]
+        clean_values = [value for value in values if value is not None]
+        percentile = None
+        status = "available"
+        reason = ""
+        if current_value is None:
+            status = "unavailable"
+            reason = "current ERP value unavailable"
+        elif sample_count < required_months:
+            status = "insufficient_history"
+            reason = f"requires at least {required_months} monthly observations"
+        elif len(clean_values) < required_months:
+            status = "insufficient_history"
+            reason = f"requires at least {required_months} non-null monthly ERP observations"
+        else:
+            percentile = round(sum(1 for value in clean_values if value <= current_value) / len(clean_values) * 100.0, 1)
+        block["windows"][label] = {
+            "current_value": current_value,
+            "percentile": percentile,
+            "status": status,
+            "sample_count": len(clean_values),
+            "required_min_months": required_months,
+            "window_start": str(window_rows[0].get("data_date")) if window_rows else None,
+            "window_end": str(window_rows[-1].get("data_date")) if window_rows else None,
+            "data_cutoff_date": data_cutoff or None,
+            "source_file": source_file,
+            "reason": reason,
+        }
+    return block
+
+
+def _damodaran_erp_percentile_unavailable_block(*, data_cutoff_date: Optional[str], source_file: Optional[str]) -> Dict[str, Any]:
+    block = {
+        "metric": "Damodaran US implied ERP historical percentile",
+        "scope": "US equity market reference, not NDX PE/PB/Forward PE historical percentile",
+        "primary_field": "erp_t12m_adjusted_payout",
+        "method": "count(values <= current_value) / sample_count * 100",
+        "data_cutoff_date": data_cutoff_date,
+        "source_file": source_file,
+        "windows": {},
+    }
+    for label, required_months in (("5y", 60), ("10y", 120)):
+        block["windows"][label] = {
+            "current_value": None,
+            "percentile": None,
+            "status": "unavailable",
+            "sample_count": 0,
+            "required_min_months": required_months,
+            "window_start": None,
+            "window_end": None,
+            "data_cutoff_date": data_cutoff_date,
+            "source_file": source_file,
+            "reason": "Damodaran monthly ERPbymonth.xlsx series unavailable; annual fallback cannot support monthly percentile",
+        }
+    return block
 
 
 def _parse_damodaran_current_erp_calculator_excel(content: bytes, *, source_file: str) -> Dict[str, Any]:
@@ -1669,13 +1765,21 @@ def get_damodaran_us_implied_erp(end_date: str = None) -> Dict[str, Any]:
             ),
         }
 
+    data_date_out = str(parsed.get("data_date") or parsed.get("year") or date_str)
+    if retrieval_method != "monthly_excel":
+        parsed["damodaran_erp_historical_percentiles"] = _damodaran_erp_percentile_unavailable_block(
+            data_cutoff_date=data_date_out,
+            source_file=parsed.get("source_file"),
+        )
+        parsed["damodaran_erp_percentile_5y"] = None
+        parsed["damodaran_erp_percentile_10y"] = None
+
     value = {
         **parsed,
         "scope": "US equity market reference, not NDX-specific",
         "download_url": monthly_url if retrieval_method == "monthly_excel" else annual_download_url,
         "retrieval_method": retrieval_method,
     }
-    data_date_out = str(parsed.get("data_date") or parsed.get("year") or date_str)
     return {
         "name": "Damodaran US Implied ERP Reference",
         "series_id": "DAMODARAN_US_IMPLIED_ERP",

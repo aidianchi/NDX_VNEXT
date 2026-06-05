@@ -76,6 +76,40 @@ def _minimal_xlsx(rows):
     return buffer.getvalue()
 
 
+def _damodaran_monthly_xlsx(start: str, values, future_rows=None):
+    header = [
+        "Date",
+        "S&P 500",
+        "T.Bond Rate",
+        "$ Riskfree Rate",
+        "ERP (T12 m with sustainable Payout)",
+        "ERP (T12m)",
+        "ERP (Smoothed)",
+        "ERP (Normalized)",
+        "ERP (Net Cash Yield)",
+        "Expected Return",
+    ]
+    rows = [header]
+    dates = pd.date_range(start, periods=len(values), freq="MS")
+    for idx, (date, erp) in enumerate(zip(dates, values)):
+        rows.append(
+            [
+                date.strftime("%Y-%m-%d"),
+                5000 + idx,
+                0.04,
+                0.038,
+                erp,
+                erp + 0.0002,
+                0.06,
+                0.037,
+                0.04,
+                0.083,
+            ]
+        )
+    rows.extend(future_rows or [])
+    return _minimal_xlsx(rows)
+
+
 def test_weighted_metrics_use_aggregate_earnings_and_fcf_with_coverage():
     df = pd.DataFrame(
         [
@@ -211,6 +245,55 @@ def test_damodaran_monthly_erp_parser_extracts_latest_current_row():
     assert parsed["erp_net_cash_yield"] == 4.15
     assert parsed["expected_return"] == 8.76
     assert parsed["source_file"] == "ERPbymonth.xlsx"
+
+
+def test_damodaran_monthly_erp_parser_calculates_official_percentiles():
+    values = [0.03 + idx * 0.0001 for idx in range(120)]
+    parsed = tools_L4._parse_damodaran_monthly_erp_excel(_damodaran_monthly_xlsx("2016-06-01", values))
+
+    assert parsed["data_date"] == "2026-05-01"
+    assert parsed["damodaran_erp_percentile_5y"] == 100.0
+    assert parsed["damodaran_erp_percentile_10y"] == 100.0
+    windows = parsed["damodaran_erp_historical_percentiles"]["windows"]
+    assert windows["5y"]["status"] == "available"
+    assert windows["5y"]["sample_count"] == 60
+    assert windows["5y"]["window_start"] == "2021-06-01"
+    assert windows["10y"]["status"] == "available"
+    assert windows["10y"]["sample_count"] == 120
+    assert windows["10y"]["window_end"] == "2026-05-01"
+
+
+def test_damodaran_backtest_percentile_ignores_future_monthly_rows():
+    values = [0.03 + idx * 0.0001 for idx in range(120)]
+    future_low = ["2026-06-01", 9999, 0.04, 0.038, 0.0001, 0.0002, 0.06, 0.037, 0.04, 0.083]
+    future_high = ["2026-06-01", 9999, 0.04, 0.038, 0.99, 0.991, 0.06, 0.037, 0.04, 0.083]
+
+    parsed_low = tools_L4._parse_damodaran_monthly_erp_excel(
+        _damodaran_monthly_xlsx("2016-01-01", values, future_rows=[future_low]),
+        target_date="2025-12-15",
+    )
+    parsed_high = tools_L4._parse_damodaran_monthly_erp_excel(
+        _damodaran_monthly_xlsx("2016-01-01", values, future_rows=[future_high]),
+        target_date="2025-12-15",
+    )
+
+    assert parsed_low["data_date"] == "2025-12-01"
+    assert parsed_low["damodaran_erp_historical_percentiles"] == parsed_high["damodaran_erp_historical_percentiles"]
+    assert all(row["data_date"] <= "2025-12-15" for row in parsed_low["monthly_series"])
+
+
+def test_damodaran_monthly_percentile_marks_insufficient_history_without_fabricating():
+    parsed = tools_L4._parse_damodaran_monthly_erp_excel(
+        _damodaran_monthly_xlsx("2024-01-01", [0.04 + idx * 0.0001 for idx in range(24)])
+    )
+
+    windows = parsed["damodaran_erp_historical_percentiles"]["windows"]
+    assert parsed["damodaran_erp_percentile_5y"] is None
+    assert parsed["damodaran_erp_percentile_10y"] is None
+    assert windows["5y"]["status"] == "insufficient_history"
+    assert windows["5y"]["sample_count"] == 24
+    assert windows["10y"]["status"] == "insufficient_history"
+    assert windows["10y"]["sample_count"] == 24
 
 
 def test_damodaran_current_calculator_parser_extracts_default_spread_and_expected_return():
