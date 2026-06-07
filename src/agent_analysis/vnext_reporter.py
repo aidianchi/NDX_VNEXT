@@ -651,12 +651,13 @@ class VNextReportGenerator:
         *,
         template: str = "brief",
         style: str = "slate_v2",
+        include_legacy_agent_io_audit: bool = False,
     ) -> str:
         run_path = Path(run_dir)
         artifacts = self._load_artifacts(run_path)
         template = self._normalize_template(template)
         style = self._normalize_style(style)
-        html_text = self._render(run_path, artifacts, template, style)
+        html_text = self._render(run_path, artifacts, template, style, include_legacy_agent_io_audit)
         destination = Path(output_path) if output_path else self._default_output_path(run_path, artifacts, template, style)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(html_text, encoding="utf-8")
@@ -724,7 +725,14 @@ class VNextReportGenerator:
             "run_summary": _load_json(run_path / "run_summary.json", {}),
         }
 
-    def _render(self, run_path: Path, artifacts: Dict[str, Any], template: str, style: str) -> str:
+    def _render(
+        self,
+        run_path: Path,
+        artifacts: Dict[str, Any],
+        template: str,
+        style: str,
+        include_legacy_agent_io_audit: bool = False,
+    ) -> str:
         self._enrich_indicator_data_quality(artifacts)
         final = artifacts["final_adjudication"]
         synthesis = artifacts["synthesis_packet"]
@@ -771,7 +779,7 @@ class VNextReportGenerator:
     {self._hero(final, meta, run_path, template, artifacts)}
     {self._navigation()}
     {self._template_intro(template)}
-    <main id="main">{self._main_sections(template, run_path, artifacts, final, payload_json)}</main>
+    <main id="main">{self._main_sections(template, run_path, artifacts, final, payload_json, include_legacy_agent_io_audit)}</main>
   </div>
   <aside class="evidence-drawer" id="evidence-drawer" aria-hidden="true" role="dialog" aria-modal="true" aria-label="证据详情">
     <div class="drawer-backdrop" data-close-drawer></div>
@@ -885,6 +893,7 @@ class VNextReportGenerator:
         artifacts: Dict[str, Any],
         final: Dict[str, Any],
         payload_json: str,
+        include_legacy_agent_io_audit: bool = False,
     ) -> str:
         renderers = {
             "decision": lambda: self._decision_section(artifacts),
@@ -895,7 +904,12 @@ class VNextReportGenerator:
             "conflicts": lambda: self._conflicts_section(artifacts),
             "layers": lambda: self._layers_section(artifacts),
             "governance": lambda: self._governance_section(artifacts),
-            "audit": lambda: self._audit_section(run_path, artifacts, payload_json),
+            "audit": lambda: self._audit_section(
+                run_path,
+                artifacts,
+                payload_json,
+                include_legacy_agent_io_audit=include_legacy_agent_io_audit,
+            ),
         }
         return "".join(renderers[key]() for key in TEMPLATE_ORDER[template])
 
@@ -2856,7 +2870,67 @@ class VNextReportGenerator:
             return reader.get("one_liner") or payload.get("final_stance", "")
         return ""
 
-    def _audit_section(self, run_path: Path, artifacts: Dict[str, Any], payload_json: str) -> str:
+    def _agent_health_section(self, run_path: Path, artifacts: Dict[str, Any]) -> str:
+        diagnostics = artifacts.get("llm_stage_diagnostics", {}) or {}
+        stage_records = diagnostics.get("stages", {}) if isinstance(diagnostics, dict) else {}
+        layer_contexts = artifacts.get("layer_context_briefs", {}) or {}
+        isolation_breaches = []
+        for layer in ["L1", "L2", "L3", "L4", "L5"]:
+            checks = self._layer_forbidden_checks(layer, layer_contexts.get(layer, {}) if isinstance(layer_contexts, dict) else {})
+            isolation_breaches.extend(label for label, status in checks if status == "breached")
+        prompt_audit_dir = run_path / "prompt_audit"
+        prompt_stage_count = len([path for path in prompt_audit_dir.iterdir() if path.is_dir()]) if prompt_audit_dir.exists() else 0
+        retry_count = sum(max(0, int(record.get("attempts", 0) or 0) - 1) for record in stage_records.values() if isinstance(record, dict))
+        failed_count = sum(1 for record in stage_records.values() if isinstance(record, dict) and record.get("status") == "failed")
+        prompt_sizes = [
+            (name, int(record.get("prompt_chars", 0) or 0))
+            for name, record in stage_records.items()
+            if isinstance(record, dict)
+        ]
+        largest = max(prompt_sizes, key=lambda item: item[1]) if prompt_sizes else ("", 0)
+        prompt_link = ""
+        run_summary = artifacts.get("run_summary", {}) or {}
+        prompt_inspector = run_summary.get("prompt_inspector") if isinstance(run_summary, dict) else ""
+        if prompt_inspector:
+            prompt_link = f'<a href="{_escape(prompt_inspector)}">打开 Agent 原文检查器</a>'
+        elif prompt_stage_count:
+            prompt_link = "<span>已保存 prompt audit；可生成独立 Agent 原文检查器。</span>"
+        else:
+            prompt_link = "<span>未发现 prompt_audit 目录。</span>"
+        health_cards = [
+            ("L1-L5 context isolation", "通过" if not isolation_breaches else "有风险", "未发现其他层 runtime highlights 或全局跨层信号进入 layer context brief。" if not isolation_breaches else "；".join(isolation_breaches[:3])),
+            ("Prompt capture", f"已保存 {prompt_stage_count} 个 stage" if prompt_stage_count else "未保存", "完整 prompt 原文应查看独立 Agent 原文检查器。"),
+            ("Stage validation", "通过" if not failed_count else "失败", f"retry={retry_count}；failed={failed_count}；artifact=llm_stage_diagnostics.json。"),
+            ("Prompt size", f"{largest[0]} · {largest[1]} chars" if largest[0] else "未记录", "异常膨胀需要在 Prompt Inspector 中定位具体材料。"),
+            ("Evidence trace", "轻量可追踪", "关键 evidence refs 的完整语义追踪仍属于后续升级，不在 brief 正文展开。"),
+            ("Prompt Inspector", "独立入口", prompt_link),
+        ]
+        cards = "".join(
+            f"""
+    <div>
+      <b>{_escape(title)}</b>
+      <p>{_escape(status)}</p>
+      <small>{detail if '<a ' in detail or '<span>' in detail else _escape(detail)}</small>
+    </div>
+"""
+            for title, status, detail in health_cards
+        )
+        return f"""
+  <div class="audit-boundaries agent-health" id="agent-health">
+    <h3>Agent Health</h3>
+    <p>正文只保留健康摘要；完整 prompt 原文、结构化输入、raw response、hash 和污染证据请进入独立 Agent 原文检查器。</p>
+    <div class="audit-grid">{cards}</div>
+  </div>
+"""
+
+    def _audit_section(
+        self,
+        run_path: Path,
+        artifacts: Dict[str, Any],
+        payload_json: str,
+        *,
+        include_legacy_agent_io_audit: bool = False,
+    ) -> str:
         token_usage = artifacts["final_adjudication"].get("token_usage", {})
         meta = artifacts.get("synthesis_packet", {}).get("packet_meta", {}) or {}
         analysis_meta = artifacts.get("analysis_packet", {}).get("meta", {}) or {}
@@ -2944,7 +3018,8 @@ class VNextReportGenerator:
     <h3>阻断原因</h3>
     <ul>{blocking_reasons or '<li>无</li>'}</ul>
   </div>
-  {self._agent_io_audit_section(run_path, artifacts)}
+  {self._agent_health_section(run_path, artifacts)}
+  {self._agent_io_audit_section(run_path, artifacts) if include_legacy_agent_io_audit else ''}
   <details class="raw-json">
     <summary>展开页面使用的原生 JSON</summary>
     <pre>{_escape(payload_json)}</pre>
@@ -2994,6 +3069,11 @@ def parse_args() -> argparse.Namespace:
         choices=[*STYLE_FONTS.keys()],
         help="Visual style variant.",
     )
+    parser.add_argument(
+        "--include-legacy-agent-io-audit",
+        action="store_true",
+        help="Include the old expanded Agent IO Audit block for development debugging.",
+    )
     return parser.parse_args()
 
 
@@ -3006,9 +3086,23 @@ def main() -> int:
             if args.output:
                 base = Path(args.output)
                 output_path = base.with_name(f"{base.stem}_{template}{base.suffix or '.html'}")
-            print(reporter.run(args.run_dir, output_path=output_path, template=template, style=args.style))
+            print(
+                reporter.run(
+                    args.run_dir,
+                    output_path=output_path,
+                    template=template,
+                    style=args.style,
+                    include_legacy_agent_io_audit=args.include_legacy_agent_io_audit,
+                )
+            )
     else:
-        report_path = reporter.run(args.run_dir, output_path=args.output, template=args.template, style=args.style)
+        report_path = reporter.run(
+            args.run_dir,
+            output_path=args.output,
+            template=args.template,
+            style=args.style,
+            include_legacy_agent_io_audit=args.include_legacy_agent_io_audit,
+        )
         print(report_path)
     return 0
 

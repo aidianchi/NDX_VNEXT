@@ -4,6 +4,81 @@
 
 ---
 
+## 2026-06-07
+
+### Prompt 污染清理：去除旧立场锚点与 fallback 回流风险
+
+完成内容：
+
+- 清理 active prompts 与 `src/agent_analysis/prompts/prompts/` fallback prompts 中的旧立场锚点、固定动作口号和方向性反面教材，包括 `中性偏谨慎`、`建议等待更好的入场时机`、`能不能涨` 等表达。
+- 将可照抄的投资结论示例改成中性字段占位，要求模型按当日证据生成主论点、读者结论、动作条件和复核触发器。
+- 扩展 prompt guardrail 测试，递归扫描 active 与 fallback prompts，防止污染短语回流。
+- 保留必要硬边界，例如禁止编造历史统计/点位、evidence_refs 约束、Damodaran ERP 与 NDX 估值分位区分等。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_prompt_guardrails.py`：9 passed。
+- `python3 -m pytest -q tests/test_run_review.py tests/test_vnext_orchestrator.py tests/test_vnext_reporter.py`：43 passed，4 warnings。
+- `git diff --check`：通过。
+- 污染短语静态搜索无命中；必要硬边界静态搜索仍有命中。
+
+---
+
+## 2026-06-07
+
+### Final 结论反模板与赔率一致性闸门
+
+完成内容：
+
+- 移除 Bridge / Thesis / Final prompts 中会诱导模型照抄的“高风险高赔率候选”强示例，改为要求当日证据生成、点名主导矛盾、不得复用示例短语。
+- Thesis / Final prompts 新增赔率语言一致性约束：如果 `payoff_assessment` 写赔率不利、风险收益比不利或不支持重仓，`main_thesis` / `final_stance` / `reader_final.one_liner` 不得再写“高赔率”。
+- `run_review.py` 新增 Final 赔率语言自相矛盾检查，发现高赔率表达与负面赔率判断并存时输出 `final/fail`。
+- 新增 prompt guardrail 和 run_review 测试，防止模板短语回流。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_prompt_guardrails.py tests/test_run_review.py`：15 passed，4 warnings。
+- `python3 -m py_compile src/agent_analysis/run_review.py`：通过。
+- `rg -n "高风险高赔率候选|这不是低风险环境，但可能是高风险高赔率候选|核心仓守纪律，战术仓分批" src/agent_analysis/prompts -S`：无命中。
+
+---
+
+## 2026-06-06
+
+### Prompt Inspector 第一版实现
+
+完成内容：
+
+- Orchestrator 新增 `prompt_audit/` 事实源：每个 LLM stage 在调用前保存完整 prompt 原文、structured payload、raw response、normalized parsed response、validated output 和 `meta.json`；retry attempt 分开保存，并在 `llm_stage_diagnostics.json` 中写入 prompt audit 路径。
+- 完整 prompt 文件包含 system message 与 user prompt 的实际文本，并计算 `prompt_sha256`，供页面校验“看到的”和保存的 prompt 文件一致。
+- 新增独立 `src/agent_analysis/prompt_inspector.py`，生成 `vnext_prompt_inspector_<run_id>.html`，提供中文 pipeline、总览 / 完整原文 / 输入数据 / 规则定位 / 输出结果 / 下游流向 tab、搜索、复制、hash 展示和第一版污染检查。
+- Native brief 默认不再展示大块 legacy `Agent IO Audit`，改为小型 `Agent Health` 摘要；旧 Audit 保留在 `--include-legacy-agent-io-audit` 开发开关后。
+- Console 一键流程会生成 Prompt Inspector，并把 `prompt_inspector` 路径写回 `run_summary.json`，方便 brief 健康摘要链接到独立检查器。
+
+验证结果：
+
+- `python3 -m py_compile src/agent_analysis/orchestrator.py src/agent_analysis/vnext_reporter.py src/agent_analysis/prompt_inspector.py src/console_run_all.py`：通过。
+- `python3 -m pytest -q tests/test_vnext_reporter.py tests/test_vnext_orchestrator.py tests/test_console_run_all.py`：41 passed，4 warnings。
+
+---
+
+## 2026-06-06
+
+### Prompt Inspector 取代正文 Agent IO Audit 决策记录
+
+完成内容：
+
+- 新增 `docs/2026-06-06_PROMPT_INSPECTOR_REPLACES_AGENT_IO_AUDIT.md`，记录用户关于 Agent IO Audit 的核心洞见：现有正文 Audit 展示的是字段摘要和 artifact 路径，不是 agent 真实收到的完整上下文，因此不直观，也不足以判断上下文隔离、必要充分性和下游污染。
+- 文档明确建议：默认 brief 删除或折叠大块 legacy `Agent IO Audit`，只保留小型 `Agent Health` 摘要；真正有价值的能力应做成独立 `Prompt Inspector`，保存并展示每个 stage 的完整 prompt、structured payload、Canon、raw response、validated output 和 downstream use。
+- 文档给出后续实施路线：正文减负、保存真实 prompt、生成 Prompt Inspector 页面、语义级下游追踪，并列出回测边界、L1-L5 禁止输入、Bridge/Thesis 允许项和验收标准。
+- 按用户补充意见修订文档：强调第一优先级是查看 agent 实际收到的完整 prompt 原文，Canon 是完整原文的一部分而不是并列替代品；`完整原文` 展示必须保证和 agent 所见文本一致，并通过 prompt 文件与 hash 校验；页面可美观、可搜索、可折叠，但不得改写原文；面向用户的标题、tab 和状态应中文优先。
+
+验证结果：
+
+- 文档写入与修订完成；本次仅做文档记录和工作日志索引，未修改运行代码。
+
+---
+
 ## 2026-06-05
 
 ### Damodaran 官方月度 ERP 历史分位补齐

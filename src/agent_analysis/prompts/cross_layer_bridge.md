@@ -55,7 +55,7 @@
     "dominant_side": "高真实利率和信用未确认仍在压制核心仓置信度。",
     "secondary_side": "估值压缩和恐慌交易可能已经提高战术赔率。",
     "price_reflection": "partially_reflected",
-    "action_implication": "核心仓守纪律，战术仓只能在失效条件清楚时分批试探。",
+    "action_implication": "核心仓和战术仓必须分别说明动作条件、失效条件和复核触发器。",
     "conflict_refs": ["real_rate_vs_valuation"],
     "evidence_refs": ["L1.get_10y_real_rate", "L4.get_ndx_pe_and_earnings_yield"],
     "transformation_signals": [
@@ -138,7 +138,7 @@
   "contradiction_transformation_signals": [
     {
       "signal": "信用继续恶化且价格跌破恐慌低点",
-      "direction": "从高风险高赔率候选转向风险未充分反映",
+      "direction": "从战术赔率改善转向风险未充分反映",
       "implication": "停止战术进攻，降低动作等级。",
       "evidence_refs": ["L2.get_credit_spreads", "L5.get_ta_indicators"],
       "event_refs": []

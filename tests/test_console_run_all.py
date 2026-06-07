@@ -110,6 +110,7 @@ def test_console_summary_syncs_native_paths_back_to_run_summary(tmp_path):
             "report_path": "/tmp/native_brief.html",
             "native_brief": "/tmp/native_brief.html",
             "workbench": "/tmp/workbench.html",
+            "prompt_inspector": "/tmp/prompt_inspector.html",
         },
     )
 
@@ -118,4 +119,5 @@ def test_console_summary_syncs_native_paths_back_to_run_summary(tmp_path):
     assert '"report_path": "/tmp/native_brief.html"' in updated
     assert '"native_brief": "/tmp/native_brief.html"' in updated
     assert '"workbench": "/tmp/workbench.html"' in updated
+    assert '"prompt_inspector": "/tmp/prompt_inspector.html"' in updated
     assert "console_run_summary.json" in updated

@@ -31,7 +31,7 @@
 ```json
 {
   "approval_status": "approved_with_reservations",
-  "final_stance": "中性偏谨慎",
+  "final_stance": "按最终证据生成简洁立场，点名主导矛盾",
   "confidence": "medium",
   "key_support_chains": [
     {
@@ -164,7 +164,7 @@
 ```json
 {
   "approval_status": "approved_with_reservations",
-  "final_stance": "中性偏谨慎",
+  "final_stance": "按最终证据生成简洁立场，点名主导矛盾",
   "confidence": "medium",
   "must_preserve_risks": [
     "L1-L4 估值压缩风险：实际利率 1.95%（82%分位）+ PE 32.5（78%分位）。若盈利增速无法抵消折现率压力，估值压缩风险必须保留",

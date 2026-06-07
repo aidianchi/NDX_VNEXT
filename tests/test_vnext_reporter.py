@@ -11,6 +11,7 @@ from agent_analysis.vnext_reporter import (
     _label,
     _slug,
 )
+from agent_analysis.prompt_inspector import PromptInspectorGenerator
 
 
 def _write_json(path: Path, payload):
@@ -161,7 +162,43 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
                 "task_description": f"{layer} local task",
             },
         )
-    _write_json(run_dir / "llm_stage_diagnostics.json", {"stages": {"L1": {"status": "ok"}}})
+    prompt_text = "## System Message\n系统约束\n\n## User Message\nObjectCanon\nIndicatorCanon\nPermissionType\nResponse Rules\nL1 runtime prompt"
+    prompt_dir = run_dir / "prompt_audit" / "L1"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "attempt_1.prompt.txt").write_text(prompt_text, encoding="utf-8")
+    _write_json(prompt_dir / "attempt_1.payload.json", {"payload": {"layer": "L1"}})
+    (prompt_dir / "attempt_1.response.raw.txt").write_text('{"layer":"L1"}', encoding="utf-8")
+    _write_json(prompt_dir / "output.validated.json", {"layer": "L1", "local_conclusion": "干净"})
+    _write_json(
+        prompt_dir / "meta.json",
+        {
+            "stage": "L1",
+            "stage_name": "l1",
+            "status": "ok",
+            "prompt_chars": len(prompt_text),
+            "prompt_sha256": __import__("hashlib").sha256(prompt_text.encode("utf-8")).hexdigest(),
+            "prompt_file": "prompt_audit/L1/attempt_1.prompt.txt",
+            "output_artifact": "layer_cards/L1.json",
+            "attempts": 1,
+        },
+    )
+    _write_json(
+        run_dir / "run_summary.json",
+        {"prompt_inspector": str(tmp_path / "reports" / "vnext_prompt_inspector_run.html")},
+    )
+    _write_json(
+        run_dir / "llm_stage_diagnostics.json",
+        {
+            "stages": {
+                "l1": {
+                    "status": "ok",
+                    "attempts": 1,
+                    "prompt_chars": len(prompt_text),
+                    "prompt_audit": {"stage_dir": "prompt_audit/L1"},
+                }
+            }
+        },
+    )
     _write_json(
         run_dir / "synthesis_packet.json",
         {
@@ -567,15 +604,12 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert "采集时间" in html
     assert "生成时间" in html
     assert "YF Diagnostics" in html
-    assert "Agent IO Audit" in html
-    assert "L1-L5 输入边界卡" in html
-    assert "layer_context_briefs/L1.json" in html
-    assert "bridge_memos/bridge_0.json" in html
-    assert "thesis_draft.json" in html
-    assert "final_adjudication.json" in html
-    assert "other layer runtime highlights absent" in html
-    assert "global apparent_cross_layer_signals absent" in html
-    assert "bridge memo absent from L1-L5 input" in html
+    assert "Agent Health" in html
+    assert "Agent 原文检查器" in html
+    assert "已保存 1 个 stage" in html
+    assert "Agent IO Audit" not in html
+    assert "L1-L5 输入边界卡" not in html
+    assert "other layer runtime highlights absent" not in html
     assert "llm_stage_diagnostics.json" in html
     assert 'data-typed-conflict="real_rate_vs_valuation"' in html
     assert 'data-transmission-path="rates_to_valuation"' in html
@@ -619,6 +653,52 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     atlas_path = reporter.run(run_dir, template="atlas")
     atlas_html = Path(atlas_path).read_text(encoding="utf-8")
     assert "template-atlas" in atlas_html
+
+    legacy_path = reporter.run(run_dir, template="brief", include_legacy_agent_io_audit=True)
+    legacy_html = Path(legacy_path).read_text(encoding="utf-8")
+    assert "Agent IO Audit" in legacy_html
+    assert "L1-L5 输入边界卡" in legacy_html
+
+
+def test_prompt_inspector_renders_complete_prompt_and_hash(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    prompt_text = "## System Message\n系统约束\n\n## User Message\nObjectCanon\nIndicatorCanon\nPermissionType\nResponse Rules\n完整原文_SENTINEL"
+    prompt_dir = run_dir / "prompt_audit" / "L1"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "attempt_1.prompt.txt").write_text(prompt_text, encoding="utf-8")
+    _write_json(prompt_dir / "attempt_1.payload.json", {"payload": {"layer": "L1", "value": 5.25}})
+    (prompt_dir / "attempt_1.response.raw.txt").write_text('{"layer":"L1"}', encoding="utf-8")
+    _write_json(prompt_dir / "output.validated.json", {"layer": "L1", "local_conclusion": "ok"})
+    prompt_hash = __import__("hashlib").sha256(prompt_text.encode("utf-8")).hexdigest()
+    _write_json(
+        prompt_dir / "meta.json",
+        {
+            "stage": "L1",
+            "stage_name": "l1",
+            "status": "ok",
+            "prompt_sha256": prompt_hash,
+            "prompt_file": "prompt_audit/L1/attempt_1.prompt.txt",
+            "output_artifact": "layer_cards/L1.json",
+            "attempts": 1,
+        },
+    )
+    _write_json(
+        run_dir / "llm_stage_diagnostics.json",
+        {"stages": {"l1": {"status": "ok", "attempts": 1, "prompt_audit": {"stage_dir": "prompt_audit/L1"}}}},
+    )
+
+    path = PromptInspectorGenerator(reports_dir=str(tmp_path / "reports")).run(run_dir)
+    html = Path(path).read_text(encoding="utf-8")
+
+    assert "Agent 原文检查器" in html
+    assert "完整原文_SENTINEL" in html
+    assert prompt_hash in html
+    assert "总览" in html
+    assert "完整原文" in html
+    assert "输入数据" in html
+    assert "规则定位" in html
+    assert "输出结果" in html
+    assert "下游流向" in html
 
 
 def test_vnext_reporter_slug_stable_with_colon_ref():

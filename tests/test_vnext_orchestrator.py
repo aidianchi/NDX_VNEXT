@@ -1081,12 +1081,24 @@ def test_run_stage_records_parse_retry_diagnostics(tmp_path: Path):
         payload={"example": "payload"},
     )
     diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+    first_prompt = (tmp_path / "prompt_audit" / "mini_stage" / "attempt_1.prompt.txt").read_text(encoding="utf-8")
+    second_prompt = (tmp_path / "prompt_audit" / "mini_stage" / "attempt_2.prompt.txt").read_text(encoding="utf-8")
+    meta = json.loads((tmp_path / "prompt_audit" / "mini_stage" / "meta.json").read_text(encoding="utf-8"))
 
     assert result.value == "ok"
     assert engine.calls == 2
     assert "上一次返回未通过结构校验" in engine.prompts[1]
+    assert "## System Message" in first_prompt
+    assert "## User Message" in first_prompt
+    assert "上一次返回未通过结构校验" in second_prompt
+    assert (tmp_path / "prompt_audit" / "mini_stage" / "attempt_1.payload.json").exists()
+    assert (tmp_path / "prompt_audit" / "mini_stage" / "attempt_1.response.raw.txt").exists()
+    assert (tmp_path / "prompt_audit" / "mini_stage" / "output.validated.json").exists()
+    assert meta["prompt_file"] == "prompt_audit/mini_stage/attempt_2.prompt.txt"
+    assert meta["prompt_sha256"]
     assert diagnostics["stages"]["mini_stage"]["attempts"] == 2
     assert diagnostics["stages"]["mini_stage"]["errors"][0]["kind"] == "parse_error"
+    assert diagnostics["stages"]["mini_stage"]["prompt_audit"]["latest_prompt_file"] == "prompt_audit/mini_stage/attempt_2.prompt.txt"
 
 
 class FakeModelWithGeneratedAt(BaseModel):

@@ -146,6 +146,89 @@ def test_run_review_observes_thin_price_reflection_map():
     )
 
 
+def test_run_review_fails_inconsistent_high_payoff_final_language():
+    principal = {
+        "contradiction_id": "valuation_vs_rates",
+        "summary": "估值和利率拉扯。",
+        "price_reflection": "partially_reflected",
+        "evidence_refs": ["L4.valuation"],
+    }
+    report = build_run_review_report(
+        bridges=[
+            {
+                "principal_contradiction": principal,
+                "price_reflection_map": [
+                    {
+                        "category": "credit",
+                        "target": "credit",
+                        "reflected_state": "unclear",
+                        "rationale": "信用未确认。",
+                        "counterevidence": ["信用可能恶化。"],
+                        "action_implication": "限制动作。",
+                    },
+                    {
+                        "category": "rates",
+                        "target": "rates",
+                        "reflected_state": "not_reflected",
+                        "rationale": "利率压力仍在。",
+                        "counterevidence": ["利率可能回落。"],
+                        "action_implication": "限制核心仓。",
+                    },
+                    {
+                        "category": "valuation",
+                        "target": "valuation",
+                        "reflected_state": "partially_reflected",
+                        "rationale": "估值已有压缩。",
+                        "counterevidence": ["盈利可能下修。"],
+                        "action_implication": "只支持战术。",
+                    },
+                    {
+                        "category": "technical_panic",
+                        "target": "technical",
+                        "reflected_state": "partially_reflected",
+                        "rationale": "短线恐慌部分释放。",
+                        "counterevidence": ["跌破低点会失效。"],
+                        "action_implication": "需要触发条件。",
+                    },
+                    {
+                        "category": "liquidity",
+                        "target": "liquidity",
+                        "reflected_state": "unclear",
+                        "rationale": "流动性不清楚。",
+                        "counterevidence": ["流动性可能收缩。"],
+                        "action_implication": "保留复核。",
+                    },
+                ],
+            }
+        ],
+        thesis_draft={
+            "principal_contradiction": principal,
+            "priced_narrative": "坏消息部分进入价格。",
+            "payoff_assessment": "风险收益比不利。",
+        },
+        risk_boundary_report={
+            "must_preserve_risks": ["估值压缩"],
+            "opportunity_costs": [{"condition": "等待确认"}],
+            "confirmation_costs": [{"wait_for": "趋势确认"}],
+        },
+        final_adjudication={
+            "final_stance": "高赔率候选，战术仓分批。",
+            "approval_status": "approved_with_reservations",
+            "principal_contradiction": principal,
+            "payoff_assessment": "当前赔率不对称偏向下行，整体风险收益比不利。",
+            "reader_final": {"one_liner": "风险高但高赔率，动作要分批。"},
+        },
+        data_integrity_report={"publish_status": "publishable"},
+    )
+
+    assert any(
+        item.category == "final"
+        and item.severity == "fail"
+        and "赔率语言自相矛盾" in item.finding
+        for item in report.attribution_findings
+    )
+
+
 def test_run_review_reports_damodaran_erp_percentile_boundary():
     report = build_run_review_report(
         analysis_packet={

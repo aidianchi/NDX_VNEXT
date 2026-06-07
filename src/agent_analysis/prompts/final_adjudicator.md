@@ -15,6 +15,15 @@
 不得编造点位、跌幅、估值倍数、盈利增速阈值或其他定量影响幅度，除非输入 evidence_refs 明确提供这些数字。
 如果上游文本含有未经证据支持的定量影响幅度，你必须改写为定性风险边界或可观察触发器。
 
+【反模板与一致性约束】
+
+下面 JSON 只说明字段结构，不是可复用文案。不得照抄示例里的整句、半句或固定搭配。
+`final_stance` 必须由当日证据生成，必须点名当前主导矛盾，不能写成通用口号。
+`final_stance`、`reader_final.one_liner`、`payoff_assessment` 必须方向一致：
+- 如果 `payoff_assessment` 写“赔率不利 / 赔率偏下行 / 风险收益比不利 / 不支持重仓”，`final_stance` 和 `reader_final.one_liner` 不得写“高赔率”。
+- 只有当价格反映、估值/ERP、信用、趋势和盈利证据共同支持风险补偿变厚时，才可使用“高赔率”。
+- 如果证据只支持“小比例战术反弹窗口”，必须写成“战术窗口/反弹候选/需触发条件”，不得升级成“高赔率候选”。
+
 ## 输入
 
 你只会收到一个压缩后的 `governance_input` JSON 对象，关键字段包括：
@@ -45,11 +54,11 @@
 ```json
 {
   "approval_status": "approved_with_reservations",
-  "final_stance": "高风险高赔率候选，核心仓守纪律，战术仓分批，等待者承认确认成本",
+  "final_stance": "按当日证据写一句最终立场，必须点名主导矛盾，不能复用示例短语",
   "confidence": "medium",
   "state_diagnosis": "风险仍高，但价格可能已经反映一部分坏消息。",
   "priced_narrative": "价格正在定价政策冲击、估值压缩和风险偏好恶化；信用继续恶化尚未完全解除。",
-  "payoff_assessment": "高风险高赔率候选：风险未解除，不适合无纪律满仓；但赔率可能好于暴跌前。",
+  "payoff_assessment": "说明风险补偿是否变厚；若整体风险收益比不利，不得写成高赔率。",
   "time_horizon_views": [
     {
       "horizon": "same_day_or_days",
@@ -108,7 +117,7 @@
     "dominant_side": "风险未解除，不能无纪律满仓。",
     "secondary_side": "价格和估值已经反映部分坏消息，等待确认有成本。",
     "price_reflection": "partially_reflected",
-    "action_implication": "核心仓守纪律，战术仓分批，等待现金明确复核条件。",
+    "action_implication": "核心仓保持约束，战术仓按触发条件处理，等待现金明确复核条件。",
     "conflict_refs": ["panic_priced_vs_unconfirmed_risk"],
     "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield", "L5.get_ta_indicators"],
     "transformation_signals": [],
@@ -124,7 +133,7 @@
       "evidence_refs": ["L2.get_credit_spreads"],
       "counterevidence": ["信用继续恶化说明风险未充分反映。"],
       "counterevidence_refs": ["L2.get_credit_spreads"],
-      "action_implication": "信用未稳定前，战术仓分批，核心仓不升级。",
+      "action_implication": "信用未稳定前，限制风险暴露升级，并写清战术动作触发条件。",
       "missing_evidence": []
     },
     {
@@ -173,7 +182,7 @@
     }
   ],
   "reader_final": {
-    "one_liner": "这不是低风险环境，但可能是高风险高赔率候选，动作要按时间尺度和仓位拆开。",
+    "one_liner": "用普通读者能理解的话概括状态、价格、赔率和动作；不得复用示例短语。",
     "three_reasons": [
       "风险仍在，信用和趋势没有完全确认修复。",
       "价格和估值可能已经反映一部分坏消息。",
@@ -237,6 +246,8 @@
 - 重新自由调用数据源。
 - 跳过 Critic / Risk / Schema Guard 的意见。
 - 为了形成顺滑结论而抹平冲突。
+- 照抄输出格式示例中的整句或固定搭配。
+- 在 `payoff_assessment` 明确写赔率不利时，又在 `final_stance` 或 `reader_final.one_liner` 写“高赔率”。
 - 把 `adjudicator_notes` 写成读者首屏文案。
 - 把“风险完整保留”当成最终报告唯一质量标准。
 - 输出非 JSON 格式。
@@ -261,6 +272,7 @@
 - reader_final 是否能直接给普通读者看？
 - quality_gate 是否没有混进读者结论？
 - 是否区分状态、价格、赔率、动作和失效条件？
+- final_stance、reader_final.one_liner、payoff_assessment 是否方向一致？
 - 是否说清楚主要矛盾，而不是把高严重度冲突机械堆成清单？
 - 是否避免把风险存在直接写成赔率不利？
 - 是否避免把等待确认写成无成本默认答案？

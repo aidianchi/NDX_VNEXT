@@ -4,6 +4,10 @@ from pathlib import Path
 PROMPT_DIR = Path(__file__).resolve().parents[1] / "src" / "agent_analysis" / "prompts"
 
 
+def _prompt_markdown_files():
+    return sorted(path for path in PROMPT_DIR.rglob("*.md") if path.is_file())
+
+
 def test_governance_prompts_do_not_teach_unsupported_historical_probabilities():
     prompt_files = [
         "cross_layer_bridge.md",
@@ -66,6 +70,34 @@ def test_risk_and_final_prompts_explicitly_ban_unsupported_numeric_impacts():
     for name in ["risk_sentinel.md", "final_adjudicator.md"]:
         text = (PROMPT_DIR / name).read_text(encoding="utf-8")
         assert required in text
+
+
+def test_decision_prompts_do_not_teach_reusable_stance_templates():
+    banned_fragments = [
+        "中性偏谨慎",
+        "高风险高赔率候选",
+        "这不是低风险环境，但可能是高风险高赔率候选",
+        "核心仓守纪律，战术仓分批",
+        "建议等待更好的入场时机",
+        "等待估值回调或广度改善",
+    ]
+
+    offenders = []
+    for path in _prompt_markdown_files():
+        text = path.read_text(encoding="utf-8")
+        for fragment in banned_fragments:
+            if fragment in text:
+                offenders.append(f"{path.relative_to(PROMPT_DIR)}: {fragment}")
+
+    assert not offenders
+
+
+def test_decision_prompts_require_payoff_language_consistency():
+    for name in ["thesis_builder.md", "final_adjudicator.md"]:
+        text = (PROMPT_DIR / name).read_text(encoding="utf-8")
+        assert "不得照抄示例里的整句、半句或固定搭配" in text
+        assert "如果 `payoff_assessment` 写“赔率不利 / 赔率偏下行 / 风险收益比不利 / 不支持重仓”" in text
+        assert "不得写“高赔率”" in text
 
 
 def test_l4_prompt_requires_data_authority_metadata_for_valuation():

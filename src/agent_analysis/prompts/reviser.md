@@ -38,7 +38,7 @@
 
 ```json
 {
-  "revision_summary": "本次修订：1) 修复了 L4 数据引用错误，盈利增速实际为放缓而非强劲；2) 强化了 L1-L4 估值压缩风险的论证；3) 显式讨论了 L3-L5 熊市背离的含义；4) 调整了主论点立场，从'中性'改为'中性偏谨慎'",
+  "revision_summary": "本次修订：1) 修复数据引用错误；2) 强化主要矛盾和反证；3) 保留跨层张力；4) 使主论点与证据方向一致。",
   "accepted_critiques": [
     "Critic 指出的 L4 数据引用错误",
     "Critic 指出的跨层逻辑跳跃问题",
@@ -51,7 +51,7 @@
     }
   ],
   "revised_thesis": {
-    "environment_assessment": "最多300字符，宏观环境评估：能不能涨？",
+    "environment_assessment": "最多300字符，说明宏观环境对估值、盈利和风险偏好的支撑或约束。",
     "valuation_assessment": "最多300字符，估值安全边际评估：贵不贵？",
     "timing_assessment": "最多300字符，择时催化剂评估：为什么是现在？",
     "main_thesis": "最多500字符，主论点",
@@ -126,7 +126,7 @@
 如果批评显示原立场过于极端：
 - 看多 → 中性偏看多
 - 看空 → 中性偏看空
-- 中性 → 中性偏谨慎 / 中性偏乐观
+- 单一立场标签 → 有证据支撑的状态、价格、赔率和动作判断
 
 ## 修订决策流程
 
@@ -234,7 +234,7 @@ Risk Sentinel 指出：
 修订后：
 ```json
 {
-  "revision_summary": "基于 Critic 和 Risk Sentinel 的意见修订：1) 修复 L4 数据引用错误，盈利增速实际为放缓；2) 强化估值压缩风险的论证；3) 调整主论点为'中性偏谨慎'；4) 保留所有 high severity 冲突",
+  "revision_summary": "基于 Critic 和 Risk Sentinel 的意见修订：1) 修复数据引用错误；2) 强化估值、盈利和风险补偿的证据链；3) 调整主论点使其匹配证据；4) 保留所有 high severity 冲突。",
   "accepted_critiques": [
     "Critic 指出的数据引用错误",
     "Critic 指出的支撑链权重不足问题",
@@ -242,7 +242,7 @@ Risk Sentinel 指出：
   ],
   "rejected_critiques": [],
   "revised_thesis": {
-    "main_thesis": "当前环境中性偏谨慎。L1 流动性收紧压制高估值，L3 广度恶化提示趋势脆弱。尽管中期趋势仍向上，但风险收益比不利，建议等待更好的入场时机。",
+    "main_thesis": "按修订后的证据生成主论点，必须说明主导矛盾、价格反映、赔率判断、行动条件和失效条件。",
     "key_support_chains": [
       {
         "chain_description": "估值压缩风险显著",

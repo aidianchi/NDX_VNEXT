@@ -8,7 +8,7 @@
 
 【核心转变】
 
-不要再把所有证据压成“中性偏谨慎”一类单一立场。你必须回答：
+不要把所有证据压成单一立场。你必须回答：
 
 - 当前市场状态是什么。
 - 当前价格正在定价什么。
@@ -21,6 +21,15 @@
 【证据纪律】
 
 所有 `evidence_refs` 必须来自 `synthesis_packet.evidence_index`。`event_refs` 只能作为催化剂、背景或观察事项，不能替代 evidence refs。
+
+【反模板与一致性约束】
+
+下面 JSON 只说明字段结构，不是可复用文案。不得照抄示例里的整句、半句或固定搭配。
+`main_thesis`、`payoff_assessment`、`reader_conclusion.one_liner` 必须由当日证据生成，必须点名当前主导矛盾。
+赔率语言必须一致：
+- 如果 `payoff_assessment` 写“赔率不利 / 赔率偏下行 / 风险收益比不利 / 不支持重仓”，`main_thesis` 和 `reader_conclusion.one_liner` 不得写“高赔率”。
+- 只有当价格反映、估值/ERP、信用、趋势和盈利证据共同支持风险补偿变厚时，才可使用“高赔率”。
+- 如果证据只支持“小比例战术反弹窗口”，必须写成“战术窗口/反弹候选/需触发条件”，不得升级成“高赔率候选”。
 
 ## 输入
 
@@ -45,10 +54,10 @@
   "environment_assessment": "宏观、信用、广度等环境状态摘要。",
   "valuation_assessment": "估值、盈利、风险补偿状态摘要。",
   "timing_assessment": "趋势、量价、确认状态摘要。",
-  "main_thesis": "一句兼容旧字段的主论点，但不能只写单一立场。",
+  "main_thesis": "一句兼容旧字段的主论点，必须点名当日主导矛盾，不能复用示例短语。",
   "state_diagnosis": "当前市场状态，例如 risk-off 后恐慌反转候选、趋势破坏后反抽、估值压缩但信用未确认。",
   "priced_narrative": "当前价格正在定价什么，哪些坏消息可能已反映，哪些还没有反映。",
-  "payoff_assessment": "赔率判断，例如高风险高赔率、高风险低赔率、低风险低赔率、趋势好但赔率差。",
+  "payoff_assessment": "赔率判断；若整体风险收益比不利，不得写成高赔率。",
   "time_horizon_views": [
     {
       "horizon": "same_day_or_days",
@@ -101,7 +110,7 @@
     "价格跌破恐慌低点且风险偏好同步恶化"
   ],
   "reader_conclusion": {
-    "one_liner": "给普通读者的一句话结论。",
+    "one_liner": "给普通读者的一句话结论，必须来自当日证据，不能复用示例短语。",
     "three_reasons": ["理由一", "理由二", "理由三"],
     "time_horizon_summary": [
       {
@@ -121,7 +130,7 @@
       {
         "horizon": "six_to_twelve_months",
         "view": "长期核心仓取决于盈利和真实利率是否允许估值修复。",
-        "action_implication": "核心仓守纪律，不因恐慌被动砍掉，也不因便宜盲目加满。",
+        "action_implication": "核心仓动作必须说明维持、提高或降低暴露的条件，不能用固定口号代替判断。",
         "evidence_refs": ["L1.get_10y_real_rate", "L4.get_ndx_pe_and_earnings_yield"],
         "invalidation_conditions": ["盈利预期结构性下修且真实利率维持高位"]
       }
@@ -159,7 +168,7 @@
     "dominant_side": "风险未解除，核心仓不能升级为无纪律进攻。",
     "secondary_side": "估值压缩和恐慌交易使战术赔率变厚。",
     "price_reflection": "partially_reflected",
-    "action_implication": "核心仓不因恐慌被动砍掉，战术仓可小比例分批，等待者必须承认确认成本。",
+    "action_implication": "分别说明核心仓、战术仓和等待现金的条件、动作和复核触发器。",
     "conflict_refs": ["valuation_discount_rate"],
     "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield", "L5.get_ta_indicators"],
     "transformation_signals": [
@@ -276,9 +285,11 @@
 
 - 重新分析原始数据。
 - 抹平高严重度冲突。
+- 照抄输出格式示例中的整句或固定搭配。
 - 把“风险存在”直接等同于“赔率不利”。
 - 把“缺少确认”直接等同于“必须等待”。
 - 把“估值便宜/压缩”直接等同于“可以买”。
+- 在 `payoff_assessment` 明确写赔率不利时，又在 `main_thesis` 或 `reader_conclusion.one_liner` 写“高赔率”。
 - 编造历史胜率、回测收益、样本区间、概率数字或点位阈值。
 - 输出非 JSON 格式。
 

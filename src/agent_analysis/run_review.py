@@ -22,6 +22,8 @@ INTERNAL_READER_PHRASES = [
 ]
 
 REQUIRED_PRICE_REFLECTION_CATEGORIES = {"credit", "rates", "valuation", "technical_panic", "liquidity"}
+HIGH_PAYOFF_TERMS = ["高赔率", "赔率改善", "赔率变厚", "风险补偿变厚"]
+NEGATIVE_PAYOFF_TERMS = ["赔率不利", "赔率偏向下行", "赔率不对称偏向下行", "风险收益比不利", "不支持重仓"]
 
 
 def _load_json(path: Path, default: Any) -> Any:
@@ -62,6 +64,23 @@ def _reader_text(final: Dict[str, Any]) -> str:
         " ".join(str(item) for item in _as_list(reader.get("three_reasons"))),
     ]
     return " ".join(str(part) for part in parts if part)
+
+
+def _payoff_language_mismatch(final: Dict[str, Any]) -> bool:
+    stance_text = " ".join(
+        str(part)
+        for part in [
+            final.get("final_stance", ""),
+            _reader_text(final),
+        ]
+        if part
+    )
+    payoff_text = str(final.get("payoff_assessment") or "")
+    if not stance_text or not payoff_text:
+        return False
+    says_high_payoff = any(term in stance_text for term in HIGH_PAYOFF_TERMS)
+    says_negative_payoff = any(term in payoff_text for term in NEGATIVE_PAYOFF_TERMS)
+    return says_high_payoff and says_negative_payoff
 
 
 def _parse_date_text(value: Any) -> Optional[str]:
@@ -383,6 +402,17 @@ def build_run_review_report(
                 "Final 已保留主要矛盾。",
                 ["final_adjudication.json:principal_contradiction"],
                 _collect_refs(final_principal),
+            )
+        )
+
+    if _payoff_language_mismatch(final_adjudication):
+        findings.append(
+            _finding(
+                "final",
+                "fail",
+                "Final 赔率语言自相矛盾：final_stance/reader_final 使用高赔率表达，但 payoff_assessment 同时写赔率或风险收益比不利。",
+                ["final_adjudication.json:final_stance", "final_adjudication.json:payoff_assessment", "final_adjudication.json:reader_final"],
+                recommended_rule_update="Final 的最终立场、读者一句话和 payoff_assessment 必须方向一致；赔率不利时不得写成高赔率候选。",
             )
         )
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type
@@ -175,9 +176,11 @@ class VNextOrchestrator:
         self.layer_cards_dir = self.output_dir / "layer_cards"
         self.layer_context_dir = self.output_dir / "layer_context_briefs"
         self.bridge_dir = self.output_dir / "bridge_memos"
+        self.prompt_audit_dir = self.output_dir / "prompt_audit"
         self.layer_cards_dir.mkdir(exist_ok=True)
         self.layer_context_dir.mkdir(exist_ok=True)
         self.bridge_dir.mkdir(exist_ok=True)
+        self.prompt_audit_dir.mkdir(exist_ok=True)
         self.stage_diagnostics: Dict[str, Any] = {"schema_version": "vnext_llm_stage_diagnostics_v1", "stages": {}}
 
     def run(self, packet: AnalysisPacket | Dict[str, Any]) -> Dict[str, Any]:
@@ -945,6 +948,10 @@ class VNextOrchestrator:
             "errors": [],
             "prompt_chars": len(prompt),
             "status": "running",
+            "prompt_audit": {
+                "stage_dir": self._prompt_audit_relpath(stage_name),
+                "attempts": [],
+            },
         }
         self.stage_diagnostics["stages"][stage_name] = stage_record
         self._save_stage_diagnostics()
@@ -956,10 +963,29 @@ class VNextOrchestrator:
                     f"{prompt}\n\n上一次返回未通过结构校验，错误如下：\n{last_error}\n"
                     "请仅输出修正后的 JSON 对象，不要附加任何解释。"
                 )
+            attempt_record = self._capture_prompt_attempt(
+                stage_key=stage_key,
+                stage_name=stage_name,
+                attempt=attempt,
+                active_prompt=active_prompt,
+                payload=payload,
+                retry_feedback=last_error,
+            )
+            stage_record["prompt_chars"] = len(active_prompt)
+            stage_record["prompt_audit"]["attempts"].append(attempt_record)
+            stage_record["prompt_audit"]["latest_prompt_file"] = attempt_record["prompt_file"]
+            self._save_stage_diagnostics()
             raw = self.llm_engine.call_with_fallback(active_prompt, stage_name=stage_name)
+            self._save_prompt_audit_text(stage_name, f"attempt_{attempt}.response.raw.txt", str(raw or ""))
+            attempt_record["raw_response_file"] = self._prompt_audit_relpath(
+                stage_name,
+                f"attempt_{attempt}.response.raw.txt",
+            )
+            self._write_prompt_stage_meta(stage_name, stage_record)
             if not raw:
                 last_error = f"{stage_name} received empty response"
                 stage_record["errors"].append({"attempt": attempt, "kind": "empty_response", "message": last_error})
+                self._write_prompt_stage_meta(stage_name, stage_record)
                 self._save_stage_diagnostics()
                 continue
             parsed = self.llm_engine.extract_json(raw, stage_name)
@@ -979,9 +1005,15 @@ class VNextOrchestrator:
                         "raw_excerpt": raw_text[:500],
                     }
                 )
+                self._write_prompt_stage_meta(stage_name, stage_record)
                 self._save_stage_diagnostics()
                 continue
             parsed = self._normalize_payload(stage_key, parsed)
+            self._save_prompt_audit_json(stage_name, f"attempt_{attempt}.parsed.normalized.json", parsed)
+            attempt_record["parsed_response_file"] = self._prompt_audit_relpath(
+                stage_name,
+                f"attempt_{attempt}.parsed.normalized.json",
+            )
             # 强制覆盖 generated_at：防止 LLM 日期幻觉
             # LLM 经常在 JSON 输出中编造 generated_at 值，覆盖掉 pydantic 的 default_factory
             # 这里用代码实际运行时间强制覆盖，确保审计可追溯性
@@ -998,6 +1030,7 @@ class VNextOrchestrator:
                         "message": last_error[:1000],
                     }
                 )
+                self._write_prompt_stage_meta(stage_name, stage_record)
                 self._save_stage_diagnostics()
                 logger.warning("%s validation failed on attempt %s: %s", stage_name, attempt, exc)
                 continue
@@ -1012,6 +1045,7 @@ class VNextOrchestrator:
                             "message": last_error[:1000],
                         }
                     )
+                    self._write_prompt_stage_meta(stage_name, stage_record)
                     self._save_stage_diagnostics()
                     logger.warning(
                         "%s contract validation failed on attempt %s: %s",
@@ -1021,11 +1055,194 @@ class VNextOrchestrator:
                     )
                     continue
             stage_record["status"] = "ok"
+            stage_record["model"] = getattr(self.llm_engine, "successful_model", None)
+            self._save_prompt_audit_json(stage_name, "output.validated.json", _model_dump(validated))
+            stage_record["prompt_audit"]["validated_output_file"] = self._prompt_audit_relpath(
+                stage_name,
+                "output.validated.json",
+            )
+            self._write_prompt_stage_meta(stage_name, stage_record)
             self._save_stage_diagnostics()
             return validated
         stage_record["status"] = "failed"
+        self._write_prompt_stage_meta(stage_name, stage_record)
         self._save_stage_diagnostics()
         raise RuntimeError(f"{stage_name} failed after {self.max_node_retries} attempts: {last_error}")
+
+    def _prompt_audit_stage_dir(self, stage_name: str) -> Path:
+        return self.prompt_audit_dir / self._prompt_audit_stage_label(stage_name)
+
+    def _prompt_audit_stage_label(self, stage_name: str) -> str:
+        normalized = str(stage_name or "stage").strip()
+        layer_match = re.fullmatch(r"l([1-5])", normalized.lower())
+        if layer_match:
+            return f"L{layer_match.group(1)}"
+        return re.sub(r"[^A-Za-z0-9_.-]+", "_", normalized).strip("_") or "stage"
+
+    def _prompt_audit_relpath(self, stage_name: str, filename: Optional[str] = None) -> str:
+        path = Path("prompt_audit") / self._prompt_audit_stage_label(stage_name)
+        if filename:
+            path = path / filename
+        return path.as_posix()
+
+    def _actual_prompt_text(self, user_prompt: str) -> str:
+        system_constraints = ""
+        if hasattr(self.llm_engine, "_load_system_constraints"):
+            try:
+                system_constraints = self.llm_engine._load_system_constraints()
+            except Exception:
+                system_constraints = ""
+        return (
+            "## System Message\n"
+            f"{system_constraints}\n\n"
+            "## User Message\n"
+            f"{user_prompt}"
+        )
+
+    def _capture_prompt_attempt(
+        self,
+        *,
+        stage_key: str,
+        stage_name: str,
+        attempt: int,
+        active_prompt: str,
+        payload: Dict[str, Any],
+        retry_feedback: str,
+    ) -> Dict[str, Any]:
+        actual_prompt = self._actual_prompt_text(active_prompt)
+        prompt_hash = hashlib.sha256(actual_prompt.encode("utf-8")).hexdigest()
+        prompt_filename = f"attempt_{attempt}.prompt.txt"
+        payload_filename = f"attempt_{attempt}.payload.json"
+        self._save_prompt_audit_text(stage_name, prompt_filename, actual_prompt)
+        self._save_prompt_audit_json(
+            stage_name,
+            payload_filename,
+            {
+                "stage_key": stage_key,
+                "stage_name": stage_name,
+                "attempt": attempt,
+                "payload": self._sanitize_prompt_payload(stage_key, payload),
+                "retry_feedback": retry_feedback or "",
+            },
+        )
+        return {
+            "attempt": attempt,
+            "prompt_file": self._prompt_audit_relpath(stage_name, prompt_filename),
+            "payload_file": self._prompt_audit_relpath(stage_name, payload_filename),
+            "prompt_sha256": prompt_hash,
+            "prompt_chars": len(actual_prompt),
+            "retry_feedback": bool(retry_feedback),
+        }
+
+    def _save_prompt_audit_text(self, stage_name: str, filename: str, text: str) -> None:
+        stage_dir = self._prompt_audit_stage_dir(stage_name)
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        (stage_dir / filename).write_text(text, encoding="utf-8")
+
+    def _save_prompt_audit_json(self, stage_name: str, filename: str, payload: Any) -> None:
+        stage_dir = self._prompt_audit_stage_dir(stage_name)
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        (stage_dir / filename).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+
+    def _write_prompt_stage_meta(self, stage_name: str, stage_record: Dict[str, Any]) -> None:
+        prompt_audit = stage_record.get("prompt_audit", {}) if isinstance(stage_record, dict) else {}
+        attempts = prompt_audit.get("attempts", []) if isinstance(prompt_audit, dict) else []
+        latest_attempt = attempts[-1] if attempts else {}
+        meta = {
+            "stage": self._prompt_audit_stage_label(stage_name),
+            "stage_name": stage_name,
+            "stage_key": stage_record.get("stage_key"),
+            "attempt": latest_attempt.get("attempt"),
+            "attempts": stage_record.get("attempts", 0),
+            "model": stage_record.get("model") or getattr(self.llm_engine, "successful_model", None),
+            "status": stage_record.get("status"),
+            "prompt_chars": latest_attempt.get("prompt_chars") or stage_record.get("prompt_chars"),
+            "prompt_tokens_estimate": None,
+            "prompt_sha256": latest_attempt.get("prompt_sha256"),
+            "prompt_file": latest_attempt.get("prompt_file"),
+            "effective_date": self._infer_effective_date_from_prompt_audit(stage_name),
+            "mode": self._infer_run_mode_from_prompt_audit(stage_name),
+            "input_artifacts": self._infer_input_artifacts(stage_name),
+            "output_artifact": self._infer_output_artifact(stage_name),
+            "validation_errors": [
+                item for item in stage_record.get("errors", [])
+                if isinstance(item, dict) and item.get("kind") in {"schema_validation_error", "contract_validation_error"}
+            ],
+            "errors": stage_record.get("errors", []),
+            "attempt_files": attempts,
+            "data_boundary": self._infer_data_boundary_from_prompt_audit(stage_name),
+        }
+        self._save_prompt_audit_json(stage_name, "meta.json", meta)
+
+    def _infer_effective_date_from_prompt_audit(self, stage_name: str) -> Optional[str]:
+        analysis_path = self.output_dir / "analysis_packet.json"
+        packet = {}
+        if analysis_path.exists():
+            try:
+                packet = json.loads(analysis_path.read_text(encoding="utf-8"))
+            except Exception:
+                packet = {}
+        meta = packet.get("meta", {}) if isinstance(packet, dict) else {}
+        return meta.get("backtest_date") or meta.get("data_date") or meta.get("timestamp_utc")
+
+    def _infer_run_mode_from_prompt_audit(self, stage_name: str) -> str:
+        analysis_path = self.output_dir / "analysis_packet.json"
+        if analysis_path.exists():
+            try:
+                packet = json.loads(analysis_path.read_text(encoding="utf-8"))
+            except Exception:
+                packet = {}
+            meta = packet.get("meta", {}) if isinstance(packet, dict) else {}
+            if meta.get("backtest_date"):
+                return "backtest"
+            if meta.get("snapshot_id") or meta.get("snapshot_mode"):
+                return "snapshot"
+        return "latest"
+
+    def _infer_data_boundary_from_prompt_audit(self, stage_name: str) -> Dict[str, Any]:
+        effective_date = self._infer_effective_date_from_prompt_audit(stage_name)
+        return {
+            "effective_date": effective_date,
+            "max_input_date": None,
+            "backtest_cutoff_respected": None,
+        }
+
+    def _infer_input_artifacts(self, stage_name: str) -> List[str]:
+        layer_match = re.fullmatch(r"l([1-5])", str(stage_name).lower())
+        if layer_match:
+            layer = f"L{layer_match.group(1)}"
+            return [
+                f"layer_context_briefs/{layer}.json",
+                f"analysis_packet.raw_data.{layer}",
+            ]
+        return {
+            "bridge": ["context_brief.json", "layer_cards/L1-L5.json", "analysis_packet.event_refs"],
+            "thesis": ["synthesis_packet.json"],
+            "critic": ["governance_input(thesis + synthesis + layer cards)"],
+            "critic_retry": ["governance_input(thesis + synthesis + schema feedback + layer cards)"],
+            "risk": ["governance_input(thesis + synthesis + layer cards)"],
+            "risk_retry": ["governance_input(thesis + synthesis + schema feedback + layer cards)"],
+            "reviser": ["governance_input(thesis + critique + risk + schema + layer cards)"],
+            "final_adjudicator": ["governance_input(revised thesis + critique + risk + schema + layer cards)"],
+        }.get(stage_name, [])
+
+    def _infer_output_artifact(self, stage_name: str) -> str:
+        layer_match = re.fullmatch(r"l([1-5])", str(stage_name).lower())
+        if layer_match:
+            return f"layer_cards/L{layer_match.group(1)}.json"
+        return {
+            "bridge": "bridge_memos/bridge_0.json",
+            "thesis": "thesis_draft.json",
+            "critic": "critique.json",
+            "critic_retry": "critique.json",
+            "risk": "risk_boundary_report.json",
+            "risk_retry": "risk_boundary_report.json",
+            "reviser": "analysis_revised.json",
+            "final_adjudicator": "final_adjudication.json",
+        }.get(stage_name, "")
 
     def _save_stage_diagnostics(self) -> None:
         path = self.output_dir / "llm_stage_diagnostics.json"

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List
 
 try:
+    from .agent_analysis.prompt_inspector import PromptInspectorGenerator
     from .agent_analysis.vnext_reporter import VNextReportGenerator
     from .browser_sidecar import (
         collect_trendonify_valuation_sidecar,
@@ -20,6 +21,7 @@ try:
     from .main import run_pipeline, setup_logging
     from .manual_data import load_manual_data
 except ImportError:
+    from agent_analysis.prompt_inspector import PromptInspectorGenerator
     from agent_analysis.vnext_reporter import VNextReportGenerator
     from browser_sidecar import (
         collect_trendonify_valuation_sidecar,
@@ -74,6 +76,7 @@ def _sync_run_summary(run_dir: str, console_summary: Dict[str, Any]) -> None:
         "report_path": console_summary.get("report_path") or console_summary.get("native_brief") or existing.get("report_path", ""),
         "native_brief": console_summary.get("native_brief", existing.get("native_brief", "")),
         "workbench": console_summary.get("workbench", existing.get("workbench", "")),
+        "prompt_inspector": console_summary.get("prompt_inspector", existing.get("prompt_inspector", "")),
         "console_run_summary": os.path.join(run_dir, "console_run_summary.json"),
     }
     _write_json(summary_path, merged)
@@ -135,6 +138,10 @@ def main() -> int:
     )
     summary = run_pipeline(pipeline_args)
     run_dir = summary["run_dir"]
+    logging.info("Prompt Inspector generation started.")
+    prompt_inspector_path = PromptInspectorGenerator().run(run_dir)
+    _sync_run_summary(run_dir, {"prompt_inspector": prompt_inspector_path})
+    logging.info("Prompt Inspector generated: %s", prompt_inspector_path)
     logging.info("Native brief generation started.")
     brief_path = VNextReportGenerator().run(run_dir, template="brief")
     logging.info("Native brief generated: %s", brief_path)
@@ -150,6 +157,7 @@ def main() -> int:
         "report_path": report_path,
         "native_brief": brief_path,
         "workbench": workbench_path,
+        "prompt_inspector": prompt_inspector_path,
         "manual_data_path": path_config.manual_data_local_path,
         "trendonify_sidecar_path": trendonify_sidecar_path,
         "workbench_modules": _modules(args.workbench_modules),
