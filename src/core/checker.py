@@ -107,6 +107,20 @@ class DataIntegrity:
         invariants = data_json.get("strict_backtest_invariants") if isinstance(data_json, dict) else {}
         return invariants if isinstance(invariants, dict) else {}
 
+    def _source_disagreement_issues(self, item: Dict[str, Any]) -> List[Dict[str, Any]]:
+        raw = self._raw_data(item)
+        data_quality = raw.get("data_quality") if isinstance(raw.get("data_quality"), dict) else {}
+        issues = data_quality.get("source_disagreement_issues")
+        if not isinstance(issues, list):
+            return []
+        label = item.get("metric_name") or item.get("function_id") or "unknown_metric"
+        normalized = []
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            normalized.append({"indicator": label, **issue})
+        return normalized
+
     def run(self, data_json: Dict[str, Any]) -> Dict[str, Any]:
         indicators = data_json.get("indicators", [])
         total = len(indicators)
@@ -126,6 +140,14 @@ class DataIntegrity:
         weighted_success = sum(coverage_factors.values())
         if future_violations:
             weighted_success = max(0.0, weighted_success - len(future_violations))
+        quality_issues = []
+        for item in successful_items:
+            quality_issues.extend(self._source_disagreement_issues(item))
+        blocking_quality_issues = [issue for issue in quality_issues if issue.get("blocks_publish")]
+        if quality_issues:
+            weighted_success = max(0.0, weighted_success - 0.5 * len(quality_issues))
+        if blocking_quality_issues:
+            weighted_success = max(0.0, weighted_success - len(blocking_quality_issues))
         confidence = round((weighted_success / total) * 100, 1) if total else 0.0
         blocking_reasons = []
         if future_violations:
@@ -133,6 +155,14 @@ class DataIntegrity:
             blocking_reasons.append(
                 "future_data_after_backtest_date: " + "；".join(examples)
             )
+        if blocking_quality_issues:
+            examples = []
+            for issue in blocking_quality_issues[:3]:
+                examples.append(
+                    f"{issue.get('indicator')}: {issue.get('metric')} component={issue.get('component_value')} "
+                    f"reference={issue.get('reference_median')} diff={issue.get('relative_diff_pct')}%"
+                )
+            blocking_reasons.append("valuation_source_disagreement: " + "；".join(examples))
 
         failed_metrics = [
             item.get("metric_name") or item.get("function_id")
@@ -156,9 +186,16 @@ class DataIntegrity:
         if future_violations:
             examples = [f"{name}: {', '.join(values[:2])}" for name, values in list(future_violations.items())[:3]]
             notes.append(f"{len(future_violations)} 个指标存在晚于回测日的数据日期，示例: {'；'.join(examples)}")
-        else:
-            if not failed_metrics and not unavailable and not partial:
-                notes.append("所有采集指标均返回有效值。")
+        if quality_issues:
+            examples = []
+            for issue in quality_issues[:3]:
+                examples.append(
+                    f"{issue.get('indicator')} {issue.get('metric')} component={issue.get('component_value')}, "
+                    f"ref={issue.get('reference_median')}, diff={issue.get('relative_diff_pct')}%"
+                )
+            notes.append(f"{len(quality_issues)} 个估值源严重冲突，示例: {'；'.join(examples)}")
+        if not future_violations and not quality_issues and not failed_metrics and not unavailable and not partial:
+            notes.append("所有采集指标均返回有效值。")
         strict_backtest_invariants = self._strict_backtest_invariants(data_json)
         declared_limitations = strict_backtest_invariants.get("declared_limitations", []) if strict_backtest_invariants else []
         if backtest_date and declared_limitations:
@@ -218,6 +255,7 @@ class DataIntegrity:
             "unpublishable": bool(blocking_reasons),
             "publish_status": "blocked" if blocking_reasons else "publishable",
             "blocking_reasons": blocking_reasons,
+            "quality_issues": quality_issues,
             "future_date_violations": future_violations,
             "layer_breakdown": {
                 layer: {

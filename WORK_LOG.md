@@ -4,6 +4,117 @@
 
 ---
 
+## 2026-06-08
+
+### L4 数据源上位：Yahoo 管预期，SEC 管事实，yfinance 做对照，东财做质检
+
+完成内容：
+
+- 新增 L4 字段级主源规则：EPS estimate / EPS revision 明确由 Yahoo quoteSummary 主导；SEC XBRL 明确为官方已披露财报事实源；yfinance 保留为估值字段主对照和 fallback；东财固定为中文第三方交叉校验源，不直接进入核心证据链。
+- 升级组件源冲突闸门：yfinance 与 Yahoo 在单票 trailing PE / forward PE 出现高冲突时，不再硬选 yfinance，而是把该 ticker 的冲突字段剔出核心 component aggregate，并在 `component_conflict_gate` 标记 degraded。
+- SEC XBRL 输出补齐事实审计元数据：每个已命中字段带 `filed_date`、`period_end`、`form`、`source_accession`、`xbrl_tag`；未命中字段明确标为 `unavailable`，不填假值。
+- L4 输出新增/强化 `primary_source_by_field`、`sec_official_facts`、`component_conflict_gate`；`get_ndx_forward_earnings_quality` 输出 `eps_revision_source=yahoo_quote_summary`，并明确 EPS revision 只能说明盈利预期变化，不能单独证明估值便宜。
+- DataIntegrity 可看到组件级高冲突：非阻断但扣减置信度；若后续聚合 PE / Forward PE 与指数级第三方源严重冲突，仍由已有 publish gate 阻断。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_l4_forward_earnings_quality.py tests/test_l4_data_authority.py tests/test_core_checker.py`：40 passed，4 warnings。
+- `python3 -m pytest -q`：344 passed，4 warnings。
+- `python3 src/main.py --collect-only --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts`：通过；L4 三个函数均成功。
+- 最新 `output/data/data_collected_v9_live.json`：yfinance 101/101，Yahoo 101/101，SEC 20/20，东财 20/20；PDD `forward_pe` 源冲突 576.58%，该字段已从核心 Forward PE 计算剔除，Forward PE 覆盖为 99/101、99.57% market-cap coverage。
+- DataIntegrity 复核：`publish_status=publishable`、`blocked=false`、`confidence_percent=97.7`；PDD 冲突作为 quality issue 披露，不误阻断发布。
+
+---
+
+## 2026-06-07
+
+### L4 多源成分股快照：yfinance / Yahoo / SEC / 东财并跑对账
+
+完成内容：
+
+- 新增 L4 run-local 成分股 fundamentals 快照：`get_ndx_component_fundamentals_snapshot` 并跑 yfinance 与 Yahoo quoteSummary，SEC XBRL 和东财 GMAININDICATOR 做 M7 + NDX 前 20 大权重抽样对账。
+- 保持 yfinance 为实时主路径，不盲目替换；Yahoo quoteSummary 作为候选/补位源，逐字段记录 `field_sources`、`source_switches` 和 component-level source disagreements。
+- SEC XBRL 新增 filed-date 过滤能力和常用 GAAP 指标别名，用来支撑后续历史可见财报事实；东财当前页面只作为实时交叉校验源。
+- `get_ndx_pe_and_earnings_yield`、`get_ndx_forward_earnings_quality`、`get_equity_risk_premium` 共享同一 L4 快照，避免同一轮重复拉 101 只成分股。
+- L4 产物新增 `SourceReconciliation`、`source_counts`、`official_checks`、`source_switches` 和 `component_source_disagreement_issues`，让报告和 DataIntegrity 能看到多源对账情况。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_l4_forward_earnings_quality.py tests/test_l4_data_authority.py tests/test_core_checker.py`：39 passed，4 warnings。
+- `python3 -m pytest -q`：343 passed，4 warnings。
+- L4 直接 smoke：101/101 yfinance、100/101 Yahoo、SEC 20/20、东财 20/20，PE / Forward PE / Simple Yield Gap 均返回有效值。
+- `python3 src/main.py --collect-only --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts`：通过；最新 `output/data/data_collected_v9_live.json` 中 L4 三个函数均成功，`get_ndx_forward_earnings_quality` 复用快照耗时约 33.6ms。
+
+---
+
+### yfinance component-model 根因审计：PB 与 Forward EPS growth 聚合修正
+
+完成内容：
+
+- 精确复现 PB 异常根因：用同一批 yfinance 成分股数据，旧算法 `sum(weight * component_price_to_book)` 得到 `41.18`；新总量口径 `covered_market_cap / sum(market_cap / component_price_to_book)` 得到 `10.11`，与 DanjuanFunds `10.02` 接近。
+- 确认 `41.18` 不是单一 yfinance 字段拉错，而是旧代码把 PB 这种 ratio 做了错误的算术加权聚合。ASML component PB 约 `1453.31`，仅 `1.49%` 权重就在旧公式里贡献约 `21.59` 个 PB 点。
+- 审查类似口径后发现 `ForwardEPSGrowthProxyPct` 也存在“平均公司增长率”偏差：旧 component-weighted forward EPS growth 为 `74.63%`；按总 forward earnings / 总 trailing earnings 的指数级代理口径为 `48.15%`。
+- 修正 `ForwardEPSGrowthProxyPct` 计算为 `sum(market_cap / forward_pe) / sum(market_cap / trailing_pe) - 1`，并输出 `ForwardEPSGrowthProxyMethod` / `forward_eps_growth_proxy_method`。
+- 明确审计结论：`PE`、`ForwardPE`、`PB`、`FCFYield`、`ForwardEPSGrowthProxyPct` 已改为尽量使用总量口径；`WeightedEarningsGrowthPct`、`WeightedRevenueGrowthPct` 和 margin 字段仍是 yfinance component proxy，只能旁证，不能当官方 NDX 指数事实。
+- 新增根因审计文档 `docs/2026-06-07_YFINANCE_COMPONENT_MODEL_ROOT_CAUSE_AUDIT.md`，记录复现结果、根因、类似指标审计状态和后续风险。
+
+验证结果：
+
+- `python3 src/main.py --collect-only --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts`：通过；新 `output/data/data_collected_v9_live.json` 中 `ForwardEPSGrowthProxyPct=48.15`，`ForwardEPSGrowthProxyMethod=sum(market_cap / forward_pe) / sum(market_cap / trailing_pe) - 1`。
+- 同次采集显示 L4 三个成分股函数重复拉取同一批 101 只成分股，分别耗时约 135-140 秒；后续应做 run 内 component snapshot 共享，减少不一致和等待时间。
+- `python3 -m pytest -q`：341 passed，4 warnings。
+- `git diff --check`：通过。
+
+---
+
+## 2026-06-07
+
+### yfinance 成分股模型严审：指标权限、源冲突闸门与最新 run
+
+完成内容：
+
+- 对 L4 yfinance 成分股估值模型做了严审：PE / Forward PE 只有在第三方 PE / Forward PE 交叉校验通过时才有 `core_allowed` 权限；FCF yield、增长、利润率、PB 默认降为 `supporting_only` 或 `proxy_only`，不能单独证明估值便宜/昂贵或安全边际充足/不足。
+- 新增 `audit_component_valuation_metrics`：自动比较 component-model PE、Forward PE、PB 与 WorldPERatio / Trendonify / DanjuanFunds 等第三方源；核心 PE/Forward PE 严重冲突会阻断发布，PB 严重冲突会从核心证据剔除并保留原因。
+- 修正 `get_equity_risk_premium`：当 FCFYield 不是 `core_allowed` 时，不再优先使用 FCF yield，而改用已通过 PE 交叉校验的 EarningsYield；输出 `yield_authority` 和 `rejected_yield_inputs`。
+- 修正 `get_ndx_forward_earnings_quality` 中原本写在 `return` 后的无效权限标记，使 forward EPS、margin、M7 修正等字段明确为 supporting proxy。
+- DataIntegrity 新增 `source_disagreement_issues` 汇总：非阻断冲突进入 `quality_issues` 和 notes；核心估值源冲突会写入 `blocking_reasons` 并把 `publish_status` 置为 `blocked`。
+- L4 prompt 新增 `MetricAuthority` 硬纪律：`supporting_only` 只能旁证，不能进入核心因果链；`rejected` 必须说明剔除，不得无保留进入读数。
+- Native brief 估值指标条同步降权：FCF 显示为 `FCF (proxy)`；PB 在 component-model 仅为 supporting-only 时优先显示第三方 PB，并加脚注说明。
+
+验证结果：
+
+- Fresh 数据 run：`output/analysis/vnext/20260607_152856` 完整完成。该轮 PB 为 `10.11`，DanjuanFunds PB 为 `10.02`，未触发 PB 剔除；DataIntegrity `99.0%`，`publish_status=publishable`。
+- 复用同一数据快照、Pro 优先重跑分析：`output/analysis/vnext/20260607_1542_authority_rerun_pro` 完整完成。L4 输出不再把 FCFYield 当核心安全垫，简式收益差距使用 `earnings_yield_minus_10y`；`FCFYield` 进入 `rejected_yield_inputs`。
+- 生成最新 brief：`output/reports/vnext_brief_20260607_1528_20260607_1542.html`，估值条显示 `FCF (proxy) 1.40%` 和 `PB (3P) 10.02x`。
+- 生成最新 Prompt Inspector：`output/reports/vnext_prompt_inspector_20260607_1542_authority_rerun_pro.html`；11 个 stage 均为 `干净`，Risk 第一次 JSON 失败后第二次通过。
+- `python3 -m pytest -q`：340 passed，4 warnings。
+- `git diff --check`：通过。
+
+---
+
+## 2026-06-07
+
+### 最新 run 复盘：PB 口径、日期跨度与 Prompt Inspector 误报修正
+
+完成内容：
+
+- 复盘 `20260607_141610` run，确认正文 `PB 41.18x` 来自 yfinance 成分股 `priceToBook` 的市值加权平均，且与 DanjuanFunds 发布 PB `10.02` 明显冲突；旧报告正文虽然在数据质量区保留了异常信息，但仍把异常 PB 当作普通核心指标展示。
+- 修正 L4 PB 聚合口径：改为 `covered_market_cap / sum(market_cap / component_price_to_book)`，并把 `PriceToBookMethod` 写入估值产物。
+- Native brief 的估值微图新增 PB 冲突防呆：当 component-model PB 与第三方发布 PB 严重背离时，正文指标条显示第三方 PB，并用脚注说明 component 原始值留在 raw data 中。
+- 将报告中的“观察日期范围 / Observation Range”改为“输入数据日期跨度 / Input Date Span”，避免误导为所有指标都拥有同一完整 10 年窗口；本次 `2016-07-01` 实际来自 Damodaran ERP 10 年月度窗口，其他指标历史长度并不一致。
+- 修正 Prompt Inspector 边界检查误报：空的 `apparent_cross_layer_signals: []` 不再判违规；Trendonify 等 user-trusted 估值 sidecar 的来源说明不再被误判为新闻 sidecar 污染。
+- Prompt Inspector 总览新增“输入质量”提示：可标记 L4 prompt 过长、PB 口径冲突等问题，同时保持 L1-L5 真正边界状态独立展示。
+
+验证结果：
+
+- 重新生成 `output/reports/vnext_prompt_inspector_20260607_141610.html`：边界汇总为 `{'干净': 11}`；L4 仅保留 sidecar 来源提示，并标出 `Prompt 过长`、`PB 口径冲突`。
+- 重新生成 `output/reports/vnext_brief_20260607_1416.html`：正文估值条显示 `PB (3P) 10.02x`，不再显示异常 `41.18x`；日期字段显示“输入数据日期跨度”。
+- `python3 -m py_compile src/tools_L4.py src/agent_analysis/vnext_reporter.py src/agent_analysis/prompt_inspector.py`：通过。
+- `python3 -m pytest -q`：334 passed，4 warnings。
+- `git diff --check`：通过。
+
+---
+
 ## 2026-06-07
 
 ### Prompt 污染清理：去除旧立场锚点与 fallback 回流风险

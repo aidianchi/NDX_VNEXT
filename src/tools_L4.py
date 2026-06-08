@@ -28,7 +28,7 @@ from io import BytesIO, StringIO
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from zipfile import ZipFile
 from xml.etree import ElementTree as ET
 
@@ -51,6 +51,65 @@ VALUATION_FALLBACK_CHAIN = [
     SOURCE_TIER_PROXY,
     SOURCE_TIER_UNAVAILABLE,
 ]
+
+L4_COMPONENT_SNAPSHOT_CACHE: Dict[str, Tuple[pd.DataFrame, Dict[str, Any]]] = {}
+_YAHOO_QUOTE_SUMMARY_SESSION: Optional[requests.Session] = None
+L4_COMPONENT_SOURCE_DISAGREEMENT_THRESHOLDS = {
+    "market_cap": 15.0,
+    "trailing_pe": 25.0,
+    "forward_pe": 25.0,
+    "price_to_book": 60.0,
+}
+L4_COMPONENT_FIELD_SOURCE_POLICY = {
+    "market_cap": "yfinance_primary_yahoo_cross_check",
+    "current_price": "yfinance_primary_yahoo_cross_check",
+    "trailing_pe": "component_model_multi_source_cross_checked",
+    "forward_pe": "component_model_multi_source_cross_checked",
+    "price_to_book": "component_model_multi_source_cross_checked_supporting_only",
+    "forward_eps": "yfinance_primary_yahoo_cross_check",
+    "trailing_eps": "yfinance_primary_yahoo_cross_check",
+    "earnings_growth": "supporting_proxy_yfinance_primary",
+    "revenue_growth": "supporting_proxy_yfinance_primary",
+    "profit_margin": "supporting_proxy_yfinance_primary",
+    "gross_margin": "supporting_proxy_yfinance_primary",
+    "operating_margin": "supporting_proxy_yfinance_primary",
+    "fcf": "supporting_proxy_yfinance_primary",
+    "fcf_yield": "supporting_proxy_yfinance_primary",
+    "eps_estimate_current": "yahoo_quote_summary_primary",
+    "eps_estimate_30d_ago": "yahoo_quote_summary_primary",
+    "eps_estimate_60d_ago": "yahoo_quote_summary_primary",
+    "eps_estimate_90d_ago": "yahoo_quote_summary_primary",
+    "eps_revision_30d_pct": "yahoo_quote_summary_primary",
+    "eps_revision_period": "yahoo_quote_summary_primary",
+    "eps_estimate_analyst_count": "yahoo_quote_summary_primary",
+    "sec_official_facts": "sec_xbrl_official_facts_primary",
+    "eastmoney": "eastmoney_cross_check_only",
+}
+L4_YAHOO_PRIMARY_FIELDS = {
+    "eps_estimate_current",
+    "eps_estimate_30d_ago",
+    "eps_estimate_60d_ago",
+    "eps_estimate_90d_ago",
+    "eps_revision_30d_pct",
+    "eps_revision_period",
+    "eps_estimate_analyst_count",
+}
+L4_CORE_COMPONENT_VALUATION_FIELDS = {"trailing_pe", "forward_pe"}
+SEC_L4_METRIC_ALIASES = {
+    "revenue": ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues", "SalesRevenueNet"],
+    "net_income": ["NetIncomeLoss", "ProfitLoss"],
+    "diluted_eps": ["EarningsPerShareDiluted"],
+    "operating_cash_flow": [
+        "NetCashProvidedByUsedInOperatingActivities",
+        "NetCashProvidedByOperatingActivities",
+    ],
+    "capex": ["PaymentsToAcquirePropertyPlantAndEquipment", "CapitalExpenditures"],
+    "share_repurchase": ["PaymentsForRepurchaseOfCommonStock", "PaymentsForRepurchaseOfEquity"],
+    "research_development": ["ResearchAndDevelopmentExpense"],
+    "assets": ["Assets"],
+    "liabilities": ["Liabilities"],
+}
+SEC_HEADERS = {"User-Agent": "ndx-vnext/1.0 research contact@example.com"}
 
 
 def _utc_timestamp() -> str:
@@ -544,25 +603,29 @@ def calculate_weighted_metrics(df: pd.DataFrame) -> Dict[str, Any]:
             metrics["forward_earnings_proxy_usd"] = round(total_forward_earnings, 2)
             metrics["forward_earnings_coverage_market_cap_usd"] = round(covered_cap, 2)
 
-    if "forward_eps" in working.columns and "trailing_eps" in working.columns:
-        eps_frame = working.assign(
-            _forward_eps=working["forward_eps"].map(_safe_float),
-            _trailing_eps=working["trailing_eps"].map(_safe_float),
+    if "forward_pe" in working.columns and "trailing_pe" in working.columns:
+        growth_frame = working.assign(
+            _forward_pe=working["forward_pe"].map(_safe_float),
+            _trailing_pe=working["trailing_pe"].map(_safe_float),
         )
-        valid_eps = eps_frame[
-            (eps_frame["market_cap"] > 0)
-            & (eps_frame["_forward_eps"] > 0)
-            & (eps_frame["_trailing_eps"] > 0)
+        valid_growth = growth_frame[
+            (growth_frame["market_cap"] > 0)
+            & (growth_frame["_forward_pe"] > 0)
+            & (growth_frame["_trailing_pe"] > 0)
         ].copy()
-        eps_excluded = [
-            {"ticker": row.get("ticker"), "metric": "forward_eps_growth_proxy", "reason": "missing_forward_or_trailing_eps"}
-            for _, row in eps_frame.loc[~eps_frame.index.isin(valid_eps.index)].iterrows()
+        growth_excluded = [
+            {"ticker": row.get("ticker"), "metric": "forward_eps_growth_proxy", "reason": "missing_forward_or_trailing_pe"}
+            for _, row in growth_frame.loc[~growth_frame.index.isin(valid_growth.index)].iterrows()
         ]
-        _metric_coverage("forward_eps_growth_proxy", valid_eps, eps_excluded)
-        if not valid_eps.empty:
-            weights = valid_eps["market_cap"] / valid_eps["market_cap"].sum()
-            growth = (valid_eps["_forward_eps"] / valid_eps["_trailing_eps"] - 1.0) * 100.0
-            metrics["weighted_forward_eps_growth_proxy_pct"] = round(float(np.average(growth, weights=weights)), 2)
+        _metric_coverage("forward_eps_growth_proxy", valid_growth, growth_excluded)
+        if not valid_growth.empty:
+            trailing_earnings = valid_growth["market_cap"] / valid_growth["_trailing_pe"]
+            forward_earnings = valid_growth["market_cap"] / valid_growth["_forward_pe"]
+            total_trailing_earnings = float(trailing_earnings.sum())
+            total_forward_earnings = float(forward_earnings.sum())
+            if total_trailing_earnings > 0:
+                metrics["weighted_forward_eps_growth_proxy_pct"] = round((total_forward_earnings / total_trailing_earnings - 1.0) * 100.0, 2)
+                metrics["forward_eps_growth_proxy_method"] = "sum(market_cap / forward_pe) / sum(market_cap / trailing_pe) - 1"
 
     for source_column, metric_key, output_key in [
         ("earnings_growth", "earnings_growth", "weighted_earnings_growth_pct"),
@@ -617,103 +680,895 @@ def calculate_weighted_metrics(df: pd.DataFrame) -> Dict[str, Any]:
         ]
         _metric_coverage("price_to_book", valid_pb, pb_excluded)
         if not valid_pb.empty:
-            weights = valid_pb["market_cap"] / valid_pb["market_cap"].sum()
-            metrics["weighted_price_to_book"] = round(float(np.average(valid_pb["_pb"], weights=weights)), 2)
+            covered_cap = float(valid_pb["market_cap"].sum())
+            implied_book_equity = valid_pb["market_cap"] / valid_pb["_pb"]
+            total_book_equity = float(implied_book_equity.sum())
+            if covered_cap > 0 and total_book_equity > 0:
+                metrics["weighted_price_to_book"] = round(covered_cap / total_book_equity, 2)
+                metrics["price_to_book_method"] = "covered_market_cap / sum(market_cap / component_price_to_book)"
 
     return metrics
 
 
-def get_ndx_components_data_yf_v5(end_date: str = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    """
-    V5.6版：用yfinance获取NDX100成分股数据（增强容错）
-    注意：此函数获取最新的基本面数据，end_date参数仅用于获取对应日期的成分股列表，
-    因为yfinance的.info不直接支持历史时点基本面查询。
-    """
+def _median(values: List[float]) -> Optional[float]:
+    clean = sorted(value for value in values if value is not None and np.isfinite(value))
+    if not clean:
+        return None
+    mid = len(clean) // 2
+    if len(clean) % 2:
+        return clean[mid]
+    return (clean[mid - 1] + clean[mid]) / 2.0
+
+
+def _component_metric_authority(
+    *,
+    usage: str,
+    authority: str,
+    reason: str,
+    source: str = SOURCE_TIER_COMPONENT_MODEL,
+    reference_sources: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    return {
+        "source": source,
+        "usage": usage,
+        "authority": authority,
+        "reason": reason,
+        "reference_sources": reference_sources or [],
+    }
+
+
+def audit_component_valuation_metrics(metrics: Dict[str, Any], third_party_checks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Decide which yfinance component-model fields may speak as core L4 evidence."""
+    metric_specs = {
+        "PE": {"component_key": "weighted_trailing_pe", "third_party_metric": "ndx_trailing_pe", "threshold_pct": 30.0, "blocks_publish": True},
+        "ForwardPE": {"component_key": "weighted_forward_pe", "third_party_metric": "ndx_forward_pe", "threshold_pct": 30.0, "blocks_publish": True},
+        "PriceToBook": {"component_key": "weighted_price_to_book", "third_party_field": "pb", "threshold_pct": 75.0, "blocks_publish": False},
+    }
+    authority: Dict[str, Any] = {
+        "PE": _component_metric_authority(
+            usage="core_allowed",
+            authority="component_model_cross_checked",
+            reason="Component aggregate PE is computed as covered market cap / covered trailing earnings and must remain close to published PE checks.",
+        ),
+        "TrailingPE": _component_metric_authority(
+            usage="core_allowed",
+            authority="component_model_cross_checked",
+            reason="Alias of PE; same authority as PE.",
+        ),
+        "ForwardPE": _component_metric_authority(
+            usage="core_allowed",
+            authority="component_model_cross_checked",
+            reason="Component aggregate Forward PE is computed as covered market cap / covered forward earnings and must remain close to published Forward PE checks.",
+        ),
+        "EarningsYield": _component_metric_authority(
+            usage="core_allowed",
+            authority="derived_from_cross_checked_pe",
+            reason="Derived from aggregate trailing earnings / covered market cap; usable only while PE cross-check is clean.",
+        ),
+        "ForwardEarningsYield": _component_metric_authority(
+            usage="core_allowed",
+            authority="derived_from_cross_checked_forward_pe",
+            reason="Derived from aggregate forward earnings / covered market cap; usable only while Forward PE cross-check is clean.",
+        ),
+        "FCFYield": _component_metric_authority(
+            usage="supporting_only",
+            authority="component_model_uncross_checked",
+            reason="Uses yfinance freeCashflow fields with no official NDX aggregate or third-party cross-check; do not use as the primary yield-gap input.",
+        ),
+        "ForwardEPSGrowthProxyPct": _component_metric_authority(
+            usage="supporting_only",
+            authority="proxy_only",
+            reason="Aggregate forward/trailing earnings proxy derived from component PE fields; not an official NDX earnings growth estimate.",
+        ),
+        "WeightedEarningsGrowthPct": _component_metric_authority(
+            usage="supporting_only",
+            authority="proxy_only",
+            reason="Market-cap weighted yfinance earningsGrowth field; may mix quarterly/annual conventions across tickers.",
+        ),
+        "WeightedRevenueGrowthPct": _component_metric_authority(
+            usage="supporting_only",
+            authority="proxy_only",
+            reason="Market-cap weighted yfinance revenueGrowth field; use only as a broad proxy.",
+        ),
+        "WeightedProfitMarginPct": _component_metric_authority(
+            usage="supporting_only",
+            authority="proxy_only",
+            reason="Market-cap weighted yfinance profitMargins field; not an official NDX aggregate margin.",
+        ),
+        "WeightedGrossMarginPct": _component_metric_authority(
+            usage="supporting_only",
+            authority="proxy_only",
+            reason="Market-cap weighted yfinance grossMargins field; sector and accounting differences make it supporting-only.",
+        ),
+        "WeightedOperatingMarginPct": _component_metric_authority(
+            usage="supporting_only",
+            authority="proxy_only",
+            reason="Market-cap weighted yfinance operatingMargins field; not an official NDX aggregate margin.",
+        ),
+        "PriceToBook": _component_metric_authority(
+            usage="supporting_only",
+            authority="component_model_cross_check_required",
+            reason="PB is highly sensitive to accounting and negative/low book equity; must be cross-checked before any narrative use.",
+        ),
+    }
+    issues: List[Dict[str, Any]] = []
+    rejected: Dict[str, Any] = {}
+    checked_refs: Dict[str, List[Dict[str, Any]]] = {}
+
+    def reference_values(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        refs = []
+        for item in third_party_checks:
+            if not isinstance(item, dict) or item.get("availability") != "available":
+                continue
+            value = None
+            if spec.get("third_party_field"):
+                value = _safe_float(item.get(spec["third_party_field"]))
+            elif item.get("metric") == spec.get("third_party_metric"):
+                value = _safe_float(item.get("value"))
+            if value is None or value <= 0:
+                continue
+            refs.append(
+                {
+                    "source_id": item.get("source_id") or item.get("source") or item.get("source_name"),
+                    "source_name": item.get("source_name"),
+                    "metric": item.get("metric"),
+                    "value": _round_or_none(value),
+                    "data_date": item.get("data_date") or item.get("date"),
+                }
+            )
+        return refs
+
+    for public_key, spec in metric_specs.items():
+        component_value = _safe_float(metrics.get(spec["component_key"]))
+        refs = reference_values(spec)
+        checked_refs[public_key] = refs
+        if public_key in authority:
+            authority[public_key]["reference_sources"] = refs
+        if public_key == "PE":
+            authority["TrailingPE"]["reference_sources"] = refs
+        if component_value is None or not refs:
+            continue
+        ref_median = _median([_safe_float(item.get("value")) for item in refs])
+        if not ref_median or ref_median <= 0:
+            continue
+        diff_pct = abs(component_value - ref_median) / ref_median * 100.0
+        if diff_pct <= spec["threshold_pct"]:
+            continue
+        issue = {
+            "issue_type": "valuation_source_disagreement",
+            "metric": public_key,
+            "severity": "high",
+            "component_value": _round_or_none(component_value),
+            "reference_median": _round_or_none(ref_median),
+            "relative_diff_pct": _round_or_none(diff_pct),
+            "threshold_pct": spec["threshold_pct"],
+            "reference_sources": refs,
+            "blocks_publish": bool(spec.get("blocks_publish")),
+            "action": "reject_metric_from_core_evidence" if not spec.get("blocks_publish") else "block_publish_until_manual_or_official_override",
+        }
+        issues.append(issue)
+        rejected[public_key] = issue
+        authority[public_key] = _component_metric_authority(
+            usage="rejected",
+            authority="failed_cross_check",
+            reason=f"Component value differs from third-party median by {round(diff_pct, 2)}%, above {spec['threshold_pct']}% threshold.",
+            reference_sources=refs,
+        )
+        if public_key == "PE":
+            authority["TrailingPE"] = authority[public_key]
+            authority["EarningsYield"] = _component_metric_authority(
+                usage="rejected",
+                authority="derived_from_failed_pe_cross_check",
+                reason="EarningsYield is rejected because its PE source failed cross-check.",
+                reference_sources=refs,
+            )
+        if public_key == "ForwardPE":
+            authority["ForwardEarningsYield"] = _component_metric_authority(
+                usage="rejected",
+                authority="derived_from_failed_forward_pe_cross_check",
+                reason="ForwardEarningsYield is rejected because its Forward PE source failed cross-check.",
+                reference_sources=refs,
+            )
+
+    return {
+        "schema_version": "l4_component_model_authority_v1",
+        "metric_authority": authority,
+        "source_disagreement_issues": issues,
+        "rejected_metrics": rejected,
+        "reference_sources": checked_refs,
+        "core_usage_rule": (
+            "Only metrics with usage=core_allowed may support L4 core claims. "
+            "supporting_only metrics can contextualize but cannot independently prove valuation attractiveness."
+        ),
+    }
+
+
+def reset_l4_component_snapshot_cache() -> None:
+    """Clear the run-local L4 component snapshot cache."""
+    L4_COMPONENT_SNAPSHOT_CACHE.clear()
+
+
+def _raw_yahoo_value(container: Dict[str, Any], key: str) -> Any:
+    value = container.get(key) if isinstance(container, dict) else None
+    if isinstance(value, dict):
+        return value.get("raw")
+    return value
+
+
+def _component_row_from_yfinance(ticker: str, info: Dict[str, Any]) -> Dict[str, Any]:
+    market_cap = _safe_float(info.get("marketCap"))
+    fcf = _safe_float(info.get("freeCashflow"))
+    return {
+        "ticker": ticker,
+        "market_cap": market_cap,
+        "current_price": _safe_float(info.get("currentPrice") or info.get("regularMarketPrice")),
+        "forward_eps": _safe_float(info.get("forwardEps")),
+        "trailing_eps": _safe_float(info.get("trailingEps")),
+        "forward_pe": _safe_float(info.get("forwardPE")),
+        "trailing_pe": _safe_float(info.get("trailingPE")),
+        "price_to_book": _safe_float(info.get("priceToBook")),
+        "earnings_growth": _safe_float(info.get("earningsGrowth") or info.get("earningsQuarterlyGrowth")),
+        "revenue_growth": _safe_float(info.get("revenueGrowth")),
+        "profit_margin": _safe_float(info.get("profitMargins")),
+        "gross_margin": _safe_float(info.get("grossMargins")),
+        "operating_margin": _safe_float(info.get("operatingMargins")),
+        "fcf": fcf,
+        "fcf_yield": (fcf / market_cap) * 100 if fcf is not None and market_cap else None,
+    }
+
+
+def _fetch_yahoo_quote_summary_direct(symbol: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Direct Yahoo quoteSummary fetch; used as a parallel check, not a blind replacement."""
+    try:
+        session = _get_yahoo_quote_summary_session()
+        modules = [
+            "financialData",
+            "defaultKeyStatistics",
+            "summaryDetail",
+            "earningsTrend",
+            "recommendationTrend",
+        ]
+        response = session.get(
+            f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}",
+            params={"modules": ",".join(modules), "crumb": getattr(session, "_crumb", "")},
+            timeout=15,
+            proxies=get_requests_proxies(),
+        )
+        response.raise_for_status()
+        result = response.json().get("quoteSummary", {}).get("result", [{}])
+        return (result[0] if result else {}), None
+    except Exception as exc:
+        return {}, str(exc)[:160]
+
+
+def _get_yahoo_quote_summary_session() -> requests.Session:
+    global _YAHOO_QUOTE_SUMMARY_SESSION
+    if _YAHOO_QUOTE_SUMMARY_SESSION is not None and getattr(_YAHOO_QUOTE_SUMMARY_SESSION, "_crumb", None):
+        return _YAHOO_QUOTE_SUMMARY_SESSION
+    session = requests.Session()
+    session.headers["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+    session.get("https://fc.yahoo.com", timeout=10, proxies=get_requests_proxies())
+    crumb_response = session.get(
+        "https://query2.finance.yahoo.com/v1/test/getcrumb",
+        timeout=10,
+        proxies=get_requests_proxies(),
+    )
+    crumb_response.raise_for_status()
+    session._crumb = crumb_response.text
+    _YAHOO_QUOTE_SUMMARY_SESSION = session
+    return session
+
+
+def _component_row_from_yahoo_quote_summary(ticker: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    fd = data.get("financialData", {}) if isinstance(data, dict) else {}
+    ks = data.get("defaultKeyStatistics", {}) if isinstance(data, dict) else {}
+    sd = data.get("summaryDetail", {}) if isinstance(data, dict) else {}
+    market_cap = _safe_float(_raw_yahoo_value(sd, "marketCap") or _raw_yahoo_value(ks, "enterpriseValue"))
+    fcf = _safe_float(_raw_yahoo_value(fd, "freeCashflow"))
+    eps_trend = _extract_yahoo_eps_revision(data)
+    return {
+        "ticker": ticker,
+        "market_cap": market_cap,
+        "current_price": _safe_float(_raw_yahoo_value(fd, "currentPrice") or _raw_yahoo_value(sd, "regularMarketPrice")),
+        "forward_eps": _safe_float(_raw_yahoo_value(ks, "forwardEps")),
+        "trailing_eps": _safe_float(_raw_yahoo_value(ks, "trailingEps")),
+        "forward_pe": _safe_float(_raw_yahoo_value(ks, "forwardPE")),
+        "trailing_pe": _safe_float(_raw_yahoo_value(sd, "trailingPE")),
+        "price_to_book": _safe_float(_raw_yahoo_value(ks, "priceToBook")),
+        "earnings_growth": _safe_float(_raw_yahoo_value(fd, "earningsGrowth")),
+        "revenue_growth": _safe_float(_raw_yahoo_value(fd, "revenueGrowth")),
+        "profit_margin": _safe_float(_raw_yahoo_value(ks, "profitMargins")),
+        "gross_margin": _safe_float(_raw_yahoo_value(fd, "grossMargins")),
+        "operating_margin": _safe_float(_raw_yahoo_value(fd, "operatingMargins")),
+        "fcf": fcf,
+        "fcf_yield": (fcf / market_cap) * 100 if fcf is not None and market_cap else None,
+        **eps_trend,
+    }
+
+
+def _extract_yahoo_eps_revision(data: Dict[str, Any]) -> Dict[str, Any]:
+    trends = data.get("earningsTrend", {}).get("trend", []) if isinstance(data, dict) else []
+    chosen = None
+    for preferred in ("+1y", "0y", "+1q", "0q"):
+        chosen = next((item for item in trends if item.get("period") == preferred), None)
+        if chosen:
+            break
+    if not isinstance(chosen, dict):
+        return {}
+    estimate = chosen.get("earningsEstimate", {}) if isinstance(chosen.get("earningsEstimate"), dict) else {}
+    eps_trend = chosen.get("epsTrend", {}) if isinstance(chosen.get("epsTrend"), dict) else {}
+    current = _safe_float(_raw_yahoo_value(eps_trend, "current") or _raw_yahoo_value(estimate, "avg"))
+    days_30 = _safe_float(_raw_yahoo_value(eps_trend, "30daysAgo"))
+    days_60 = _safe_float(_raw_yahoo_value(eps_trend, "60daysAgo"))
+    days_90 = _safe_float(_raw_yahoo_value(eps_trend, "90daysAgo"))
+    revision_30d = (current / days_30 - 1.0) * 100.0 if current and days_30 else None
+    return {
+        "eps_estimate_current": current,
+        "eps_estimate_30d_ago": days_30,
+        "eps_estimate_60d_ago": days_60,
+        "eps_estimate_90d_ago": days_90,
+        "eps_revision_30d_pct": _round_or_none(revision_30d),
+        "eps_revision_period": chosen.get("period"),
+        "eps_estimate_analyst_count": _safe_float(_raw_yahoo_value(estimate, "numberOfAnalysts")),
+    }
+
+
+def _relative_diff_pct(left: Any, right: Any) -> Optional[float]:
+    left_f = _safe_float(left)
+    right_f = _safe_float(right)
+    if left_f is None or right_f is None or right_f == 0:
+        return None
+    return abs(left_f - right_f) / abs(right_f) * 100.0
+
+
+def _merge_component_source_rows(
+    ticker: str,
+    yfinance_row: Dict[str, Any],
+    yahoo_row: Dict[str, Any],
+    source_errors: Dict[str, str],
+) -> Dict[str, Any]:
+    output_keys = [
+        "market_cap",
+        "current_price",
+        "forward_eps",
+        "trailing_eps",
+        "forward_pe",
+        "trailing_pe",
+        "price_to_book",
+        "earnings_growth",
+        "revenue_growth",
+        "profit_margin",
+        "gross_margin",
+        "operating_margin",
+        "fcf",
+        "fcf_yield",
+        "eps_estimate_current",
+        "eps_estimate_30d_ago",
+        "eps_estimate_60d_ago",
+        "eps_estimate_90d_ago",
+        "eps_revision_30d_pct",
+        "eps_revision_period",
+        "eps_estimate_analyst_count",
+    ]
+    merged: Dict[str, Any] = {"ticker": ticker}
+    field_sources: Dict[str, str] = {}
+    source_switches: List[Dict[str, Any]] = []
+    disagreements: List[Dict[str, Any]] = []
+
+    for key in output_keys:
+        yf_value = yfinance_row.get(key)
+        yahoo_value = yahoo_row.get(key)
+        selected_source = None
+        if key in L4_YAHOO_PRIMARY_FIELDS and yahoo_value is not None:
+            merged[key] = yahoo_value
+            field_sources[key] = "yahoo_quote_summary"
+            selected_source = "yahoo_quote_summary"
+            source_switches.append(
+                {
+                    "field": key,
+                    "selected_source": "yahoo_quote_summary",
+                    "previous_source": "yfinance" if yf_value is not None else None,
+                    "reason": "field_policy_yahoo_primary",
+                }
+            )
+        elif yf_value is not None:
+            merged[key] = yf_value
+            field_sources[key] = "yfinance"
+            selected_source = "yfinance"
+        elif yahoo_value is not None:
+            merged[key] = yahoo_value
+            field_sources[key] = "yahoo_quote_summary"
+            selected_source = "yahoo_quote_summary"
+            source_switches.append(
+                {
+                    "field": key,
+                    "selected_source": "yahoo_quote_summary",
+                    "previous_source": None,
+                    "reason": "yfinance_missing",
+                }
+            )
+        else:
+            merged[key] = None
+
+        threshold = L4_COMPONENT_SOURCE_DISAGREEMENT_THRESHOLDS.get(key)
+        diff_pct = _relative_diff_pct(yf_value, yahoo_value)
+        if threshold is not None and diff_pct is not None and diff_pct > threshold:
+            severity = "high" if diff_pct > threshold * 2 else "medium"
+            action = "field_rejected_from_core_component_calculation" if (
+                severity == "high" and key in L4_CORE_COMPONENT_VALUATION_FIELDS
+            ) else "field_marked_for_review"
+            if action == "field_rejected_from_core_component_calculation":
+                merged[key] = None
+                field_sources[key] = "rejected_source_disagreement"
+            disagreements.append(
+                {
+                    "ticker": ticker,
+                    "field": key,
+                    "yfinance_value": _round_or_none(_safe_float(yf_value)),
+                    "yahoo_value": _round_or_none(_safe_float(yahoo_value)),
+                    "relative_diff_pct": _round_or_none(diff_pct),
+                    "threshold_pct": threshold,
+                    "severity": severity,
+                    "selected_source_before_gate": selected_source,
+                    "blocks_publish": False,
+                    "action": action,
+                }
+            )
+
+    merged["field_sources"] = field_sources
+    merged["component_source_switches"] = source_switches
+    merged["component_source_disagreements"] = disagreements
+    merged["component_source_errors"] = source_errors
+    return merged
+
+
+def _sec_cik_map() -> Dict[str, str]:
+    cache_key = "_l4_sec_cik_map"
+    cached = getattr(_sec_cik_map, cache_key, None)
+    if isinstance(cached, dict):
+        return cached
+    try:
+        response = requests.get(
+            "https://www.sec.gov/files/company_tickers.json",
+            headers=SEC_HEADERS,
+            timeout=15,
+            proxies=get_requests_proxies(),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        mapping = {
+            str(item.get("ticker")).upper(): str(item.get("cik_str")).zfill(10)
+            for item in payload.values()
+            if isinstance(item, dict) and item.get("ticker") and item.get("cik_str") is not None
+        }
+        setattr(_sec_cik_map, cache_key, mapping)
+        return mapping
+    except Exception:
+        return {}
+
+
+def _latest_sec_fact_before(units: Dict[str, Any], *, end_date: Optional[str]) -> Optional[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+    for unit_key in ("USD", "USD/shares", "shares"):
+        for item in units.get(unit_key, []) if isinstance(units.get(unit_key), list) else []:
+            if item.get("form") not in {"10-K", "10-Q"}:
+                continue
+            filed = item.get("filed")
+            if end_date and filed and str(filed) > end_date:
+                continue
+            candidate = dict(item)
+            candidate["unit"] = unit_key
+            candidates.append(candidate)
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: (str(item.get("filed") or ""), str(item.get("end") or "")))[-1]
+
+
+def _fetch_sec_xbrl_summary(ticker: str, *, end_date: Optional[str] = None) -> Tuple[Dict[str, Any], Optional[str]]:
+    cik = _sec_cik_map().get(ticker.upper())
+    if not cik:
+        return {}, "missing_cik"
+    try:
+        response = requests.get(
+            f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
+            headers=SEC_HEADERS,
+            timeout=15,
+            proxies=get_requests_proxies(),
+        )
+        response.raise_for_status()
+        facts = response.json().get("facts", {}).get("us-gaap", {})
+        summary: Dict[str, Any] = {"cik": cik, "facts": {}}
+        filed_dates: List[str] = []
+        for public_key, aliases in SEC_L4_METRIC_ALIASES.items():
+            selected = None
+            selected_alias = None
+            for alias in aliases:
+                metric = facts.get(alias, {})
+                fact = _latest_sec_fact_before(metric.get("units", {}), end_date=end_date) if isinstance(metric, dict) else None
+                if fact:
+                    selected = fact
+                    selected_alias = alias
+                    break
+            if selected:
+                summary[public_key] = selected.get("val")
+                summary[f"{public_key}_filed_date"] = selected.get("filed")
+                summary[f"{public_key}_period_end"] = selected.get("end")
+                summary[f"{public_key}_form"] = selected.get("form")
+                summary[f"{public_key}_source_accession"] = selected.get("accn")
+                summary[f"{public_key}_xbrl_tag"] = selected_alias
+                summary["facts"][public_key] = {
+                    "availability": "available",
+                    "value": selected.get("val"),
+                    "filed_date": selected.get("filed"),
+                    "period_end": selected.get("end"),
+                    "form": selected.get("form"),
+                    "source_accession": selected.get("accn"),
+                    "xbrl_tag": selected_alias,
+                    "unit": selected.get("unit"),
+                }
+                if selected.get("filed"):
+                    filed_dates.append(str(selected.get("filed")))
+            else:
+                summary["facts"][public_key] = {
+                    "availability": "unavailable",
+                    "aliases_checked": list(aliases),
+                }
+        summary["latest_filed_date"] = max(filed_dates) if filed_dates else None
+        summary["availability"] = "available" if filed_dates else "unavailable"
+        return summary, None
+    except Exception as exc:
+        return {}, str(exc)[:160]
+
+
+def _fetch_eastmoney_gmain_indicator(secucode: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    try:
+        response = requests.get(
+            "https://datacenter-web.eastmoney.com/api/data/v1/get",
+            params={
+                "reportName": "RPT_USF10_FN_GMAININDICATOR",
+                "columns": "ALL",
+                "filter": f'(SECUCODE="{secucode}")',
+                "pageNumber": "1",
+                "pageSize": "2",
+                "sortColumns": "REPORT_DATE",
+                "sortTypes": "-1",
+                "source": "WEB",
+                "client": "WEB",
+            },
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+            timeout=12,
+            proxies=get_requests_proxies(),
+        )
+        response.raise_for_status()
+        rows = response.json().get("result", {}).get("data", [])
+        row = rows[0] if rows else {}
+        if not isinstance(row, dict):
+            return {}, "empty_response"
+        return {
+            "report_date": row.get("REPORT_DATE"),
+            "revenue": row.get("OPERATE_INCOME"),
+            "basic_eps": row.get("BASIC_EPS"),
+            "roe_avg": row.get("ROE_AVG"),
+            "roa": row.get("ROA"),
+            "gross_margin": row.get("GROSS_PROFIT_RATIO"),
+            "debt_asset_ratio": row.get("DEBT_ASSET_RATIO"),
+            "availability": "available",
+        }, None
+    except Exception as exc:
+        return {}, str(exc)[:160]
+
+
+def _select_audit_tickers(df: pd.DataFrame, total_tickers: int = 20) -> Set[str]:
+    tickers = set(M7_TICKERS)
+    if not df.empty and "market_cap" in df.columns:
+        by_cap = df.copy()
+        by_cap["market_cap"] = by_cap["market_cap"].map(_safe_float)
+        by_cap = by_cap.sort_values("market_cap", ascending=False)
+        tickers.update(str(ticker).upper() for ticker in by_cap["ticker"].head(total_tickers).tolist())
+    return {ticker for ticker in tickers if ticker}
+
+
+def _m7_eps_revision_snapshot_from_frame(m7_frame: pd.DataFrame) -> Dict[str, Any]:
+    if m7_frame.empty or "eps_revision_30d_pct" not in m7_frame.columns:
+        return {"availability": "unavailable", "reason": "snapshot_missing_eps_revision", "members": {}}
+    snapshots: Dict[str, Any] = {}
+    weighted_changes: List[Tuple[float, float]] = []
+    analyst_counts: List[int] = []
+    for _, row in m7_frame.iterrows():
+        ticker = str(row.get("ticker") or "").upper()
+        if not ticker:
+            continue
+        revision = _safe_float(row.get("eps_revision_30d_pct"))
+        current = _safe_float(row.get("eps_estimate_current"))
+        days_30 = _safe_float(row.get("eps_estimate_30d_ago"))
+        days_90 = _safe_float(row.get("eps_estimate_90d_ago"))
+        analyst_count = _safe_float(row.get("eps_estimate_analyst_count"))
+        if analyst_count is not None:
+            analyst_counts.append(int(analyst_count))
+        weight = _safe_float(row.get("market_cap")) or 0.0
+        if weight > 0 and revision is not None:
+            weighted_changes.append((weight, revision))
+        snapshots[ticker] = {
+            "next_year_eps_current": _round_or_none(current),
+            "next_year_eps_30d_ago": _round_or_none(days_30),
+            "next_year_eps_90d_ago": _round_or_none(days_90),
+            "revision_30d_pct": _round_or_none(revision),
+            "revision_90d_pct": _round_or_none((current / days_90 - 1.0) * 100.0) if current and days_90 else None,
+            "revision_direction_30d": _direction_from_change(revision),
+            "next_year_analyst_count": int(analyst_count) if analyst_count is not None else None,
+            "source": "yahoo_quote_summary earningsTrend via L4 component snapshot",
+        }
+    weighted_revision = None
+    if weighted_changes:
+        total_weight = sum(weight for weight, _ in weighted_changes)
+        weighted_revision = sum(weight * change for weight, change in weighted_changes) / total_weight if total_weight else None
+    available = [item for item in snapshots.values() if item.get("revision_30d_pct") is not None]
+    return {
+        "availability": "available" if available else "unavailable",
+        "coverage": {"available_members": len(available), "total_members": len(M7_TICKERS)},
+        "weighted_next_year_eps_revision_30d_pct": _round_or_none(weighted_revision),
+        "revision_direction_30d": _direction_from_change(weighted_revision),
+        "median_next_year_analyst_count": int(np.median(analyst_counts)) if analyst_counts else None,
+        "members": snapshots,
+        "methodology": "M7 analyst revision proxy from Yahoo earningsTrend in the shared L4 component snapshot.",
+    }
+
+
+def _weighted_eps_revision_from_frame(df: pd.DataFrame) -> Optional[float]:
+    if df.empty or "eps_revision_30d_pct" not in df.columns or "market_cap" not in df.columns:
+        return None
+    values: List[float] = []
+    weights: List[float] = []
+    for _, row in df.iterrows():
+        revision = _safe_float(row.get("eps_revision_30d_pct"))
+        market_cap = _safe_float(row.get("market_cap"))
+        if revision is None or market_cap is None or market_cap <= 0:
+            continue
+        values.append(revision)
+        weights.append(market_cap)
+    if not values or not weights or sum(weights) <= 0:
+        return None
+    return _round_or_none(float(np.average(values, weights=weights)))
+
+
+def _enrich_component_rows_with_official_checks(
+    df: pd.DataFrame,
+    *,
+    end_date: Optional[str],
+    include_current_web_checks: bool,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    if df.empty:
+        return df, {"sec_xbrl": {"checked": 0, "available": 0}, "eastmoney": {"checked": 0, "available": 0}}
+    enriched = df.copy()
+    if "sec_xbrl" not in enriched.columns:
+        enriched["sec_xbrl"] = None
+    if "eastmoney" not in enriched.columns:
+        enriched["eastmoney"] = None
+    audit_tickers = _select_audit_tickers(enriched)
+    sec_available = 0
+    eastmoney_available = 0
+    sec_errors: Dict[str, str] = {}
+    eastmoney_errors: Dict[str, str] = {}
+
+    for ticker in audit_tickers:
+        row_idx = enriched.index[enriched["ticker"] == ticker]
+        if row_idx.empty:
+            continue
+        idx = row_idx[0]
+        sec_summary, sec_error = _fetch_sec_xbrl_summary(ticker, end_date=end_date)
+        if sec_summary:
+            sec_available += 1
+            enriched.at[idx, "sec_xbrl"] = dict(sec_summary)
+        elif sec_error:
+            sec_errors[ticker] = sec_error
+
+        if include_current_web_checks:
+            eastmoney_summary, eastmoney_error = _fetch_eastmoney_gmain_indicator(f"{ticker}.O")
+            if eastmoney_summary:
+                eastmoney_available += 1
+                enriched.at[idx, "eastmoney"] = dict(eastmoney_summary)
+            elif eastmoney_error:
+                eastmoney_errors[ticker] = eastmoney_error
+
+    return enriched, {
+        "sec_xbrl": {
+            "checked": len(audit_tickers),
+            "available": sec_available,
+            "scope": "M7 plus top market-cap NDX constituents",
+            "role": "official_disclosed_financial_facts_primary",
+            "allowed_claims": "official disclosed facts only; not a standalone valuation-cheapness signal",
+            "errors": dict(list(sec_errors.items())[:10]),
+            "historical_filter": "filed_date <= effective_date" if end_date else "latest filed facts",
+        },
+        "eastmoney": {
+            "checked": len(audit_tickers) if include_current_web_checks else 0,
+            "available": eastmoney_available,
+            "scope": "current web cross-check only",
+            "role": "third_party_chinese_cross_check_only",
+            "errors": dict(list(eastmoney_errors.items())[:10]),
+            "research_candidate_only": True,
+        },
+    }
+
+
+def _sec_official_facts_from_frame(df: pd.DataFrame) -> Dict[str, Any]:
+    if df.empty or "sec_xbrl" not in df.columns:
+        return {"availability": "unavailable", "facts_by_ticker": {}, "field_coverage": {}}
+    facts_by_ticker: Dict[str, Any] = {}
+    field_counts = {key: 0 for key in SEC_L4_METRIC_ALIASES}
+    checked = 0
+    for _, row in df.iterrows():
+        ticker = str(row.get("ticker") or "").upper()
+        sec_summary = row.get("sec_xbrl")
+        if not ticker or not isinstance(sec_summary, dict):
+            continue
+        checked += 1
+        ticker_facts = sec_summary.get("facts") if isinstance(sec_summary.get("facts"), dict) else {}
+        facts_by_ticker[ticker] = {
+            "cik": sec_summary.get("cik"),
+            "latest_filed_date": sec_summary.get("latest_filed_date"),
+            "facts": ticker_facts,
+        }
+        for field, fact in ticker_facts.items():
+            if isinstance(fact, dict) and fact.get("availability") == "available":
+                field_counts[field] = field_counts.get(field, 0) + 1
+    return {
+        "availability": "available" if facts_by_ticker else "unavailable",
+        "role": "official_disclosed_financial_facts_primary",
+        "allowed_claims": "SEC facts answer what has been filed, not whether NDX is cheap.",
+        "checked_tickers": checked,
+        "field_coverage": {
+            field: {"available": count, "checked": checked}
+            for field, count in field_counts.items()
+        },
+        "facts_by_ticker": facts_by_ticker,
+    }
+
+
+def get_ndx_component_fundamentals_snapshot(end_date: str = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """Collect a run-local L4 component fundamentals snapshot with parallel source checks."""
+    cache_key = f"l4_component_snapshot:{end_date or 'live'}"
+    cached = L4_COMPONENT_SNAPSHOT_CACHE.get(cache_key)
+    if cached is not None:
+        cached_df, cached_stats = cached
+        stats = dict(cached_stats)
+        stats["cache_hit"] = True
+        return cached_df.copy(), stats
+
     if end_date:
         effective_date = datetime.strptime(end_date, "%Y-%m-%d")
     else:
         effective_date = datetime.now()
-
-    # 只有显式历史日期才取历史成分股；实时模式优先当前官方/实时来源。
     ndx100_components = get_ndx100_components(end_date=end_date)
+    data_list: List[Dict[str, Any]] = []
+    failed_tickers: List[str] = []
+    source_disagreements: List[Dict[str, Any]] = []
+    source_switches: List[Dict[str, Any]] = []
+    source_counts = {
+        "yfinance": {"attempted": 0, "available": 0},
+        "yahoo_quote_summary": {"attempted": 0, "available": 0},
+    }
 
-    if not YF_AVAILABLE:
-        return pd.DataFrame(), {"error": "yfinance not available", "successful": 0, "total_tickers": len(ndx100_components)}
-
-    data_list = []
-    failed_tickers = []
-    print(f"开始获取 {len(ndx100_components)} 支NDX100成分股数据 (V5.6)...")
-
-    for i, ticker in enumerate(ndx100_components):
-        # 跳过已知问题股票
+    print(f"开始获取 {len(ndx100_components)} 支NDX100成分股多源L4快照...")
+    for i, original_ticker in enumerate(ndx100_components):
+        ticker = original_ticker
         if ticker in TICKER_REPLACEMENTS and TICKER_REPLACEMENTS[ticker] is None:
             continue
 
-        try:
-            info = get_yf_ticker_info_with_retry(ticker, attempts=2, pause_seconds=0.5)
+        source_errors: Dict[str, str] = {}
+        yfinance_row: Dict[str, Any] = {}
+        yahoo_row: Dict[str, Any] = {}
 
-            # 如果获取失败，尝试替换股票
-            if not info or 'marketCap' not in info or info.get('marketCap', 0) <= 0:
-                if ticker in TICKER_REPLACEMENTS and TICKER_REPLACEMENTS[ticker]:
+        if not end_date and YF_AVAILABLE:
+            source_counts["yfinance"]["attempted"] += 1
+            try:
+                info = get_yf_ticker_info_with_retry(ticker, attempts=2, pause_seconds=0.5)
+                if (not info or not info.get("marketCap")) and ticker in TICKER_REPLACEMENTS and TICKER_REPLACEMENTS[ticker]:
                     ticker = TICKER_REPLACEMENTS[ticker]
                     info = get_yf_ticker_info_with_retry(ticker, attempts=2, pause_seconds=0.5)
+                if info:
+                    yfinance_row = _component_row_from_yfinance(ticker, info)
+                    if yfinance_row.get("market_cap"):
+                        source_counts["yfinance"]["available"] += 1
                 else:
-                    failed_tickers.append(ticker)
-                    continue
+                    source_errors["yfinance"] = "empty_info"
+            except Exception as exc:
+                source_errors["yfinance"] = str(exc)[:160]
+        elif end_date:
+            source_errors["yfinance"] = "backtest_skipped_latest_only_source"
 
-            # 过滤无市值的标的
-            market_cap = info.get('marketCap', 0)
-            if not market_cap or market_cap <= 0:
-                failed_tickers.append(ticker)
-                continue
+        if not end_date:
+            source_counts["yahoo_quote_summary"]["attempted"] += 1
+            yahoo_payload, yahoo_error = _fetch_yahoo_quote_summary_direct(ticker)
+            if yahoo_payload:
+                yahoo_row = _component_row_from_yahoo_quote_summary(ticker, yahoo_payload)
+                if yahoo_row.get("market_cap"):
+                    source_counts["yahoo_quote_summary"]["available"] += 1
+            elif yahoo_error:
+                source_errors["yahoo_quote_summary"] = yahoo_error
+        else:
+            source_errors["yahoo_quote_summary"] = "backtest_skipped_latest_only_source"
 
-            # 提取核心财务指标
-            data_list.append({
-                'ticker': ticker,
-                'market_cap': market_cap,
-                'current_price': info.get('currentPrice') or info.get('regularMarketPrice'),
-                'forward_eps': info.get('forwardEps'),
-                'trailing_eps': info.get('trailingEps'),
-                'forward_pe': info.get('forwardPE'),
-                'trailing_pe': info.get('trailingPE'),
-                'price_to_book': info.get('priceToBook'),
-                'earnings_growth': info.get('earningsGrowth') or info.get('earningsQuarterlyGrowth'),
-                'revenue_growth': info.get('revenueGrowth'),
-                'profit_margin': info.get('profitMargins'),
-                'gross_margin': info.get('grossMargins'),
-                'operating_margin': info.get('operatingMargins'),
-                # 自由现金流与FCF收益率（V5新增）
-                'fcf': info.get('freeCashflow'),
-                'fcf_yield': (info.get('freeCashflow') / market_cap) * 100 if info.get('freeCashflow') else None,
-                'weight': None  # 后续计算市值权重
-            })
-
-            # 进度提示
-            if (i + 1) % 20 == 0:
-                print(f"  已处理 {i + 1}/{len(ndx100_components)} 个NDX成分股")
-            time.sleep(0.05)  # 避免请求过于频繁
-
-        except Exception as e:
-            if ticker not in failed_tickers:
-                failed_tickers.append(ticker)
+        merged = _merge_component_source_rows(ticker, yfinance_row, yahoo_row, source_errors)
+        if not merged.get("market_cap") and not end_date:
+            failed_tickers.append(original_ticker)
             continue
+        if merged.get("component_source_disagreements"):
+            source_disagreements.extend(merged["component_source_disagreements"])
+        if merged.get("component_source_switches"):
+            source_switches.extend({"ticker": ticker, **item} for item in merged["component_source_switches"])
+        data_list.append(merged)
 
-    # 转换为DataFrame并计算权重
+        if (i + 1) % 20 == 0:
+            print(f"  已处理 {i + 1}/{len(ndx100_components)} 个NDX成分股")
+        time.sleep(0.02)
+
     df = pd.DataFrame(data_list)
-    total_market_cap = df['market_cap'].sum()
-    if total_market_cap > 0:
-        df['weight'] = df['market_cap'] / total_market_cap
+    if not df.empty and "market_cap" in df.columns:
+        df["market_cap"] = df["market_cap"].map(_safe_float)
+        total_market_cap = df["market_cap"].dropna().clip(lower=0).sum()
+        if total_market_cap > 0:
+            df["weight"] = df["market_cap"] / total_market_cap
+            weight_by_ticker = {
+                str(row.get("ticker") or "").upper(): _round_or_none((_safe_float(row.get("weight")) or 0.0) * 100.0)
+                for _, row in df.iterrows()
+            }
+            for issue in source_disagreements:
+                ticker = str(issue.get("ticker") or "").upper()
+                issue["market_cap_weight_pct"] = weight_by_ticker.get(ticker)
 
-    # 统计信息
-    stats = {
-        'successful': len(df),
-        'total_tickers': len(ndx100_components),
-        'failed': len(failed_tickers),
-        'coverage': round(len(df) / len(ndx100_components), 3) if len(ndx100_components) > 0 else 0,
-        'failed_tickers': failed_tickers
+    df, official_stats = _enrich_component_rows_with_official_checks(
+        df,
+        end_date=end_date,
+        include_current_web_checks=not bool(end_date),
+    )
+    high_core_disagreements = [
+        issue for issue in source_disagreements
+        if issue.get("severity") == "high" and issue.get("field") in L4_CORE_COMPONENT_VALUATION_FIELDS
+    ]
+    component_conflict_gate = {
+        "status": "degraded" if high_core_disagreements else "clean",
+        "rule": "High yfinance/Yahoo disagreement in component trailing_pe or forward_pe rejects that ticker field from core component calculation.",
+        "high_core_component_disagreements": high_core_disagreements[:20],
+        "blocks_publish": False,
     }
-    print(f"NDX成分股数据获取完成：成功{len(df)}/{len(ndx100_components)}，失败{len(failed_tickers)}/{len(ndx100_components)}")
+    sec_official_facts = _sec_official_facts_from_frame(df)
+    stats = {
+        "successful": len(df),
+        "total_tickers": len(ndx100_components),
+        "failed": len(failed_tickers),
+        "coverage": round(len(df) / len(ndx100_components), 3) if ndx100_components else 0,
+        "failed_tickers": failed_tickers,
+        "source_counts": source_counts,
+        "official_checks": official_stats,
+        "source_disagreement_issues": source_disagreements,
+        "source_switches": source_switches,
+        "primary_source": "field_policy",
+        "primary_source_by_field": dict(L4_COMPONENT_FIELD_SOURCE_POLICY),
+        "candidate_sources": ["yahoo_quote_summary", "sec_xbrl", "eastmoney"],
+        "component_conflict_gate": component_conflict_gate,
+        "sec_official_facts": sec_official_facts,
+        "data_date": effective_date.strftime("%Y-%m-%d"),
+        "backtest_mode": bool(end_date),
+        "cache_hit": False,
+    }
+    L4_COMPONENT_SNAPSHOT_CACHE[cache_key] = (df.copy(), dict(stats))
+    print(
+        "NDX成分股多源L4快照完成："
+        f"成功{len(df)}/{len(ndx100_components)}，"
+        f"yfinance={source_counts['yfinance']['available']}/{source_counts['yfinance']['attempted']}，"
+        f"Yahoo={source_counts['yahoo_quote_summary']['available']}/{source_counts['yahoo_quote_summary']['attempted']}"
+    )
     return df, stats
+
+
+def get_ndx_components_data_yf_v5(end_date: str = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    V5.7版：获取NDX100成分股L4快照。
+    实时模式并跑 yfinance 与 Yahoo quoteSummary；SEC/东财只做对账补充。
+    回测模式跳过最新 fundamentals，只允许 SEC filed-date 合格事实作为候选。
+    """
+    return get_ndx_component_fundamentals_snapshot(end_date=end_date)
 
 
 def get_ndx_pe_and_earnings_yield_av(end_date: str = None) -> Dict[str, Any]:
@@ -1824,15 +2679,21 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
 
             coverage_pct = stats['coverage'] * 100
             third_party_checks = get_ndx_valuation_third_party_checks()
+            valuation_audit = audit_component_valuation_metrics(metrics, third_party_checks)
+            rejected_metrics = valuation_audit.get("rejected_metrics", {})
             source_disagreement = {
                 "component_model": {
                     "metric": "ndx_component_model_current_values",
                     "PE": metrics.get("weighted_trailing_pe"),
                     "ForwardPE": metrics.get("weighted_forward_pe"),
                     "FCFYield": metrics.get("weighted_fcf_yield"),
+                    "PriceToBook": metrics.get("weighted_price_to_book"),
                     "source_tier": SOURCE_TIER_COMPONENT_MODEL,
                     "historical_percentile": None,
                     "note": "current component aggregate only; not a historical valuation percentile anchor",
+                    "source_counts": stats.get("source_counts", {}),
+                    "source_switches": stats.get("source_switches", [])[:20],
+                    "component_source_disagreements": stats.get("source_disagreement_issues", [])[:20],
                 },
                 **{
                 item.get("source_id") or item.get("source"): {
@@ -1841,6 +2702,8 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
                     "data_date": item.get("data_date"),
                     "percentile_10y": item.get("percentile_10y"),
                     "historical_percentile": item.get("historical_percentile"),
+                    "pb": item.get("pb"),
+                    "pb_percentile": item.get("pb_percentile"),
                     "source_tier": item.get("source_tier"),
                     "availability": item.get("availability"),
                     "unavailable_reason": item.get("unavailable_reason") or item.get("error"),
@@ -1848,20 +2711,61 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
                 for item in third_party_checks
                 }
             }
+            component_source_disagreements = list(stats.get("source_disagreement_issues", []))
+            component_conflict_gate = stats.get("component_conflict_gate", {})
+            component_gate_issues = list(component_conflict_gate.get("high_core_component_disagreements", []))
+            anomalies = (
+                list(metrics.get("anomalies", []))
+                + list(valuation_audit.get("source_disagreement_issues", []))
+                + component_source_disagreements[:20]
+            )
             data_quality = _quality_block(
                 source_tier=SOURCE_TIER_COMPONENT_MODEL,
                 data_date=effective_date.strftime("%Y-%m-%d"),
-                update_frequency="latest component fundamentals; refreshed on collection",
+                update_frequency="latest component fundamentals; shared once per run and refreshed on collection",
                 formula=(
                     "Trailing PE = covered market cap / covered trailing earnings; "
                     "Forward PE = covered market cap / covered forward earnings; "
-                    "FCF yield = covered FCF / covered market cap"
+                    "FCF yield = covered FCF / covered market cap; "
+                    "PB = covered market cap / covered implied book equity"
                 ),
                 coverage=metrics.get("coverage", {}),
-                anomalies=metrics.get("anomalies", []),
+                anomalies=anomalies,
                 fallback_chain=VALUATION_FALLBACK_CHAIN,
                 source_disagreement=source_disagreement,
             )
+            if component_conflict_gate.get("status") == "degraded":
+                data_quality["availability"] = "degraded"
+                data_quality["degraded_reason"] = (
+                    "High yfinance/Yahoo component valuation disagreement; affected ticker fields were rejected from core aggregate calculation."
+                )
+            data_quality["metric_authority"] = valuation_audit.get("metric_authority", {})
+            data_quality["source_disagreement_issues"] = (
+                list(valuation_audit.get("source_disagreement_issues", []))
+                + [
+                    {
+                        "issue_type": "component_source_disagreement",
+                        "metric": item.get("field"),
+                        "ticker": item.get("ticker"),
+                        "severity": item.get("severity"),
+                        "relative_diff_pct": item.get("relative_diff_pct"),
+                        "threshold_pct": item.get("threshold_pct"),
+                        "market_cap_weight_pct": item.get("market_cap_weight_pct"),
+                        "blocks_publish": item.get("blocks_publish", False),
+                        "action": item.get("action"),
+                    }
+                    for item in component_gate_issues
+                ]
+            )
+            data_quality["component_source_disagreement_issues"] = component_source_disagreements
+            data_quality["source_counts"] = stats.get("source_counts", {})
+            data_quality["official_checks"] = stats.get("official_checks", {})
+            data_quality["source_switches"] = stats.get("source_switches", [])
+            data_quality["primary_source_by_field"] = stats.get("primary_source_by_field", {})
+            data_quality["component_conflict_gate"] = component_conflict_gate
+            data_quality["sec_official_facts"] = stats.get("sec_official_facts", {})
+            data_quality["rejected_metrics"] = rejected_metrics
+            data_quality["core_usage_rule"] = valuation_audit.get("core_usage_rule")
             return {
                 "name": "NDX P/E and Earnings Yield",
                 "series_id": "NDX_WEIGHTED",
@@ -1873,27 +2777,45 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
                     "ForwardEarningsYield": metrics.get('weighted_forward_earnings_yield'),
                     "ForwardEarningsProxyUSD": metrics.get('forward_earnings_proxy_usd'),
                     "ForwardEPSGrowthProxyPct": metrics.get('weighted_forward_eps_growth_proxy_pct'),
+                    "ForwardEPSGrowthProxyMethod": metrics.get("forward_eps_growth_proxy_method"),
                     "WeightedEarningsGrowthPct": metrics.get('weighted_earnings_growth_pct'),
                     "WeightedRevenueGrowthPct": metrics.get('weighted_revenue_growth_pct'),
                     "WeightedProfitMarginPct": metrics.get('weighted_profit_margin_pct'),
                     "WeightedGrossMarginPct": metrics.get('weighted_gross_margin_pct'),
                     "WeightedOperatingMarginPct": metrics.get('weighted_operating_margin_pct'),
                     "FCFYield": metrics.get('weighted_fcf_yield'),
-                    "PriceToBook": metrics.get('weighted_price_to_book'),
+                    "PriceToBook": None if "PriceToBook" in rejected_metrics else metrics.get('weighted_price_to_book'),
+                    "PriceToBookMethod": metrics.get("price_to_book_method"),
+                    "MetricAuthority": valuation_audit.get("metric_authority", {}),
+                    "RejectedMetrics": rejected_metrics,
                     "Coverage": {
                         "stocks_analyzed": stats['successful'],
                         "total_stocks": stats['total_tickers'],
                         "market_cap_coverage": f"{coverage_pct:.1f}%",
                         "metric_coverage": metrics.get("coverage", {}),
                         "failed_tickers": stats['failed_tickers'][:5] + ["..."] if len(stats['failed_tickers']) > 5 else stats['failed_tickers'],
+                        "source_counts": stats.get("source_counts", {}),
+                        "official_checks": stats.get("official_checks", {}),
+                        "source_switches": stats.get("source_switches", [])[:20],
                     },
-                    "Anomalies": metrics.get("anomalies", []),
+                    "Anomalies": anomalies,
                     "ThirdPartyChecks": third_party_checks,
+                    "SourceReconciliation": {
+                        "primary_source": stats.get("primary_source"),
+                        "primary_source_by_field": stats.get("primary_source_by_field", {}),
+                        "candidate_sources": stats.get("candidate_sources", []),
+                        "source_counts": stats.get("source_counts", {}),
+                        "official_checks": stats.get("official_checks", {}),
+                        "source_switches": stats.get("source_switches", [])[:20],
+                        "component_source_disagreements": component_source_disagreements[:20],
+                        "component_conflict_gate": component_conflict_gate,
+                        "sec_official_facts": stats.get("sec_official_facts", {}),
+                    },
                 },
                 "unit": "ratio/percent",
                 "date": effective_date.strftime("%Y-%m-%d"),
                 "source_tier": SOURCE_TIER_COMPONENT_MODEL,
-                "source_name": "yfinance (NDX100 Components)",
+                "source_name": "field-policy L4 snapshot: Yahoo expectations, SEC facts, yfinance valuation cross-check, Eastmoney QA",
                 "data_quality": data_quality,
                 "notes": f"市值加权计算，覆盖{coverage_pct:.1f}%的NDX成分股"
             }
@@ -2001,8 +2923,16 @@ def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
             for _, row in df.iterrows()
             if str(row.get("ticker", "")).upper() in M7_TICKERS and _safe_float(row.get("market_cap"))
         }
-        m7_revisions = _m7_eps_revision_snapshot(market_caps)
         m7_frame = df[df["ticker"].isin(M7_TICKERS)].copy() if "ticker" in df.columns else pd.DataFrame()
+        m7_revisions = _m7_eps_revision_snapshot_from_frame(m7_frame)
+        eps_revision_primary_source = "yahoo_quote_summary"
+        if m7_revisions.get("availability") != "available":
+            yahoo_unavailable_reason = m7_revisions.get("reason") or "yahoo_snapshot_missing_eps_revision"
+            m7_revisions = _m7_eps_revision_snapshot(market_caps)
+            eps_revision_primary_source = "yfinance_fallback"
+            m7_revisions["fallback_reason"] = yahoo_unavailable_reason
+        m7_revisions["primary_source"] = eps_revision_primary_source
+        weighted_eps_revision = _weighted_eps_revision_from_frame(df)
         m7_metrics = calculate_weighted_metrics(m7_frame) if not m7_frame.empty else {}
         coverage_pct = stats.get("coverage", 0) * 100
         value = {
@@ -2012,43 +2942,50 @@ def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
                 "forward_earnings_yield_pct": metrics.get("weighted_forward_earnings_yield"),
                 "forward_earnings_proxy_usd": metrics.get("forward_earnings_proxy_usd"),
                 "forward_eps_growth_proxy_pct": metrics.get("weighted_forward_eps_growth_proxy_pct"),
+                "forward_eps_growth_proxy_method": metrics.get("forward_eps_growth_proxy_method"),
                 "weighted_earnings_growth_pct": metrics.get("weighted_earnings_growth_pct"),
                 "weighted_revenue_growth_pct": metrics.get("weighted_revenue_growth_pct"),
                 "weighted_profit_margin_pct": metrics.get("weighted_profit_margin_pct"),
                 "weighted_gross_margin_pct": metrics.get("weighted_gross_margin_pct"),
                 "weighted_operating_margin_pct": metrics.get("weighted_operating_margin_pct"),
+                "weighted_eps_revision_30d_pct": weighted_eps_revision,
+                "eps_revision_source": eps_revision_primary_source,
+                "eps_revision_usage": "earnings_expectation_change_only_not_valuation_cheapness",
                 "coverage": metrics.get("coverage", {}),
             },
             "m7": {
                 "weighted_forward_pe": m7_metrics.get("weighted_forward_pe"),
                 "forward_earnings_yield_pct": m7_metrics.get("weighted_forward_earnings_yield"),
                 "forward_eps_growth_proxy_pct": m7_metrics.get("weighted_forward_eps_growth_proxy_pct"),
+                "forward_eps_growth_proxy_method": m7_metrics.get("forward_eps_growth_proxy_method"),
                 "weighted_profit_margin_pct": m7_metrics.get("weighted_profit_margin_pct"),
                 "weighted_gross_margin_pct": m7_metrics.get("weighted_gross_margin_pct"),
                 "weighted_operating_margin_pct": m7_metrics.get("weighted_operating_margin_pct"),
                 "eps_revisions": m7_revisions,
             },
             "source_boundary": (
-                "NDX forward earnings and margin quality are component-model proxies from latest yfinance fundamentals. "
-                "M7 EPS revisions use yfinance analyst EPS trend, not an official Nasdaq aggregate revision series."
+                "NDX forward earnings and margin quality are component-model proxies from a shared L4 snapshot. "
+                "EPS revisions use Yahoo quoteSummary as the primary analyst-trend source when available; "
+                "they describe earnings expectation changes only and are not an official Nasdaq aggregate revision series."
             ),
         }
-        return {
+        component_conflict_gate = stats.get("component_conflict_gate", {})
+        result = {
             "name": "NDX Forward Earnings Quality",
             "series_id": "NDX_FORWARD_EARNINGS_QUALITY",
             "value": value,
             "unit": "ratio/percent/mixed",
             "date": date_str,
             "source_tier": SOURCE_TIER_COMPONENT_MODEL,
-            "source_name": "yfinance component model + M7 EPS trend",
+            "source_name": "shared L4 component snapshot + Yahoo EPS revisions",
             "data_quality": _quality_block(
                 source_tier=SOURCE_TIER_COMPONENT_MODEL,
                 data_date=date_str,
-                update_frequency="latest component fundamentals; EPS trend refreshed when yfinance updates",
+                update_frequency="latest component fundamentals; Yahoo EPS trend refreshed with quoteSummary",
                 formula=(
                     "Forward earnings yield = covered forward earnings / covered market cap; "
                     "margin quality = market-cap weighted profit/gross/operating margins; "
-                    "M7 revisions = +1y EPS current estimate vs 30 days ago."
+                    "EPS revisions = Yahoo earningsTrend current estimate vs 30 days ago."
                 ),
                 coverage={
                     "component_coverage_pct": round(coverage_pct, 2),
@@ -2056,13 +2993,71 @@ def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
                     "total_tickers": stats.get("total_tickers"),
                     "metric_coverage": metrics.get("coverage", {}),
                     "m7_revision_coverage": m7_revisions.get("coverage", {}),
+                    "source_counts": stats.get("source_counts", {}),
+                    "official_checks": stats.get("official_checks", {}),
+                    "primary_source_by_field": stats.get("primary_source_by_field", {}),
                 },
                 anomalies=metrics.get("anomalies", []),
                 fallback_chain=[SOURCE_TIER_LICENSED_MANUAL, SOURCE_TIER_COMPONENT_MODEL, SOURCE_TIER_PROXY, SOURCE_TIER_UNAVAILABLE],
-                source_disagreement={"official_ndx_revision_series": "not available in automated source; use manual/Wind if supplied"},
+                source_disagreement={
+                    "official_ndx_revision_series": "not available in automated source; use manual/Wind if supplied",
+                    "component_source_disagreements": stats.get("source_disagreement_issues", [])[:20],
+                    "source_switches": stats.get("source_switches", [])[:20],
+                },
             ),
             "notes": "补充 Forward EPS、盈利修正和利润率质量代理，避免 L4 只看当前 PE/ERP。",
         }
+        if component_conflict_gate.get("status") == "degraded":
+            result["data_quality"]["availability"] = "degraded"
+            result["data_quality"]["degraded_reason"] = (
+                "High yfinance/Yahoo component valuation disagreement; affected ticker fields were rejected from core aggregate calculation."
+            )
+        result["data_quality"]["metric_authority"] = {
+            "weighted_forward_pe": _component_metric_authority(
+                usage="supporting_only",
+                authority="duplicate_component_proxy",
+                reason="Use get_ndx_pe_and_earnings_yield for cross-checked Forward PE; this field is kept only as context.",
+            ),
+            "forward_eps_growth_proxy_pct": _component_metric_authority(
+                usage="supporting_only",
+                authority="proxy_only",
+                reason="Aggregate forward/trailing earnings proxy derived from component PE fields; not an official NDX aggregate earnings growth estimate.",
+            ),
+            "weighted_earnings_growth_pct": _component_metric_authority(
+                usage="supporting_only",
+                authority="proxy_only",
+                reason="Market-cap weighted yfinance earningsGrowth field; may mix quarterly/annual conventions across tickers.",
+            ),
+            "weighted_profit_margin_pct": _component_metric_authority(
+                usage="supporting_only",
+                authority="proxy_only",
+                reason="Market-cap weighted yfinance margin field; supporting context only.",
+            ),
+            "m7_eps_revisions": _component_metric_authority(
+                usage="supporting_only",
+                authority="proxy_only",
+                reason="M7 representative analyst revision proxy from Yahoo quoteSummary when available; not an official NDX-wide revision series.",
+                source="yahoo_quote_summary" if eps_revision_primary_source == "yahoo_quote_summary" else SOURCE_TIER_COMPONENT_MODEL,
+            ),
+            "ndx_weighted_eps_revision_30d_pct": _component_metric_authority(
+                usage="supporting_only",
+                authority="earnings_expectation_change_only",
+                reason="Yahoo EPS revision can describe whether earnings expectations are moving up or down, but cannot independently prove valuation attractiveness.",
+                source="yahoo_quote_summary" if eps_revision_primary_source == "yahoo_quote_summary" else SOURCE_TIER_COMPONENT_MODEL,
+            ),
+        }
+        result["data_quality"]["source_counts"] = stats.get("source_counts", {})
+        result["data_quality"]["official_checks"] = stats.get("official_checks", {})
+        result["data_quality"]["component_source_disagreement_issues"] = stats.get("source_disagreement_issues", [])
+        result["data_quality"]["source_switches"] = stats.get("source_switches", [])
+        result["data_quality"]["primary_source_by_field"] = stats.get("primary_source_by_field", {})
+        result["data_quality"]["component_conflict_gate"] = component_conflict_gate
+        result["data_quality"]["sec_official_facts"] = stats.get("sec_official_facts", {})
+        result["data_quality"]["core_usage_rule"] = (
+            "Forward earnings quality fields are supporting proxies. They may explain whether high valuation has some support, "
+            "but cannot independently prove NDX valuation is attractive."
+        )
+        return result
     except Exception as exc:
         return {
             "name": "NDX Forward Earnings Quality",
@@ -2099,10 +3094,13 @@ def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:
     yield_type = None
     ndx_value = ndx_data["value"]
 
-    if ndx_value.get("FCFYield") is not None:
+    metric_authority = ndx_value.get("MetricAuthority") if isinstance(ndx_value.get("MetricAuthority"), dict) else {}
+    fcf_usage = (metric_authority.get("FCFYield") or {}).get("usage") if isinstance(metric_authority.get("FCFYield"), dict) else None
+    earnings_usage = (metric_authority.get("EarningsYield") or {}).get("usage") if isinstance(metric_authority.get("EarningsYield"), dict) else None
+    if ndx_value.get("FCFYield") is not None and (not metric_authority or fcf_usage == "core_allowed"):
         yield_to_use = ndx_value["FCFYield"]
         yield_type = "fcf_yield"
-    elif ndx_value.get("EarningsYield") is not None:
+    elif ndx_value.get("EarningsYield") is not None and (not metric_authority or earnings_usage == "core_allowed"):
         yield_to_use = ndx_value["EarningsYield"]
         yield_type = "earnings_yield"
     else:
@@ -2110,7 +3108,7 @@ def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:
             "name": "NDX Simple Yield Gap",
             "value": None,
             "source_tier": SOURCE_TIER_UNAVAILABLE,
-            "notes": "NDX无有效收益率数据（FCF/盈利）"
+            "notes": "NDX无有效且具备核心发言权的收益率数据（FCF/盈利）"
         }
 
     # 获取10年期美债收益率（无风险利率）
@@ -2154,6 +3152,12 @@ def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:
                 "10Y Treasury Yield (Risk-Free)": f"{treasury_yield}%"
             },
             "not_implied_erp_warning": "This is a simple yield gap, not Damodaran-style implied ERP.",
+            "yield_authority": (metric_authority.get("FCFYield") if yield_type == "fcf_yield" else metric_authority.get("EarningsYield")) or {},
+            "rejected_yield_inputs": {
+                key: item
+                for key, item in metric_authority.items()
+                if key in {"FCFYield", "EarningsYield"} and isinstance(item, dict) and item.get("usage") != "core_allowed"
+            },
             "damodaran_reference": {
                 "function_id": "get_damodaran_us_implied_erp",
                 "scope": "US equity market reference, not NDX-specific",

@@ -600,7 +600,7 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert "2 个阶段；输入 30，输出 15，合计 45" in html
     assert "{&#x27;prompt_tokens&#x27;:" not in html
     assert "分析目标日" in html
-    assert "观察日期范围" in html
+    assert "输入数据日期跨度" in html
     assert "采集时间" in html
     assert "生成时间" in html
     assert "YF Diagnostics" in html
@@ -699,6 +699,104 @@ def test_prompt_inspector_renders_complete_prompt_and_hash(tmp_path: Path):
     assert "规则定位" in html
     assert "输出结果" in html
     assert "下游流向" in html
+
+
+def test_prompt_inspector_empty_cross_layer_signals_are_clean(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    prompt_text = '## System Message\n系统约束\n\n## User Message\n{"context_brief":{"apparent_cross_layer_signals":[]}}'
+    prompt_dir = run_dir / "prompt_audit" / "L1"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "attempt_1.prompt.txt").write_text(prompt_text, encoding="utf-8")
+    _write_json(
+        prompt_dir / "attempt_1.payload.json",
+        {
+            "payload": {
+                "layer": "L1",
+                "context_brief": {"apparent_cross_layer_signals": [], "layer_highlights": {"L1": ["ok"]}},
+                "layer_raw_data": {},
+                "layer_facts": {},
+            }
+        },
+    )
+    (prompt_dir / "attempt_1.response.raw.txt").write_text('{"layer":"L1"}', encoding="utf-8")
+    _write_json(prompt_dir / "output.validated.json", {"layer": "L1"})
+    _write_json(prompt_dir / "meta.json", {"stage": "L1", "stage_name": "l1", "status": "ok", "attempts": 1})
+    _write_json(run_dir / "llm_stage_diagnostics.json", {"stages": {}})
+
+    payload = PromptInspectorGenerator(reports_dir=str(tmp_path / "reports"))._load_payload(run_dir)
+
+    assert payload["stages"][0]["boundary"]["status"] == "干净"
+
+
+def test_l4_valuation_visual_uses_third_party_pb_when_component_pb_diverges(tmp_path: Path):
+    reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
+
+    html = reporter._valuation_indicator_visual(
+        "L4.get_ndx_pe_and_earnings_yield",
+        {
+            "PE": 33.3,
+            "ForwardPE": 22.72,
+            "PriceToBook": 41.18,
+            "ThirdPartyChecks": [
+                {"source_name": "DanjuanFunds", "value": 34.16, "pb": 10.02, "availability": "available"},
+            ],
+        },
+    )
+
+    assert "PB (3P)</b>10.02x" in html
+    assert "Component-model PB diverged materially" in html
+
+
+def test_l4_valuation_visual_explains_rejected_component_pb(tmp_path: Path):
+    reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
+
+    html = reporter._valuation_indicator_visual(
+        "L4.get_ndx_pe_and_earnings_yield",
+        {
+            "PE": 33.3,
+            "ForwardPE": 22.72,
+            "PriceToBook": None,
+            "RejectedMetrics": {
+                "PriceToBook": {
+                    "component_value": 41.18,
+                    "reference_median": 10.02,
+                    "relative_diff_pct": 311.0,
+                }
+            },
+            "ThirdPartyChecks": [
+                {"source_name": "DanjuanFunds", "value": 34.16, "pb": 10.02, "availability": "available"},
+            ],
+        },
+    )
+
+    assert "PB (3P)</b>10.02x" in html
+    assert "Component-model PB was rejected from core evidence" in html
+
+
+def test_l4_valuation_visual_marks_supporting_only_component_metrics(tmp_path: Path):
+    reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
+
+    html = reporter._valuation_indicator_visual(
+        "L4.get_ndx_pe_and_earnings_yield",
+        {
+            "PE": 33.3,
+            "ForwardPE": 22.72,
+            "FCFYield": 1.4,
+            "PriceToBook": 10.11,
+            "MetricAuthority": {
+                "FCFYield": {"usage": "supporting_only"},
+                "PriceToBook": {"usage": "supporting_only"},
+            },
+            "ThirdPartyChecks": [
+                {"source_name": "DanjuanFunds", "value": 34.16, "pb": 10.02, "availability": "available"},
+            ],
+        },
+    )
+
+    assert "FCF (proxy)</b>1.40%" in html
+    assert "PB (3P)</b>10.02x" in html
+    assert "FCF yield is supporting-only" in html
+    assert "Component-model PB is supporting-only" in html
 
 
 def test_vnext_reporter_slug_stable_with_colon_ref():

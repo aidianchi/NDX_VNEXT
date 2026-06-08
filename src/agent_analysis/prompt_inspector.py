@@ -67,6 +67,10 @@ def _json_for_script(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, default=str).replace("</script", "<\\/script")
 
 
+def _as_list(value: Any) -> List[Any]:
+    return value if isinstance(value, list) else []
+
+
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -149,9 +153,10 @@ class PromptInspectorGenerator:
                     "parsed_response": _load_json(parsed_file, {}),
                 }
             )
-        prompt_text = attempts[-1]["prompt_text"] if attempts else ""
+        latest_attempt = attempts[-1] if attempts else {}
+        prompt_text = latest_attempt.get("prompt_text", "")
         validated_file = stage_dir / "output.validated.json"
-        boundary = self._scan_boundary(stage_dir_name, prompt_text)
+        boundary = self._scan_boundary(stage_dir_name, prompt_text, latest_attempt.get("payload", {}))
         return {
             "stage": stage_dir_name,
             "label": STAGE_LABELS.get(stage_dir_name, stage_dir_name),
@@ -164,6 +169,7 @@ class PromptInspectorGenerator:
             "validated_output": _load_json(validated_file, {}),
             "boundary": boundary,
             "rule_hits": self._rule_hits(prompt_text),
+            "input_quality": self._input_quality(stage_dir_name, latest_attempt),
             "downstream": self._downstream_summary(stage_dir_name),
         }
 
@@ -203,7 +209,7 @@ class PromptInspectorGenerator:
             return stage.lower()
         return stage
 
-    def _scan_boundary(self, stage: str, prompt_text: str) -> Dict[str, Any]:
+    def _scan_boundary(self, stage: str, prompt_text: str, attempt_payload: Any = None) -> Dict[str, Any]:
         checks = []
         if stage in {"L1", "L2", "L3", "L4", "L5"}:
             checks = [
@@ -211,8 +217,7 @@ class PromptInspectorGenerator:
                 ("Bridge 当前 memo", r"bridge_memos/bridge_0\.json|\"bridge_memos\""),
                 ("Thesis 当前判断", r"thesis_draft\.json|\"thesis_draft\""),
                 ("Final 当前判断", r"final_adjudication\.json|\"final_adjudication\""),
-                ("全局跨层运行时信号", r"apparent_cross_layer_signals\"\s*:\s*\[[^\]]*\S"),
-                ("新闻候选 sidecar", r"news_layer_analysis|news_event_ledger|browser_sidecar"),
+                ("新闻候选 sidecar", r"news_layer_analysis|news_event_ledger"),
             ]
         elif stage == "bridge":
             checks = [
@@ -225,6 +230,20 @@ class PromptInspectorGenerator:
                 ("未标注新闻候选", r"browser_sidecar"),
             ]
         findings = []
+        payload = attempt_payload.get("payload") if isinstance(attempt_payload, dict) else None
+        context_brief = payload.get("context_brief") if isinstance(payload, dict) else None
+        if stage in {"L1", "L2", "L3", "L4", "L5"} and isinstance(context_brief, dict):
+            cross_signals = context_brief.get("apparent_cross_layer_signals")
+            if isinstance(cross_signals, list) and cross_signals:
+                findings.append(
+                    {
+                        "rule": "全局跨层运行时信号",
+                        "severity": "违规",
+                        "excerpt": json.dumps(cross_signals[:3], ensure_ascii=False, default=str),
+                        "offset": 0,
+                        "explanation": "L1-L5 只应接收本层运行时数据；非空 apparent_cross_layer_signals 会破坏上下文隔离。",
+                    }
+                )
         for rule, pattern in checks:
             for match in re.finditer(pattern, prompt_text, flags=re.I | re.S):
                 start = max(0, match.start() - 80)
@@ -235,16 +254,113 @@ class PromptInspectorGenerator:
                         "severity": "违规",
                         "excerpt": prompt_text[start:end],
                         "offset": match.start(),
+                        "explanation": "命中了禁止进入该 stage 的运行时 artifact 或新闻候选输入。",
                     }
                 )
                 break
+        if stage in {"L1", "L2", "L3", "L4", "L5"} and "browser_sidecar" in prompt_text:
+            findings.append(
+                {
+                    "rule": "浏览器 sidecar 来源说明",
+                    "severity": "提示",
+                    "excerpt": self._first_excerpt(prompt_text, "browser_sidecar"),
+                    "offset": prompt_text.find("browser_sidecar"),
+                    "explanation": "本次命中的是来源元数据。若它是 user_trusted 的估值交叉校验，可作为第三方检查源；若是新闻/网页观察，则不能当作 L1-L5 evidence_ref。",
+                }
+            )
         if not prompt_text:
             status = "未保存"
-        elif findings:
+        elif any(item.get("severity") == "违规" for item in findings):
             status = "违规"
+        elif any(item.get("severity") == "可疑" for item in findings):
+            status = "可疑"
         else:
             status = "干净"
         return {"status": status, "findings": findings}
+
+    def _first_excerpt(self, text: str, needle: str, radius: int = 160) -> str:
+        idx = text.find(needle)
+        if idx < 0:
+            return ""
+        return text[max(0, idx - radius) : min(len(text), idx + len(needle) + radius)]
+
+    def _input_quality(self, stage: str, latest_attempt: Dict[str, Any]) -> List[Dict[str, Any]]:
+        prompt_text = latest_attempt.get("prompt_text", "") if isinstance(latest_attempt, dict) else ""
+        attempt_payload = latest_attempt.get("payload", {}) if isinstance(latest_attempt, dict) else {}
+        payload = attempt_payload.get("payload") if isinstance(attempt_payload, dict) else {}
+        findings: List[Dict[str, Any]] = []
+        char_count = len(prompt_text)
+        if char_count > 120_000:
+            findings.append(
+                {
+                    "severity": "可优化",
+                    "title": "Prompt 过长",
+                    "detail": f"{stage} prompt 为 {char_count:,} 字符；建议继续压缩 data_quality、source_disagreement 和重复的 Runtime Input。",
+                }
+            )
+        elif char_count > 60_000:
+            findings.append(
+                {
+                    "severity": "关注",
+                    "title": "Prompt 偏长",
+                    "detail": f"{stage} prompt 为 {char_count:,} 字符；可检查是否有重复字段。",
+                }
+            )
+        if isinstance(payload, dict):
+            context_brief = payload.get("context_brief") if isinstance(payload.get("context_brief"), dict) else {}
+            highlights = context_brief.get("layer_highlights") if isinstance(context_brief.get("layer_highlights"), dict) else {}
+            other_highlights = [key for key in highlights if str(key).upper() != stage.upper()]
+            if other_highlights and stage in {"L1", "L2", "L3", "L4", "L5"}:
+                findings.append(
+                    {
+                        "severity": "违规",
+                        "title": "包含其他层 highlights",
+                        "detail": f"context_brief.layer_highlights 包含 {other_highlights}，会污染本层上下文。",
+                    }
+                )
+            layer_raw = payload.get("layer_raw_data")
+            layer_facts = payload.get("layer_facts")
+            if stage in {"L1", "L2", "L3", "L4", "L5"} and not isinstance(layer_raw, dict):
+                findings.append({"severity": "缺口", "title": "缺少本层原始数据", "detail": "layer_raw_data 不存在或不是对象。"})
+            if stage in {"L1", "L2", "L3", "L4", "L5"} and not isinstance(layer_facts, dict):
+                findings.append({"severity": "缺口", "title": "缺少本层事实摘要", "detail": "layer_facts 不存在或不是对象。"})
+            if stage == "L4" and isinstance(layer_raw, dict):
+                valuation = layer_raw.get("get_ndx_pe_and_earnings_yield")
+                value = valuation.get("value") if isinstance(valuation, dict) else {}
+                pb = value.get("PriceToBook") if isinstance(value, dict) else None
+                rejected_metrics = value.get("RejectedMetrics") if isinstance(value, dict) and isinstance(value.get("RejectedMetrics"), dict) else {}
+                for metric, issue in rejected_metrics.items():
+                    if not isinstance(issue, dict):
+                        continue
+                    findings.append(
+                        {
+                            "severity": "数据风险",
+                            "title": f"{metric} 已被剔除",
+                            "detail": (
+                                f"component={issue.get('component_value')}，第三方中位数={issue.get('reference_median')}，"
+                                f"差异={issue.get('relative_diff_pct')}%；该指标不能进入核心证据。"
+                            ),
+                        }
+                    )
+                third_party_pb = None
+                for source in _as_list(value.get("ThirdPartyChecks")) if isinstance(value, dict) else []:
+                    if isinstance(source, dict) and source.get("pb") is not None:
+                        third_party_pb = source.get("pb")
+                        break
+                try:
+                    if pb and third_party_pb and float(pb) / float(third_party_pb) > 2:
+                        findings.append(
+                            {
+                                "severity": "数据风险",
+                                "title": "PB 口径冲突",
+                                "detail": f"component-model PB={pb}，第三方 PB={third_party_pb}，差异过大；L4 不应把 component PB 当作无争议核心证据。",
+                            }
+                        )
+                except Exception:
+                    pass
+        if not findings:
+            findings.append({"severity": "通过", "title": "输入边界清楚", "detail": "未发现明显跨层污染、关键输入缺口或极端冗余。"})
+        return findings
 
     def _rule_hits(self, prompt_text: str) -> List[Dict[str, Any]]:
         targets = [
@@ -520,7 +636,8 @@ function renderOverview() {
   const attempt = currentAttempt();
   const meta = selected.meta || {};
   const boundary = selected.boundary || {};
-  const findings = (boundary.findings || []).map(item => `<div class="boundary-row"><strong>${escapeHtml(item.rule)}</strong><p>${escapeHtml(item.excerpt)}</p></div>`).join('');
+  const findings = (boundary.findings || []).map(item => `<div class="boundary-row"><strong>${escapeHtml(item.rule)} · ${escapeHtml(item.severity || '')}</strong><p>${escapeHtml(item.explanation || '')}</p><pre class="response-pre">${escapeHtml(item.excerpt)}</pre></div>`).join('');
+  const quality = (selected.input_quality || []).map(item => `<div class="boundary-row"><strong>${escapeHtml(item.title)} · ${escapeHtml(item.severity || '')}</strong><p>${escapeHtml(item.detail || '')}</p></div>`).join('');
   tabContent.innerHTML = `
     <div class="metric-grid">
       <div class="metric"><span>运行模式</span><strong>${escapeHtml(meta.mode || '')}</strong></div>
@@ -534,7 +651,10 @@ function renderOverview() {
     </div>
     <p class="fileline">Prompt 文件：${escapeHtml(attempt?.prompt_file || '')}</p>
     <p class="hash">SHA256：${escapeHtml(attempt?.prompt_sha256 || meta.prompt_sha256 || '')}</p>
-    <div class="boundary-list">${findings || '<div class="empty">未发现命中的越权片段。</div>'}</div>`;
+    <h3>边界检查</h3>
+    <div class="boundary-list">${findings || '<div class="empty">未发现命中的越权片段。</div>'}</div>
+    <h3>输入质量</h3>
+    <div class="boundary-list">${quality || '<div class="empty">未发现明显输入问题。</div>'}</div>`;
 }
 
 function highlightedPrompt(text, term) {

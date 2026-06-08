@@ -110,6 +110,77 @@ def test_data_integrity_third_party_checks():
     assert tp["confidence"] == 50.0
 
 
+def test_data_integrity_reports_nonblocking_valuation_source_disagreement():
+    data = {
+        "indicators": [
+            {
+                "layer": 4,
+                "function_id": "get_ndx_pe_and_earnings_yield",
+                "metric_name": "NDX P/E and Earnings Yield",
+                "raw_data": {
+                    "value": {"PE": 33.3},
+                    "data_quality": {
+                        "source_disagreement_issues": [
+                            {
+                                "issue_type": "valuation_source_disagreement",
+                                "metric": "PriceToBook",
+                                "severity": "high",
+                                "component_value": 41.18,
+                                "reference_median": 10.02,
+                                "relative_diff_pct": 311.0,
+                                "blocks_publish": False,
+                                "action": "reject_metric_from_core_evidence",
+                            }
+                        ]
+                    },
+                },
+            }
+        ]
+    }
+
+    report = DataIntegrity().run(data)
+
+    assert report["publish_status"] == "publishable"
+    assert report["quality_issues"][0]["metric"] == "PriceToBook"
+    assert "估值源严重冲突" in report["notes"]
+
+
+def test_data_integrity_blocks_publish_for_core_valuation_source_disagreement():
+    data = {
+        "indicators": [
+            {
+                "layer": 4,
+                "function_id": "get_ndx_pe_and_earnings_yield",
+                "metric_name": "NDX P/E and Earnings Yield",
+                "raw_data": {
+                    "value": {"PE": 70.0},
+                    "data_quality": {
+                        "source_disagreement_issues": [
+                            {
+                                "issue_type": "valuation_source_disagreement",
+                                "metric": "PE",
+                                "severity": "high",
+                                "component_value": 70.0,
+                                "reference_median": 34.0,
+                                "relative_diff_pct": 105.9,
+                                "blocks_publish": True,
+                                "action": "block_publish_until_manual_or_official_override",
+                            }
+                        ]
+                    },
+                },
+            }
+        ]
+    }
+
+    report = DataIntegrity().run(data)
+
+    assert report["blocked"] is True
+    assert report["unpublishable"] is True
+    assert report["publish_status"] == "blocked"
+    assert any("valuation_source_disagreement" in reason for reason in report["blocking_reasons"])
+
+
 def test_data_integrity_penalizes_skips_partial_coverage_and_future_dates():
     data = {
         "backtest_date": "2025-04-09",

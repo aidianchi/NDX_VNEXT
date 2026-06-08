@@ -995,7 +995,7 @@ class VNextReportGenerator:
       <div class="verdict-row"><span>发布状态</span><strong class="pill {_severity_class(publish_status)}">{_escape(_label(publish_status, 'publish_status'))}</strong></div>
       <div class="verdict-row"><span>分析目标日</span><strong class="mono">{_escape(meta.get('data_date', 'N/A'))}</strong></div>
       <div class="verdict-row"><span>回测日</span><strong class="mono">{_escape(backtest_date)}</strong></div>
-      <div class="verdict-row"><span>观察日期范围</span><strong class="mono">{_escape(observation_range)}</strong></div>
+      <div class="verdict-row"><span>输入数据日期跨度</span><strong class="mono">{_escape(observation_range)}</strong></div>
       <div class="verdict-row"><span>采集时间</span><strong class="mono">{_escape(_format_timestamp(collector_timestamp))}</strong></div>
       <div class="verdict-row"><span>生成时间</span><strong class="mono">{_escape(_format_timestamp(generated_at))}</strong></div>
       <div class="verdict-row"><span>指标覆盖</span><strong class="mono">{_escape(success)}</strong></div>
@@ -2123,12 +2123,56 @@ class VNextReportGenerator:
         return self._wrap_indicator_visual(ref, "m7-fundamentals", "M7 fundamentals heatmap", body, details=True)
 
     def _valuation_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        component_pb = _safe_number(_first_present(value, "PriceToBook", "PB"))
+        metric_authority = value.get("MetricAuthority") if isinstance(value.get("MetricAuthority"), dict) else {}
+        pb_usage = (metric_authority.get("PriceToBook") or {}).get("usage") if isinstance(metric_authority.get("PriceToBook"), dict) else None
+        fcf_usage = (metric_authority.get("FCFYield") or {}).get("usage") if isinstance(metric_authority.get("FCFYield"), dict) else None
+        third_party_pb = None
+        for source in _as_list(value.get("ThirdPartyChecks")):
+            if isinstance(source, dict):
+                source_pb = _safe_number(source.get("pb"))
+                if source_pb is not None:
+                    third_party_pb = source_pb
+                    break
+        pb_display = component_pb
+        pb_label = "PB"
+        pb_note = ""
+        rejected_metrics = value.get("RejectedMetrics") if isinstance(value.get("RejectedMetrics"), dict) else {}
+        rejected_pb = rejected_metrics.get("PriceToBook") if isinstance(rejected_metrics.get("PriceToBook"), dict) else None
+        if rejected_pb and third_party_pb is not None:
+            pb_display = third_party_pb
+            pb_label = "PB (3P)"
+            pb_note = (
+                "Component-model PB was rejected from core evidence after a severe source cross-check failure; "
+                "the headline strip shows the third-party PB."
+            )
+        elif pb_usage and pb_usage != "core_allowed" and third_party_pb is not None:
+            pb_display = third_party_pb
+            pb_label = "PB (3P)"
+            pb_note = (
+                "Component-model PB is supporting-only; the headline strip shows the third-party PB where available."
+            )
+        elif component_pb is not None and third_party_pb is not None:
+            ratio = component_pb / third_party_pb if third_party_pb else None
+            if ratio is not None and (ratio > 2.0 or ratio < 0.5):
+                pb_display = third_party_pb
+                pb_label = "PB (3P)"
+                pb_note = (
+                    "Component-model PB diverged materially from third-party published PB; "
+                    "the headline strip shows the third-party PB and leaves the component value in raw data."
+                )
+        fcf_label = "FCF Yield"
+        if fcf_usage and fcf_usage != "core_allowed":
+            fcf_label = "FCF (proxy)"
+            if pb_note:
+                pb_note += " "
+            pb_note += "FCF yield is supporting-only and is not used as the primary yield-gap input."
         rows = [
             ("PE", _first_present(value, "PE", "TrailingPE", "PE_TTM"), "x"),
             ("Forward PE", value.get("ForwardPE"), "x"),
             ("Earnings Yield", value.get("EarningsYield"), "%"),
-            ("FCF Yield", value.get("FCFYield"), "%"),
-            ("PB", _first_present(value, "PriceToBook", "PB"), "x"),
+            (fcf_label, value.get("FCFYield"), "%"),
+            (pb_label, pb_display, "x"),
         ]
         metrics = "".join(f"<span><b>{_escape(label)}</b>{_fmt_number(metric, suffix=suffix, digits=2)}</span>" for label, metric, suffix in rows)
         sources = []
@@ -2183,6 +2227,8 @@ class VNextReportGenerator:
         boundary = ""
         if not sources:
             boundary = '<p class="chart-footnote">本次估值微图只展示主来源字段；未接入 Trendonify 或 WorldPERatio 交叉校验。</p>'
+        if pb_note:
+            boundary += f'<p class="chart-footnote">{_escape(pb_note)}</p>'
         body = f'<div class="metric-strip">{metrics}</div>{source_list}{wp_table}{boundary}'
         return self._wrap_indicator_visual(ref, "valuation-sources", title, body, details=True, open_by_default=True)
 
@@ -3004,7 +3050,7 @@ class VNextReportGenerator:
     <div><b>Token Usage</b><p>{_escape(_token_usage_summary(token_usage))}</p></div>
     <div><b>Data Integrity</b><p>{_escape(_label(integrity_status, 'publish_status'))}</p></div>
     <div><b>Backtest Date</b><p>{_escape(meta.get('backtest_date') or analysis_meta.get('backtest_date') or 'N/A')}</p></div>
-    <div><b>Observation Range</b><p>{_escape(observation_range)}</p></div>
+    <div><b>Input Date Span</b><p>{_escape(observation_range)}</p></div>
     <div><b>Collected At</b><p>{_escape(_format_timestamp(collector_timestamp))}</p></div>
     <div><b>Generated At</b><p>{_escape(_format_timestamp(generated_at))}</p></div>
     <div><b>YF Diagnostics</b><p>{_escape(runtime_summary or '无异常记录')}</p></div>

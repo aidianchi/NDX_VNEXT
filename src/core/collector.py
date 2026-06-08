@@ -33,6 +33,14 @@ try:
 except ImportError:
     from tools_common import classify_yfinance_failure, get_yfinance_runtime_diagnostics, reset_yfinance_runtime_diagnostics
 
+try:
+    from ..tools_L4 import reset_l4_component_snapshot_cache
+except ImportError:
+    try:
+        from tools_L4 import reset_l4_component_snapshot_cache
+    except ImportError:
+        reset_l4_component_snapshot_cache = None
+
 class DataCollector:
     """负责从tools.py收集、缓存和格式化所有市场数据。"""
     def __init__(self):
@@ -293,6 +301,8 @@ class DataCollector:
             enable_news: 是否启用新闻采集（默认False，非侵入性）
         """
         reset_yfinance_runtime_diagnostics()
+        if reset_l4_component_snapshot_cache is not None:
+            reset_l4_component_snapshot_cache()
         # --- 【新增逻辑】: 尝试导入手动数据模块 ---
         try:
             # 确保能从 src/ 目录导入 manual_data
