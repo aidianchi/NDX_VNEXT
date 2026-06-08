@@ -5,6 +5,11 @@ import re
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
+try:
+    from ..data_availability import NO_DATA_AVAILABLE, has_meaningful_observation_value, no_data_reason
+except ImportError:
+    from data_availability import NO_DATA_AVAILABLE, has_meaningful_observation_value, no_data_reason
+
 
 class DataIntegrity:
     """Generate a compact reliability report from collector output."""
@@ -18,9 +23,27 @@ class DataIntegrity:
 
     def _has_value(self, item: Dict[str, Any]) -> bool:
         raw = self._raw_data(item)
-        if "value" in raw:
-            return raw.get("value") is not None
-        return item.get("value") is not None or bool(raw)
+        if raw:
+            if no_data_reason(raw):
+                return False
+            if "value" in raw:
+                return has_meaningful_observation_value(raw.get("value"))
+            return True
+        if item.get("error"):
+            return False
+        if no_data_reason(item):
+            return False
+        return has_meaningful_observation_value(item.get("value"))
+
+    def _no_data_reason(self, item: Dict[str, Any]) -> Optional[str]:
+        raw = self._raw_data(item)
+        return no_data_reason(raw) if raw else no_data_reason(item)
+
+    def _fallback_chain(self, item: Dict[str, Any]) -> List[str]:
+        raw = self._raw_data(item)
+        data_quality = raw.get("data_quality") if isinstance(raw.get("data_quality"), dict) else {}
+        chain = data_quality.get("fallback_chain") or raw.get("fallback_chain")
+        return chain if isinstance(chain, list) else []
 
     def _coverage_numbers(self, value: Any) -> Iterable[float]:
         if isinstance(value, dict):
@@ -131,6 +154,10 @@ class DataIntegrity:
             if not item.get("error") and not self._is_skipped(item) and self._has_value(item)
         ]
         successful = len(successful_items)
+        no_data_items = [
+            item for item in indicators
+            if not item.get("error") and not self._is_skipped(item) and self._no_data_reason(item)
+        ]
         coverage_factors = {id(item): self._coverage_factor(item) for item in successful_items}
         future_violations = {
             item.get("metric_name") or item.get("function_id"): self._future_date_violations(item, backtest_date)
@@ -176,6 +203,15 @@ class DataIntegrity:
             )
         if unavailable:
             notes.append(f"{unavailable} 个指标因回测前瞻风险被跳过。")
+        if no_data_items:
+            examples = []
+            for item in no_data_items[:3]:
+                name = item.get("metric_name") or item.get("function_id")
+                examples.append(f"{name}: {self._no_data_reason(item)}")
+            notes.append(
+                f"{len(no_data_items)} 个指标明确返回 {NO_DATA_AVAILABLE}，只能作为数据边界使用，示例: "
+                + "；".join(str(item) for item in examples)
+            )
         partial = [
             item.get("metric_name") or item.get("function_id")
             for item in successful_items
@@ -194,7 +230,7 @@ class DataIntegrity:
                     f"ref={issue.get('reference_median')}, diff={issue.get('relative_diff_pct')}%"
                 )
             notes.append(f"{len(quality_issues)} 个估值源严重冲突，示例: {'；'.join(examples)}")
-        if not future_violations and not quality_issues and not failed_metrics and not unavailable and not partial:
+        if not future_violations and not quality_issues and not failed_metrics and not unavailable and not no_data_items and not partial:
             notes.append("所有采集指标均返回有效值。")
         strict_backtest_invariants = self._strict_backtest_invariants(data_json)
         declared_limitations = strict_backtest_invariants.get("declared_limitations", []) if strict_backtest_invariants else []
@@ -256,6 +292,24 @@ class DataIntegrity:
             "publish_status": "blocked" if blocking_reasons else "publishable",
             "blocking_reasons": blocking_reasons,
             "quality_issues": quality_issues,
+            "no_data_indicators": [
+                {
+                    "function_id": item.get("function_id"),
+                    "metric_name": item.get("metric_name"),
+                    "reason": self._no_data_reason(item),
+                    "fallback_chain": self._fallback_chain(item),
+                }
+                for item in no_data_items
+            ],
+            "fallback_indicators": [
+                {
+                    "function_id": item.get("function_id"),
+                    "metric_name": item.get("metric_name"),
+                    "fallback_chain": self._fallback_chain(item),
+                }
+                for item in indicators
+                if self._fallback_chain(item)
+            ],
             "future_date_violations": future_violations,
             "layer_breakdown": {
                 layer: {

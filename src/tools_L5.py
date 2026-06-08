@@ -4,6 +4,9 @@
 NDX Agent · 第5层数据获取函数
 """
 
+import hashlib
+from datetime import timezone
+
 try:
     from .tools_common import *
 except ImportError:
@@ -105,6 +108,222 @@ def _filter_daily_frame_to_effective_date(df: pd.DataFrame, effective_date: date
     filtered.index = pd.to_datetime(filtered.index).tz_localize(None)
     effective = pd.Timestamp(effective_date).tz_localize(None)
     return filtered[filtered.index <= effective]
+
+
+def _date_text(value: Any) -> Optional[str]:
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d")
+    return str(value)[:10] if value is not None else None
+
+
+def _ohlcv_sha256(df: pd.DataFrame) -> str:
+    cols = [col for col in ["open", "high", "low", "close", "volume"] if col in df.columns]
+    material = df[cols].copy()
+    material.index = pd.to_datetime(material.index).strftime("%Y-%m-%d")
+    return hashlib.sha256(material.to_csv(float_format="%.10g").encode("utf-8")).hexdigest()
+
+
+def _ma_snapshot(close: pd.Series, current_price: float) -> Dict[str, Dict[str, Optional[float]]]:
+    positions: Dict[str, Dict[str, Optional[float]]] = {}
+    for window in (5, 20, 50, 60, 100, 200):
+        key = f"sma_{window}"
+        if len(close) < window:
+            positions[key] = {"value": None, "deviation_pct": None}
+            continue
+        value = _last_valid(close.rolling(window=window, min_periods=window).mean())
+        positions[key] = {
+            "value": _round_value(value, 2),
+            "deviation_pct": round((current_price - value) / value * 100, 2) if value and value > 0 else None,
+        }
+    return positions
+
+
+def _build_l5_snapshot_from_frame(
+    df: pd.DataFrame,
+    *,
+    effective_date: datetime,
+    source_name: str,
+    raw_row_count: int,
+    future_rows_dropped: int,
+) -> Dict[str, Any]:
+    df = clean_yfinance_dataframe(df)
+    df = _filter_daily_frame_to_effective_date(df, effective_date)
+    if df.empty or len(df) < 200:
+        raise Exception(f"数据不足：仅{len(df)}个交易日")
+
+    indicators = calculate_technical_indicators_yf(df)
+    if not indicators:
+        raise Exception("未计算出有效技术指标")
+
+    latest = df.iloc[-1]
+    latest_date = _date_text(df.index[-1])
+    current_price = float(latest["close"])
+    ma_positions = _ma_snapshot(df["close"], current_price)
+    exact_values = {
+        "latest_close": _round_value(current_price, 2),
+        "sma_5": ma_positions["sma_5"]["value"],
+        "sma_20": ma_positions["sma_20"]["value"],
+        "sma_50": ma_positions["sma_50"]["value"],
+        "sma_60": ma_positions["sma_60"]["value"],
+        "sma_100": ma_positions["sma_100"]["value"],
+        "sma_200": ma_positions["sma_200"]["value"],
+        "rsi_14": indicators.get("rsi_14"),
+        "macd_line": indicators.get("macd_line"),
+        "macd_signal": indicators.get("macd_signal"),
+        "macd_histogram": indicators.get("macd_histogram"),
+        "atr_14": indicators.get("atr_14"),
+        "adx_14": indicators.get("adx_14"),
+        "pdi_14": indicators.get("pdi_14"),
+        "mdi_14": indicators.get("mdi_14"),
+        "obv": indicators.get("obv"),
+        "volume_ma_ratio": indicators.get("volume_ma_ratio"),
+        "vwap_20": indicators.get("vwap_20"),
+        "mfi_14": indicators.get("mfi_14"),
+        "cmf_20": indicators.get("cmf_20"),
+        "donchian_upper": indicators.get("donchian_upper"),
+        "donchian_middle": indicators.get("donchian_middle"),
+        "donchian_lower": indicators.get("donchian_lower"),
+    }
+    latest_ohlcv = {
+        "open": _round_value(float(latest["open"]), 2) if "open" in df.columns else None,
+        "high": _round_value(float(latest["high"]), 2) if "high" in df.columns else None,
+        "low": _round_value(float(latest["low"]), 2) if "low" in df.columns else None,
+        "close": _round_value(current_price, 2),
+        "volume": int(latest["volume"]) if "volume" in df.columns and pd.notna(latest["volume"]) else None,
+    }
+    recent_closes = [
+        {"date": _date_text(index), "close": _round_value(float(value), 2)}
+        for index, value in df["close"].tail(30).items()
+    ]
+    effective_text = effective_date.strftime("%Y-%m-%d")
+    return {
+        "name": "L5 Deterministic Technical Snapshot",
+        "series_id": "QQQ_L5_DETERMINISTIC_SNAPSHOT",
+        "value": {
+            "schema_version": "l5_deterministic_snapshot_v1",
+            "symbol": "QQQ",
+            "effective_date": effective_text,
+            "max_observed_date": latest_date,
+            "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+            "source_name": source_name,
+            "row_count": len(df),
+            "raw_row_count": raw_row_count,
+            "ohlcv_sha256": _ohlcv_sha256(df),
+            "formula_engine": indicators.get("formula_engine"),
+            "fillna_policy": indicators.get("fillna_policy"),
+            "future_exclusion": {
+                "effective_date": effective_text,
+                "max_observed_date": latest_date,
+                "future_rows_dropped": future_rows_dropped,
+                "backtest_cutoff_respected": latest_date <= effective_text if latest_date else False,
+                "rule": "rows_after_effective_date_are_excluded_before_formula_calculation",
+            },
+            "latest_ohlcv": latest_ohlcv,
+            "moving_average_positions": ma_positions,
+            "exact_technical_values": exact_values,
+            "recent_closes_30": recent_closes,
+            "allowed_use": "exact_l5_price_and_indicator_source_of_truth",
+            "forbidden_use": "do_not_infer_valuation_or_breadth_from_l5",
+        },
+        "unit": "mixed (price/ratio)",
+        "date": latest_date,
+        "source_name": source_name,
+        "data_quality": {
+            "availability": "available",
+            "source_tier": "market_data",
+            "effective_date": effective_text,
+            "max_observed_date": latest_date,
+            "future_rows_dropped": future_rows_dropped,
+            "formula_engine": indicators.get("formula_engine"),
+        },
+        "notes": "L5 精确价格、均线、RSI、MACD、ATR 等技术数值的单一确定性快照；模型只能解释这些数值，不得自行估算。",
+    }
+
+
+def get_l5_deterministic_snapshot(end_date: str = None) -> Dict[str, Any]:
+    """Build one deterministic L5 price/indicator snapshot for exact technical values."""
+    effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
+    start_date = effective_date - timedelta(days=420)
+    errors: List[str] = []
+
+    if YF_AVAILABLE:
+        try:
+            raw_df = cached_yf_download(
+                "QQQ",
+                start=start_date,
+                end=_yf_daily_end_inclusive(effective_date),
+                interval="1d",
+                progress=False,
+                auto_adjust=False,
+            )
+            cleaned = clean_yfinance_dataframe(raw_df)
+            raw_count = len(cleaned)
+            filtered = _filter_daily_frame_to_effective_date(cleaned, effective_date)
+            future_rows_dropped = max(0, raw_count - len(filtered))
+            return _build_l5_snapshot_from_frame(
+                filtered,
+                effective_date=effective_date,
+                source_name="yfinance",
+                raw_row_count=raw_count,
+                future_rows_dropped=future_rows_dropped,
+            )
+        except Exception as exc:
+            errors.append(f"yfinance failed: {str(exc)[:120]}")
+
+    alphavantage_api_key = get_alphavantage_api_key()
+    if alphavantage_api_key:
+        try:
+            params = {
+                "function": "TIME_SERIES_DAILY",
+                "symbol": "QQQ",
+                "apikey": alphavantage_api_key,
+                "outputsize": "full",
+            }
+            data = safe_request(get_alphavantage_base_url(), params)
+            if not data or "Time Series (Daily)" not in data:
+                raise Exception("Alpha Vantage无有效数据")
+            df = pd.DataFrame.from_dict(data["Time Series (Daily)"], orient="index")
+            df.index = pd.to_datetime(df.index)
+            df = df.sort_index()
+            df = df.rename(columns={
+                "1. open": "open",
+                "2. high": "high",
+                "3. low": "low",
+                "4. close": "close",
+                "5. volume": "volume",
+            })
+            for col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            raw_count = len(df)
+            filtered = df[df.index <= pd.Timestamp(effective_date)]
+            future_rows_dropped = max(0, raw_count - len(filtered))
+            return _build_l5_snapshot_from_frame(
+                filtered,
+                effective_date=effective_date,
+                source_name="Alpha Vantage (fallback)",
+                raw_row_count=raw_count,
+                future_rows_dropped=future_rows_dropped,
+            )
+        except Exception as exc:
+            errors.append(f"Alpha Vantage failed: {str(exc)[:120]}")
+
+    reason = "; ".join(errors) or "yfinance unavailable and Alpha Vantage API key missing"
+    return {
+        "name": "L5 Deterministic Technical Snapshot",
+        "series_id": "QQQ_L5_DETERMINISTIC_SNAPSHOT",
+        "value": None,
+        "unit": "mixed (price/ratio)",
+        "source_name": "unavailable",
+        "unavailable_reason": reason,
+        "data_quality": {
+            "availability": "unavailable",
+            "source_tier": "unavailable",
+            "effective_date": effective_date.strftime("%Y-%m-%d"),
+            "failure_reason": reason,
+            "fallback_chain": ["yfinance", "Alpha Vantage", "unavailable"],
+        },
+        "notes": f"L5 deterministic snapshot unavailable: {reason}",
+    }
 
 # =====================================================
 # 第5层函数

@@ -163,6 +163,7 @@ class VNextOrchestrator:
         llm_engine: Optional[Any] = None,
         max_node_retries: int = 2,
         schema_guard_retry: bool = True,
+        resume_from_existing: bool = False,
     ) -> None:
         if not llm_engine and not available_models:
             raise ValueError("At least one available model is required.")
@@ -172,6 +173,7 @@ class VNextOrchestrator:
         self.llm_engine = llm_engine or LLMEngine(available_models=available_models)
         self.max_node_retries = max_node_retries
         self.schema_guard_retry = schema_guard_retry
+        self.resume_from_existing = resume_from_existing
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.layer_cards_dir = self.output_dir / "layer_cards"
         self.layer_context_dir = self.output_dir / "layer_context_briefs"
@@ -182,6 +184,8 @@ class VNextOrchestrator:
         self.bridge_dir.mkdir(exist_ok=True)
         self.prompt_audit_dir.mkdir(exist_ok=True)
         self.stage_diagnostics: Dict[str, Any] = {"schema_version": "vnext_llm_stage_diagnostics_v1", "stages": {}}
+        self.stage_manifest_path = self.output_dir / "stage_manifest.json"
+        self.stage_manifest = self._load_stage_manifest()
 
     def run(self, packet: AnalysisPacket | Dict[str, Any]) -> Dict[str, Any]:
         packet_model = packet if isinstance(packet, AnalysisPacket) else AnalysisPacket.model_validate(packet)
@@ -284,23 +288,39 @@ class VNextOrchestrator:
             analysis_revised=analysis_revised,
             layer_cards=layer_cards,
         )
-        final_adjudication = self._run_stage(
+        final_payload = {
+            "governance_input": _model_dump(gov_input_final),
+        }
+        final_adjudication = self._load_stage_checkpoint(
+            "final_adjudication.json",
+            FinalAdjudication,
             stage_key="final",
             stage_name="final_adjudicator",
-            model_cls=FinalAdjudication,
-            payload={
-                "governance_input": _model_dump(gov_input_final),
-            },
+            expected_payload=final_payload,
         )
-        token_report = self.llm_engine.get_token_report() if hasattr(self.llm_engine, "get_token_report") else {}
-        final_adjudication.token_usage = token_report
-        self._save_json("final_adjudication.json", final_adjudication)
+        if final_adjudication is None:
+            final_adjudication = self._run_stage(
+                stage_key="final",
+                stage_name="final_adjudicator",
+                model_cls=FinalAdjudication,
+                payload=final_payload,
+            )
+            token_report = self.llm_engine.get_token_report() if hasattr(self.llm_engine, "get_token_report") else {}
+            final_adjudication.token_usage = token_report
+            self._save_json("final_adjudication.json", final_adjudication)
+            self._record_stage_artifact(
+                self.output_dir / "final_adjudication.json",
+                stage_key="final",
+                stage_name="final_adjudicator",
+                payload=final_payload,
+            )
         run_review_report = self._build_run_review_report(
             packet_model=packet_model,
             bridge_memos=bridge_memos,
             synthesis_packet=synthesis_packet,
             thesis=thesis,
             risk_report=risk_report,
+            schema_report=schema_report,
             final_adjudication=final_adjudication,
         )
         self._save_json("run_review_report.json", run_review_report)
@@ -309,6 +329,12 @@ class VNextOrchestrator:
             final_adjudication=final_adjudication,
         )
         self._save_json("outcome_review_report.json", outcome_review_report)
+        reflection_library = self._build_post_run_reflection_library(
+            run_review_report=run_review_report,
+            outcome_review_report=outcome_review_report,
+            schema_report=schema_report,
+        )
+        self._save_json("post_run_reflection_library.json", reflection_library)
 
         return {
             "context_brief": context_brief,
@@ -323,6 +349,7 @@ class VNextOrchestrator:
             "final_adjudication": final_adjudication,
             "run_review_report": run_review_report,
             "outcome_review_report": outcome_review_report,
+            "post_run_reflection_library": reflection_library,
             "output_dir": str(self.output_dir),
         }
 
@@ -334,6 +361,7 @@ class VNextOrchestrator:
         synthesis_packet: SynthesisPacket,
         thesis: ThesisDraft,
         risk_report: RiskBoundaryReport,
+        schema_report: SchemaGuardReport,
         final_adjudication: FinalAdjudication,
     ) -> RunReviewReport:
         data_integrity = {}
@@ -350,6 +378,7 @@ class VNextOrchestrator:
             synthesis_packet=_model_dump(synthesis_packet),
             thesis_draft=_model_dump(thesis),
             risk_boundary_report=_model_dump(risk_report),
+            schema_guard_report=_model_dump(schema_report),
             final_adjudication=_model_dump(final_adjudication),
             data_integrity_report=data_integrity,
         )
@@ -378,22 +407,70 @@ class VNextOrchestrator:
             final_adjudication=_model_dump(final_adjudication),
         )
 
+    def _build_post_run_reflection_library(
+        self,
+        *,
+        run_review_report: RunReviewReport,
+        outcome_review_report: OutcomeReviewReport,
+        schema_report: SchemaGuardReport,
+    ) -> Dict[str, Any]:
+        run_updates = list(getattr(run_review_report, "learning_updates", []) or [])
+        outcome_updates = list(getattr(outcome_review_report, "learning_updates", []) or [])
+        next_checks = list(getattr(run_review_report, "next_run_checks", []) or [])
+        items: List[Dict[str, Any]] = []
+        for index, text in enumerate(dict.fromkeys(run_updates + outcome_updates), start=1):
+            if not str(text).strip():
+                continue
+            items.append(
+                {
+                    "id": f"reflection_{index}",
+                    "source": "run_review_or_outcome_review",
+                    "lesson": str(text),
+                    "allowed_use": "manual_rule_update_or_test_design_for_future_runs",
+                    "runtime_prompt_use": "forbidden_for_current_run",
+                }
+            )
+        return {
+            "schema_version": "post_run_reflection_library_v1",
+            "generated_at": _utc_now().isoformat(),
+            "run_dir": str(self.output_dir),
+            "boundary": (
+                "This artifact is generated after Final. It must not be injected into L1-L5, "
+                "Bridge, Thesis, Risk, Reviser, or Final prompts for the current run."
+            ),
+            "schema_guard_quality_status": getattr(schema_report, "quality_status", ""),
+            "items": items,
+            "next_run_checks": next_checks,
+            "eligible_destinations": ["tests", "documentation", "future prompt/manual rule revisions"],
+        }
+
     def _run_layer_cards(self, packet: AnalysisPacket, context_brief: ContextBrief) -> List[LayerCard]:
         cards: List[LayerCard] = []
         for layer in ["L1", "L2", "L3", "L4", "L5"]:
             layer_context_brief = self._build_layer_context_brief(packet, context_brief, layer)
             self._save_json(self.layer_context_dir / f"{layer}.json", layer_context_brief)
+            layer_payload = {
+                "context_brief": _model_dump(layer_context_brief),
+                "layer": layer,
+                "layer_facts": _model_dump(packet.facts_by_layer.get(layer)),
+                "layer_raw_data": packet.raw_data.get(layer, {}),
+                "manual_overrides": self._build_layer_manual_overrides(packet, layer),
+            }
+            checkpoint = self._load_stage_checkpoint(
+                self.layer_cards_dir / f"{layer}.json",
+                LayerCard,
+                stage_key=f"{layer.lower()}_analyst",
+                stage_name=layer.lower(),
+                expected_payload=layer_payload,
+            )
+            if checkpoint is not None:
+                cards.append(checkpoint)
+                continue
             card = self._run_stage(
                 stage_key=f"{layer.lower()}_analyst",
                 stage_name=layer.lower(),
                 model_cls=LayerCard,
-                payload={
-                    "context_brief": _model_dump(layer_context_brief),
-                    "layer": layer,
-                    "layer_facts": _model_dump(packet.facts_by_layer.get(layer)),
-                    "layer_raw_data": packet.raw_data.get(layer, {}),
-                    "manual_overrides": self._build_layer_manual_overrides(packet, layer),
-                },
+                payload=layer_payload,
                 validator=lambda card, layer=layer: self._validate_layer_card_v2(
                     card,
                     layer,
@@ -404,6 +481,12 @@ class VNextOrchestrator:
                 raise ValueError(f"{layer} analyst returned mismatched layer: {card.layer}")
             cards.append(card)
             self._save_json(self.layer_cards_dir / f"{layer}.json", card)
+            self._record_stage_artifact(
+                self.layer_cards_dir / f"{layer}.json",
+                stage_key=f"{layer.lower()}_analyst",
+                stage_name=layer.lower(),
+                payload=layer_payload,
+            )
         return cards
 
     def _run_bridge(
@@ -412,31 +495,63 @@ class VNextOrchestrator:
         context_brief: ContextBrief,
         layer_cards: List[LayerCard],
     ) -> BridgeMemo:
+        bridge_payload = {
+            "context_brief": _model_dump(context_brief),
+            "candidate_cross_layer_links": [_model_dump(link) for link in packet.candidate_cross_layer_links],
+            "layer_cards": [_model_dump(card) for card in layer_cards],
+            "event_refs": packet.event_refs,
+        }
+        checkpoint = self._load_stage_checkpoint(
+            self.bridge_dir / "bridge_0.json",
+            BridgeMemo,
+            stage_key="bridge",
+            stage_name="bridge",
+            expected_payload=bridge_payload,
+        )
+        if checkpoint is not None:
+            return checkpoint
         bridge = self._run_stage(
             stage_key="bridge",
             stage_name="bridge",
             model_cls=BridgeMemo,
-            payload={
-                "context_brief": _model_dump(context_brief),
-                "candidate_cross_layer_links": [_model_dump(link) for link in packet.candidate_cross_layer_links],
-                "layer_cards": [_model_dump(card) for card in layer_cards],
-                "event_refs": packet.event_refs,
-            },
+            payload=bridge_payload,
             validator=self._validate_bridge_memo_v2,
         )
         self._save_json(self.bridge_dir / "bridge_0.json", bridge)
+        self._record_stage_artifact(
+            self.bridge_dir / "bridge_0.json",
+            stage_key="bridge",
+            stage_name="bridge",
+            payload=bridge_payload,
+        )
         return bridge
 
     def _run_thesis(self, synthesis_packet: SynthesisPacket) -> ThesisDraft:
+        thesis_payload = {
+            "synthesis_packet": _model_dump(synthesis_packet),
+        }
+        checkpoint = self._load_stage_checkpoint(
+            "thesis_draft.json",
+            ThesisDraft,
+            stage_key="thesis",
+            stage_name="thesis",
+            expected_payload=thesis_payload,
+        )
+        if checkpoint is not None:
+            return checkpoint
         thesis = self._run_stage(
             stage_key="thesis",
             stage_name="thesis",
             model_cls=ThesisDraft,
-            payload={
-                "synthesis_packet": _model_dump(synthesis_packet),
-            },
+            payload=thesis_payload,
         )
         self._save_json("thesis_draft.json", thesis)
+        self._record_stage_artifact(
+            self.output_dir / "thesis_draft.json",
+            stage_key="thesis",
+            stage_name="thesis",
+            payload=thesis_payload,
+        )
         return thesis
 
     def _build_synthesis_packet(
@@ -1247,6 +1362,7 @@ class VNextOrchestrator:
     def _save_stage_diagnostics(self) -> None:
         path = self.output_dir / "llm_stage_diagnostics.json"
         path.write_text(json.dumps(self.stage_diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._record_stage_artifact(path)
 
     def _validate_layer_card_v2(
         self,
@@ -1307,6 +1423,16 @@ class VNextOrchestrator:
     def _validate_bridge_memo_v2(self, bridge: BridgeMemo) -> List[str]:
         """Reject soft Bridge resonance chains that lack evidence, mechanism, or falsifiers."""
         errors: List[str] = []
+        notes = set(getattr(bridge, "normalization_notes", []) or [])
+        typed_conflicts_derived = "typed_conflicts_derived_from_legacy_conflicts" in notes
+        for conflict in bridge.typed_conflicts:
+            conflict_id = str(conflict.conflict_id or "typed_conflict")
+            if not conflict.evidence_refs:
+                errors.append(f"bridge.typed_conflicts[{conflict_id}].evidence_refs must not be empty.")
+            if not typed_conflicts_derived and not str(conflict.mechanism or "").strip():
+                errors.append(f"bridge.typed_conflicts[{conflict_id}].mechanism is required.")
+            if not str(conflict.implication or "").strip():
+                errors.append(f"bridge.typed_conflicts[{conflict_id}].implication is required.")
         for chain in bridge.resonance_chains:
             chain_id = str(chain.chain_id or "resonance_chain")
             if not chain.evidence_refs:
@@ -1319,6 +1445,16 @@ class VNextOrchestrator:
                 errors.append(f"bridge.resonance_chains[{chain_id}].implication is required.")
             if not chain.falsifiers:
                 errors.append(f"bridge.resonance_chains[{chain_id}].falsifiers must not be empty.")
+        seen_path_ids: set[str] = set()
+        for path in bridge.transmission_paths:
+            path_id = str(path.path_id or "transmission_path")
+            if path_id in seen_path_ids:
+                errors.append(f"bridge.transmission_paths[{path_id}] duplicate path_id.")
+            seen_path_ids.add(path_id)
+            if not path.evidence_refs:
+                errors.append(f"bridge.transmission_paths[{path_id}].evidence_refs must not be empty.")
+            if not str(path.implication or "").strip():
+                errors.append(f"bridge.transmission_paths[{path_id}].implication is required.")
         return errors
 
     def _run_schema_guard(
@@ -1537,12 +1673,14 @@ class VNextOrchestrator:
                 + "; ".join(l3_structural_warnings)
             )
 
+        passed = not structural_issues and not consistency_issues and not missing_fields
         return SchemaGuardReport(
-            passed=not structural_issues and not consistency_issues and not missing_fields,
+            passed=passed,
             structural_issues=structural_issues,
             consistency_issues=consistency_issues,
             missing_fields=missing_fields,
             suggested_fixes=suggested_fixes,
+            quality_status="passed" if passed else "review_required",
         )
 
     def _analysis_required_function_ids(self, packet: AnalysisPacket, layer: str) -> List[str]:
@@ -1871,8 +2009,21 @@ class VNextOrchestrator:
         return manifest
 
     def _run_and_save(self, *, stage_key: str, stage_name: str, model_cls: type, payload: dict, filename: str) -> Any:
+        checkpoint = self._load_stage_checkpoint(
+            filename,
+            model_cls,
+            stage_key=stage_key,
+            stage_name=stage_name,
+            expected_payload=payload,
+        )
+        if checkpoint is not None:
+            return checkpoint
         result = self._run_stage(stage_key=stage_key, stage_name=stage_name, model_cls=model_cls, payload=payload)
         self._save_json(filename, result)
+        path = Path(filename)
+        if not path.is_absolute():
+            path = self.output_dir / path
+        self._record_stage_artifact(path, stage_key=stage_key, stage_name=stage_name, payload=payload)
         return result
 
     def _load_prompt(self, stage_key: str) -> str:
@@ -1910,6 +2061,205 @@ class VNextOrchestrator:
         with path.open("w", encoding="utf-8") as handle:
             json.dump(_model_dump(payload), handle, ensure_ascii=False, indent=2)
             handle.write("\n")
+        self._record_stage_artifact(path)
+
+    def _load_stage_manifest(self) -> Dict[str, Any]:
+        if self.stage_manifest_path.exists():
+            try:
+                payload = json.loads(self.stage_manifest_path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    payload.setdefault("artifacts", {})
+                    return payload
+            except Exception:
+                pass
+        return {
+            "schema_version": "vnext_stage_manifest_v1",
+            "run_id": self.output_dir.name,
+            "output_dir": str(self.output_dir),
+            "resume_scope": "same output_dir and same input packet/effective_date only",
+            "created_at": _utc_now().isoformat(),
+            "updated_at": _utc_now().isoformat(),
+            "artifacts": {},
+        }
+
+    def _artifact_relpath(self, path: Path) -> str:
+        try:
+            return path.resolve().relative_to(self.output_dir).as_posix()
+        except ValueError:
+            return path.resolve().as_posix()
+
+    def _sha256_file(self, path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _strip_volatile_hash_fields(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: self._strip_volatile_hash_fields(item)
+                for key, item in value.items()
+                if key not in {"generated_at"}
+            }
+        if isinstance(value, list):
+            return [self._strip_volatile_hash_fields(item) for item in value]
+        return value
+
+    def _stable_json_file_sha256(self, path: Path) -> str:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return self._sha256_file(path)
+        normalized = json.dumps(
+            self._strip_volatile_hash_fields(payload),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    def _stable_stage_payload_sha256(self, stage_key: str, payload: Dict[str, Any]) -> str:
+        normalized = json.dumps(
+            self._strip_volatile_hash_fields(self._sanitize_prompt_payload(stage_key, payload)),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    def _current_input_sha256(self) -> Optional[str]:
+        analysis_packet_path = self.output_dir / "analysis_packet.json"
+        if not analysis_packet_path.exists():
+            return None
+        return self._stable_json_file_sha256(analysis_packet_path)
+
+    def _manifest_stage_for_path(self, relpath: str) -> str:
+        if relpath == "analysis_packet.json":
+            return "input"
+        if relpath == "context_brief.json" or relpath.startswith("layer_context_briefs/"):
+            return "context"
+        layer_match = re.fullmatch(r"layer_cards/(L[1-5])\.json", relpath)
+        if layer_match:
+            return layer_match.group(1).lower()
+        if relpath.startswith("bridge_memos/"):
+            return "bridge"
+        return {
+            "synthesis_packet.json": "synthesis",
+            "thesis_draft.json": "thesis",
+            "critique.json": "critic",
+            "risk_boundary_report.json": "risk",
+            "schema_guard_report.json": "schema_guard",
+            "analysis_revised.json": "reviser",
+            "final_adjudication.json": "final_adjudicator",
+            "run_review_report.json": "run_review",
+            "outcome_review_report.json": "outcome_review",
+            "post_run_reflection_library.json": "post_run_reflection",
+            "llm_stage_diagnostics.json": "diagnostics",
+        }.get(relpath, "artifact")
+
+    def _write_stage_manifest(self) -> None:
+        self.stage_manifest["updated_at"] = _utc_now().isoformat()
+        self.stage_manifest_path.write_text(
+            json.dumps(self.stage_manifest, ensure_ascii=False, indent=2, default=str) + "\n",
+            encoding="utf-8",
+        )
+
+    def _record_stage_artifact(
+        self,
+        path: Path,
+        *,
+        stage_key: Optional[str] = None,
+        stage_name: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if path.resolve() == self.stage_manifest_path.resolve() or not path.exists():
+            return
+        relpath = self._artifact_relpath(path)
+        input_sha256 = self._current_input_sha256()
+        item = {
+            "stage": self._manifest_stage_for_path(relpath),
+            "path": relpath,
+            "sha256": self._sha256_file(path),
+            "input_sha256": input_sha256,
+            "bytes": path.stat().st_size,
+            "status": "complete",
+            "checkpoint_reusable": relpath.endswith(".json")
+            and not relpath.startswith("prompt_audit/")
+            and relpath != "run_review_report.json"
+            and relpath != "outcome_review_report.json"
+            and relpath != "post_run_reflection_library.json",
+            "updated_at": _utc_now().isoformat(),
+            "effective_date": self._infer_effective_date_from_prompt_audit(""),
+        }
+        if stage_key:
+            item["stage_key"] = stage_key
+        if stage_name:
+            item["stage_name"] = stage_name
+        if stage_key and payload is not None:
+            item["payload_sha256"] = self._stable_stage_payload_sha256(stage_key, payload)
+        self.stage_manifest.setdefault("artifacts", {})[relpath] = item
+        self._write_stage_manifest()
+
+    def _load_stage_checkpoint(
+        self,
+        filename: str | Path,
+        model_cls: type,
+        *,
+        stage_key: str,
+        stage_name: str,
+        expected_payload: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        if not self.resume_from_existing:
+            return None
+        path = Path(filename)
+        if not path.is_absolute():
+            path = self.output_dir / path
+        if not path.exists():
+            return None
+        relpath = self._artifact_relpath(path)
+        manifest_item = self.stage_manifest.get("artifacts", {}).get(relpath, {})
+        if not manifest_item or manifest_item.get("checkpoint_reusable") is False:
+            return None
+        if manifest_item.get("sha256") and manifest_item.get("sha256") != self._sha256_file(path):
+            return None
+        if manifest_item.get("stage_key") and manifest_item.get("stage_key") != stage_key:
+            return None
+        if manifest_item.get("stage_name") and manifest_item.get("stage_name") != stage_name:
+            return None
+        if expected_payload is not None:
+            expected_payload_sha = self._stable_stage_payload_sha256(stage_key, expected_payload)
+            if manifest_item.get("payload_sha256") != expected_payload_sha:
+                return None
+        current_input_sha256 = self._current_input_sha256()
+        if manifest_item.get("input_sha256") and current_input_sha256:
+            if manifest_item.get("input_sha256") != current_input_sha256:
+                return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            validated = model_cls.model_validate(payload)
+        except Exception:
+            return None
+        self.stage_diagnostics["stages"][stage_name] = {
+            "stage_key": stage_key,
+            "stage_name": stage_name,
+            "attempts": 0,
+            "errors": [],
+            "status": "resumed",
+            "checkpoint": {
+                "artifact": relpath,
+                "sha256": manifest_item.get("sha256"),
+                "resume_scope": self.stage_manifest.get("resume_scope"),
+            },
+            "prompt_audit": {
+                "stage_dir": self._prompt_audit_relpath(stage_name),
+                "attempts": [],
+            },
+        }
+        self._save_stage_diagnostics()
+        return validated
 
     def _normalize_payload(self, stage_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         normalized = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
@@ -1964,6 +2314,7 @@ class VNextOrchestrator:
                 if isinstance(normalized.get(key), list):
                     normalized[key] = [self._normalize_conflict(item) for item in normalized[key]]
             if stage_key == "bridge":
+                normalization_notes = self._coerce_string_list(normalized.get("normalization_notes"))
                 if isinstance(normalized.get("typed_conflicts"), list):
                     normalized["typed_conflicts"] = [
                         self._normalize_typed_conflict(item)
@@ -1972,6 +2323,8 @@ class VNextOrchestrator:
                     ]
                 else:
                     normalized["typed_conflicts"] = self._derive_typed_conflicts(normalized.get("conflicts", []))
+                    if normalized["typed_conflicts"]:
+                        normalization_notes.append("typed_conflicts_derived_from_legacy_conflicts")
                 if isinstance(normalized.get("resonance_chains"), list):
                     normalized["resonance_chains"] = [
                         self._normalize_resonance_chain(item)
@@ -1994,6 +2347,8 @@ class VNextOrchestrator:
                         normalized.get("typed_conflicts", []),
                         normalized.get("conflicts", []),
                     )
+                    if normalized.get("principal_contradiction"):
+                        normalization_notes.append("principal_contradiction_derived_by_code")
                 if isinstance(normalized.get("secondary_contradictions"), list):
                     normalized["secondary_contradictions"] = [
                         self._normalize_secondary_contradiction(item)
@@ -2005,6 +2360,8 @@ class VNextOrchestrator:
                         normalized.get("typed_conflicts", []),
                         normalized.get("principal_contradiction"),
                     )
+                    if normalized["secondary_contradictions"]:
+                        normalization_notes.append("secondary_contradictions_derived_by_code")
                 if isinstance(normalized.get("price_reflection_map"), list):
                     normalized["price_reflection_map"] = [
                         self._normalize_price_reflection_assessment(item)
@@ -2015,11 +2372,28 @@ class VNextOrchestrator:
                     normalized["price_reflection_map"] = self._derive_price_reflection_map(
                         normalized.get("principal_contradiction"),
                     )
+                    if normalized["price_reflection_map"]:
+                        normalization_notes.append("price_reflection_map_derived_by_code")
+                categories_before_completion = {
+                    item.get("category")
+                    for item in normalized.get("price_reflection_map", [])
+                    if isinstance(item, dict)
+                }
                 normalized["price_reflection_map"] = self._ensure_price_reflection_categories(
                     normalized.get("price_reflection_map", []),
                     fallback_evidence_refs=(normalized.get("principal_contradiction") or {}).get("evidence_refs", []),
                     stage_key=stage_key,
                 )
+                categories_after_completion = {
+                    item.get("category")
+                    for item in normalized.get("price_reflection_map", [])
+                    if isinstance(item, dict)
+                }
+                added_categories = sorted(categories_after_completion - categories_before_completion)
+                if added_categories:
+                    normalization_notes.append(
+                        "price_reflection_categories_added_by_code:" + ",".join(added_categories)
+                    )
                 if isinstance(normalized.get("contradiction_transformation_signals"), list):
                     normalized["contradiction_transformation_signals"] = [
                         self._normalize_contradiction_transformation_signal(item)
@@ -2032,6 +2406,7 @@ class VNextOrchestrator:
                 if not isinstance(normalized.get("unresolved_questions"), list):
                     normalized["unresolved_questions"] = []
                 normalized["event_refs"] = self._coerce_event_refs_list(normalized.get("event_refs"))
+                normalized["normalization_notes"] = list(dict.fromkeys(normalization_notes))
             if stage_key in {"thesis", "reviser"}:
                 thesis_payload = normalized.get("revised_thesis") if stage_key == "reviser" else normalized
                 if isinstance(thesis_payload, dict):

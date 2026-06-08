@@ -7,8 +7,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-import pandas as pd
-
 try:
     from .contracts import AnalysisPacket, CandidateCrossLayerLink, LayerFacts
 except ImportError:
@@ -23,6 +21,17 @@ try:
     from ..manual_data import has_meaningful_manual_override, load_manual_data
 except ImportError:
     from manual_data import has_meaningful_manual_override, load_manual_data
+
+try:
+    from ..data_availability import (
+        has_meaningful_observation_value as _shared_has_meaningful_observation_value,
+        no_data_reason as _shared_no_data_reason,
+    )
+except ImportError:
+    from data_availability import (
+        has_meaningful_observation_value as _shared_has_meaningful_observation_value,
+        no_data_reason as _shared_no_data_reason,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +82,7 @@ LAYER_FUNCTIONS = {
         "get_damodaran_us_implied_erp",
     },
     "L5": {
+        "get_l5_deterministic_snapshot",
         "get_qqq_technical_indicators",
         "get_rsi_qqq",
         "get_atr_qqq",
@@ -109,77 +119,11 @@ _MEANINGFUL_VALUE_META_KEYS = {
 
 
 def _has_meaningful_observation_value(value: Any, *, parent_key: str = "") -> bool:
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return True
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        try:
-            return not pd.isna(value)
-        except Exception:
-            return True
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return False
-        if parent_key.lower() in _MEANINGFUL_VALUE_META_KEYS:
-            return False
-        return text.lower() not in {"none", "null", "nan", "n/a", "unavailable", "failed"}
-    if isinstance(value, dict):
-        for key, item in value.items():
-            key_l = str(key).lower()
-            if key_l in _MEANINGFUL_VALUE_META_KEYS:
-                continue
-            if _has_meaningful_observation_value(item, parent_key=key_l):
-                return True
-        return False
-    if isinstance(value, (list, tuple)):
-        return any(_has_meaningful_observation_value(item, parent_key=parent_key) for item in value)
-    return True
+    return _shared_has_meaningful_observation_value(value, parent_key=parent_key)
 
 
 def _payload_unavailable_reason(payload: Dict[str, Any]) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return "invalid_payload"
-    if payload.get("error"):
-        return str(payload.get("error"))
-    if payload.get("backtest_skipped"):
-        return "backtest_skipped_unsupported_function"
-    data_quality = payload.get("data_quality")
-    availability = str(payload.get("availability") or "").lower()
-    source_tier = str(payload.get("source_tier") or "").lower()
-    if isinstance(data_quality, dict):
-        availability = availability or str(data_quality.get("availability") or "").lower()
-        source_tier = source_tier or str(data_quality.get("source_tier") or "").lower()
-    if availability in {"unavailable", "backtest_skipped", "skipped", "failed"}:
-        return availability
-    if source_tier in {"unavailable", "backtest_skipped", "skipped", "failed"}:
-        return source_tier
-    if payload.get("value") is None and (payload.get("skip_reason") or payload.get("unavailable_reason")):
-        return str(payload.get("skip_reason") or payload.get("unavailable_reason"))
-
-    value_has_observation = _has_meaningful_observation_value(payload.get("value"))
-    if not value_has_observation:
-        reason_text = " ".join(
-            str(payload.get(key) or "")
-            for key in ("notes", "note", "unavailable_reason", "skip_reason")
-        ).lower()
-        failed_tokens = (
-            "failed",
-            "unable",
-            "unavailable",
-            "insufficient",
-            "too many open files",
-            "empty frame",
-            "no valid",
-            "not available",
-        )
-        if any(token in reason_text for token in failed_tokens):
-            return "unavailable_payload"
-        if payload.get("value") is None:
-            return None
-        return "empty_observation_payload"
-    return None
+    return _shared_no_data_reason(payload)
 
 
 def indicator_payload_unavailable_reason(payload: Dict[str, Any]) -> Optional[str]:

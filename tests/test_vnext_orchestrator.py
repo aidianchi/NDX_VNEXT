@@ -454,6 +454,64 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
     assert l1_context["apparent_cross_layer_signals"] == []
     assert "L1 本层" in l1_context["data_summary"]
     assert "共" not in l1_context["data_summary"]
+    manifest = json.loads((tmp_path / "stage_manifest.json").read_text(encoding="utf-8"))
+    l1_checkpoint = manifest["artifacts"]["layer_cards/L1.json"]
+    assert manifest["schema_version"] == "vnext_stage_manifest_v1"
+    assert l1_checkpoint["checkpoint_reusable"] is True
+    assert len(l1_checkpoint["sha256"]) == 64
+    assert len(l1_checkpoint["input_sha256"]) == 64
+    reflection = json.loads((tmp_path / "post_run_reflection_library.json").read_text(encoding="utf-8"))
+    assert reflection["schema_version"] == "post_run_reflection_library_v1"
+    assert "must not be injected" in reflection["boundary"]
+
+    resumed = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+        resume_from_existing=True,
+    ).run(_mock_packet())
+    assert resumed["final_adjudication"].final_stance == "中性偏谨慎"
+    resumed_diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+    assert resumed_diagnostics["stages"]["l1"]["status"] == "resumed"
+    assert resumed_diagnostics["stages"]["final_adjudicator"]["status"] == "resumed"
+
+
+def test_checkpoint_resume_requires_matching_stage_payload(tmp_path: Path):
+    first = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({"mini_stage": '{"value": "old"}'}),
+    )
+    old_result = first._run_and_save(
+        stage_key="mini",
+        stage_name="mini_stage",
+        model_cls=MiniStageModel,
+        payload={"example": "old"},
+        filename="mini.json",
+    )
+    assert old_result.value == "old"
+
+    manifest = json.loads((tmp_path / "stage_manifest.json").read_text(encoding="utf-8"))
+    assert len(manifest["artifacts"]["mini.json"]["payload_sha256"]) == 64
+
+    second_engine = FakeLLMEngine({"mini_stage": '{"value": "new"}'})
+    second = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=second_engine,
+        resume_from_existing=True,
+    )
+    new_result = second._run_and_save(
+        stage_key="mini",
+        stage_name="mini_stage",
+        model_cls=MiniStageModel,
+        payload={"example": "new"},
+        filename="mini.json",
+    )
+
+    assert new_result.value == "new"
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["stages"]["mini_stage"]["status"] == "ok"
 
 
 def test_orchestrator_resolves_relative_output_dir_before_saving_nested_paths(tmp_path: Path, monkeypatch):

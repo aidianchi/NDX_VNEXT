@@ -1,9 +1,10 @@
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from agent_analysis.run_review import build_run_review_report
+from agent_analysis.run_review import build_run_review_from_dir, build_run_review_report
 
 
 def test_run_review_attributes_missing_main_chain_fields():
@@ -45,6 +46,39 @@ def test_run_review_attributes_missing_main_chain_fields():
     assert ("final", "fail") in findings
     assert ("expression", "fail") in findings
     assert any("reader_final" in item.recommended_rule_update for item in report.attribution_findings)
+
+
+def test_run_review_from_dir_reads_schema_guard_report(tmp_path):
+    (tmp_path / "schema_guard_report.json").write_text(
+        json.dumps(
+            {
+                "passed": False,
+                "quality_status": "review_required",
+                "structural_issues": ["Bridge 缺少 typed_conflicts evidence_refs"],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "data_integrity_report.json").write_text('{"publish_status":"publishable"}', encoding="utf-8")
+    (tmp_path / "final_adjudication.json").write_text(
+        json.dumps(
+            {
+                "final_stance": "测试",
+                "approval_status": "approved_with_reservations",
+                "reader_final": {"one_liner": "测试结论。"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_run_review_from_dir(tmp_path)
+
+    assert any(
+        item.category == "final" and item.severity == "fail" and "Schema Guard 未通过" in item.finding
+        for item in report.attribution_findings
+    )
 
 
 def test_run_review_passes_when_main_chain_fields_exist():

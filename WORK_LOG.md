@@ -6,6 +6,60 @@
 
 ## 2026-06-08
 
+### TradingAgents 借鉴 Phase 0-5：no-data、L5 确定性快照、schema 边界、checkpoint 与反思库
+
+完成内容：
+
+- 新增共享 no-data 语义模块 `src/data_availability.py`，统一 `NO_DATA_AVAILABLE`、缺数据原因识别和 fallback 失败后的结构化 payload；DataIntegrity / Collector / Packet Builder 不再把空 dict 或空 value 误当成有效观察。
+- L5 新增 `get_l5_deterministic_snapshot`：对 QQQ OHLCV 先做确定性快照，冻结价格、均线、RSI、MACD、ATR、ADX、OBV、VWAP/MFI/CMF、Donchian、row_count、effective_date 和 `ohlcv_sha256`；精确技术数字优先来自该底稿。
+- L5 prompt、system constraints 和 Deep Research Canon 同步补边界：精确价格/均线/RSI/MACD 不能凭模型记忆补；`NO_DATA_AVAILABLE` 只能作为数据边界，不能围绕空数据编故事。
+- Bridge / Schema Guard / Run Review 加强：Bridge 归一化补齐会写入 `normalization_notes`；Schema Guard 增加 `quality_status`；Run Review 会把 schema guard 失败作为 fail，并提示哪些字段来自代码兜底而非模型原生理解。
+- Orchestrator 新增轻量 `stage_manifest.json` checkpoint：每个关键 artifact 落盘时记录阶段、路径、哈希、输入包稳定哈希、阶段 payload 稳定哈希、状态和可恢复标记；显式 `resume_from_existing=True` 时，仅复用同一输入包且同一阶段输入 payload 下已完整落盘的 L1-L5 / Bridge / Thesis / Critic / Risk / Reviser / Final 产物。
+- Orchestrator 新增 `post_run_reflection_library.json`：只在 Final 之后生成，沉淀 Run Review / Outcome Review 的学习点和下一轮检查项，并明确不得回灌本轮 L1-L5、Bridge、Thesis、Risk、Reviser 或 Final prompt。
+- 工具注册、采集清单和测试补齐：`get_l5_deterministic_snapshot` 已进入 L5 collection、tools registry 和指标法典。
+
+验证结果：
+
+- `python3 -m py_compile src/agent_analysis/orchestrator.py src/agent_analysis/run_review.py src/agent_analysis/contracts.py src/data_availability.py src/core/checker.py src/core/collector.py src/agent_analysis/packet_builder.py src/tools_L5.py src/tools.py`：通过。
+- `python3 -m pytest -q tests/test_run_review.py tests/test_vnext_orchestrator.py tests/test_core_checker.py tests/test_vnext_packet_builder.py tests/test_ta_l5_and_pdr_sources.py tests/test_tools_smoke.py`：68 passed，4 warnings。
+- `python3 -m pytest -q`：345 passed，4 warnings。
+- `git diff --check`：通过。
+
+---
+
+### NEXT_STEPS 细致审计与待办瘦身
+
+完成内容：
+
+- 逐条复核 `NEXT_STEPS.md` 当前待办，并对照 `WORK_LOG.md`、`README.md`、`src/main.py`、`src/agent_analysis/run_review.py`、Bridge / Thesis prompt 和 `src/core/collector.py` 的实际状态。
+- 将 P0 从“第二轮重构”改为“最新验收与薄点修复”：主要矛盾、五类价格反映、踏空/确认成本和 Run Review 检查已经落地，下一步应通过最新 fresh run 验证表达质量和链路稳定性。
+- 移除独立的「yfinance 盈利质量代理实时模式审计」待办：6 月 7-8 日已经完成 L4 多源快照、字段级主源规则、冲突闸门、权限降级和 full test 验证。
+- 将「权威证据研究助理」与「历史数据研究助理」合并为 P1 一期待办：统一走问题清单、候选证据包、`research_candidate` / `manual_review_required` 和升级闸门。
+- 新增 P1「L3 广度、集中度和历史成分数据补强」：当前更真实的数据薄点已经从 L4 转回 L3。
+- 将「采集机 / 快照模式产品化」改为「收尾」：`--collect-only`、`--data-json`、控制台入口和 README 两段式说明已存在，剩余重点是同一快照贯穿报告和审计痕迹。
+- 更新后续方向与暂缓边界：Prompt Inspector 已取代正文 Agent IO Audit；L4 yfinance/Yahoo/SEC/东财审计不再作为当前独立 P1。
+
+验证结果：
+
+- 文档审计和修订完成；本次为文档维护，未运行代码测试。
+
+---
+
+### NEXT_STEPS 补充：权威证据研究助理替代泛新闻源
+
+完成内容：
+
+- 更新 `NEXT_STEPS.md` 日期，并新增 P1「权威证据研究助理原型」待办。
+- 明确该模块是独立研究助理：L1-L5 先根据正式数据独立分析，遇到“不知道为什么”时提出具体问题，再由研究助理去找 Fed、SEC、Nasdaq、Invesco、公司财报、官方新闻稿等权威来源。
+- 明确边界：候选材料默认标记 `research_candidate` / `manual_review_required`，不得直接进入 L1-L5，不得直接成为 `evidence_ref`；只有经过人工确认、规则确认，或沉淀成可重复采集器后，才允许升级为正式数据源。
+- 在数据基础和暂缓边界中补充通俗说明：后续不是做更大的新闻摘要器，而是用问题驱动的权威证据研究助理逐步替代泛新闻源。
+
+验证结果：
+
+- 文档修改完成；本次为待办和架构边界记录更新，未运行代码测试。
+
+---
+
 ### L4 数据源上位：Yahoo 管预期，SEC 管事实，yfinance 做对照，东财做质检
 
 完成内容：

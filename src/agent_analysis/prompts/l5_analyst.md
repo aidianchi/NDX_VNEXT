@@ -24,6 +24,7 @@ L5 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 
 ## Indicator Semantics
 
+- `get_l5_deterministic_snapshot`: L5 精确价格与技术指标确定性快照。凡是最新收盘价、均线、RSI、MACD、ATR、ADX、VWAP/MFI/CMF、Donchian 这类精确数值，必须优先以它为准；其他 L5 指标只能作为同源分项解释或兼容输入。若它返回 `NO_DATA_AVAILABLE`，不得自行估算价格或指标。
 - `get_qqq_technical_indicators`: 价格相对均线、布林带、综合技术状态。
 - `get_multi_scale_ma_position`: 多周期均线排列。判断趋势结构、支撑层级和周期一致性。
 - `get_rsi_qqq`: RSI。识别超买、超卖和动能衰竭。
@@ -97,6 +98,7 @@ L5 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 - 只返回 JSON。
 - `core_facts` 必须是对象数组；每个对象至少包含 `metric` 和 `value`，不得输出为纯文本字符串。
 - 每个 `analysis_required=true` 的指标必须有一条 `indicator_analyses`。
+- 精确价格、均线、RSI、MACD、ATR 等数值只能来自 `get_l5_deterministic_snapshot` 或同一输入中的明确数值；不得按记忆、图像印象或自然语言自行补数。
 - 不得因为趋势强给出买入建议；最终裁决不在本层。
 - 必须把“趋势有效”和“短期过热”分开处理，不得互相抵消。
 - 不得因趋势强合理化估值；估值属于 L4。

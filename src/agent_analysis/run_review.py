@@ -168,6 +168,7 @@ def build_run_review_report(
     synthesis_packet: Optional[Dict[str, Any]] = None,
     thesis_draft: Optional[Dict[str, Any]] = None,
     risk_boundary_report: Optional[Dict[str, Any]] = None,
+    schema_guard_report: Optional[Dict[str, Any]] = None,
     final_adjudication: Optional[Dict[str, Any]] = None,
     data_integrity_report: Optional[Dict[str, Any]] = None,
     run_summary: Optional[Dict[str, Any]] = None,
@@ -177,6 +178,7 @@ def build_run_review_report(
     synthesis_packet = synthesis_packet or {}
     thesis_draft = thesis_draft or {}
     risk_boundary_report = risk_boundary_report or {}
+    schema_guard_report = schema_guard_report or {}
     final_adjudication = final_adjudication or {}
     data_integrity_report = data_integrity_report or {}
     run_summary = run_summary or {}
@@ -231,7 +233,34 @@ def build_run_review_report(
 
     findings.append(_damodaran_review_finding(analysis_packet, meta.get("backtest_date") or run_summary.get("backtest_date")))
 
+    if schema_guard_report:
+        if schema_guard_report.get("passed") is False:
+            issues = []
+            issues.extend(_as_list(schema_guard_report.get("structural_issues")))
+            issues.extend(_as_list(schema_guard_report.get("consistency_issues")))
+            issues.extend(_as_list(schema_guard_report.get("missing_fields")))
+            findings.append(
+                _finding(
+                    "final",
+                    "fail",
+                    "Schema Guard 未通过，不能把本轮报告理解为结构完整的可发布结论。"
+                    + (" 示例: " + "；".join(str(item) for item in issues[:3]) if issues else ""),
+                    ["schema_guard_report.json"],
+                    recommended_rule_update="schema_guard_report.passed=false 必须进入 run_summary 质量状态和 Run Review fail。",
+                )
+            )
+        else:
+            findings.append(
+                _finding(
+                    "final",
+                    "pass",
+                    "Schema Guard 通过；关键结构、引用和一致性检查未发现阻断问题。",
+                    ["schema_guard_report.json"],
+                )
+            )
+
     bridge = bridges[0] if bridges else {}
+    normalization_notes = _as_list(bridge.get("normalization_notes")) if isinstance(bridge, dict) else []
     typed_conflicts = _as_list(bridge.get("typed_conflicts"))
     principal = bridge.get("principal_contradiction") if isinstance(bridge.get("principal_contradiction"), dict) else {}
     price_map = _as_list(bridge.get("price_reflection_map"))
@@ -256,6 +285,17 @@ def build_run_review_report(
                 "Bridge 已输出主要矛盾，可供 Thesis 消费。",
                 ["bridge_memos/bridge_0.json:principal_contradiction"],
                 _collect_refs(principal),
+            )
+        )
+    if normalization_notes:
+        findings.append(
+            _finding(
+                "bridge",
+                "observe",
+                "Bridge 有代码归一化/兜底补全痕迹，需要区分模型原生理解和兼容层补齐字段: "
+                + "；".join(str(item) for item in normalization_notes[:5]),
+                ["bridge_memos/bridge_0.json:normalization_notes"],
+                recommended_rule_update="Bridge 的 principal_contradiction 与 price_reflection_map 应尽量由模型原生输出；代码兜底只保留为兼容和复盘线索。",
             )
         )
     if not price_map:
@@ -486,6 +526,7 @@ def build_run_review_from_dir(run_dir: str | Path) -> RunReviewReport:
         synthesis_packet=_load_json(run_path / "synthesis_packet.json", {}),
         thesis_draft=_load_json(run_path / "thesis_draft.json", {}),
         risk_boundary_report=_load_json(run_path / "risk_boundary_report.json", {}),
+        schema_guard_report=_load_json(run_path / "schema_guard_report.json", {}),
         final_adjudication=_load_json(run_path / "final_adjudication.json", {}),
         data_integrity_report=_load_json(run_path / "data_integrity_report.json", {}),
         run_summary=_load_json(run_path / "run_summary.json", {}),

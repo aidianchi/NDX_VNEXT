@@ -34,6 +34,11 @@ except ImportError:
     from tools_common import classify_yfinance_failure, get_yfinance_runtime_diagnostics, reset_yfinance_runtime_diagnostics
 
 try:
+    from ..data_availability import normalize_no_data_payload, no_data_reason
+except ImportError:
+    from data_availability import normalize_no_data_payload, no_data_reason
+
+try:
     from ..tools_L4 import reset_l4_component_snapshot_cache
 except ImportError:
     try:
@@ -76,6 +81,7 @@ class DataCollector:
             # V6.0新增：MACD（动量确认）、OBV（资金流向）、Volume Analysis（量价关系）、Donchian Channels（突破识别）
             # V7.0新增：Multi-Scale MA Position（多尺度移动平均线分析）
             5: [
+                "get_l5_deterministic_snapshot", # L5 精确价格/指标确定性快照（模型解释源）
                 "get_qqq_technical_indicators",  # 综合技术指标（包含所有V6.0新增指标）
                 "get_rsi_qqq",                   # RSI超买超卖
                 "get_atr_qqq",                   # ATR波动率与止损
@@ -235,6 +241,7 @@ class DataCollector:
                 logging.warning(f"  - 跳过 {func_name}... ⊘ (回测模式下不支持历史数据，避免前瞻偏差)")
                 result = {
                     "name": func_name.replace('_', ' ').title(),
+                    "function_id": func_name,
                     "value": None,
                     "error": "backtest_skipped_unsupported_function",
                     "backtest_skipped": True,
@@ -248,6 +255,7 @@ class DataCollector:
                 return self._finalize_indicator_result(result, started)
             
             result = TOOLS_REGISTRY[func_name](end_date=end_date)
+            result.setdefault("function_id", func_name)
             
             if result.get('value') is None:
                 logging.warning(f"  - 调用 {func_name}... ✗ (数据缺失)")
@@ -260,7 +268,7 @@ class DataCollector:
             error_msg = str(e)[:150]
             logging.error(f"  - 调用 {func_name}... ✗ (异常: {error_msg})")
             return self._finalize_indicator_result(
-                {"name": func_name.replace('_', ' ').title(), "value": None, "error": error_msg},
+                {"name": func_name.replace('_', ' ').title(), "function_id": func_name, "value": None, "error": error_msg},
                 started,
             )
 
@@ -290,6 +298,15 @@ class DataCollector:
         else:
             data_quality["availability"] = data_quality.get("availability") or "available"
         result["data_quality"] = data_quality
+        reason = no_data_reason(result)
+        if reason:
+            result = normalize_no_data_payload(
+                result,
+                reason=reason,
+                source=result.get("source_name"),
+                metric=result.get("function_id") or result.get("name"),
+                effective_date=result.get("date") or data_quality.get("effective_date"),
+            )
         return result
 
     def run(self, backtest_date: Optional[str] = None, enable_news: bool = False) -> Dict[str, Any]:

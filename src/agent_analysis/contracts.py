@@ -654,6 +654,11 @@ class BridgeMemo(BaseModel):
         description="Bridge 选择保留的事件引用；与 evidence_refs 分离，只能作为背景或催化剂"
     )
 
+    normalization_notes: List[str] = Field(
+        default_factory=list,
+        description="代码归一化或兜底补全记录；用于区分模型原生判断和兼容层补齐字段"
+    )
+
 
 class LayerSynthesisItem(BaseModel):
     """Thesis 输入用的压缩层级摘要。"""
@@ -1040,6 +1045,11 @@ class SchemaGuardReport(BaseModel):
 
     # 建议修复
     suggested_fixes: List[str] = Field(default_factory=list, description="建议修复")
+
+    quality_status: str = Field(
+        "passed",
+        description="passed / review_required；供 run_summary 和 Run Review 标记非数据类发布质量"
+    )
 
 
 # ============================================================================

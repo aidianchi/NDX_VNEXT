@@ -118,6 +118,7 @@ TOOLS_REGISTRY = {
     "get_crowdedness_dashboard": get_crowdedness_dashboard,
 
     # Layer 5
+    "get_l5_deterministic_snapshot": get_l5_deterministic_snapshot,
     "get_qqq_technical_indicators": get_qqq_technical_indicators,
     "get_rsi_qqq": get_rsi_qqq,
     "get_atr_qqq": get_atr_qqq,

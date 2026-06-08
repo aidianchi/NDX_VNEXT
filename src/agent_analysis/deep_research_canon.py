@@ -306,6 +306,28 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
         "短线执行和趋势状态指标。",
         "技术面回答何时做，不回答值不值得。",
     ),
+    "get_l5_deterministic_snapshot": _indicator(
+        "get_l5_deterministic_snapshot",
+        "L5 Deterministic Technical Snapshot",
+        Layer.L5,
+        PermissionType.TECHNICAL,
+        "本轮价格、均线、RSI、MACD 等精确技术数值的冻结底稿是什么？",
+        [
+            "凡是精确价格、均线、RSI、MACD、ATR、ADX、OBV、VWAP/MFI/CMF 或 Donchian 数值，优先引用本快照。",
+            "它负责把可复算技术事实固定下来，减少模型在 L5 里凭记忆补数字。",
+        ],
+        [
+            "它只说明价格和技术状态，不能证明估值便宜、宏观转松或盈利改善。",
+            "若快照标记 NO_DATA_AVAILABLE 或 unavailable，必须写成数据边界，不能围绕空数据讲故事。",
+        ],
+        ["get_qqq_technical_indicators", "get_volume_analysis_qqq", "get_advance_decline_line", "get_ndx_pe_and_earnings_yield"],
+        [
+            "快照数据日期晚于 effective_date，或 ohlcv_sha256 / row_count 显示输入不足。",
+            "L3 广度无法确认价格强势，或 L4 估值/风险补偿与价格趋势方向冲突。",
+        ],
+        "L5 精确数值底稿；提高技术读数可审计性，但不改变指标发言权边界。",
+        "deterministic snapshot 是技术事实底稿，不是自动交易结论。",
+    ),
     "get_rsi_qqq": _indicator(
         "get_rsi_qqq",
         "QQQ RSI",
