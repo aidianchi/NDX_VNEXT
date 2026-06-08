@@ -61,6 +61,11 @@ except ImportError:
     from run_review import build_run_review_report
     from outcome_review import build_outcome_review_report
 
+try:
+    from ..data_availability import has_meaningful_observation_value
+except ImportError:
+    from data_availability import has_meaningful_observation_value
+
 logger = logging.getLogger(__name__)
 
 PROMPT_FILES = {
@@ -146,9 +151,19 @@ def _layer_has_usable_raw_data(layer_payload: Any) -> bool:
             continue
         if indicator_payload.get("error"):
             continue
-        if indicator_payload:
+        if _indicator_payload_unavailable_for_object_firewall(indicator_payload):
+            continue
+        if "value" in indicator_payload:
+            if has_meaningful_observation_value(indicator_payload.get("value")):
+                return True
+            continue
+        if has_meaningful_observation_value(indicator_payload):
             return True
     return False
+
+
+def _indicator_payload_unavailable_for_object_firewall(payload: Dict[str, Any]) -> bool:
+    return indicator_payload_unavailable_reason(payload) is not None
 
 
 class VNextOrchestrator:
@@ -3114,6 +3129,16 @@ class VNextOrchestrator:
         return mapping.get(lowered)
 
 
-def run_vnext_analysis(packet: AnalysisPacket | Dict[str, Any], *, available_models: List[str], output_dir: str) -> Dict[str, Any]:
-    orchestrator = VNextOrchestrator(available_models=available_models, output_dir=output_dir)
+def run_vnext_analysis(
+    packet: AnalysisPacket | Dict[str, Any],
+    *,
+    available_models: List[str],
+    output_dir: str,
+    resume_from_existing: bool = False,
+) -> Dict[str, Any]:
+    orchestrator = VNextOrchestrator(
+        available_models=available_models,
+        output_dir=output_dir,
+        resume_from_existing=resume_from_existing,
+    )
     return orchestrator.run(packet)

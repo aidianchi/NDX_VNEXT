@@ -15,6 +15,7 @@ from agent_analysis.contracts import (
     TypedConflict,
 )
 from agent_analysis.orchestrator import VNextOrchestrator
+from data_availability import NO_DATA_AVAILABLE
 
 
 def _empty_layer_card(layer: str) -> LayerCard:
@@ -166,6 +167,47 @@ def test_object_clear_false_when_layers_are_present_but_empty(tmp_path: Path):
     )
     synthesis = orchestrator._build_synthesis_packet(packet, context, layer_cards, [bridge])
     firewall = synthesis.objective_firewall_summary
+    assert firewall.object_clear is False
+    assert any("only 0/5 layers" in w for w in firewall.warnings)
+
+
+def test_object_clear_false_when_layers_only_have_no_data_sentinels(tmp_path: Path):
+    """F3: no-data sentinels document the boundary but must not count as evidence coverage."""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+    no_data_payload = {
+        "value": None,
+        "availability_sentinel": NO_DATA_AVAILABLE,
+        "data_quality": {
+            "availability": "unavailable",
+            "sentinel": NO_DATA_AVAILABLE,
+            "no_data_reason": "backtest_unsupported",
+        },
+    }
+    packet = AnalysisPacket(
+        meta={"data_date": "2026-04-24"},
+        raw_data={
+            "L1": {"metric": no_data_payload},
+            "L2": {"metric": no_data_payload},
+            "L3": {"metric": no_data_payload},
+            "L4": {"metric": no_data_payload},
+            "L5": {"metric": no_data_payload},
+        },
+    )
+    context = ContextBrief(data_summary="data", task_description="task")
+    layer_cards = [_empty_layer_card("L1")]
+    bridge = BridgeMemo(
+        bridge_type="macro_valuation",
+        layers_connected=["L1", "L4"],
+        implication_for_ndx="no data input",
+    )
+
+    synthesis = orchestrator._build_synthesis_packet(packet, context, layer_cards, [bridge])
+    firewall = synthesis.objective_firewall_summary
+
     assert firewall.object_clear is False
     assert any("only 0/5 layers" in w for w in firewall.warnings)
 

@@ -37,6 +37,7 @@ MEANINGFUL_VALUE_META_KEYS = {
     "no_data",
     "no_data_text",
     "sentinel",
+    "data_quality",
 }
 
 
@@ -177,8 +178,10 @@ def normalize_no_data_payload(
     data_quality = normalized.get("data_quality") if isinstance(normalized.get("data_quality"), dict) else {}
     data_quality = deepcopy(data_quality)
     reason_text = reason or no_data_reason(normalized) or "no_data"
-    availability = data_quality.get("availability") or normalized.get("availability") or "unavailable"
+    existing_availability = str(data_quality.get("availability") or normalized.get("availability") or "").lower()
+    availability = existing_availability if existing_availability in NO_DATA_STATUSES else "unavailable"
 
+    normalized["availability"] = availability
     normalized["availability_sentinel"] = NO_DATA_AVAILABLE
     normalized["no_data_text"] = (
         f"{NO_DATA_AVAILABLE}: source={source or normalized.get('source_name') or 'unknown'}; "

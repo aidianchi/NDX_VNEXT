@@ -51,6 +51,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--collect-only", action="store_true", help="Only collect market data JSON, then exit before any LLM calls.")
     parser.add_argument("--enable-news", action="store_true", help="Write an independent official news/event sidecar artifact.")
     parser.add_argument("--skip-report", action="store_true", help="Stop after logic_json generation.")
+    parser.add_argument(
+        "--resume-from-existing",
+        action="store_true",
+        help="Reuse complete vNext stage artifacts in this output dir when input hashes match.",
+    )
     chart_group = parser.add_mutually_exclusive_group()
     chart_group.add_argument(
         "--disable-charts",
@@ -124,14 +129,22 @@ def build_run_dir(
     *,
     run_id: Optional[str] = None,
     output_dir: Optional[str] = None,
+    allow_existing: bool = False,
 ) -> str:
     if output_dir:
+        if allow_existing:
+            os.makedirs(output_dir, exist_ok=True)
+            return output_dir
         return _unique_run_dir(output_dir)
     if run_id:
         safe_run_id = run_id.strip().replace("/", "_")
         if not safe_run_id:
             raise ValueError("--run-id cannot be empty.")
-        return _unique_run_dir(os.path.join(path_config.analysis_dir, "vnext", safe_run_id))
+        run_dir = os.path.join(path_config.analysis_dir, "vnext", safe_run_id)
+        if allow_existing:
+            os.makedirs(run_dir, exist_ok=True)
+            return run_dir
+        return _unique_run_dir(run_dir)
     if backtest_date:
         date_part = backtest_date.replace("-", "")
         stamp = datetime.now().strftime("%Y%m%d_%H%M")
@@ -244,7 +257,12 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         collector = DataCollector()
         data_json = collector.run(backtest_date=backtest_date)
 
-    run_dir = build_run_dir(backtest_date, run_id=getattr(args, "run_id", None), output_dir=getattr(args, "output_dir", None))
+    run_dir = build_run_dir(
+        backtest_date,
+        run_id=getattr(args, "run_id", None),
+        output_dir=getattr(args, "output_dir", None),
+        allow_existing=args.resume_from_existing,
+    )
     news_event_ledger_path = ""
     news_event_ledger_payload = None
     if args.enable_news:
@@ -309,7 +327,11 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
             news_event_data_links_path=news_event_data_links_path,
         )
 
-    orchestrator = VNextOrchestrator(available_models=available_models, output_dir=run_dir)
+    orchestrator = VNextOrchestrator(
+        available_models=available_models,
+        output_dir=run_dir,
+        resume_from_existing=args.resume_from_existing,
+    )
     artifacts = orchestrator.run(packet)
 
     logic_json = adapt_vnext_to_legacy(

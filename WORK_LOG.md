@@ -6,6 +6,25 @@
 
 ## 2026-06-08
 
+### TradingAgents 借鉴后代码审视修补：no-data、object firewall 与 checkpoint 入口
+
+完成内容：
+
+- 收紧 `ObjectiveFirewallSummary.object_clear` 的 raw data 覆盖判断：空 dict、`NO_DATA_AVAILABLE` 哨兵、失败/跳过 payload、只有日期/来源/`data_quality` 的元信息，不再算作有效观察层。
+- 修正 `normalize_no_data_payload`：no-data 归一化会同步把顶层和 `data_quality.availability` 置为 no-data 状态，避免保留旧的 `available` 标记。
+- 打通 checkpoint 复用入口：CLI 新增 `--resume-from-existing`，主流程会传给 `VNextOrchestrator`；当用户明确指定 `--output-dir` 或 `--run-id` 并开启 resume 时，不再自动改写到 `_02` 新目录。
+- 补充回归测试：覆盖 no-data sentinel 不可作为 object coverage、metadata-only payload 不可作为观察值、CLI resume 参数与目录复用行为。
+
+验证结果：
+
+- `python3 -m pytest -q tests/test_objective_firewall.py tests/test_data_availability.py tests/test_main_cli.py tests/test_vnext_orchestrator.py tests/test_core_checker.py`：51 passed，4 warnings。
+- `python3 -m pytest -q tests/test_vnext_orchestrator.py tests/test_vnext_packet_builder.py tests/test_core_checker.py tests/test_ta_l5_and_pdr_sources.py tests/test_run_review.py tests/test_objective_firewall.py tests/test_main_cli.py tests/test_data_availability.py`：77 passed，4 warnings。
+- `python3 -m pytest -q`：352 passed，4 warnings。
+- `python3 -m py_compile src/agent_analysis/orchestrator.py src/data_availability.py src/main.py`：通过。
+- `git diff --check`：通过。
+
+---
+
 ### TradingAgents 借鉴 Phase 0-5：no-data、L5 确定性快照、schema 边界、checkpoint 与反思库
 
 完成内容：
