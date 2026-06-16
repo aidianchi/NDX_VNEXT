@@ -97,6 +97,107 @@ def test_danjuan_ndx_valuation_parser_extracts_percentiles_and_dates():
     assert "pe_percentile * 100" in parsed["formula"]
 
 
+def test_wind_ndx_valuation_parser_normalizes_percentiles_and_rank():
+    payload = {
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "columns": [
+                            "指数代码",
+                            "指数名称",
+                            "日期",
+                            "市盈率",
+                            "市净率",
+                            "市销率",
+                            "市盈率历史分位",
+                            "市净率历史分位",
+                            "市销率历史分位",
+                            "风险溢价",
+                            "风险溢价历史分位",
+                            "风险溢价排名",
+                            "最早成分日期",
+                        ],
+                        "data": [
+                            [
+                                "NDX.GI",
+                                "纳斯达克100",
+                                "2026-06-16",
+                                35.2454,
+                                10.3394,
+                                7.4105,
+                                0.8464,
+                                0.9927,
+                                0.9767,
+                                1.0926,
+                                0.5554,
+                                "1770/3186",
+                                "2011-04-01",
+                            ]
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        ]
+    }
+
+    parsed = tools_L4._parse_wind_ndx_valuation_payload(payload)
+
+    assert parsed["index_code"] == "NDX.GI"
+    assert parsed["index_name"] == "纳斯达克100"
+    assert parsed["data_date"] == "2026-06-16"
+    assert parsed["pe"] == 35.2454
+    assert parsed["pb"] == 10.3394
+    assert parsed["ps"] == 7.4105
+    assert parsed["risk_premium"] == 1.0926
+    assert parsed["pe_historical_percentile"] == 84.64
+    assert parsed["pb_historical_percentile"] == 99.27
+    assert parsed["ps_historical_percentile"] == 97.67
+    assert parsed["risk_premium_historical_percentile"] == 55.54
+    assert parsed["risk_premium_rank"] == {"rank": 1770, "sample_count": 3186}
+    assert parsed["sample_start"] == "2011-04-01"
+
+
+def test_wind_ndx_snapshot_uses_cli_once_and_marks_authority(monkeypatch):
+    tools_L4.L4_WIND_NDX_VALUATION_CACHE.clear()
+
+    def fake_wind_cli(server_type, tool_name, params, timeout=45):
+        assert server_type == "index_data"
+        assert tool_name == "get_index_fundamentals"
+        assert "纳斯达克100" in params["question"]
+        return (
+            {
+                "content": [
+                    {
+                        "text": json.dumps(
+                            {
+                                "columns": ["指数代码", "指数名称", "日期", "市盈率", "风险溢价", "市盈率历史分位", "风险溢价历史分位"],
+                                "data": [["NDX.GI", "纳斯达克100", "2026-06-16", 35.2454, 1.0926, 0.8464, 0.5554]],
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                ]
+            },
+            None,
+        )
+
+    monkeypatch.setattr(tools_L4, "_call_wind_cli", fake_wind_cli)
+
+    result = tools_L4.get_ndx_wind_valuation_snapshot()
+
+    assert result["source_tier"] == "licensed_provider/Wind"
+    assert result["value"]["PE"] == 35.25
+    assert result["value"]["RiskPremium"] == 1.0926
+    assert result["value"]["PEHistoricalPercentile"] == 84.64
+    assert result["value"]["RiskPremiumHistoricalPercentile"] == 55.54
+    assert result["value"]["MetricAuthority"]["RiskPremium"]["usage"] == "core_allowed"
+    assert result["data_quality"]["license_note"] == "licensed_provider"
+    assert "数据来源于万得 Wind 金融数据服务" in result["notes"]
+
+
 def test_danjuan_check_is_included_with_required_headers(monkeypatch):
     captured = {}
 

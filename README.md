@@ -54,6 +54,16 @@ DEEPSEEK_API_KEY=your_deepseek_api_key_here
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 ```
 
+可选 Wind L4 数据：
+
+- 如果本机已经配置好 Wind skills 和 Wind API 授权，实时 L4 会优先调用 `get_ndx_wind_valuation_snapshot`，读取 NDX 指数级 PE/PB/PS、历史分位和 NDX 专属风险溢价。
+- Wind 授权和 key 由全局 Wind skill 管理，通常不需要写进本仓库 `.env`。
+- 如果想节省 Wind 积分，或当前环境没有 Wind 授权，可以在 `.env` 中加入：
+
+```bash
+NDX_DISABLE_WIND_L4=1
+```
+
 运行测试：
 
 ```bash

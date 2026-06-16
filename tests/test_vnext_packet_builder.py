@@ -313,6 +313,82 @@ def test_l4_state_accepts_trendonify_or_manual_real_percentile():
     assert packet.facts_by_layer["L4"].state == "expensive"
 
 
+def test_l4_state_prefers_wind_ndx_snapshot_when_available():
+    data = _mock_data_json()
+    data["indicators"].append(
+        {
+            "layer": 4,
+            "metric_name": "Wind NDX Valuation and Risk Premium Snapshot",
+            "function_id": "get_ndx_wind_valuation_snapshot",
+            "raw_data": {
+                "name": "Wind NDX Valuation and Risk Premium Snapshot",
+                "value": {
+                    "PE": 35.2454,
+                    "PB": 10.3394,
+                    "PS": 7.4105,
+                    "RiskPremium": 1.0926,
+                    "PEHistoricalPercentile": 84.64,
+                    "PBHistoricalPercentile": 99.27,
+                    "PSHistoricalPercentile": 97.67,
+                    "RiskPremiumHistoricalPercentile": 55.54,
+                },
+                "source_tier": "licensed_provider/Wind",
+                "source_name": "Wind index_data.get_index_fundamentals",
+            },
+            "error": None,
+            "collection_timestamp_utc": "2026-06-16T00:00:00Z",
+        }
+    )
+    for indicator in data["indicators"]:
+        if indicator["function_id"] == "get_ndx_pe_and_earnings_yield":
+            indicator["raw_data"] = {
+                "name": "NDX Valuation",
+                "value": {"PE": 34.0, "ThirdPartyChecks": []},
+                "source_tier": "component_model",
+            }
+        if indicator["function_id"] == "get_equity_risk_premium":
+            indicator["raw_data"] = {"name": "NDX Simple Yield Gap", "value": {"level": 2.2}}
+
+    packet = AnalysisPacketBuilder().build(data, manual_overrides={"active": False, "metrics": {}})
+    wind_signal = next(
+        signal for signal in packet.facts_by_layer["L4"].core_signals if signal["metric"] == "get_ndx_wind_valuation_snapshot"
+    )
+
+    assert wind_signal["historical_percentile"] == 84.64
+    assert "Wind PE分位=84.64" in wind_signal["summary"]
+    assert "Wind风险溢价分位=55.54" in wind_signal["summary"]
+    assert packet.facts_by_layer["L4"].state == "expensive"
+
+
+def test_l4_wind_risk_premium_low_percentile_marks_compensation_thin():
+    data = {
+        "timestamp_utc": "2026-06-16T00:00:00Z",
+        "indicators": [
+            {
+                "layer": 4,
+                "metric_name": "Wind NDX Valuation and Risk Premium Snapshot",
+                "function_id": "get_ndx_wind_valuation_snapshot",
+                "raw_data": {
+                    "name": "Wind NDX Valuation and Risk Premium Snapshot",
+                    "value": {
+                        "PE": 24.0,
+                        "PEHistoricalPercentile": 45.0,
+                        "RiskPremium": 0.5,
+                        "RiskPremiumHistoricalPercentile": 18.0,
+                    },
+                    "source_tier": "licensed_provider/Wind",
+                },
+                "error": None,
+                "collection_timestamp_utc": "2026-06-16T00:00:00Z",
+            }
+        ],
+    }
+
+    packet = AnalysisPacketBuilder().build(data, manual_overrides={"active": False, "metrics": {}})
+
+    assert packet.facts_by_layer["L4"].state == "expensive"
+
+
 def test_l4_state_accepts_danjuan_real_percentile_after_trendonify():
     data = _mock_data_json()
     for indicator in data["indicators"]:

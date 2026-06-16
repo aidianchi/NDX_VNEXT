@@ -1,6 +1,6 @@
 # Run Review Checklist：真实运行复盘清单
 
-最近更新：2026-05-19
+更新日期：2026-06-16
 用途：每次跑完真实模型后，用同一套标准判断系统是否真的变稳，而不是只看“有没有生成报告”。
 
 阅读方式：最新运行记录放在最上面；通用检查表放在后面。
@@ -203,8 +203,8 @@
 | 跳过项是否明示 | `backtest_data_boundaries` 列出被跳过的指标、原因和未来升级路径。 |
 | 严格回测 invariant 是否入包 | `strict_backtest_invariants` 同时出现在数据包、DataIntegrity、AnalysisPacket / run summary 和 native brief 审计区。 |
 | 强制项与限制项是否分清 | `hard_enforced` 只列已工程化强制的规则；ALFRED vintage、first-reported、point-in-time universe、LLM 后验知识应留在 `declared_limitations`，不能伪装成已解决。 |
-| 当前网页是否误入回测 | bb browser、Trendonify、蛋卷、WorldPERatio 等当前网页数据没有在历史回测中默认充当当时证据。 |
-| yfinance 成分股代理 | 回测模式未自动触发 yfinance 成分股基本面批量代理；如使用人工/Wind 覆盖，必须有来源和数据日期。 |
+| 当前快照是否误入回测 | 当前 Wind NDX 快照、bb browser、Trendonify、蛋卷、WorldPERatio 等当前数据没有在历史回测中默认充当当时证据。 |
+| yfinance 成分股代理 | 回测模式未自动触发 yfinance 成分股基本面批量代理；如使用人工或可证明历史当时可见的 Wind 数据覆盖，必须有来源和数据日期。 |
 | 新闻侧栏 | 新闻只作为辅助 sidecar，不进入 L1-L5，不成为 `evidence_ref`；发布日期不得晚于回测日。 |
 | LLM 后验风险 | 报告承认新模型可能有后验知识；治理只要求证据不越界，不假装完全复原当时人脑。 |
 | 数据快照不可变 | 分析阶段消费的是同一份数据包，不能一边采集一边切换网络导致半截数据、半截分析。 |
@@ -225,6 +225,8 @@
 | 代理指标是否避免被当成官方事实 |  |  |  |
 | 反证条件是否具体，而不是空泛套话 |  |  |  |
 | 交叉验证对象是否和指标问题相关 |  |  |  |
+| 实时 L4 是否优先使用 Wind 主锚 |  | `analysis_packet.json` / `raw_data` | Wind 可用时应看到 NDX PE/PB/PS、历史分位和 NDX 专属风险溢价；Wind 不可用时必须明示降级。 |
+| L4 旧替代项是否被正确降权 |  | `layer_cards/L4.json` / `brief` | Damodaran 是美国市场 ERP 背景；WorldPERatio 是相对位置参照；简式收益差距只做诊断或回退。 |
 
 ### 2. 跨层冲突是否稳定、具体、可追溯
 

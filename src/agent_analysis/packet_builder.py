@@ -81,6 +81,7 @@ LAYER_FUNCTIONS = {
         "get_mcclellan_oscillator_nasdaq_or_nyse",
     },
     "L4": {
+        "get_ndx_wind_valuation_snapshot",
         "get_ndx_pe_and_earnings_yield",
         "get_ndx_forward_earnings_quality",
         "get_equity_risk_premium",
@@ -543,6 +544,9 @@ class AnalysisPacketBuilder:
     def _build_signal(self, function_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         value = payload.get("value")
         percentile = (
+            self._extract_wind_ndx_valuation_percentile(value)
+            if function_id == "get_ndx_wind_valuation_snapshot"
+            else
             self._extract_l4_valuation_percentile(value, payload=payload)
             if function_id == "get_ndx_pe_and_earnings_yield"
             else self._extract_damodaran_erp_percentile(value)
@@ -558,8 +562,17 @@ class AnalysisPacketBuilder:
             summary_bits.append(f"值={compact_value}")
         if percentile is not None and function_id == "get_damodaran_us_implied_erp":
             summary_bits.append(f"Damodaran ERP 10Y分位={percentile}")
+        elif percentile is not None and function_id == "get_ndx_wind_valuation_snapshot":
+            summary_bits.append(f"Wind PE分位={percentile}")
         elif percentile is not None:
             summary_bits.append(f"分位={percentile}")
+        if function_id == "get_ndx_wind_valuation_snapshot" and isinstance(value, dict):
+            risk_pct = _find_first_number(value, ("riskpremiumhistoricalpercentile", "risk_premium_historical_percentile", "RiskPremiumHistoricalPercentile"))
+            risk_level = _find_first_number(value, ("riskpremium", "risk_premium", "RiskPremium"))
+            if risk_level is not None:
+                summary_bits.append(f"Wind风险溢价={_round_if_float(risk_level)}")
+            if risk_pct is not None:
+                summary_bits.append(f"Wind风险溢价分位={_round_if_float(risk_pct)}")
         if trend:
             summary_bits.append(f"趋势={trend}")
         if status:
@@ -593,6 +606,12 @@ class AnalysisPacketBuilder:
         if isinstance(value, (str, int, float)):
             return _round_if_float(value)
         if isinstance(value, dict):
+            if function_id == "get_ndx_wind_valuation_snapshot":
+                return {
+                    key: _round_if_float(value[key])
+                    for key in ("PE", "PB", "PS", "RiskPremium")
+                    if key in value and value.get(key) is not None
+                }
             if function_id == "get_price_volume_quality_qqq":
                 return {
                     key: _round_if_float(value[key])
@@ -627,6 +646,15 @@ class AnalysisPacketBuilder:
                 percentile = window_10y.get("percentile")
                 if isinstance(percentile, (int, float)) and not isinstance(percentile, bool):
                     return float(percentile)
+        return None
+
+    def _extract_wind_ndx_valuation_percentile(self, value: Any) -> Optional[float]:
+        if not isinstance(value, dict):
+            return None
+        for key in ("PEHistoricalPercentile", "pe_historical_percentile", "pe_percentile"):
+            percentile = value.get(key)
+            if isinstance(percentile, (int, float)) and not isinstance(percentile, bool):
+                return float(percentile)
         return None
 
     def _extract_l4_valuation_percentile(self, value: Any, *, payload: Optional[Dict[str, Any]] = None) -> Optional[float]:
@@ -801,12 +829,36 @@ class AnalysisPacketBuilder:
 
         if layer == "L4":
             pe = self._metric_level(metrics, "get_ndx_pe_and_earnings_yield", "pe_ttm", "weighted_forward_pe", "forward_pe")
+            wind_payload = metrics.get("get_ndx_wind_valuation_snapshot", {})
+            wind_value = wind_payload.get("value") if isinstance(wind_payload.get("value"), dict) else {}
+            wind_pe_pct = self._extract_wind_ndx_valuation_percentile(wind_value)
+            wind_pb_pct = _find_first_number(wind_value, ("PBHistoricalPercentile", "pb_historical_percentile"))
+            wind_ps_pct = _find_first_number(wind_value, ("PSHistoricalPercentile", "ps_historical_percentile"))
+            wind_risk_premium_pct = _find_first_number(
+                wind_value,
+                ("RiskPremiumHistoricalPercentile", "risk_premium_historical_percentile"),
+            )
             valuation_payload = metrics.get("get_ndx_pe_and_earnings_yield", {})
             pe_pct = self._extract_l4_valuation_percentile(
                 valuation_payload.get("value"),
                 payload=valuation_payload,
             )
             simple_gap = self._metric_level(metrics, "get_equity_risk_premium", "simple_yield_gap", "erp_value", "level")
+            if wind_value:
+                valuation_pressure = any(
+                    pct is not None and pct >= 70
+                    for pct in (wind_pe_pct, wind_pb_pct, wind_ps_pct)
+                )
+                compensation_thin = wind_risk_premium_pct is not None and wind_risk_premium_pct <= 30
+                valuation_support = (
+                    wind_pe_pct is not None
+                    and wind_pe_pct <= 30
+                    and (wind_risk_premium_pct is None or wind_risk_premium_pct >= 70)
+                )
+                if valuation_pressure or compensation_thin:
+                    return "expensive"
+                if valuation_support:
+                    return "cheap"
             if (pe_pct is not None and pe_pct >= 70) or (simple_gap is not None and simple_gap <= 1.5):
                 return "expensive"
             if (pe_pct is not None and pe_pct <= 30) or (simple_gap is not None and simple_gap >= 3.5):

@@ -57,6 +57,7 @@ CORE_EVIDENCE_FUNCTIONS = {
     "get_m7_fundamentals",
     "get_new_highs_lows",
     "get_mcclellan_oscillator_nasdaq_or_nyse",
+    "get_ndx_wind_valuation_snapshot",
     "get_ndx_pe_and_earnings_yield",
     "get_ndx_forward_earnings_quality",
     "get_equity_risk_premium",
@@ -68,13 +69,14 @@ CORE_EVIDENCE_FUNCTIONS = {
 LATEST_ONLY_FUNCTIONS = {
     "get_m7_fundamentals",
     "get_qqq_top10_concentration",
+    "get_ndx_wind_valuation_snapshot",
     "get_ndx_pe_and_earnings_yield",
     "get_ndx_forward_earnings_quality",
     "get_equity_risk_premium",
 }
 
 PROXY_SOURCE_TOKENS = {"proxy", "component_model", "third_party_estimate"}
-OFFICIAL_SOURCE_TOKENS = {"official", "official_provider", "licensed_manual/wind"}
+OFFICIAL_SOURCE_TOKENS = {"official", "official_provider", "licensed_manual/wind", "licensed_provider/wind"}
 
 
 def utc_timestamp() -> str:
@@ -167,6 +169,8 @@ def _source_tier_from_name(text: str) -> str:
     lowered = text.lower()
     if "fred" in lowered or "invesco" in lowered or "nasdaq" in lowered or "sec" in lowered or "damodaran" in lowered:
         return "official"
+    if "wind" in lowered and "manual" not in lowered:
+        return "licensed_provider/Wind"
     if "manual" in lowered or "wind" in lowered:
         return "licensed_manual/Wind"
     if "alpha vantage" in lowered or "yfinance" in lowered or "yahoo" in lowered:
@@ -178,8 +182,10 @@ def _source_tier_from_name(text: str) -> str:
 
 def _license_note(source_tier: str, source_name: str) -> str:
     lowered = f"{source_tier} {source_name}".lower()
-    if "manual" in lowered or "wind" in lowered:
+    if "manual" in lowered:
         return "licensed_manual"
+    if "wind" in lowered:
+        return "licensed_provider"
     if "fred" in lowered or "sec" in lowered or "nasdaq" in lowered or "invesco" in lowered or "damodaran" in lowered:
         return "official_public"
     if "openbb" in lowered:

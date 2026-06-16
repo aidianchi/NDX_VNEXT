@@ -298,14 +298,17 @@ native 图表主路径必须直接消费 vNext artifacts 或 `analysis_packet.ra
 
 ### 6.5 L4 估值数据发言权
 
-截至 2026-05-02，L4 估值锚必须带数据发言权元数据：
+截至 2026-06-16，L4 估值锚必须带数据发言权元数据，并优先使用 Wind 的 NDX 指数级数据：
 
-- 来源等级固定为 `licensed_manual/Wind`、`official`、`component_model`、`third_party_estimate`、`proxy`、`unavailable`。
+- 来源等级固定为 `licensed_provider/Wind`、`licensed_manual/Wind`、`official`、`component_model`、`third_party_estimate`、`proxy`、`unavailable`。
 - 每个 L4 估值指标应携带 `data_date`、`collected_at_utc`、`update_frequency`、`formula`、`coverage`、`anomalies`、`fallback_chain`、`source_disagreement`。
-- Wind 人工输入是可选高信任源，不是系统运行硬依赖；空模板不得触发人工覆盖。
-- `get_equity_risk_premium` 保留函数名兼容历史调用，但语义已经改为 NDX 简式收益差距：`earnings_yield - 10Y` 或 `fcf_yield - 10Y`。
-- Damodaran 美国 implied ERP 只作为美国市场参考锚，不替代 NDX 成分股聚合估值。
-- 回测模式下，yfinance 成分股基本面批量代理默认不进入 agent 上下文：`get_ndx_pe_and_earnings_yield`、`get_ndx_forward_earnings_quality`、`get_equity_risk_premium` 在没有人工/Wind 覆盖时自动跳过，并写入 `backtest_data_boundaries`。原则是宁缺勿错，不用缺失严重的成分股代理结果伪装成纳斯达克100整体估值。
+- `get_ndx_wind_valuation_snapshot` 是实时 L4 的主锚：读取 Wind NDX 指数级 PE/PB/PS、历史分位和 NDX 专属风险溢价。它是高信任付费数据源，但不是系统硬依赖；Wind 不可用或用户设置 `NDX_DISABLE_WIND_L4=1` 时，必须显式降级。
+- Wind 人工输入仍是可选高信任源，可用于 Wind API 不可用时的人工复核；空模板不得触发人工覆盖。
+- `get_equity_risk_premium` 保留函数名兼容历史调用，但当前语义是 NDX 简式收益差距：`earnings_yield - 10Y` 或 `fcf_yield - 10Y`。它不再与 Wind NDX 风险溢价平级，只能作为 Wind 不可用时的诊断或回退。
+- Damodaran 美国 implied ERP 保留为美国市场股权风险补偿背景，不替代 NDX 专属风险溢价。
+- WorldPERatio 保留标准差、滚动均值和相对位置参照，不冒充 Wind 的指数级历史分位。
+- yfinance / Yahoo / SEC / 东财的成分股模型用于解释成分、forward、margin、事实对账和轻量校验，不替代 Wind 的指数级 PE/PB/PS 与风险溢价。
+- 回测模式下，当前 Wind 快照、当前网页和 yfinance 最新成分股基本面批量代理默认不进入 agent 上下文：`get_ndx_wind_valuation_snapshot`、`get_ndx_pe_and_earnings_yield`、`get_ndx_forward_earnings_quality`、`get_equity_risk_premium` 在没有可证明历史当时可见数据时自动跳过，并写入 `backtest_data_boundaries`。原则是宁缺勿错，不用当前数据伪装成历史当时可见的纳斯达克100整体估值。
 - 当前严格回测基线是“数据日期不超过回测日”；ALFRED first-vintage、财报 first-reported、point-in-time universe 和 LLM 训练后验知识属于后续升级项，不能在当前报告中伪装成已经解决。
 
 ### 6.6 历史数据研究助理与采集机模式

@@ -79,7 +79,7 @@ class DataCollector:
             
             # 第四层：指数基本面估值 (Index Fundamental Valuation)
             # 核心问题：当前价格相对于其内在价值和无风险资产，是否具有吸引力？
-            4: ["get_ndx_pe_and_earnings_yield", "get_ndx_forward_earnings_quality", "get_equity_risk_premium", "get_damodaran_us_implied_erp"],
+            4: ["get_ndx_wind_valuation_snapshot", "get_ndx_pe_and_earnings_yield", "get_ndx_forward_earnings_quality", "get_equity_risk_premium", "get_damodaran_us_implied_erp"],
             
             # 第五层：价格趋势与波动率 (Price Trend & Volatility) - V6.0完整版
             # 核心问题：价格的路径、动能和波动状态如何？
@@ -163,6 +163,10 @@ class DataCollector:
         "get_ndx_pe_and_earnings_yield": {
             "reason": "自动路径依赖 yfinance 成分股基本面批量代理；回测时覆盖率和历史可见性不可接受，若有人工/Wind 数据可用人工覆盖",
             "anomalies": ["batch_yfinance_component_fundamentals_not_used_in_backtest"],
+        },
+        "get_ndx_wind_valuation_snapshot": {
+            "reason": "当前 Wind NDX 快照是实时/近实时 licensed provider 数据；尚未接入按回测日取数并证明当时可见的历史合约",
+            "anomalies": ["current_wind_ndx_snapshot_not_used_in_backtest"],
         },
         "get_ndx_forward_earnings_quality": {
             "reason": "自动路径依赖 yfinance 最新 forward fundamentals / EPS trend，回测时自动跳过",

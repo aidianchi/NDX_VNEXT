@@ -1426,12 +1426,20 @@ class VNextReportGenerator:
 """
 
     def _valuation_ruler_chart(self, artifacts: Dict[str, Any]) -> str:
+        wind_value = self._metric_value(artifacts, "L4", "get_ndx_wind_valuation_snapshot")
         value = self._metric_value(artifacts, "L4", "get_ndx_pe_and_earnings_yield")
-        pe = _safe_number(_first_present(value, "PE", "TrailingPE", "PE_TTM", "pe_ttm"))
+        pe = _safe_number(_first_present(wind_value, "PE", "pe"))
+        if pe is None:
+            pe = _safe_number(_first_present(value, "PE", "TrailingPE", "PE_TTM", "pe_ttm"))
+        pb = _safe_number(_first_present(wind_value, "PB", "pb"))
+        ps = _safe_number(_first_present(wind_value, "PS", "ps"))
+        wind_risk_premium = _safe_number(_first_present(wind_value, "RiskPremium", "risk_premium"))
         forward_pe = _safe_number(value.get("ForwardPE"))
         fcf_yield = _safe_number(_first_present(value, "FCFYield", "FCF_Yield"))
         sources = [source for source in _as_list(value.get("ThirdPartyChecks")) if isinstance(source, dict)]
-        percentile = _safe_number(_first_present(value, "PE_TTM_percentile_10y", "PE_TTM_percentile_5y"))
+        percentile = _safe_number(_first_present(wind_value, "PEHistoricalPercentile", "pe_historical_percentile"))
+        if percentile is None:
+            percentile = _safe_number(_first_present(value, "PE_TTM_percentile_10y", "PE_TTM_percentile_5y"))
         for source in sources:
             source_percentile = _safe_number(source.get("historical_percentile", source.get("percentile_10y")))
             if source_percentile is not None:
@@ -1443,6 +1451,17 @@ class VNextReportGenerator:
                 f'<span class="chart-marker high" style="left:{_clamp(percentile, 0, 100):.2f}%"><b>{_fmt_number(percentile, suffix="%", digits=1)}</b><small>真实分位</small></span>'
             )
         source_rows = []
+        if wind_value:
+            source_rows.append(
+                f"""
+<li>
+  <b>Wind</b>
+  <span>NDX PE/PB/PS + Risk Premium</span>
+  <strong>{_fmt_number(pe, digits=2)}x</strong>
+  <small>PE percentile {_fmt_number(percentile, suffix='%', digits=1)} · RP {_fmt_number(wind_risk_premium, suffix='%', digits=2)}</small>
+</li>
+"""
+            )
         for source in sources[:5]:
             source_rows.append(
                 f"""
@@ -1469,6 +1488,9 @@ class VNextReportGenerator:
   <div class="metric-strip">
     <span><b>PE</b>{_fmt_number(pe, digits=2)}x</span>
     <span><b>Forward PE</b>{_fmt_number(forward_pe, digits=2)}x</span>
+    <span><b>PB</b>{_fmt_number(pb, digits=2)}x</span>
+    <span><b>PS</b>{_fmt_number(ps, digits=2)}x</span>
+    <span><b>Wind RP</b>{_fmt_number(wind_risk_premium, suffix="%", digits=2)}</span>
     <span><b>FCF Yield</b>{_fmt_number(fcf_yield, suffix="%", digits=2)}</span>
   </div>
   <ul class="chart-source-list">{''.join(source_rows) or '<li>无外部估值源。</li>'}</ul>
@@ -1481,18 +1503,23 @@ class VNextReportGenerator:
         l1_real_item = self._indicator_item(artifacts, "L1", "get_10y_real_rate")
         l1_nominal_item = self._indicator_item(artifacts, "L1", "get_10y_treasury")
         l4_gap = self._metric_value(artifacts, "L4", "get_equity_risk_premium")
+        l4_wind = self._metric_value(artifacts, "L4", "get_ndx_wind_valuation_snapshot")
         l4_val = self._metric_value(artifacts, "L4", "get_ndx_pe_and_earnings_yield")
         real_reading = l1_real_item.get("current_reading") or l1_real.get("value")
         nominal_reading = l1_nominal_item.get("current_reading") or l1_nominal.get("value")
         real_pct = _extract_percentile(real_reading)
         nominal_pct = _extract_percentile(nominal_reading)
         gap = _safe_number(l4_gap.get("level"))
+        wind_risk_premium = _safe_number(_first_present(l4_wind, "RiskPremium", "risk_premium"))
+        wind_risk_premium_pct = _safe_number(_first_present(l4_wind, "RiskPremiumHistoricalPercentile", "risk_premium_historical_percentile"))
         pe = _safe_number(_first_present(l4_val, "PE", "TrailingPE", "PE_TTM", "pe_ttm"))
         gap_pressure = None if gap is None else _clamp((0 - gap) / 4 * 100, 0, 100)
+        wind_rp_pressure = None if wind_risk_premium_pct is None else _clamp(100 - wind_risk_premium_pct, 0, 100)
         pe_pressure = None if pe is None else _clamp((pe - 15) / 30 * 100, 0, 100)
         rows = [
             ("10Y Treasury", nominal_pct, _fmt_number(nominal_reading, suffix="%", digits=2), "L1.get_10y_treasury"),
             ("10Y Real Rate", real_pct, _fmt_number(real_reading, suffix="%", digits=2), "L1.get_10y_real_rate"),
+            ("Wind NDX Risk Premium", wind_rp_pressure, _fmt_number(wind_risk_premium, suffix="%", digits=2), "L4.get_ndx_wind_valuation_snapshot"),
             ("Simple Yield Gap", gap_pressure, _fmt_number(gap, suffix="%", digits=2), "L4.get_equity_risk_premium"),
             ("NDX PE", pe_pressure, _fmt_number(pe, suffix="x", digits=2), "L4.get_ndx_pe_and_earnings_yield"),
         ]
@@ -1510,11 +1537,11 @@ class VNextReportGenerator:
             )
         return f"""
 <article class="chart-card" data-chart-id="rate-valuation-pressure">
-  {self._chart_header("L1-L4 利率估值压力图", "用同一方向阅读折现率压力、真实利率、简式收益差距和 PE 估值要求。", "L4.get_equity_risk_premium")}
+  {self._chart_header("L1-L4 利率估值压力图", "优先看 Wind NDX 风险溢价；简式收益差距保留为诊断/回退。", "L4.get_ndx_wind_valuation_snapshot")}
   <div class="pressure-chart" aria-label="L1-L4 利率估值压力图">
     {''.join(row_html)}
   </div>
-  <p class="chart-footnote">越靠右表示压力越高。利率行优先用历史分位；收益差距和 PE 行是方向性压力尺，不是历史分位。</p>
+  <p class="chart-footnote">越靠右表示压力越高。Wind 风险溢价行用分位反向显示：分位越低，补偿越薄，压力越高；简式收益差距和 PE 行是方向性压力尺。</p>
 </article>
 """
 
@@ -1840,6 +1867,7 @@ class VNextReportGenerator:
             "get_new_highs_lows": self._new_highs_lows_visual,
             "get_qqq_top10_concentration": self._top10_concentration_visual,
             "get_m7_fundamentals": self._m7_fundamentals_visual,
+            "get_ndx_wind_valuation_snapshot": self._wind_valuation_indicator_visual,
             "get_ndx_pe_and_earnings_yield": self._valuation_indicator_visual,
             "get_ndx_forward_earnings_quality": self._forward_earnings_quality_visual,
             "get_damodaran_us_implied_erp": self._damodaran_indicator_visual,
@@ -2121,6 +2149,35 @@ class VNextReportGenerator:
             )
         body = f'<div class="m7-grid">{"".join(rows)}</div>'
         return self._wrap_indicator_visual(ref, "m7-fundamentals", "M7 fundamentals heatmap", body, details=True)
+
+    def _wind_valuation_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        rows = [
+            ("PE", value.get("PE"), "x"),
+            ("PB", value.get("PB"), "x"),
+            ("PS", value.get("PS"), "x"),
+            ("Risk Premium", value.get("RiskPremium"), "%"),
+            ("PE percentile", value.get("PEHistoricalPercentile"), "%"),
+            ("RP percentile", value.get("RiskPremiumHistoricalPercentile"), "%"),
+        ]
+        metrics = "".join(
+            f"<span><b>{_escape(label)}</b>{_fmt_number(metric, suffix=suffix, digits=2)}</span>"
+            for label, metric, suffix in rows
+            if _safe_number(metric) is not None
+        )
+        rank = value.get("RiskPremiumRank") if isinstance(value.get("RiskPremiumRank"), dict) else {}
+        rank_html = ""
+        if rank:
+            rank_html = (
+                f"<p class=\"chart-footnote\">风险溢价历史排序："
+                f"{_escape(str(rank.get('rank', 'N/A')))}/{_escape(str(rank.get('sample_count', 'N/A')))}。"
+                "风险溢价分位越高，通常表示相对历史补偿越厚。</p>"
+            )
+        body = f"""
+<div class="metric-strip">{metrics}</div>
+{rank_html}
+<p class="chart-footnote">Wind NDX 风险溢价是 NDX 专属风险补偿；Damodaran 是美国市场背景，简式收益差距只是诊断/回退。</p>
+"""
+        return self._wrap_indicator_visual(ref, "wind-valuation", "Wind NDX valuation + risk premium", body, details=True, open_by_default=True)
 
     def _valuation_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
         component_pb = _safe_number(_first_present(value, "PriceToBook", "PB"))

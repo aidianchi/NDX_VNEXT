@@ -1,12 +1,12 @@
 # vNext 数据覆盖复盘
 
-更新日期：2026-05-19
+更新日期：2026-06-16
 
 本文回答一个朴素问题：系统现在到底靠哪些数据推理，哪些数据可靠，哪些数据还薄弱。
 
 结论先说：
 
-> 2026-05-19 的严格回测 invariant 第一版确认：实时模式下，Damodaran、WorldPERatio、Trendonify sidecar、蛋卷等仍可作为当前估值交叉校验；历史回测模式下，当前网页和 yfinance 成分股基本面批量代理默认不能当作当时可见数据。缺口必须写入 `backtest_data_boundaries`，ALFRED vintage、first-reported、point-in-time universe 和 LLM 后验知识等未强制项必须写入 `strict_backtest_invariants.declared_limitations`。
+> 2026-06-16 起，实时 L4 新增 `get_ndx_wind_valuation_snapshot`：Wind NDX 指数级 PE/PB/PS、历史分位和 NDX 专属风险溢价成为估值与风险补偿主锚。Damodaran 仍保留为美国市场 implied ERP 背景；WorldPERatio 保留标准差/滚动均值参照；yfinance component model 保留成分、forward、margin 与轻量对照用途；简式收益差距降为 Wind 不可用时的诊断/回退。历史回测模式下，当前 Wind 快照、当前网页和 yfinance 成分股基本面批量代理默认不能当作当时可见数据。
 
 ---
 
@@ -29,7 +29,7 @@
 | L1 宏观流动性 | 稳定 | 8 个指标进入分析，未发现本轮显式缺口。 |
 | L2 信用与压力 | 稳定 | 9 个指标进入分析，未发现本轮显式缺口。 |
 | L3 市场结构 | 可用但弱 | 6 个指标进入分析，但 4 个关键广度指标仍被质量自检标为缺失或薄弱。 |
-| L4 估值与盈利 | 实时可交叉校验，回测宁缺勿错 | 实时模式下可用 Damodaran、WorldPERatio、Trendonify sidecar、蛋卷和 yfinance 成分模型做交叉校验；回测模式下，yfinance 成分股基本面批量代理和今天打开的网页默认不能进入核心证据，除非能证明数据日期/发布时间不晚于回测日。 |
+| L4 估值与盈利 | 实时主锚升级，回测宁缺勿错 | 实时模式下 Wind NDX PE/PB/PS、历史分位和 NDX 专属风险溢价优先；Damodaran 是美国市场 ERP 背景；WorldPERatio 是标准差/滚动均值参照；yfinance 成分模型用于解释成分、forward、margin 和对照；回测模式下，当前 Wind 快照、yfinance 最新成分股基本面和运行时打开的网页默认不能进入核心证据。 |
 | L5 技术与资金流 | 稳定并扩展 | 9 个指标进入分析，新增 VWAP/MFI/CMF 量价质量视角；短线趋势和交易拥挤度可以表达，但不能替代估值或基本面判断。 |
 
 ---
@@ -40,7 +40,7 @@
 
 - L1：铜金比、净流动性动量等宏观流动性指标。
 - L2：高收益债利差、投资级债利差等信用压力指标。
-- L4 实时模式：成分股聚合 PE / Forward PE / FCF yield、NDX 简式收益差距、Damodaran 美国 implied ERP 月度参考锚、WorldPERatio / Trendonify / 蛋卷等当前页面交叉校验。
+- L4 实时模式：Wind NDX 指数级 PE/PB/PS、历史分位和 NDX 专属风险溢价；Damodaran 美国 implied ERP 月度参考锚；WorldPERatio 标准差/滚动均值参照；yfinance / Yahoo / SEC component snapshot 用于成分、forward、margin 和轻量对照。
 - L5：均线位置、MACD、OBV、RSI、Donchian、VWAP、MFI、CMF 等技术与资金流指标。
 
 使用边界：
@@ -131,7 +131,7 @@ L3 是最重要的薄弱点。
 优先级从高到低：
 
 1. 为 L3 广度指标寻找更稳定的数据源或 fallback。
-2. 继续解决 Trendonify 或等价历史估值分位来源；不能静默退回 yfinance 当前值冒充历史分位。
+2. 用 fresh run 验证 Wind L4 主锚进入报告后的表达质量；Wind 不可用时必须清楚降级，不静默退回 yfinance 当前值冒充历史分位。
 3. 区分“采集成功”和“语义质量足够”，把质量边界写进数据层。
 4. 扩展 L4 的盈利预期、盈利质量和估值压力数据；继续观察第三方估值源与成分股模型的 source disagreement。
 5. 保持 L1、L2、L5 的现有稳定性，避免为了扩指标引入不可靠源。

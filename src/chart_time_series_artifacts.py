@@ -44,6 +44,7 @@ WORKBENCH_MODULES: Dict[str, Dict[str, Any]] = {
             "get_10y_real_rate",
             "get_10y_breakeven",
             "get_fed_funds_rate",
+            "get_ndx_wind_valuation_snapshot",
             "get_ndx_pe_and_earnings_yield",
             "get_equity_risk_premium",
             "get_damodaran_us_implied_erp",

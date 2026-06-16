@@ -111,6 +111,7 @@ TOOLS_REGISTRY = {
     "get_m7_fundamentals": get_m7_fundamentals,
 
     # Layer 4
+    "get_ndx_wind_valuation_snapshot": get_ndx_wind_valuation_snapshot,
     "get_ndx_pe_and_earnings_yield": get_ndx_pe_and_earnings_yield,
     "get_ndx_forward_earnings_quality": get_ndx_forward_earnings_quality,
     "get_equity_risk_premium": get_equity_risk_premium,

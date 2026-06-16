@@ -6,6 +6,36 @@
 
 ## 2026-06-16
 
+### 研究控制台重做计划：从参数面板改成用户启动器
+
+完成内容：
+
+- 新增 `docs/2026-06-16_RESEARCH_CONSOLE_SIMPLIFICATION_PLAN.md`，把控制台重做目标、主界面保留/移除内容、Wind L4 开关、安全环境覆盖、代码改动范围和验收标准写成可在全新对话中直接实施的计划。
+- 更新 `NEXT_STEPS.md`，把控制台重做列为 P1 输出体验待办，并指向该计划文档。
+
+验证结果：
+
+- 文档变更，无代码执行路径修改；后续实施时按计划运行控制台测试和 Chrome 桌面/手机宽度检查。
+
+### L4 Wind 主锚接入：NDX 风险溢价、估值分位和旧替代项降权
+
+完成内容：
+
+- 新增 `get_ndx_wind_valuation_snapshot`：通过本地 `wind-mcp-skill` CLI 调用 `index_data.get_index_fundamentals`，获取 Wind NDX 指数级 PE/PB/PS、历史分位和 NDX 专属风险溢价；Wind 返回 0-1 分位会统一转换为 0-100。
+- 新增 Wind 解析、缓存和降级边界：每轮 live 只缓存一次；`NDX_DISABLE_WIND_L4=1` 可显式关闭；回测模式跳过当前 Wind 快照并写入边界，避免把运行时数据伪装成历史可见事实。
+- L4 采集、工具注册、data evidence、packet builder 和 deep research canon 全部接入新函数；`licensed_provider/Wind` 成为独立来源等级，和 `licensed_manual/Wind` 区分。
+- L4 状态判断优先读取 Wind：PE/PB/PS 分位高表示估值压力，Wind 风险溢价分位低表示风险补偿偏薄；风险溢价分位方向不再按 PE 分位误读。
+- L4 prompt 与 fallback prompt 更新：Wind NDX 风险溢价是 NDX 专属主锚；Damodaran 保留为美国市场 ERP 背景；WorldPERatio 保留标准差/滚动均值参照；Danjuan/Trendonify/人工输入降为 fallback 或审计材料；简式收益差距降为 Wind 不可用时的诊断/回退。
+- Native brief 图表更新：L4 估值尺和 L1-L4 压力图优先展示 Wind NDX 风险溢价；`get_equity_risk_premium` 仍保留为兼容和回退诊断。
+- 更新 `DATA_COVERAGE_REVIEW.md`，记录 L4 实时主锚从多源拼接升级为 Wind 主锚 + Damodaran/WorldPERatio/yfinance 分工。
+
+验证结果：
+
+- `.venv/bin/python -m pytest -q tests/test_l4_external_valuation_sources.py tests/test_vnext_packet_builder.py tests/test_deep_research_canon.py tests/test_tools_smoke.py`：48 passed，4 warnings。
+- `.venv/bin/python -m pytest -q tests/test_data_evidence_contract.py tests/test_data_availability.py tests/test_l4_data_authority.py tests/test_l4_forward_earnings_quality.py tests/test_vnext_reporter.py tests/test_prompt_guardrails.py tests/test_chart_time_series_artifacts.py tests/test_collector_manual_valuation_checks.py`：75 passed，6 warnings。
+- `.venv/bin/python -m py_compile src/tools_L4.py src/core/collector.py src/agent_analysis/packet_builder.py src/agent_analysis/vnext_reporter.py src/agent_analysis/deep_research_canon.py src/data_evidence.py src/tools.py`：通过。
+- `.venv/bin/python -m pytest -q`：372 passed，49 warnings。
+
 ### 数据证据合约迁移：data_evidence_v1、分级闸门与报告展示
 
 完成内容：

@@ -15,6 +15,7 @@ except ImportError:
     from data_evidence import build_data_quality
 
 from datetime import timezone
+from copy import deepcopy
 
 try:
     from .tools_L1 import get_10y_treasury
@@ -32,6 +33,7 @@ except ImportError:
 from io import BytesIO, StringIO
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from zipfile import ZipFile
@@ -42,6 +44,7 @@ from xml.etree import ElementTree as ET
 # =====================================================
 
 SOURCE_TIER_LICENSED_MANUAL = "licensed_manual/Wind"
+SOURCE_TIER_LICENSED_PROVIDER = "licensed_provider/Wind"
 SOURCE_TIER_OFFICIAL = "official"
 SOURCE_TIER_COMPONENT_MODEL = "component_model"
 SOURCE_TIER_THIRD_PARTY = "third_party_estimate"
@@ -49,6 +52,7 @@ SOURCE_TIER_PROXY = "proxy"
 SOURCE_TIER_UNAVAILABLE = "unavailable"
 
 VALUATION_FALLBACK_CHAIN = [
+    SOURCE_TIER_LICENSED_PROVIDER,
     SOURCE_TIER_LICENSED_MANUAL,
     SOURCE_TIER_OFFICIAL,
     SOURCE_TIER_COMPONENT_MODEL,
@@ -58,6 +62,7 @@ VALUATION_FALLBACK_CHAIN = [
 ]
 
 L4_COMPONENT_SNAPSHOT_CACHE: Dict[str, Tuple[pd.DataFrame, Dict[str, Any]]] = {}
+L4_WIND_NDX_VALUATION_CACHE: Dict[str, Dict[str, Any]] = {}
 _YAHOO_QUOTE_SUMMARY_SESSION: Optional[requests.Session] = None
 L4_COMPONENT_SOURCE_DISAGREEMENT_THRESHOLDS = {
     "market_cap": 15.0,
@@ -243,6 +248,417 @@ def _unavailable_valuation_source(
         availability="unavailable",
         unavailable_reason=reason,
     )
+
+
+def _wind_l4_disabled() -> bool:
+    return str(os.environ.get("NDX_DISABLE_WIND_L4", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _wind_skill_dir() -> Path:
+    return Path.home() / ".agents" / "skills" / "wind-mcp-skill"
+
+
+def _wind_unavailable_snapshot(reason: str, *, date_str: Optional[str] = None) -> Dict[str, Any]:
+    data_date = date_str or datetime.now().strftime("%Y-%m-%d")
+    return {
+        "name": "Wind NDX Valuation and Risk Premium Snapshot",
+        "series_id": "WIND_NDX_VALUATION_RISK_PREMIUM",
+        "value": None,
+        "unit": "ratio/percent",
+        "date": data_date,
+        "source_tier": SOURCE_TIER_UNAVAILABLE,
+        "source_name": "Wind index_data.get_index_fundamentals",
+        "source_url": "https://aifinmarket.wind.com.cn",
+        "availability": "unavailable",
+        "unavailable_reason": reason,
+        "error": reason,
+        "data_quality": build_data_quality(
+            provider="Wind",
+            source_name="Wind index_data.get_index_fundamentals",
+            source_url="https://aifinmarket.wind.com.cn",
+            source_tier=SOURCE_TIER_UNAVAILABLE,
+            data_date=data_date,
+            as_of_date=data_date,
+            effective_date=data_date,
+            collected_at_utc=_utc_timestamp(),
+            availability="unavailable",
+            fallback_reason=reason,
+            fallback_chain=[SOURCE_TIER_LICENSED_PROVIDER, SOURCE_TIER_COMPONENT_MODEL, SOURCE_TIER_THIRD_PARTY, SOURCE_TIER_UNAVAILABLE],
+            license_note="licensed_provider",
+            coverage={"index_code": "NDX.GI", "index_name": "Nasdaq 100"},
+            methodology="Wind NDX index fundamentals snapshot unavailable this run",
+            formula="Wind NDX PE/PB/PS and risk premium historical percentiles when licensed provider access is available",
+            anomalies=[reason],
+        ),
+    }
+
+
+def _call_wind_cli(server_type: str, tool_name: str, params: Dict[str, Any], *, timeout: int = 45) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    skill_dir = _wind_skill_dir()
+    cli_path = skill_dir / "scripts" / "cli.mjs"
+    if not cli_path.exists():
+        return None, "wind_mcp_skill_cli_not_found"
+    try:
+        completed = subprocess.run(
+            ["node", "scripts/cli.mjs", "call", server_type, tool_name, json.dumps(params, ensure_ascii=False)],
+            cwd=str(skill_dir),
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "wind_cli_timeout"
+    except Exception as exc:
+        return None, f"wind_cli_runtime_error:{str(exc)[:120]}"
+
+    stdout = (completed.stdout or "").strip()
+    stderr = (completed.stderr or "").strip()
+    if completed.returncode != 0:
+        detail = stdout or stderr or f"exit_code={completed.returncode}"
+        return None, f"wind_cli_failed:{detail[:240]}"
+    if not stdout:
+        return None, "wind_cli_empty_stdout"
+    try:
+        payload = json.loads(stdout)
+        return payload if isinstance(payload, dict) else {"payload": payload}, None
+    except Exception:
+        return {"text": stdout}, None
+
+
+def _json_from_text(text: Any) -> Any:
+    if not isinstance(text, str):
+        return text
+    stripped = text.strip()
+    if not stripped:
+        return text
+    try:
+        return json.loads(stripped)
+    except Exception:
+        pass
+    match = re.search(r"(\{.*\}|\[.*\])", stripped, flags=re.S)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except Exception:
+            return text
+    return text
+
+
+def _wind_payload_body(payload: Any) -> Any:
+    if isinstance(payload, dict) and isinstance(payload.get("content"), list) and payload["content"]:
+        first = payload["content"][0]
+        if isinstance(first, dict) and "text" in first:
+            return _json_from_text(first.get("text"))
+    if isinstance(payload, dict) and "text" in payload:
+        return _json_from_text(payload.get("text"))
+    return payload
+
+
+def _rows_from_table_dict(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    columns = None
+    rows = None
+    for c_key in ("columns", "headers", "fields"):
+        if isinstance(payload.get(c_key), list):
+            columns = payload.get(c_key)
+            break
+    for r_key in ("data", "rows", "values"):
+        if isinstance(payload.get(r_key), list):
+            rows = payload.get(r_key)
+            break
+    if not rows:
+        return []
+    if columns and all(isinstance(row, list) for row in rows):
+        return [
+            {str(columns[idx]): row[idx] if idx < len(row) else None for idx in range(len(columns))}
+            for row in rows
+        ]
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _extract_wind_rows(payload: Any) -> List[Dict[str, Any]]:
+    body = _wind_payload_body(payload)
+    rows: List[Dict[str, Any]] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            table_rows = _rows_from_table_dict(node)
+            if table_rows:
+                rows.extend(table_rows)
+            elif any("风险溢价" in str(key) or "市盈率" in str(key) or str(key).lower() in {"pe", "pb", "ps"} for key in node):
+                rows.append(node)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            if node and all(isinstance(item, dict) for item in node):
+                rows.extend(node)
+            else:
+                for item in node:
+                    walk(item)
+
+    walk(body)
+    deduped: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for row in rows:
+        key = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped
+
+
+def _norm_wind_key(value: Any) -> str:
+    return re.sub(r"[\s_()/（）:：-]+", "", str(value or "").strip().lower())
+
+
+def _wind_row_value(row: Dict[str, Any], *labels: str, exclude: Iterable[str] = ()) -> Any:
+    normalized = {_norm_wind_key(key): value for key, value in row.items()}
+    excludes = tuple(_norm_wind_key(item) for item in exclude)
+    for label in labels:
+        needle = _norm_wind_key(label)
+        for key, value in normalized.items():
+            if needle and needle in key and not any(ex in key for ex in excludes):
+                return value
+    return None
+
+
+def _wind_percent(value: Any) -> Optional[float]:
+    number = _safe_float(value)
+    if number is None:
+        return None
+    if abs(number) <= 1:
+        number *= 100
+    return _round_or_none(number, 2)
+
+
+def _wind_parse_rank(value: Any) -> Dict[str, Any]:
+    text = str(value or "").strip()
+    match = re.search(r"([0-9]+)\s*/\s*([0-9]+)", text)
+    if not match:
+        return {}
+    return {"rank": int(match.group(1)), "sample_count": int(match.group(2))}
+
+
+def _parse_wind_ndx_valuation_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    rows = _extract_wind_rows(payload)
+    parsed: Dict[str, Any] = {
+        "index_code": None,
+        "index_name": None,
+        "data_date": None,
+        "pe": None,
+        "pb": None,
+        "ps": None,
+        "risk_premium": None,
+        "pe_historical_percentile": None,
+        "pb_historical_percentile": None,
+        "ps_historical_percentile": None,
+        "risk_premium_historical_percentile": None,
+        "risk_premium_rank": {},
+        "sample_start": None,
+    }
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        parsed["index_code"] = parsed["index_code"] or _wind_row_value(row, "指数代码", "证券代码", "windcode", "wind代码")
+        parsed["index_name"] = parsed["index_name"] or _wind_row_value(row, "指数简称", "指数名称", "证券简称", "名称")
+        parsed["data_date"] = parsed["data_date"] or _wind_row_value(row, "日期", "交易日期", "数据日期", "截止日期")
+        parsed["sample_start"] = parsed["sample_start"] or _wind_row_value(row, "最早成分日期", "样本开始", "开始日期", "begin")
+
+        parsed["pe"] = parsed["pe"] if parsed["pe"] is not None else _safe_float(_wind_row_value(row, "市盈率", "pe", "pet_ttm", exclude=("分位", "排名", "rank")))
+        parsed["pb"] = parsed["pb"] if parsed["pb"] is not None else _safe_float(_wind_row_value(row, "市净率", "pb", exclude=("分位", "排名", "rank")))
+        parsed["ps"] = parsed["ps"] if parsed["ps"] is not None else _safe_float(_wind_row_value(row, "市销率", "ps", exclude=("分位", "排名", "rank")))
+        parsed["risk_premium"] = parsed["risk_premium"] if parsed["risk_premium"] is not None else _safe_float(
+            _wind_row_value(row, "风险溢价", exclude=("分位", "排名", "rank"))
+        )
+
+        parsed["pe_historical_percentile"] = parsed["pe_historical_percentile"] if parsed["pe_historical_percentile"] is not None else _wind_percent(
+            _wind_row_value(row, "市盈率历史分位", "pe历史分位", "pe分位")
+        )
+        parsed["pb_historical_percentile"] = parsed["pb_historical_percentile"] if parsed["pb_historical_percentile"] is not None else _wind_percent(
+            _wind_row_value(row, "市净率历史分位", "pb历史分位", "pb分位")
+        )
+        parsed["ps_historical_percentile"] = parsed["ps_historical_percentile"] if parsed["ps_historical_percentile"] is not None else _wind_percent(
+            _wind_row_value(row, "市销率历史分位", "ps历史分位", "ps分位")
+        )
+        parsed["risk_premium_historical_percentile"] = (
+            parsed["risk_premium_historical_percentile"]
+            if parsed["risk_premium_historical_percentile"] is not None
+            else _wind_percent(_wind_row_value(row, "风险溢价历史分位", "风险溢价分位"))
+        )
+        if not parsed["risk_premium_rank"]:
+            rank_text = _wind_row_value(row, "风险溢价排名", "风险溢价rank", "排名", "rank")
+            parsed["risk_premium_rank"] = _wind_parse_rank(rank_text)
+
+    if parsed["data_date"]:
+        try:
+            parsed["data_date"] = pd.to_datetime(parsed["data_date"], errors="coerce").strftime("%Y-%m-%d")
+        except Exception:
+            parsed["data_date"] = str(parsed["data_date"])
+    if parsed["sample_start"]:
+        try:
+            parsed["sample_start"] = pd.to_datetime(parsed["sample_start"], errors="coerce").strftime("%Y-%m-%d")
+        except Exception:
+            parsed["sample_start"] = str(parsed["sample_start"])
+
+    parsed["index_code"] = parsed["index_code"] or "NDX.GI"
+    parsed["index_name"] = parsed["index_name"] or "Nasdaq 100"
+    return parsed
+
+
+def get_ndx_wind_valuation_snapshot(end_date: str = None) -> Dict[str, Any]:
+    """Wind NDX-specific valuation and risk-premium snapshot.
+
+    Live mode calls Wind once per run through the local wind-mcp-skill CLI.
+    Backtests do not use current Wind data unless a dated historical contract is
+    added later.
+    """
+    date_str = end_date or datetime.now().strftime("%Y-%m-%d")
+    cache_key = f"wind_ndx_valuation:{end_date or 'live'}"
+    cached = L4_WIND_NDX_VALUATION_CACHE.get(cache_key)
+    if cached is not None:
+        result = deepcopy(cached)
+        result["cache_hit"] = True
+        return result
+    if _wind_l4_disabled():
+        return _wind_unavailable_snapshot("wind_l4_disabled_by_NDX_DISABLE_WIND_L4", date_str=date_str)
+    if end_date:
+        return _wind_unavailable_snapshot("backtest_skipped_current_wind_snapshot_not_point_in_time", date_str=date_str)
+
+    question = "纳斯达克100指数市盈率市净率市销率风险溢价历史分位"
+    payload, error = _call_wind_cli(
+        "index_data",
+        "get_index_fundamentals",
+        {"question": question},
+    )
+    if error or payload is None:
+        result = _wind_unavailable_snapshot(error or "wind_empty_payload", date_str=date_str)
+        L4_WIND_NDX_VALUATION_CACHE[cache_key] = deepcopy(result)
+        return result
+
+    parsed = _parse_wind_ndx_valuation_payload(payload)
+    value_keys = ("pe", "pb", "ps", "risk_premium", "pe_historical_percentile", "risk_premium_historical_percentile")
+    if not any(parsed.get(key) is not None for key in value_keys):
+        result = _wind_unavailable_snapshot("wind_payload_missing_ndx_valuation_fields", date_str=date_str)
+        result["raw_wind_payload_compact"] = _compact_wind_payload(payload)
+        L4_WIND_NDX_VALUATION_CACHE[cache_key] = deepcopy(result)
+        return result
+
+    data_date = str(parsed.get("data_date") or date_str)
+    value = {
+        "index_code": parsed.get("index_code"),
+        "index_name": parsed.get("index_name"),
+        "data_date": data_date,
+        "PE": _round_or_none(parsed.get("pe")),
+        "PB": _round_or_none(parsed.get("pb")),
+        "PS": _round_or_none(parsed.get("ps")),
+        "RiskPremium": _round_or_none(parsed.get("risk_premium"), 4),
+        "PEHistoricalPercentile": parsed.get("pe_historical_percentile"),
+        "PBHistoricalPercentile": parsed.get("pb_historical_percentile"),
+        "PSHistoricalPercentile": parsed.get("ps_historical_percentile"),
+        "RiskPremiumHistoricalPercentile": parsed.get("risk_premium_historical_percentile"),
+        "RiskPremiumRank": parsed.get("risk_premium_rank") or {},
+        "sample_start": parsed.get("sample_start"),
+        "comparison_targets": ["get_ndx_pe_and_earnings_yield", "get_damodaran_us_implied_erp", "get_equity_risk_premium"],
+        "authority_boundary": (
+            "Wind is the primary licensed provider snapshot for NDX-specific PE/PB/PS and risk premium. "
+            "Damodaran remains a US market ERP background reference; simple yield gap is fallback/diagnostic only."
+        ),
+        "data_source_note": "数据来源于万得 Wind 金融数据服务。",
+        "MetricAuthority": {
+            "PE": _component_metric_authority(
+                usage="core_allowed",
+                authority="licensed_provider_wind_index_fundamentals",
+                reason="Wind returns an NDX index-level valuation field, not a yfinance component proxy.",
+                source=SOURCE_TIER_LICENSED_PROVIDER,
+            ),
+            "PB": _component_metric_authority(
+                usage="core_allowed",
+                authority="licensed_provider_wind_index_fundamentals",
+                reason="Wind returns an NDX index-level PB field; use before component-model PB.",
+                source=SOURCE_TIER_LICENSED_PROVIDER,
+            ),
+            "PS": _component_metric_authority(
+                usage="core_allowed",
+                authority="licensed_provider_wind_index_fundamentals",
+                reason="Wind returns an NDX index-level PS field.",
+                source=SOURCE_TIER_LICENSED_PROVIDER,
+            ),
+            "RiskPremium": _component_metric_authority(
+                usage="core_allowed",
+                authority="licensed_provider_wind_ndx_specific_risk_premium",
+                reason="NDX-specific Wind risk premium; do not mix it with Damodaran US ERP or simple yield gap.",
+                source=SOURCE_TIER_LICENSED_PROVIDER,
+            ),
+        },
+    }
+    result = {
+        "name": "Wind NDX Valuation and Risk Premium Snapshot",
+        "series_id": "WIND_NDX_VALUATION_RISK_PREMIUM",
+        "value": value,
+        "unit": "ratio/percent",
+        "date": data_date,
+        "source_tier": SOURCE_TIER_LICENSED_PROVIDER,
+        "source_name": "Wind index_data.get_index_fundamentals",
+        "source_url": "https://aifinmarket.wind.com.cn",
+        "availability": "available",
+        "notes": "Wind NDX-specific valuation and risk premium primary snapshot. 数据来源于万得 Wind 金融数据服务。",
+        "data_quality": build_data_quality(
+            provider="Wind",
+            source_name="Wind index_data.get_index_fundamentals",
+            source_url="https://aifinmarket.wind.com.cn",
+            source_tier=SOURCE_TIER_LICENSED_PROVIDER,
+            data_date=data_date,
+            as_of_date=data_date,
+            effective_date=data_date,
+            collected_at_utc=_utc_timestamp(),
+            availability="available",
+            fallback_reason="none",
+            fallback_chain=[SOURCE_TIER_LICENSED_PROVIDER, SOURCE_TIER_COMPONENT_MODEL, SOURCE_TIER_THIRD_PARTY, SOURCE_TIER_UNAVAILABLE],
+            license_note="licensed_provider",
+            coverage={
+                "index_code": parsed.get("index_code"),
+                "index_name": parsed.get("index_name"),
+                "sample_start": parsed.get("sample_start"),
+                "provider_question": question,
+            },
+            methodology=(
+                "Wind index fundamentals natural-language query for Nasdaq 100 PE/PB/PS and NDX-specific risk premium historical percentile."
+            ),
+            formula="Provider-published index-level PE/PB/PS and risk premium; percentiles normalized to 0-100 when Wind returns 0-1 ratios.",
+            anomalies=[],
+            source_disagreement={
+                "compare_against": {
+                    "component_model": "get_ndx_pe_and_earnings_yield",
+                    "us_market_background_erp": "get_damodaran_us_implied_erp",
+                    "fallback_diagnostic": "get_equity_risk_premium",
+                },
+                "interpretation_boundary": (
+                    "RiskPremium is NDX-specific Wind data; Damodaran is US market background and simple yield gap is a fallback diagnostic."
+                ),
+            },
+            metric_authority=value["MetricAuthority"],
+        ),
+    }
+    L4_WIND_NDX_VALUATION_CACHE[cache_key] = deepcopy(result)
+    return result
+
+
+def _compact_wind_payload(payload: Any) -> Any:
+    if isinstance(payload, dict):
+        compact = {}
+        for key, value in payload.items():
+            if key in {"content", "data", "rows", "result"}:
+                compact[key] = _compact_wind_payload(value)
+            elif isinstance(value, (str, int, float)) or value is None:
+                compact[key] = value
+            if len(compact) >= 5:
+                break
+        return compact
+    if isinstance(payload, list):
+        return [_compact_wind_payload(item) for item in payload[:3]]
+    return str(payload)[:200]
 
 
 def _html_text(html: str) -> str:
@@ -896,6 +1312,7 @@ def audit_component_valuation_metrics(metrics: Dict[str, Any], third_party_check
 def reset_l4_component_snapshot_cache() -> None:
     """Clear the run-local L4 component snapshot cache."""
     L4_COMPONENT_SNAPSHOT_CACHE.clear()
+    L4_WIND_NDX_VALUATION_CACHE.clear()
 
 
 def _raw_yahoo_value(container: Dict[str, Any], key: str) -> Any:
