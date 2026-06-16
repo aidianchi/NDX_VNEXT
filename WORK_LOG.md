@@ -4,6 +4,50 @@
 
 ---
 
+## 2026-06-16
+
+### 数据证据合约迁移：data_evidence_v1、分级闸门与报告展示
+
+完成内容：
+
+- 新增统一数据证据合约模块 `src/data_evidence.py`：所有 Collector 输出会归一化为 `data_quality.contract_version = data_evidence_v1`，补齐 provider、source、日期、vintage、fallback、license、coverage、methodology、anomalies 等字段框架。
+- Collector 接入 normalizer：自动数据和 manual/Wind 输入都走同一证据合约；缺 `source_url`、缺 coverage、缺 first-vintage 不再导致采集失败，而是进入 degraded/audit warn。
+- DataIntegrity 增加合约分级：日期越界、latest-only 混入回测、proxy 冒充 official、available 但无有效值、核心 fallback 缺原因会 hard block；普通元数据缺口只记录为 degraded/audit warn，不误拦本来能获取的数据。
+- Packet Builder 会过滤 hard-blocked 指标的观测值，不送入 L1-L5 事实层；degraded 指标继续保留，并把质量边界带入 packet meta/context。
+- Reporter 数据质量区展示证据合约、provider/source_url、data/as-of/effective/vintage 日期、fallback_reason、license_note、coverage 和 anomalies。
+- L4 `_quality_block` 改接共享 helper；manual data 模板补齐 data evidence 字段。
+
+验证结果：
+
+- `.venv/bin/python -m pytest -q tests/test_data_evidence_contract.py tests/test_data_availability.py tests/test_manual_data_template.py tests/test_vnext_packet_builder.py tests/test_vnext_reporter.py::test_enrich_indicator_data_quality_injects_collection_timestamp tests/test_vnext_reporter.py::test_enrich_indicator_data_quality_with_existing_dq`：32 passed，4 warnings。
+- `.venv/bin/python -m pytest -q tests/test_core_checker.py tests/test_runtime_resilience.py tests/test_l3_breadth_data.py tests/test_l3_top10_concentration.py tests/test_l4_data_authority.py tests/test_l4_forward_earnings_quality.py tests/test_l4_external_valuation_sources.py tests/test_ta_l5_and_pdr_sources.py tests/test_data_layer_integrity_fixes.py tests/test_chart_time_series_artifacts.py tests/test_vnext_packet_builder.py tests/test_vnext_reporter.py tests/test_data_evidence_contract.py`：125 passed，7 warnings。
+- `.venv/bin/python -m pytest -q`：368 passed，49 warnings。
+- `git diff --check`：通过。
+
+---
+
+## 2026-06-09
+
+### 数据获取层严审：回测时间锚、L3/L5 口径和情绪越权修补
+
+完成内容：
+
+- 修正长期分位统计窗口：`calculate_long_term_stats` 不再用系统当前日期锚定 5Y/10Y，而是用传入 `as_of_date` 或输入序列最新观测日，并丢弃锚点之后的数据。
+- 收紧图表技术序列：OHLCV / 补充序列先按日期排序；MA、布林带、Donchian、ATR、VWAP、CMF 等滚动指标必须满足完整窗口，不再用不满窗口的早期样本冒充有效指标。
+- 取消 `GOOGL -> GOOG` 静默替换，避免 Alphabet 两类股混用或双计。
+- L3 回测模式下 `get_qqq_top10_concentration` 不再请求当前 Invesco 持仓作为历史证据，改为明确 unavailable 和数据边界。
+- 统一 M7 Alpha Vantage fallback 的 ROE / margin 百分比口径：兼容 `0.25`、`25`、`25%`，输出统一为百分点。
+- 降权 CNN Fear & Greed：文案去掉“买入信号”，Packet Builder 不允许 FGI 单独把 L2 判为 risk_on / risk_off；risk_on 需要低 VIX + 信用平静，risk_off 需要波动/信用压力或情绪压力被硬信号确认。
+- 修正 SOFR 文案为“以美国国债为抵押的隔夜回购融资成本”；Donchian 文案改为技术观察，不再写成独立买卖信号。
+
+验证结果：
+
+- `.venv/bin/python -m pytest -q tests/test_data_layer_integrity_fixes.py tests/test_chart_time_series_artifacts.py tests/test_l3_top10_concentration.py tests/test_vnext_packet_builder.py`：26 passed，4 warnings。
+- `.venv/bin/python -m pytest -q tests/test_l3_breadth_data.py tests/test_l4_data_authority.py tests/test_l4_forward_earnings_quality.py tests/test_ta_l5_and_pdr_sources.py tests/test_core_checker.py tests/test_runtime_resilience.py tests/test_data_layer_integrity_fixes.py tests/test_chart_time_series_artifacts.py tests/test_l3_top10_concentration.py tests/test_vnext_packet_builder.py`：87 passed，7 warnings。
+- `git diff --check`：通过。
+
+---
+
 ## 2026-06-08
 
 ### TradingAgents 借鉴后代码审视修补：no-data、object firewall 与 checkpoint 入口

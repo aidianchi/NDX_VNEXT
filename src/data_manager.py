@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timedelta
-from typing import Callable, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -152,11 +152,17 @@ class TimeSeriesManager:
             print(f"[TimeSeriesManager] 写入本地文件失败: {exc}")
 
 
-def calculate_long_term_stats(df: pd.DataFrame, current_value: float) -> dict:
+def calculate_long_term_stats(
+    df: pd.DataFrame,
+    current_value: float,
+    *,
+    as_of_date: Optional[Any] = None,
+) -> dict:
     """
     计算长期分位与 Z 分数。
     - 输入 DataFrame 需包含 date 列与 value 列。
     - current_value 为当前最新值，用于相对定位。
+    - as_of_date 为统计窗口锚点；未传入时使用输入序列的最新观测日，避免回测时被系统当前日期污染。
     """
     if df is None or df.empty or current_value is None or np.isnan(current_value):
         return {
@@ -180,9 +186,18 @@ def calculate_long_term_stats(df: pd.DataFrame, current_value: float) -> dict:
         }
     df = df.sort_values("date")
 
-    now = pd.Timestamp(datetime.now().date())
-    window_5y = now - pd.DateOffset(years=5)
-    window_10y = now - pd.DateOffset(years=10)
+    anchor = pd.to_datetime(as_of_date).normalize() if as_of_date is not None else df["date"].max().normalize()
+    df = df[df["date"] <= anchor]
+    if df.empty:
+        return {
+            "percentile_5y": np.nan,
+            "percentile_10y": np.nan,
+            "z_score_10y": np.nan,
+            "window_anchor_date": str(anchor.date()),
+        }
+
+    window_5y = anchor - pd.DateOffset(years=5)
+    window_10y = anchor - pd.DateOffset(years=10)
 
     df_5y = df[df["date"] >= window_5y]
     df_10y = df[df["date"] >= window_10y]
@@ -212,6 +227,7 @@ def calculate_long_term_stats(df: pd.DataFrame, current_value: float) -> dict:
         "percentile_5y": percentile_5y,
         "percentile_10y": percentile_10y,
         "z_score_10y": z_score_10y,
+        "window_anchor_date": str(anchor.date()),
     }
 
 

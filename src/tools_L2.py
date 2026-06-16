@@ -721,7 +721,7 @@ def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
 
     核心价值：
     - 综合性市场情绪指标，整合7个子指标
-    - 极端值是有效的反向指标（<25极度恐惧=买入机会，>75极度贪婪=风险警示）
+    - 极端值是反向情绪观察（<25极度恐惧、>75极度贪婪），必须结合价格、波动率和信用确认
     - 提供历史对比数据（前一日/周/月/年）
 
     返回结构：
@@ -731,8 +731,8 @@ def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
     - sub_metrics: 7个子指标详情
 
     投资逻辑（第一性原理）：
-    - 极端恐惧（<25）：市场过度悲观，价格低于内在价值 → 买入机会
-    - 极端贪婪（>75）：市场过度乐观，价格高于内在价值 → 风险警示
+    - 极端恐惧（<25）：市场过度悲观的候选观察，不能单独推出价格低于内在价值或买入结论
+    - 极端贪婪（>75）：市场过度乐观的候选观察，不能单独推出卖出结论
     """
     headers = _get_cnn_headers()
 
@@ -794,7 +794,7 @@ def get_cnn_fear_greed_index(end_date: str = None) -> Dict[str, Any]:
             },
             "unit": "index (0-100)",
             "source_name": "CNN Business",
-            "notes": "Score range: 0-100. <25=Extreme Fear (buy signal), >75=Extreme Greed (risk warning)"
+            "notes": "Score range: 0-100. <25=Extreme Fear, >75=Extreme Greed. This is sentiment evidence only and requires confirmation from volatility, credit, price, and valuation."
         }
         if end_date:
             result["data_quality"] = {

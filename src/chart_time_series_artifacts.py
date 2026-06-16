@@ -144,6 +144,14 @@ def _filter_rows_to_effective_date(rows: List[Dict[str, Any]], effective_date: O
     return kept, {"effective_date": effective_date, "max_observed_date": max_observed, "future_rows_dropped": dropped}
 
 
+def _sort_rows_by_time(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    decorated = []
+    for index, row in enumerate(rows):
+        row_date = _parse_date(row.get("time"))
+        decorated.append((row_date is None, row_date or datetime.max, index, row))
+    return [row for *_prefix, row in sorted(decorated, key=lambda item: item[:3])]
+
+
 def _is_finite(value: Any) -> bool:
     number = _safe_number(value)
     return number is not None and math.isfinite(number)
@@ -160,7 +168,7 @@ def _rolling_mean(values: List[Optional[float]], window: int) -> List[Optional[f
     out: List[Optional[float]] = []
     for index in range(len(values)):
         tail = [item for item in values[max(0, index - window + 1) : index + 1] if item is not None]
-        out.append(sum(tail) / len(tail) if tail else None)
+        out.append(sum(tail) / len(tail) if len(tail) >= window else None)
     return out
 
 
@@ -168,7 +176,7 @@ def _rolling_std(values: List[Optional[float]], window: int) -> List[Optional[fl
     out: List[Optional[float]] = []
     for index in range(len(values)):
         tail = [item for item in values[max(0, index - window + 1) : index + 1] if item is not None]
-        if len(tail) < 2:
+        if len(tail) < window:
             out.append(None)
             continue
         mean = sum(tail) / len(tail)
@@ -180,7 +188,7 @@ def _rolling_min(values: List[Optional[float]], window: int) -> List[Optional[fl
     out: List[Optional[float]] = []
     for index in range(len(values)):
         tail = [item for item in values[max(0, index - window + 1) : index + 1] if item is not None]
-        out.append(min(tail) if tail else None)
+        out.append(min(tail) if len(tail) >= window else None)
     return out
 
 
@@ -188,7 +196,7 @@ def _rolling_max(values: List[Optional[float]], window: int) -> List[Optional[fl
     out: List[Optional[float]] = []
     for index in range(len(values)):
         tail = [item for item in values[max(0, index - window + 1) : index + 1] if item is not None]
-        out.append(max(tail) if tail else None)
+        out.append(max(tail) if len(tail) >= window else None)
     return out
 
 
@@ -273,6 +281,9 @@ def _vwap(highs: List[Optional[float]], lows: List[Optional[float]], closes: Lis
     for index in range(len(closes)):
         pv_tail = [item for item in tpv[max(0, index - window + 1) : index + 1] if item is not None]
         vol_tail = [item for item in volumes[max(0, index - window + 1) : index + 1] if item is not None]
+        if len(pv_tail) < window or len(vol_tail) < window:
+            out.append(None)
+            continue
         vol_sum = sum(vol_tail)
         out.append(sum(pv_tail) / vol_sum if vol_sum else None)
     return out
@@ -323,6 +334,9 @@ def _cmf(highs: List[Optional[float]], lows: List[Optional[float]], closes: List
     out: List[Optional[float]] = []
     for index in range(len(closes)):
         vol_tail = [item for item in volumes[max(0, index - window + 1) : index + 1] if item is not None]
+        if len(vol_tail) < window:
+            out.append(None)
+            continue
         vol_sum = sum(vol_tail)
         mfv_tail = [item for item in mfv[max(0, index - window + 1) : index + 1] if item is not None]
         out.append(sum(mfv_tail) / vol_sum if vol_sum else None)
@@ -355,7 +369,7 @@ def _frame_to_rows(frame: Any) -> List[Dict[str, Any]]:
             "volume": _safe_number(_row_get(row, "volume")) or 0.0,
         }
         rows.append(prepared)
-    return _enrich_ohlcv_rows(rows)
+    return _enrich_ohlcv_rows(_sort_rows_by_time(rows))
 
 
 def _enrich_ohlcv_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -420,7 +434,7 @@ def _frame_to_value_rows(frame: Any) -> List[Dict[str, Any]]:
         if value is None:
             continue
         rows.append({"time": _date_text(_row_get(row, "date")), "value": value})
-    return rows
+    return _sort_rows_by_time(rows)
 
 
 def _packet_dict(packet: Any) -> Dict[str, Any]:

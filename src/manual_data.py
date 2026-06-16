@@ -201,6 +201,38 @@ DEFAULT_MANUAL_DATA: ManualData = {
     },
 }
 
+
+def _apply_manual_data_evidence_defaults() -> None:
+    for metric_key, metric in DEFAULT_MANUAL_DATA["metrics"].items():
+        if not isinstance(metric, dict):
+            continue
+        data_quality = metric.get("data_quality") if isinstance(metric.get("data_quality"), dict) else {}
+        metric["data_quality"] = data_quality
+        source_name = metric.get("source_name") or data_quality.get("source_name") or "Manual Input"
+        source_tier = metric.get("source_tier") or data_quality.get("source_tier") or "licensed_manual/Wind"
+        data_quality.setdefault("contract_version", "data_evidence_v1")
+        data_quality.setdefault("provider", source_name)
+        data_quality.setdefault("source_name", source_name)
+        data_quality.setdefault("source_url", metric.get("source_url") or "missing")
+        data_quality.setdefault("source_tier", source_tier)
+        data_quality.setdefault("as_of_date", "")
+        data_quality.setdefault("effective_date", "")
+        data_quality.setdefault("data_date", "")
+        data_quality.setdefault("vintage_date", "not_available")
+        data_quality.setdefault("collected_at_utc", "")
+        data_quality.setdefault("availability", "template")
+        data_quality.setdefault("fallback_reason", "none")
+        data_quality.setdefault("fallback_chain", ["licensed_manual/Wind", "unavailable"])
+        data_quality.setdefault("license_note", "licensed_manual")
+        data_quality.setdefault("coverage", {"note": "Manual source coverage must be supplied or reviewed by user."})
+        data_quality.setdefault("methodology", data_quality.get("formula", "user supplied"))
+        data_quality.setdefault("formula", data_quality.get("methodology", "user supplied"))
+        data_quality.setdefault("anomalies", [])
+        data_quality.setdefault("function_id", metric_key)
+
+
+_apply_manual_data_evidence_defaults()
+
 _ALLOWED_METRIC_FIELDS = (
     "name",
     "series_id",

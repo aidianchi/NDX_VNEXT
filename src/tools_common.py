@@ -238,7 +238,6 @@ NDX100_COMPONENTS_FALLBACK = [
 TICKER_REPLACEMENTS = {
     'ANSS': None,
     'WBA': None,
-    'GOOGL': 'GOOG',
 }
 
 # =====================================================

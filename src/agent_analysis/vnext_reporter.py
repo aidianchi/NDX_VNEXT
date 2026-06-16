@@ -2532,6 +2532,21 @@ class VNextReportGenerator:
         fallback = data_quality.get("fallback_chain", [])
         disagreement = data_quality.get("source_disagreement", {})
         valuation_sources = self._valuation_source_rows(data_quality.get("valuation_sources", []))
+        source_line = " / ".join(
+            str(item)
+            for item in (
+                data_quality.get("provider"),
+                data_quality.get("source_name"),
+                data_quality.get("source_url"),
+            )
+            if item
+        )
+        date_line = (
+            f"data={data_quality.get('data_date', '')}; "
+            f"as_of={data_quality.get('as_of_date', '')}; "
+            f"effective={data_quality.get('effective_date', '')}; "
+            f"vintage={data_quality.get('vintage_date', '')}"
+        )
         coverage_html = ""
         if isinstance(coverage, dict) and coverage:
             coverage_html = f"""
@@ -2556,16 +2571,24 @@ class VNextReportGenerator:
 """
         return f"""
   <div class="data-quality-box">
+    <h5>证据合约</h5>
+    <p>{_escape(data_quality.get('contract_version', ''))}</p>
+    <h5>数据源</h5>
+    <p>{_escape(source_line)}</p>
     <h5>来源等级</h5>
     <p>{_escape(data_quality.get('source_tier', ''))}</p>
-    <h5>数据日期 / 采集时间</h5>
-    <p>{_escape(data_quality.get('data_date', ''))} · {_escape(data_quality.get('collected_at_utc', ''))}</p>
+    <h5>数据日期 / as-of / effective / vintage</h5>
+    <p>{_escape(date_line)}</p>
+    <h5>采集时间</h5>
+    <p>{_escape(data_quality.get('collected_at_utc', ''))}</p>
     <h5>可用性 / 耗时</h5>
     <p>{_escape(_label(data_quality.get('availability', ''), 'availability'))} · {_escape(data_quality.get('collection_duration_ms', ''))} ms</p>
+    <h5>Fallback / 授权边界</h5>
+    <p>{_escape(data_quality.get('fallback_reason', ''))} · {_escape(data_quality.get('license_note', ''))}</p>
     <h5>失败类型</h5>
     <p>{_escape(data_quality.get('failure_type', ''))}</p>
-    <h5>公式口径</h5>
-    <p>{_escape(data_quality.get('formula', ''))}</p>
+    <h5>方法与公式口径</h5>
+    <p>{_escape(data_quality.get('methodology', '') or data_quality.get('formula', ''))}</p>
     {coverage_html}
     {valuation_sources}
     <h5>异常与缺口</h5>

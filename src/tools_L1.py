@@ -1057,7 +1057,7 @@ def get_sofr_rate(end_date: str = None) -> Dict[str, Any]:
     第一性原理:
     - SOFR (Secured Overnight Financing Rate) 是LIBOR的替代基准利率
     - 基于真实交易（美国国债回购市场），比LIBOR更难操纵，更可靠
-    - 反映银行间无担保借贷成本，是衡量美元流动性的关键指标
+    - 反映以美国国债为抵押的隔夜回购融资成本，是衡量美元融资和抵押品流动性的关键指标
     - SOFR飙升 = 流动性紧张（如2019年9月回购危机）
 
     数据来源: FRED (SOFR)

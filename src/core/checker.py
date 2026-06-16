@@ -10,6 +10,11 @@ try:
 except ImportError:
     from data_availability import NO_DATA_AVAILABLE, has_meaningful_observation_value, no_data_reason
 
+try:
+    from ..data_evidence import data_evidence_issues, flatten_issue_groups
+except ImportError:
+    from data_evidence import data_evidence_issues, flatten_issue_groups
+
 
 class DataIntegrity:
     """Generate a compact reliability report from collector output."""
@@ -164,9 +169,29 @@ class DataIntegrity:
             for item in indicators
         }
         future_violations = {key: value for key, value in future_violations.items() if value}
+        data_evidence_contract_issues = []
+        for item in indicators:
+            raw = self._raw_data(item)
+            function_id = str(item.get("function_id") or raw.get("function_id") or item.get("metric_name") or "unknown_metric")
+            issue_groups = data_evidence_issues(raw, function_id=function_id, backtest_date=backtest_date)
+            for issue in flatten_issue_groups(issue_groups):
+                issue["metric_name"] = item.get("metric_name")
+                issue["layer"] = item.get("layer")
+                data_evidence_contract_issues.append(issue)
+        hard_evidence_issues = [
+            issue for issue in data_evidence_contract_issues if issue.get("severity") == "hard_block"
+        ]
+        degraded_evidence_issues = [
+            issue for issue in data_evidence_contract_issues if issue.get("severity") == "degraded"
+        ]
+        audit_evidence_issues = [
+            issue for issue in data_evidence_contract_issues if issue.get("severity") == "audit_warn"
+        ]
         weighted_success = sum(coverage_factors.values())
         if future_violations:
             weighted_success = max(0.0, weighted_success - len(future_violations))
+        if hard_evidence_issues:
+            weighted_success = max(0.0, weighted_success - len(hard_evidence_issues))
         quality_issues = []
         for item in successful_items:
             quality_issues.extend(self._source_disagreement_issues(item))
@@ -190,6 +215,12 @@ class DataIntegrity:
                     f"reference={issue.get('reference_median')} diff={issue.get('relative_diff_pct')}%"
                 )
             blocking_reasons.append("valuation_source_disagreement: " + "；".join(examples))
+        if hard_evidence_issues:
+            examples = [
+                f"{issue.get('function_id')}: {issue.get('code')}"
+                for issue in hard_evidence_issues[:5]
+            ]
+            blocking_reasons.append("data_evidence_contract_hard_block: " + "；".join(examples))
 
         failed_metrics = [
             item.get("metric_name") or item.get("function_id")
@@ -230,6 +261,20 @@ class DataIntegrity:
                     f"ref={issue.get('reference_median')}, diff={issue.get('relative_diff_pct')}%"
                 )
             notes.append(f"{len(quality_issues)} 个估值源严重冲突，示例: {'；'.join(examples)}")
+        if hard_evidence_issues:
+            examples = [
+                f"{issue.get('function_id')}: {issue.get('code')}"
+                for issue in hard_evidence_issues[:3]
+            ]
+            notes.append(f"{len(hard_evidence_issues)} 个数据证据合约硬阻断，示例: {'；'.join(examples)}")
+        if degraded_evidence_issues:
+            examples = [
+                f"{issue.get('function_id')}: {issue.get('code')}"
+                for issue in degraded_evidence_issues[:3]
+            ]
+            notes.append(f"{len(degraded_evidence_issues)} 个指标数据证据元信息不完整，已降级但不阻断，示例: {'；'.join(examples)}")
+        if audit_evidence_issues:
+            notes.append(f"{len(audit_evidence_issues)} 条数据证据审计提示进入审计区，不单独阻断发布。")
         if not future_violations and not quality_issues and not failed_metrics and not unavailable and not no_data_items and not partial:
             notes.append("所有采集指标均返回有效值。")
         strict_backtest_invariants = self._strict_backtest_invariants(data_json)
@@ -311,6 +356,12 @@ class DataIntegrity:
                 if self._fallback_chain(item)
             ],
             "future_date_violations": future_violations,
+            "data_evidence_contract_issues": data_evidence_contract_issues,
+            "data_evidence_contract_summary": {
+                "hard_block": len(hard_evidence_issues),
+                "degraded": len(degraded_evidence_issues),
+                "audit_warn": len(audit_evidence_issues),
+            },
             "layer_breakdown": {
                 layer: {
                     "total": stats["total"],

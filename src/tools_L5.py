@@ -963,7 +963,7 @@ def get_donchian_channels_qqq(end_date: str = None) -> Dict[str, Any]:
             },
             "unit": "price points",
             "source_name": tech_data.get("source_name"),
-            "notes": "唐奇安通道：海龟交易法则核心工具。突破上轨=买入信号，跌破下轨=卖出信号。"
+            "notes": "唐奇安通道用于观察20日价格通道和趋势突破/破位；它是L5技术证据，不能单独推出买入或卖出结论。"
         }
     return {
         "name": "QQQ Donchian Channels(20)",

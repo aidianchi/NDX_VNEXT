@@ -361,6 +361,25 @@ def _qqq_equal_weight_performance_spread(effective_date: datetime) -> Dict[str, 
 def get_qqq_top10_concentration(end_date: str = None) -> Dict[str, Any]:
     """QQQ official holdings anchor for Top10 concentration and cap-weighted vs equal-weight spread."""
     effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
+    if end_date:
+        return {
+            "name": "QQQ Top10 Concentration",
+            "series_id": "INVESCO_QQQ_HOLDINGS",
+            "value": None,
+            "unit": "percent",
+            "date": end_date,
+            "source_name": "Invesco QQQ official holdings API",
+            "source_url": INVESCO_QQQ_HOLDINGS_PAGE,
+            "source_tier": "unavailable",
+            "notes": "Backtest/snapshot mode skipped: current Invesco holdings must not be used as historical QQQ top-10 concentration evidence.",
+            "data_quality": {
+                "effective_date": end_date,
+                "fallback_reason": "no_official_historical_qqq_holdings_snapshot",
+                "coverage": {"holdings_reported": 0, "total_holdings": None},
+                "anomalies": ["historical_holdings_unavailable", "live_current_holdings_not_used"],
+                "fallback_chain": ["official_historical_holdings", "unavailable"],
+            },
+        }
     payload, error = _fetch_invesco_qqq_holdings()
     if payload is None:
         return {
@@ -607,9 +626,20 @@ def get_m7_fundamentals(end_date: str = None) -> Dict[str, Any]:
                     raise Exception("No data from Alpha Vantage")
 
                 # 计算简化版护城河分数（基于可用字段）
-                roe = float(data.get("ReturnOnEquity", 0)) / 100 if data.get("ReturnOnEquity") else None
-                gross_margin = float(data.get("GrossMargin", 0)) / 100 if data.get("GrossMargin") else None
-                op_margin = float(data.get("OperatingMargin", 0)) / 100 if data.get("OperatingMargin") else None
+                def _av_percent_ratio(field: str) -> Optional[float]:
+                    raw = data.get(field)
+                    if raw in (None, "", "None", "null"):
+                        return None
+                    value = float(str(raw).strip().rstrip("%"))
+                    return value / 100 if abs(value) > 1 else value
+
+                def _ratio_to_pct(value: Optional[float]) -> Optional[float]:
+                    return round(value * 100, 2) if value is not None else None
+
+                roe = _av_percent_ratio("ReturnOnEquity")
+                gross_margin = _av_percent_ratio("GrossMargin")
+                op_margin = _av_percent_ratio("OperatingMargin")
+                profit_margin = _av_percent_ratio("ProfitMargin")
 
                 score = 0
                 notes = []
@@ -639,12 +669,12 @@ def get_m7_fundamentals(end_date: str = None) -> Dict[str, Any]:
                     "PE": float(data.get("PERatio")) if data.get("PERatio") else None,
                     "ForwardPE": float(data.get("ForwardPE")) if data.get("ForwardPE") else None,
                     "PEG": float(data.get("PEGRatio")) if data.get("PEGRatio") else None,
-                    "ROE": float(data.get("ReturnOnEquity")) if data.get("ReturnOnEquity") else None,
+                    "ROE": _ratio_to_pct(roe),
                     "EPS": float(data.get("EPS")) if data.get("EPS") else None,
                     "MarketCap": int(data.get("MarketCapitalization")) if data.get("MarketCapitalization") else None,
-                    "ProfitMargin": float(data.get("ProfitMargin")) if data.get("ProfitMargin") else None,
-                    "GrossMargin": float(data.get("GrossMargin")) if data.get("GrossMargin") else None,
-                    "OperatingMargin": float(data.get("OperatingMargin")) if data.get("OperatingMargin") else None,
+                    "ProfitMargin": _ratio_to_pct(profit_margin),
+                    "GrossMargin": _ratio_to_pct(gross_margin),
+                    "OperatingMargin": _ratio_to_pct(op_margin),
                     "Price": latest_price,
                     "52WeekHigh": float(data.get("52WeekHigh")) if data.get("52WeekHigh") else None,
                     "52WeekLow": float(data.get("52WeekLow")) if data.get("52WeekLow") else None,

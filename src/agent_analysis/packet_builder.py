@@ -33,6 +33,11 @@ except ImportError:
         no_data_reason as _shared_no_data_reason,
     )
 
+try:
+    from ..data_evidence import data_evidence_issues, flatten_issue_groups
+except ImportError:
+    from data_evidence import data_evidence_issues, flatten_issue_groups
+
 logger = logging.getLogger(__name__)
 
 LAYER_NAMES = {
@@ -154,6 +159,16 @@ def _indicator_successful(indicator: Dict[str, Any]) -> bool:
     if "value" in raw:
         return _has_meaningful_observation_value(raw.get("value"))
     return indicator.get("value") is not None or bool(raw)
+
+
+def _data_evidence_issue_rows(indicator: Dict[str, Any], backtest_date: Optional[str]) -> List[Dict[str, Any]]:
+    raw = indicator.get("raw_data") if isinstance(indicator.get("raw_data"), dict) else {}
+    function_id = str(indicator.get("function_id") or raw.get("function_id") or indicator.get("metric_name") or "unknown_metric")
+    rows = flatten_issue_groups(data_evidence_issues(raw, function_id=function_id, backtest_date=backtest_date))
+    for row in rows:
+        row["metric_name"] = indicator.get("metric_name")
+        row["layer"] = indicator.get("layer")
+    return rows
 
 
 def _utc_now() -> datetime:
@@ -362,7 +377,25 @@ class AnalysisPacketBuilder:
     ) -> Dict[str, Any]:
         indicators = data_json.get("indicators", [])
         total_indicators = len(indicators)
-        successful_indicators = sum(1 for item in indicators if _indicator_successful(item))
+        evidence_issues = [
+            issue
+            for indicator in indicators
+            for issue in _data_evidence_issue_rows(indicator, data_json.get("backtest_date"))
+        ]
+        evidence_summary = {
+            severity: sum(1 for issue in evidence_issues if issue.get("severity") == severity)
+            for severity in ("hard_block", "degraded", "audit_warn")
+        }
+        hard_block_ids = {
+            str(issue.get("function_id"))
+            for issue in evidence_issues
+            if issue.get("severity") == "hard_block"
+        }
+        successful_indicators = sum(
+            1
+            for item in indicators
+            if _indicator_successful(item) and str(item.get("function_id")) not in hard_block_ids
+        )
         manual_count = 0
         for metrics in grouped_raw_data.values():
             manual_count += sum(1 for item in metrics.values() if item.get("manual_override_used"))
@@ -383,6 +416,10 @@ class AnalysisPacketBuilder:
             "manual_override_active": bool(manual_overrides.get("active")),
             "backtest_data_boundaries": data_json.get("backtest_data_boundaries", []),
             "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),
+            "data_evidence_contract_summary": evidence_summary,
+            "data_evidence_hard_blocks": [
+                issue for issue in evidence_issues if issue.get("severity") == "hard_block"
+            ],
         }
 
     def _build_context(
@@ -391,11 +428,23 @@ class AnalysisPacketBuilder:
         facts_by_layer: Dict[str, LayerFacts],
         extra_context: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
+        evidence_issues = [
+            issue
+            for indicator in data_json.get("indicators", [])
+            for issue in _data_evidence_issue_rows(indicator, data_json.get("backtest_date"))
+        ]
         context = {
             "source_timestamp_utc": data_json.get("timestamp_utc"),
             "backtest_date": data_json.get("backtest_date"),
             "backtest_data_boundaries": data_json.get("backtest_data_boundaries", []),
             "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),
+            "data_evidence_contract_summary": {
+                severity: sum(1 for issue in evidence_issues if issue.get("severity") == severity)
+                for severity in ("hard_block", "degraded", "audit_warn")
+            },
+            "data_evidence_hard_blocks": [
+                issue for issue in evidence_issues if issue.get("severity") == "hard_block"
+            ],
             "layer_states": {layer: facts.state for layer, facts in facts_by_layer.items()},
             "layer_summaries": {layer: facts.summary for layer, facts in facts_by_layer.items()},
         }
@@ -427,6 +476,20 @@ class AnalysisPacketBuilder:
             raw_payload["metric_name"] = indicator.get("metric_name") or raw_payload.get("name") or function_id
             raw_payload["error"] = _indicator_error(indicator, raw_payload)
             raw_payload["collection_timestamp_utc"] = indicator.get("collection_timestamp_utc")
+            issue_rows = _data_evidence_issue_rows(indicator, data_json.get("backtest_date"))
+            hard_blocks = [issue for issue in issue_rows if issue.get("severity") == "hard_block"]
+            if hard_blocks:
+                grouped[layer][function_id] = {
+                    "function_id": function_id,
+                    "metric_name": raw_payload.get("metric_name"),
+                    "name": raw_payload.get("name"),
+                    "value": None,
+                    "error": "data_evidence_hard_block",
+                    "data_quality": raw_payload.get("data_quality", {}),
+                    "data_evidence_hard_block_issues": hard_blocks,
+                    "collection_timestamp_utc": indicator.get("collection_timestamp_utc"),
+                }
+                continue
 
             manual_metric = manual_metrics.get(function_id) if isinstance(manual_metrics, dict) else None
             raw_payload["manual_override_used"] = bool(
@@ -688,14 +751,24 @@ class AnalysisPacketBuilder:
             hy_oas = self._metric_level(metrics, "get_hy_oas_bp", "level")
             hy_quality_spread = self._metric_level(metrics, "get_hy_quality_spread_bp", "level")
             fear_greed = self._metric_level(metrics, "get_cnn_fear_greed_index", "score")
-            if (
-                (vix is not None and vix >= 25)
-                or (hy_oas is not None and hy_oas >= 500)
+            vol_stress = vix is not None and vix >= 25
+            credit_stress = (
+                (hy_oas is not None and hy_oas >= 500)
                 or (hy_quality_spread is not None and hy_quality_spread >= 700)
-                or (fear_greed is not None and fear_greed <= 30)
-            ):
+            )
+            sentiment_stress_confirmed = (
+                fear_greed is not None
+                and fear_greed <= 30
+                and ((vix is not None and vix >= 20) or credit_stress)
+            )
+            if vol_stress or credit_stress or sentiment_stress_confirmed:
                 return "risk_off"
-            if (vix is not None and vix <= 15) or (fear_greed is not None and fear_greed >= 70):
+            credit_calm = (
+                hy_oas is not None
+                and hy_oas < 350
+                and (hy_quality_spread is None or hy_quality_spread < 500)
+            )
+            if vix is not None and vix <= 15 and credit_calm:
                 return "risk_on"
             return "neutral"
 

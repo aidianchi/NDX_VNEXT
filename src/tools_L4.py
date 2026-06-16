@@ -9,6 +9,11 @@ try:
 except ImportError:
     from tools_common import *
 
+try:
+    from .data_evidence import build_data_quality
+except ImportError:
+    from data_evidence import build_data_quality
+
 from datetime import timezone
 
 try:
@@ -153,17 +158,22 @@ def _quality_block(
     fallback_chain: Optional[List[str]] = None,
     source_disagreement: Any = None,
 ) -> Dict[str, Any]:
-    return {
-        "source_tier": source_tier,
-        "data_date": data_date,
-        "collected_at_utc": _utc_timestamp(),
-        "update_frequency": update_frequency,
-        "formula": formula,
-        "coverage": coverage or {},
-        "anomalies": anomalies or [],
-        "fallback_chain": fallback_chain or [],
-        "source_disagreement": source_disagreement or {},
-    }
+    return build_data_quality(
+        provider=source_tier,
+        source_name=source_tier,
+        source_tier=source_tier,
+        data_date=data_date,
+        as_of_date=data_date,
+        effective_date=data_date,
+        collected_at_utc=_utc_timestamp(),
+        update_frequency=update_frequency,
+        formula=formula,
+        methodology=formula,
+        coverage=coverage or {},
+        anomalies=anomalies or [],
+        fallback_chain=fallback_chain or [],
+        source_disagreement=source_disagreement or {},
+    )
 
 
 def _valuation_source_result(

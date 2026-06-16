@@ -39,6 +39,11 @@ except ImportError:
     from data_availability import normalize_no_data_payload, no_data_reason
 
 try:
+    from ..data_evidence import normalize_data_evidence
+except ImportError:
+    from data_evidence import normalize_data_evidence
+
+try:
     from ..tools_L4 import reset_l4_component_snapshot_cache
 except ImportError:
     try:
@@ -228,7 +233,7 @@ class DataCollector:
             },
         }
 
-    def _collect_single_indicator(self, func_name: str, end_date: Optional[str] = None) -> dict:
+    def _collect_single_indicator(self, func_name: str, end_date: Optional[str] = None, layer_num: Optional[int] = None) -> dict:
         """安全地调用单个数据函数并处理异常。"""
         started = time.monotonic()
         try:
@@ -252,7 +257,7 @@ class DataCollector:
                         "anomalies": skip_meta.get("anomalies", ["latest_only_source_not_used_in_backtest"]),
                     },
                 }
-                return self._finalize_indicator_result(result, started)
+                return self._finalize_indicator_result(result, started, function_id=func_name, layer_num=layer_num, effective_date=end_date)
             
             result = TOOLS_REGISTRY[func_name](end_date=end_date)
             result.setdefault("function_id", func_name)
@@ -262,7 +267,7 @@ class DataCollector:
                 result['error'] = "Upstream data source returned None."
             else:
                 logging.info(f"  - 调用 {func_name}... ✔")
-            return self._finalize_indicator_result(result, started)
+            return self._finalize_indicator_result(result, started, function_id=func_name, layer_num=layer_num, effective_date=end_date)
             
         except Exception as e:
             error_msg = str(e)[:150]
@@ -270,11 +275,23 @@ class DataCollector:
             return self._finalize_indicator_result(
                 {"name": func_name.replace('_', ' ').title(), "function_id": func_name, "value": None, "error": error_msg},
                 started,
+                function_id=func_name,
+                layer_num=layer_num,
+                effective_date=end_date,
             )
 
-    def _finalize_indicator_result(self, result: Dict[str, Any], started: float) -> Dict[str, Any]:
+    def _finalize_indicator_result(
+        self,
+        result: Dict[str, Any],
+        started: float,
+        *,
+        function_id: Optional[str] = None,
+        layer_num: Optional[int] = None,
+        effective_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
         duration_ms = round((time.monotonic() - started) * 1000, 1)
         result["collection_duration_ms"] = duration_ms
+        result.setdefault("collection_timestamp_utc", datetime.now(timezone.utc).isoformat())
         error = result.get("error")
         data_quality = result.get("data_quality") if isinstance(result.get("data_quality"), dict) else {}
         data_quality["collection_duration_ms"] = duration_ms
@@ -307,6 +324,13 @@ class DataCollector:
                 metric=result.get("function_id") or result.get("name"),
                 effective_date=result.get("date") or data_quality.get("effective_date"),
             )
+        result = normalize_data_evidence(
+            result,
+            function_id=function_id or result.get("function_id") or result.get("name") or "unknown_function",
+            layer=layer_num,
+            effective_date=effective_date,
+            collected_at_utc=result.get("collection_timestamp_utc"),
+        )
         return result
 
     def run(self, backtest_date: Optional[str] = None, enable_news: bool = False) -> Dict[str, Any]:
@@ -362,7 +386,7 @@ class DataCollector:
 
                 # Damodaran ERP: always call live function for monthly series, merge manual values as supplement
                 if func_name == "get_damodaran_us_implied_erp":
-                    result = self._collect_single_indicator(func_name, end_date=backtest_date)
+                    result = self._collect_single_indicator(func_name, end_date=backtest_date, layer_num=layer_num)
                     if manual_active and isinstance(manual_metric, dict):
                         manual_value = manual_metric.get("value", {}) if isinstance(manual_metric.get("value"), dict) else {}
                         live_value = result.get("value", {}) if isinstance(result.get("value"), dict) else {}
@@ -390,20 +414,30 @@ class DataCollector:
                 if manual_active:
                     logging.info(f"  - 璋冪敤 {func_name}... 鉁?(manual override used)")
                     logging.info(f"  - 调用 {func_name}... ✔ (使用 'manual_data.py' 中的人工数据)")
-                    raw_data = manual_metric
+                    raw_data = deepcopy(manual_metric)
                     if func_name == "get_ndx_pe_and_earnings_yield" and isinstance(manual_metric, dict):
                         raw_data = self._merge_manual_ndx_valuation_checks(manual_metric, backtest_date=backtest_date)
                         if backtest_date:
                             logging.info(f"  - 调用 {func_name}... ✔ (manual valuation used; live third-party checks skipped in backtest)")
                         else:
                             logging.info(f"  - 调用 {func_name}... ✔ (manual valuation merged with live third-party checks)")
+                    collection_timestamp = datetime.now(timezone.utc).isoformat()
+                    raw_data["function_id"] = func_name
+                    raw_data["collection_timestamp_utc"] = collection_timestamp
+                    raw_data = normalize_data_evidence(
+                        raw_data,
+                        function_id=func_name,
+                        layer=layer_num,
+                        effective_date=backtest_date or MANUAL_DATA.get("date") or raw_data.get("date"),
+                        collected_at_utc=collection_timestamp,
+                    )
                     indicator = {
                         "layer": layer_num,
                         "metric_name": raw_data.get("name", func_name.replace("_", " ").title()),
                         "function_id": func_name,
                         "raw_data": raw_data,
                         "error": None,
-                        "collection_timestamp_utc": datetime.now(timezone.utc).isoformat()
+                        "collection_timestamp_utc": collection_timestamp
                     }
                     indicators.append(indicator)
                     # 使用 continue 结束当前函数的处理，直接进入下一个函数的循环
@@ -414,7 +448,7 @@ class DataCollector:
                 # --- 【新增逻辑结束】 ---
 
                 # 如果上述if条件不满足，则正常执行自动化数据收集
-                result = self._collect_single_indicator(func_name, end_date=backtest_date)
+                result = self._collect_single_indicator(func_name, end_date=backtest_date, layer_num=layer_num)
                 indicator = {
                     "layer": layer_num,
                     "metric_name": result.get("name", func_name.replace("_", " ").title()),

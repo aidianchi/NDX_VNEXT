@@ -86,7 +86,7 @@ def test_write_chart_time_series_artifact_persists_qqq_rows(tmp_path: Path):
     assert payload["generated_at_utc"] == "2026-05-05T00:00:00Z"
     assert payload["series"]["QQQ_OHLCV"]["source_file"] == "chart_time_series.json"
     assert payload["series"]["QQQ_OHLCV"]["rows"][1]["time"] == "2026-05-04"
-    assert payload["series"]["QQQ_OHLCV"]["rows"][1]["ma5"] == 103.5
+    assert "ma5" not in payload["series"]["QQQ_OHLCV"]["rows"][1]
 
 
 def test_chart_time_series_artifact_respects_effective_date(tmp_path: Path):
@@ -117,6 +117,73 @@ def test_chart_time_series_artifact_respects_effective_date(tmp_path: Path):
     assert payload["series"]["QQQ_OHLCV"]["max_observed_date"] == "2025-04-09"
     assert payload["series"]["QQQ_OHLCV"]["future_rows_dropped"] == 1
     assert payload["series"]["VIX"]["rows"] == [{"time": "2025-04-09", "value": 40.0}]
+
+
+def test_chart_time_series_requires_full_rolling_windows():
+    payload_19 = build_chart_time_series_artifact(
+        fetcher=lambda lookback_days: _ohlcv_frame(19),
+        generated_at="2026-05-05T00:00:00Z",
+    )
+    latest_19 = payload_19["series"]["QQQ_OHLCV"]["rows"][-1]
+    for key in ["ma20", "bb_upper", "bb_lower", "donchian_upper", "donchian_lower", "vwap20", "cmf20"]:
+        assert key not in latest_19
+
+    payload_20 = build_chart_time_series_artifact(
+        fetcher=lambda lookback_days: _ohlcv_frame(20),
+        generated_at="2026-05-05T00:00:00Z",
+    )
+    latest_20 = payload_20["series"]["QQQ_OHLCV"]["rows"][-1]
+    assert latest_20["ma20"] == 109.5
+    for key in ["bb_upper", "bb_lower", "donchian_upper", "donchian_lower", "vwap20", "cmf20"]:
+        assert key in latest_20
+
+    payload_199 = build_chart_time_series_artifact(
+        fetcher=lambda lookback_days: _ohlcv_frame(199),
+        generated_at="2026-05-05T00:00:00Z",
+    )
+    assert "ma200" not in payload_199["series"]["QQQ_OHLCV"]["rows"][-1]
+
+    payload_200 = build_chart_time_series_artifact(
+        fetcher=lambda lookback_days: _ohlcv_frame(200),
+        generated_at="2026-05-05T00:00:00Z",
+    )
+    assert payload_200["series"]["QQQ_OHLCV"]["rows"][-1]["ma200"] == 199.5
+
+
+def test_chart_time_series_sorts_rows_before_rolling_calculations():
+    rows = []
+    for index in range(20):
+        close = 100 + index
+        rows.append(
+            {
+                "date": _Date(f"2026-05-{index + 1:02d}"),
+                "open": close - 1,
+                "high": close + 2,
+                "low": close - 2,
+                "close": close,
+                "volume": 1000 + index,
+            }
+        )
+
+    payload = build_chart_time_series_artifact(
+        fetcher=lambda lookback_days: _MiniFrame(list(reversed(rows))),
+        generated_at="2026-05-05T00:00:00Z",
+        supplemental_fetchers={
+            "VIX": lambda lookback_days: _MiniFrame(
+                [
+                    {"date": _Date("2026-05-03"), "value": 3.0},
+                    {"date": _Date("2026-05-01"), "value": 1.0},
+                    {"date": _Date("2026-05-02"), "value": 2.0},
+                ]
+            )
+        },
+    )
+
+    qqq_rows = payload["series"]["QQQ_OHLCV"]["rows"]
+    assert qqq_rows[0]["time"] == "2026-05-01"
+    assert qqq_rows[-1]["time"] == "2026-05-20"
+    assert qqq_rows[-1]["ma20"] == 109.5
+    assert [row["time"] for row in payload["series"]["VIX"]["rows"]] == ["2026-05-01", "2026-05-02", "2026-05-03"]
 
 
 def test_chart_time_series_artifact_adds_workbench_modules_and_research_series():
