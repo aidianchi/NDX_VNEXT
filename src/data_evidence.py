@@ -151,6 +151,23 @@ def _append_unique(items: List[Any], value: Any) -> None:
         items.append(value)
 
 
+def _meaningful_fallback_explanation(payload: Dict[str, Any], quality: Dict[str, Any]) -> str:
+    for value in (
+        quality.get("fallback_reason"),
+        quality.get("degraded_reason"),
+        quality.get("unavailable_reason"),
+        quality.get("no_data_reason"),
+        payload.get("fallback_reason"),
+        payload.get("degraded_reason"),
+        payload.get("unavailable_reason"),
+        payload.get("notes"),
+    ):
+        text = str(value or "").strip()
+        if text and text.lower() not in {"none", "missing", "not_available", "not_applicable"}:
+            return text
+    return ""
+
+
 def _parse_date(value: Any) -> Optional[datetime]:
     if value in (None, "", "missing", "not_available", "not_applicable"):
         return None
@@ -337,7 +354,8 @@ def data_evidence_issues(payload: Dict[str, Any], *, function_id: str, backtest_
         ]
     )
     actual_fallback = "fallback" in fallback_context or "degraded" in fallback_context
-    if quality.get("fallback_chain") and quality.get("fallback_reason") in (None, "", "none") and actual_fallback:
+    fallback_explanation = _meaningful_fallback_explanation(payload, quality)
+    if quality.get("fallback_chain") and not fallback_explanation and actual_fallback:
         level = "hard_block" if function_id in CORE_EVIDENCE_FUNCTIONS else "degraded"
         add(level, "fallback_without_reason")
 

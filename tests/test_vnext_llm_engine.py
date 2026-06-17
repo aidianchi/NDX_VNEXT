@@ -179,6 +179,17 @@ def test_call_ai_does_not_send_beta_prefix_to_custom_deepseek_endpoint(monkeypat
     assert raw == '{"ok": true}'
 
 
+def test_extract_json_repairs_fullwidth_bracket_string_list_slip():
+    from agent_analysis.llm_engine import LLMEngine
+
+    engine = LLMEngine(available_models=[])
+    payload = '{\n  "falsifiers": ["分层利差收窄且总量利差继续低位】\n}'
+
+    parsed = engine.extract_json(payload, stage="bridge")
+
+    assert parsed == {"falsifiers": ["分层利差收窄且总量利差继续低位"]}
+
+
 def test_kimi_http_call_loads_system_constraints(monkeypatch):
     from agent_analysis import llm_engine as engine_mod
     from agent_analysis.llm_engine import LLMEngine

@@ -233,8 +233,13 @@ def _fetch_invesco_qqq_holdings() -> Tuple[Optional[Dict[str, Any]], Optional[st
         response = requests.get(
             INVESCO_QQQ_HOLDINGS_URL,
             headers={
-                "User-Agent": "Mozilla/5.0 (compatible; ndx-vnext/1.0)",
-                "Accept": "application/json",
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                ),
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Origin": "https://www.invesco.com",
                 "Referer": "https://www.invesco.com/qqq-etf/en/about.html",
             },
             timeout=12,

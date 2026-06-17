@@ -135,6 +135,7 @@ def main() -> int:
         enable_news=args.enable_news,
         skip_report=args.skip_legacy_report,
         disable_charts=not args.enable_legacy_charts,
+        resume_from_existing=False,
     )
     summary = run_pipeline(pipeline_args)
     run_dir = summary["run_dir"]

@@ -160,13 +160,238 @@ def test_wind_ndx_valuation_parser_normalizes_percentiles_and_rank():
     assert parsed["sample_start"] == "2011-04-01"
 
 
-def test_wind_ndx_snapshot_uses_cli_once_and_marks_authority(monkeypatch):
+def test_wind_ndx_valuation_parser_handles_nested_step_tables_with_column_metadata():
+    payload = {
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "data": {
+                            "data": [
+                                {
+                                    "columns": [
+                                        {"name": "Wind代码", "type": "string"},
+                                        {"name": "证券简称", "type": "string"},
+                                        {"name": "最新市盈率", "type": "number", "unit": "倍"},
+                                        {"name": "日期", "type": "date"},
+                                        {"name": "过去一年市净率", "type": "number", "unit": "倍"},
+                                        {"name": "过去一年市销率", "type": "number"},
+                                        {"name": "过去一年风险溢价", "type": "number"},
+                                        {"name": "过去一年市盈率序号", "type": "number"},
+                                        {"name": "过去一年市盈率最大序号", "type": "number"},
+                                        {"name": "最新市盈率在过去一年中的分位数", "type": "number"},
+                                    ],
+                                    "rows": [["NDX.GI", "纳斯达克100", 35.2443, "2026-06-16", 10.3391, 7.4103, 1.1049, 99, 251, 0.392]],
+                                    "step": "Step1",
+                                },
+                                {
+                                    "columns": [
+                                        {"name": "Wind代码", "type": "string"},
+                                        {"name": "证券简称", "type": "string"},
+                                        {"name": "过去一年市盈率", "type": "number", "unit": "倍"},
+                                        {"name": "日期", "type": "date"},
+                                        {"name": "最新市净率", "type": "number", "unit": "倍"},
+                                        {"name": "过去一年市销率", "type": "number"},
+                                        {"name": "过去一年风险溢价", "type": "number"},
+                                        {"name": "过去一年市净率序号", "type": "number"},
+                                        {"name": "过去一年市净率最大序号", "type": "number"},
+                                        {"name": "最新市净率在过去一年中的分位数", "type": "number"},
+                                    ],
+                                    "rows": [["NDX.GI", "纳斯达克100", 35.2443, "2026-06-16", 10.3391, 7.4103, 1.1049, 222, 251, 0.884]],
+                                    "step": "Step2",
+                                },
+                                {
+                                    "columns": [
+                                        {"name": "Wind代码", "type": "string"},
+                                        {"name": "证券简称", "type": "string"},
+                                        {"name": "过去一年市盈率", "type": "number", "unit": "倍"},
+                                        {"name": "日期", "type": "date"},
+                                        {"name": "过去一年市净率", "type": "number", "unit": "倍"},
+                                        {"name": "最新市销率", "type": "number"},
+                                        {"name": "过去一年风险溢价", "type": "number"},
+                                        {"name": "过去一年市销率序号", "type": "number"},
+                                        {"name": "过去一年市销率最大序号", "type": "number"},
+                                        {"name": "最新市销率在过去一年中的分位数", "type": "number"},
+                                    ],
+                                    "rows": [["NDX.GI", "纳斯达克100", 35.2443, "2026-06-16", 10.3391, 7.4103, 1.1049, 161, 251, 0.64]],
+                                    "step": "Step3",
+                                },
+                                {
+                                    "columns": [
+                                        {"name": "Wind代码", "type": "string"},
+                                        {"name": "证券简称", "type": "string"},
+                                        {"name": "过去一年市盈率", "type": "number", "unit": "倍"},
+                                        {"name": "日期", "type": "date"},
+                                        {"name": "过去一年市净率", "type": "number", "unit": "倍"},
+                                        {"name": "过去一年市销率", "type": "number"},
+                                        {"name": "最新风险溢价", "type": "number"},
+                                        {"name": "过去一年风险溢价序号", "type": "number"},
+                                        {"name": "过去一年风险溢价最大序号", "type": "number"},
+                                        {"name": "最新风险溢价在过去一年中的分位数", "type": "number"},
+                                    ],
+                                    "rows": [["NDX.GI", "纳斯达克100", 35.2443, "2026-06-16", 10.3391, 7.4103, 1.1049, 172, 251, 0.684]],
+                                    "step": "Step4",
+                                },
+                            ]
+                        },
+                        "error": None,
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        ],
+        "isError": False,
+    }
+
+    parsed = tools_L4._parse_wind_ndx_valuation_payload(payload)
+
+    assert parsed["index_code"] == "NDX.GI"
+    assert parsed["index_name"] == "纳斯达克100"
+    assert parsed["data_date"] == "2026-06-16"
+    assert parsed["pe"] == 35.2443
+    assert parsed["pb"] == 10.3391
+    assert parsed["ps"] == 7.4103
+    assert parsed["risk_premium"] == 1.1049
+    assert parsed["pe_historical_percentile"] == 39.2
+    assert parsed["pe_percentile_windows"]["1y"]["percentile"] == 39.2
+    assert parsed["pe_percentile_windows"]["1y"]["rank"] == 99
+    assert parsed["pe_percentile_windows"]["1y"]["sample_count"] == 251
+    assert parsed["pb_historical_percentile"] == 88.4
+    assert parsed["pb_percentile_windows"]["1y"]["percentile"] == 88.4
+    assert parsed["ps_historical_percentile"] == 64.0
+    assert parsed["risk_premium_historical_percentile"] == 68.4
+    assert parsed["risk_premium_percentile_windows"]["1y"]["percentile"] == 68.4
+    assert parsed["risk_premium_rank"] == {"rank": 172, "sample_count": 251}
+
+
+def test_wind_ndx_valuation_parser_extracts_pe_percentile_windows():
+    payload = {
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    {
+                        "data": {
+                            "data": [
+                                {
+                                    "columns": [
+                                        {"name": "Wind代码"},
+                                        {"name": "证券简称"},
+                                        {"name": "近1年每日市盈率"},
+                                        {"name": "日期"},
+                                        {"name": "近1年每日市盈率序号"},
+                                        {"name": "近1年市盈率最大序号"},
+                                        {"name": "最新市盈率在过去1年中的分位数"},
+                                    ],
+                                    "rows": [["NDX.GI", "纳斯达克100", 35.2443, "2026-06-17", 99, 251, 0.392]],
+                                },
+                                {
+                                    "columns": [
+                                        {"name": "Wind代码"},
+                                        {"name": "证券简称"},
+                                        {"name": "近2年每日市盈率"},
+                                        {"name": "日期"},
+                                        {"name": "近2年每日市盈率序号"},
+                                        {"name": "近2年市盈率最大序号"},
+                                        {"name": "最新市盈率在过去2年中的分位数"},
+                                    ],
+                                    "rows": [["NDX.GI", "纳斯达克100", 35.2443, "2026-06-17", 208, 501, 0.414]],
+                                },
+                                {
+                                    "columns": [
+                                        {"name": "Wind代码"},
+                                        {"name": "证券简称"},
+                                        {"name": "近5年每日市盈率"},
+                                        {"name": "日期"},
+                                        {"name": "近5年每日市盈率序号"},
+                                        {"name": "近5年市盈率最大序号"},
+                                        {"name": "最新市盈率在过去5年中的分位数"},
+                                    ],
+                                    "rows": [["NDX.GI", "纳斯达克100", 35.2443, "2026-06-17", 844, 1255, 0.6722]],
+                                },
+                                {
+                                    "columns": [
+                                        {"name": "Wind代码"},
+                                        {"name": "证券简称"},
+                                        {"name": "近10年每日市盈率"},
+                                        {"name": "日期"},
+                                        {"name": "近10年每日市盈率序号"},
+                                        {"name": "近10年市盈率最大序号"},
+                                        {"name": "最新市盈率在过去10年中的分位数"},
+                                    ],
+                                    "rows": [["NDX.GI", "纳斯达克100", 35.2443, "2026-06-17", 1924, 2513, 0.7655]],
+                                },
+                            ]
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        ]
+    }
+
+    parsed = tools_L4._parse_wind_ndx_valuation_payload(payload)
+
+    assert parsed["pe"] == 35.2443
+    assert parsed["pe_percentile_windows"]["1y"]["percentile"] == 39.2
+    assert parsed["pe_percentile_windows"]["2y"]["percentile"] == 41.4
+    assert parsed["pe_percentile_windows"]["5y"]["percentile"] == 67.22
+    assert parsed["pe_percentile_windows"]["10y"]["percentile"] == 76.55
+    assert parsed["pe_percentile_windows"]["10y"]["rank"] == 1924
+    assert parsed["pe_percentile_windows"]["10y"]["sample_count"] == 2513
+
+
+def test_wind_ndx_snapshot_fetches_pe_windows_and_marks_authority(monkeypatch):
     tools_L4.L4_WIND_NDX_VALUATION_CACHE.clear()
 
     def fake_wind_cli(server_type, tool_name, params, timeout=45):
         assert server_type == "index_data"
         assert tool_name == "get_index_fundamentals"
         assert "纳斯达克100" in params["question"]
+        if "过去1年2年5年10年" in params["question"]:
+            return (
+                {
+                    "content": [
+                        {
+                            "text": json.dumps(
+                                {
+                                    "data": {
+                                        "data": [
+                                            {
+                                                "columns": [
+                                                    {"name": "Wind代码"},
+                                                    {"name": "证券简称"},
+                                                    {"name": "近5年每日市盈率"},
+                                                    {"name": "日期"},
+                                                    {"name": "近5年每日市盈率序号"},
+                                                    {"name": "近5年市盈率最大序号"},
+                                                    {"name": "最新市盈率在过去5年中的分位数"},
+                                                ],
+                                                "rows": [["NDX.GI", "纳斯达克100", 35.2454, "2026-06-17", 844, 1255, 0.6722]],
+                                            },
+                                            {
+                                                "columns": [
+                                                    {"name": "Wind代码"},
+                                                    {"name": "证券简称"},
+                                                    {"name": "近10年每日市盈率"},
+                                                    {"name": "日期"},
+                                                    {"name": "近10年每日市盈率序号"},
+                                                    {"name": "近10年市盈率最大序号"},
+                                                    {"name": "最新市盈率在过去10年中的分位数"},
+                                                ],
+                                                "rows": [["NDX.GI", "纳斯达克100", 35.2454, "2026-06-17", 1924, 2513, 0.7655]],
+                                            },
+                                        ]
+                                    }
+                                },
+                                ensure_ascii=False,
+                            )
+                        }
+                    ]
+                },
+                None,
+            )
         return (
             {
                 "content": [
@@ -191,11 +416,75 @@ def test_wind_ndx_snapshot_uses_cli_once_and_marks_authority(monkeypatch):
     assert result["source_tier"] == "licensed_provider/Wind"
     assert result["value"]["PE"] == 35.25
     assert result["value"]["RiskPremium"] == 1.0926
-    assert result["value"]["PEHistoricalPercentile"] == 84.64
+    assert result["value"]["PEHistoricalPercentile"] == 76.55
+    assert result["value"]["PEHistoricalPercentileWindow"] == "10y"
+    assert result["value"]["PEPercentileWindows"]["5y"]["percentile"] == 67.22
+    assert result["value"]["PEPercentileWindows"]["10y"]["sample_count"] == 2513
     assert result["value"]["RiskPremiumHistoricalPercentile"] == 55.54
     assert result["value"]["MetricAuthority"]["RiskPremium"]["usage"] == "core_allowed"
     assert result["data_quality"]["license_note"] == "licensed_provider"
     assert "数据来源于万得 Wind 金融数据服务" in result["notes"]
+
+
+def test_wind_ndx_snapshot_accepts_nested_step_payload(monkeypatch):
+    tools_L4.L4_WIND_NDX_VALUATION_CACHE.clear()
+
+    def fake_wind_cli(server_type, tool_name, params, timeout=45):
+        return (
+            {
+                "content": [
+                    {
+                        "text": json.dumps(
+                            {
+                                "data": {
+                                    "data": [
+                                        {
+                                            "columns": [
+                                                {"name": "Wind代码"},
+                                                {"name": "证券简称"},
+                                                {"name": "最新市盈率"},
+                                                {"name": "日期"},
+                                                {"name": "过去一年风险溢价"},
+                                                {"name": "最新市盈率在过去一年中的分位数"},
+                                            ],
+                                            "rows": [["NDX.GI", "纳斯达克100", 35.2443, "2026-06-16", 1.1049, 0.392]],
+                                        },
+                                        {
+                                            "columns": [
+                                                {"name": "Wind代码"},
+                                                {"name": "证券简称"},
+                                                {"name": "日期"},
+                                                {"name": "最新风险溢价"},
+                                                {"name": "过去一年风险溢价序号"},
+                                                {"name": "过去一年风险溢价最大序号"},
+                                                {"name": "最新风险溢价在过去一年中的分位数"},
+                                            ],
+                                            "rows": [["NDX.GI", "纳斯达克100", "2026-06-16", 1.1049, 172, 251, 0.684]],
+                                        },
+                                    ]
+                                }
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                ],
+                "isError": False,
+            },
+            None,
+        )
+
+    monkeypatch.setattr(tools_L4, "_call_wind_cli", fake_wind_cli)
+
+    result = tools_L4.get_ndx_wind_valuation_snapshot()
+
+    assert result["availability"] == "available"
+    assert result["source_tier"] == "licensed_provider/Wind"
+    assert result["value"]["PE"] == 35.24
+    assert result["value"]["RiskPremium"] == 1.1049
+    assert result["value"]["PEHistoricalPercentile"] == 39.2
+    assert result["value"]["RiskPremiumHistoricalPercentile"] == 68.4
+    assert result["value"]["RiskPremiumRank"] == {"rank": 172, "sample_count": 251}
+    assert result["data_quality"]["availability"] == "available"
 
 
 def test_danjuan_check_is_included_with_required_headers(monkeypatch):

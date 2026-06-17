@@ -78,6 +78,10 @@ ALLOWED_ENTRYPOINTS = {
     },
 }
 
+ALLOWED_ENV_OVERRIDES = {
+    "NDX_DISABLE_WIND_L4": {"", "1"},
+}
+
 
 def _repo_root() -> Path:
     return Path(path_config.base_dir).resolve()
@@ -123,6 +127,22 @@ def validate_command(command: str) -> List[str]:
             raise ValueError(f"Unsafe path value for {arg}: {value}")
         idx += 2
     return parts
+
+
+def validate_env_overrides(raw_overrides: Any) -> Dict[str, str]:
+    if raw_overrides in (None, "", {}):
+        return {}
+    if not isinstance(raw_overrides, dict):
+        raise ValueError("env_overrides must be an object.")
+    overrides: Dict[str, str] = {}
+    for key, raw_value in raw_overrides.items():
+        if key not in ALLOWED_ENV_OVERRIDES:
+            raise ValueError(f"Environment override is not allowed: {key}")
+        value = "" if raw_value is None else str(raw_value)
+        if value not in ALLOWED_ENV_OVERRIDES[key]:
+            raise ValueError(f"Invalid value for {key}: {value}")
+        overrides[key] = value
+    return overrides
 
 
 def _python_bound_args(args: Sequence[str]) -> List[str]:
@@ -200,10 +220,17 @@ class JobStore:
         except OSError:
             return False
 
-    def create_job(self, args: Sequence[str]) -> Dict[str, Any]:
+    def create_job(self, args: Sequence[str], env_overrides: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         job_id = time.strftime("%Y%m%d_%H%M%S") + f"_{int((time.time() % 1) * 1000):03d}"
         log_path = self._log_path(job_id)
         actual_args = _python_bound_args(args)
+        process_env = os.environ.copy()
+        normalized_env_overrides = dict(env_overrides or {})
+        for key, value in normalized_env_overrides.items():
+            if value:
+                process_env[key] = value
+            else:
+                process_env.pop(key, None)
         with open(log_path, "w", encoding="utf-8") as log:
             process = subprocess.Popen(
                 actual_args,
@@ -211,6 +238,7 @@ class JobStore:
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 text=True,
+                env=process_env,
             )
         self.processes[job_id] = process
         state = {
@@ -219,6 +247,7 @@ class JobStore:
             "status": "running",
             "command": actual_args,
             "requested_command": list(args),
+            "env_overrides": normalized_env_overrides,
             "log_path": str(log_path),
             "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "exit_code": None,
@@ -459,7 +488,8 @@ class ControlServiceHandler(BaseHTTPRequestHandler):
                 _save_manual_json(manual_json)
             command = str(payload.get("command", "")).strip()
             args = validate_command(command)
-            job = self.store.create_job(args)
+            env_overrides = validate_env_overrides(payload.get("env_overrides"))
+            job = self.store.create_job(args, env_overrides=env_overrides)
             _json_response(
                 self,
                 202,

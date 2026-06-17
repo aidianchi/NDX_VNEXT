@@ -7,6 +7,36 @@ import tools_L3
 from agent_analysis.packet_builder import AnalysisPacketBuilder
 
 
+def test_invesco_holdings_fetch_uses_browser_headers(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"holdings": [{"ticker": "MSFT", "percentageOfTotalNetAssets": 8.1}]}
+
+    def fake_get(url, headers=None, timeout=None, proxies=None):
+        captured["url"] = url
+        captured["headers"] = headers or {}
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(tools_L3.requests, "get", fake_get)
+
+    payload, error = tools_L3._fetch_invesco_qqq_holdings()
+
+    assert error is None
+    assert payload["holdings"][0]["ticker"] == "MSFT"
+    assert captured["url"] == tools_L3.INVESCO_QQQ_HOLDINGS_URL
+    assert "Mozilla/5.0" in captured["headers"]["User-Agent"]
+    assert captured["headers"]["Accept"] == "application/json, text/plain, */*"
+    assert captured["headers"]["Origin"] == "https://www.invesco.com"
+    assert captured["headers"]["Referer"] == "https://www.invesco.com/qqq-etf/en/about.html"
+    assert captured["timeout"] == 12
+
+
 def test_qqq_top10_concentration_parses_invesco_holdings(monkeypatch):
     holdings = [
         {"ticker": f"T{i}", "issuerName": f"Company {i}", "percentageOfTotalNetAssets": weight}

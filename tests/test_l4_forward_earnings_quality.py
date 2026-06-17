@@ -6,6 +6,7 @@ import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import tools_L4
+from data_evidence import data_evidence_issues
 
 
 def test_calculate_weighted_metrics_includes_forward_eps_and_margin_quality():
@@ -190,6 +191,103 @@ def test_ndx_forward_earnings_quality_uses_component_and_m7_revision_proxies(mon
     assert result["data_quality"]["metric_authority"]["forward_eps_growth_proxy_pct"]["usage"] == "supporting_only"
     assert result["data_quality"]["metric_authority"]["weighted_profit_margin_pct"]["usage"] == "supporting_only"
     assert result["data_quality"]["metric_authority"]["ndx_weighted_eps_revision_30d_pct"]["usage"] == "supporting_only"
+
+
+def test_l4_component_model_degraded_outputs_explain_fallback_reason(monkeypatch):
+    df = pd.DataFrame(
+        [
+            {
+                "ticker": "AAPL",
+                "market_cap": 700.0,
+                "trailing_pe": 28.0,
+                "forward_pe": 23.0,
+                "free_cashflow": 30.0,
+                "fcf": 30.0,
+                "price_to_book": 12.0,
+                "profit_margin": 0.25,
+                "gross_margin": 0.45,
+                "operating_margin": 0.31,
+                "eps_estimate_current": 9.1,
+                "eps_estimate_30d_ago": 8.9,
+                "eps_revision_30d_pct": 2.25,
+                "eps_estimate_analyst_count": 30,
+            },
+            {
+                "ticker": "MSFT",
+                "market_cap": 300.0,
+                "trailing_pe": 32.0,
+                "forward_pe": 25.0,
+                "free_cashflow": 20.0,
+                "fcf": 20.0,
+                "price_to_book": 10.0,
+                "profit_margin": 0.35,
+                "gross_margin": 0.69,
+                "operating_margin": 0.44,
+                "eps_estimate_current": 13.0,
+                "eps_estimate_30d_ago": 12.9,
+                "eps_revision_30d_pct": 0.78,
+                "eps_estimate_analyst_count": 35,
+            },
+        ]
+    )
+    stats = {
+        "coverage": 1.0,
+        "successful": 2,
+        "total_tickers": 2,
+        "failed_tickers": [],
+        "source_counts": {"yahoo_quote_summary": {"attempted": 2, "available": 2}},
+        "source_switches": [],
+        "source_disagreement_issues": [{"ticker": "AAPL", "field": "trailing_pe", "severity": "high"}],
+        "primary_source_by_field": tools_L4.L4_COMPONENT_FIELD_SOURCE_POLICY,
+        "component_conflict_gate": {
+            "status": "degraded",
+            "high_core_component_disagreements": [{"ticker": "AAPL", "field": "trailing_pe", "severity": "high"}],
+        },
+        "official_checks": {},
+        "sec_official_facts": {},
+    }
+    monkeypatch.setattr(tools_L4, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_L4, "get_ndx_components_data_yf_v5", lambda end_date=None: (df, stats))
+    monkeypatch.setattr(tools_L4, "get_ndx_valuation_third_party_checks", lambda: [])
+    monkeypatch.setattr(
+        tools_L4,
+        "audit_component_valuation_metrics",
+        lambda metrics, checks: {
+            "rejected_metrics": {},
+            "source_disagreement_issues": [],
+            "metric_authority": {},
+            "core_usage_rule": "unit test",
+        },
+    )
+    monkeypatch.setattr(
+        tools_L4,
+        "_m7_eps_revision_snapshot",
+        lambda market_caps=None: {
+            "availability": "available",
+            "coverage": {"available_members": 2, "total_members": 7},
+            "weighted_next_year_eps_revision_30d_pct": 1.8,
+            "revision_direction_30d": "upward",
+            "members": {},
+        },
+    )
+
+    valuation = tools_L4.get_ndx_pe_and_earnings_yield(end_date="2026-06-16")
+    forward_quality = tools_L4.get_ndx_forward_earnings_quality(end_date="2026-06-16")
+
+    assert valuation["data_quality"]["availability"] == "degraded"
+    assert valuation["data_quality"]["fallback_reason"] == tools_L4.NDX_COMPONENT_VALUATION_FALLBACK_REASON
+    assert forward_quality["data_quality"]["availability"] == "degraded"
+    assert forward_quality["data_quality"]["fallback_reason"] == tools_L4.NDX_FORWARD_QUALITY_FALLBACK_REASON
+    valuation_codes = {
+        issue["code"]
+        for issue in data_evidence_issues(valuation, function_id="get_ndx_pe_and_earnings_yield")["hard_block"]
+    }
+    forward_codes = {
+        issue["code"]
+        for issue in data_evidence_issues(forward_quality, function_id="get_ndx_forward_earnings_quality")["hard_block"]
+    }
+    assert "fallback_without_reason" not in valuation_codes
+    assert "fallback_without_reason" not in forward_codes
 
 
 def test_realtime_forward_earnings_does_not_request_historical_constituents(monkeypatch):

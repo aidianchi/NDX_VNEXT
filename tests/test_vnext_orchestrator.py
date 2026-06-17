@@ -910,6 +910,104 @@ def test_schema_guard_rejects_bridge_dead_refs_and_bad_transmission_paths(tmp_pa
     assert "implication is required" in joined
 
 
+def test_bridge_normalization_converts_claim_fact_sentences_to_evidence_refs(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    normalized = orchestrator._normalize_payload(
+        "bridge",
+        {
+            "bridge_type": "macro_valuation",
+            "layers_connected": ["L1", "L4"],
+            "cross_layer_claims": [
+                {
+                    "claim": "盈利增长预期支撑高估值",
+                    "supporting_facts": [
+                        "L4 Forward PE 23.22 隐含盈利大幅增长",
+                        "M7 EPS修正30d +3.05%",
+                    ],
+                    "confidence": "medium",
+                    "mechanism": "盈利增长若兑现，可缓冲折现率压力。",
+                }
+            ],
+            "typed_conflicts": [
+                {
+                    "conflict_id": "real_rate_vs_valuation",
+                    "conflict_type": "L1_restrictive_vs_L4_expensive",
+                    "severity": "high",
+                    "description": "高实际利率与高估值并存。",
+                    "mechanism": "折现率上行压制估值。",
+                    "implication": "估值需要盈利兑现来支撑。",
+                    "involved_layers": ["L1", "L4"],
+                    "evidence_refs": [
+                        "L1.get_fed_funds_rate",
+                        "L4.get_ndx_pe_and_earnings_yield",
+                    ],
+                }
+            ],
+            "implication_for_ndx": "需要谨慎。",
+        },
+    )
+
+    claim = normalized["cross_layer_claims"][0]
+
+    assert claim["supporting_facts"] == ["L4.get_ndx_pe_and_earnings_yield"]
+    assert "L4 Forward PE 23.22 隐含盈利大幅增长" in claim["supporting_fact_notes"]
+    assert "cross_layer_claim_supporting_facts_normalized_to_evidence_refs" in normalized["normalization_notes"]
+
+
+def test_layer_normalization_truncates_overlong_local_conclusion(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    normalized = orchestrator._normalize_payload(
+        "l4_analyst",
+        {
+            "layer": "L4",
+            "core_facts": [{"metric": "pe", "value": 32.5}],
+            "local_conclusion": "估值结论" * 140,
+            "confidence": "medium",
+        },
+    )
+
+    assert len(normalized["local_conclusion"]) <= 500
+    assert normalized["local_conclusion"].endswith("...")
+
+
+def test_reviser_normalization_drops_empty_retained_conflicts(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    normalized = orchestrator._normalize_payload(
+        "reviser",
+        {
+            "revised_thesis": {
+                "retained_conflicts": [
+                    {},
+                    {"description": "L1 高利率与 L4 高估值并存"},
+                ],
+            }
+        },
+    )
+
+    conflicts = normalized["revised_thesis"]["retained_conflicts"]
+
+    assert len(conflicts) == 1
+    assert conflicts[0]["conflict_type"] == "normalized_conflict"
+    assert conflicts[0]["severity"] == "medium"
+    assert conflicts[0]["description"] == "L1 高利率与 L4 高估值并存"
+    assert conflicts[0]["involved_layers"] == ["L1", "L4"]
+
+
 def test_schema_guard_rejects_cnn_submetric_high_conflict_without_aggregate_semantics(tmp_path: Path):
     orchestrator = VNextOrchestrator(
         available_models=["fake"],

@@ -41,6 +41,24 @@ def _enum_value(value: Any) -> Any:
     return getattr(value, "value", value)
 
 
+def _schema_guard_summary(artifacts: Dict[str, Any]) -> Dict[str, Any]:
+    schema_guard = artifacts.get("schema_guard_report")
+    if not schema_guard:
+        return {}
+    structural_issues = list(getattr(schema_guard, "structural_issues", []) or [])
+    consistency_issues = list(getattr(schema_guard, "consistency_issues", []) or [])
+    missing_fields = list(getattr(schema_guard, "missing_fields", []) or [])
+    passed = bool(getattr(schema_guard, "passed", False))
+    return {
+        "passed": passed,
+        "quality_status": str(getattr(schema_guard, "quality_status", "") or ""),
+        "issue_count": len(structural_issues) + len(consistency_issues) + len(missing_fields),
+        "structural_issues": structural_issues[:5],
+        "consistency_issues": consistency_issues[:5],
+        "missing_fields": missing_fields[:5],
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ndx_vnext first runnable chain")
     parser.add_argument("--date", type=str, help="Backtest date in YYYY-MM-DD format.")
@@ -250,6 +268,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     available_models = resolve_available_models(args.models)
     if not available_models:
         raise RuntimeError("No enabled LLM models with effective API keys were found.")
+    resume_from_existing = getattr(args, "resume_from_existing", False)
 
     if args.data_json:
         data_json = load_data_json(args.data_json)
@@ -261,7 +280,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         backtest_date,
         run_id=getattr(args, "run_id", None),
         output_dir=getattr(args, "output_dir", None),
-        allow_existing=args.resume_from_existing,
+        allow_existing=resume_from_existing,
     )
     news_event_ledger_path = ""
     news_event_ledger_payload = None
@@ -330,7 +349,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     orchestrator = VNextOrchestrator(
         available_models=available_models,
         output_dir=run_dir,
-        resume_from_existing=args.resume_from_existing,
+        resume_from_existing=resume_from_existing,
     )
     artifacts = orchestrator.run(packet)
 
@@ -357,6 +376,11 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         reporter = ReportGenerator(use_charts=not args.disable_charts)
         report_path = reporter.run(logic_json, data_json, backtest_date=backtest_date)
 
+    schema_summary = _schema_guard_summary(artifacts)
+    publish_quality_status = "publishable"
+    if schema_summary and not schema_summary.get("passed", True):
+        publish_quality_status = "review_required"
+
     summary = {
         "run_dir": run_dir,
         "logic_json": logic_path,
@@ -373,6 +397,8 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),
         "runtime_diagnostics": _runtime_diagnostics_summary(data_json),
         "data_quality_summary": _data_quality_summary(data_json),
+        "schema_guard_summary": schema_summary,
+        "publish_quality_status": publish_quality_status,
     }
     with open(os.path.join(run_dir, "run_summary.json"), "w", encoding="utf-8") as handle:
         json.dump(summary, handle, ensure_ascii=False, indent=2, default=str)

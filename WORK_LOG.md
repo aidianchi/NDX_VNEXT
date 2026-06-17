@@ -4,7 +4,149 @@
 
 ---
 
+## 2026-06-17
+
+### L4 Wind PE 分位窗口修复：10年分位回到主锚，forward PE 仍不可由 Wind 直接升级
+
+完成内容：
+
+- 复查最新 brief `vnext_brief_20260617_0230_20260617_0246.html` 背后的 L4 artifact，确认报告把 Wind 返回的短窗口 PE 分位当作泛称历史分位使用，导致 Wind 与 Trendonify / 蛋卷口径差异被误读。
+- 按 Wind MCP 实测：`get_index_fundamentals` 在显式询问“最新市盈率在过去1年2年5年10年中的分位数”时返回 PE 1年 39.20%、2年 41.40%、5年 67.22%、10年 76.55%；`PEHistoricalPercentile` 现在优先使用 10年窗口，并把完整窗口写入 `PEPercentileWindows`。
+- 保留 Wind NDX 指数级 PE/PB/PS/风险溢价主锚，同时新增一次专门的 PE 分位窗口查询；报告 UI 标签显示 PE percentile 的窗口，L4 prompt 明确禁止把 1年/2年或窗口不明的分位写成 10年分位。
+- 实测 Wind 对 NDX 指数级 forward PE / 一致预期 EPS / FY1 预测净利润有字段识别，但返回值为空；因此当前不能把 forward PE 升级为 Wind 指数级正式主锚，仍只能使用现有成分股总量口径代理并保留 source boundary。
+
+验证结果：
+
+- `.venv/bin/python -m pytest -q tests/test_l4_external_valuation_sources.py tests/test_l4_data_authority.py tests/test_l4_forward_earnings_quality.py`：45 passed，6 warnings。
+- `.venv/bin/python -m py_compile src/tools_L4.py src/agent_analysis/vnext_reporter.py`：通过。
+- 直接调用 `get_ndx_wind_valuation_snapshot()`：返回 `availability=available`、`PE=35.24`、`PEHistoricalPercentile=76.55`、`PEHistoricalPercentileWindow=10y`、`PEPercentileWindows={1y:39.2,2y:41.4,5y:67.22,10y:76.55}`。
+
+### 最新完整 run 验收：Schema Guard 通过，报告与 Prompt Inspector 清洁
+
+完成内容：
+
+- 连续排查并修复最新完整 run 暴露的问题：L4 代理估值字段缺 fallback 解释、Bridge `supporting_facts` 写成自然语言、Schema Guard 状态未进入 `run_summary`、未完成美国日线被误打成 ERROR、L4 结论过长触发重试、Reviser 空冲突对象触发重试。
+- `src/agent_analysis/orchestrator.py` 加固 Bridge / Reviser / Layer 输出清洗：Bridge claim 的 `supporting_facts` 只保留 evidence refs，自然语言说明转入 notes；过长 `local_conclusion` 自动截断；空 `retained_conflicts` 丢弃，半空冲突补齐最低结构。
+- `src/main.py` 在 `run_summary.json` 写入 `schema_guard_summary` 和 `publish_quality_status`，避免报告可发布状态与 Run Review / Schema Guard 脱节。
+- `src/tools_common.py` 将“美国当天日线尚未完成”的空增量请求从 ERROR 降为 INFO，同时继续保留 `runtime_diagnostics.yfinance.by_failure_type.no_completed_daily_bar` 作为数据边界。
+- 用最新完整采集 run 验证数据和报告链路：`output/analysis/vnext/20260617_023048` 跑通、DataIntegrity 96.2%、Wind NDX 成功、Schema Guard passed、native brief / workbench / Prompt Inspector 均生成。
+- 用同一份最新数据快照做最终分析+报告验证：`output/analysis/vnext/20260617_024610` 所有 LLM stage attempts=1、errors=[]，Schema Guard passed，Run Review 全部 pass，`publish_quality_status=publishable`。
+
+验证结果：
+
+- `.venv/bin/python -m pytest tests/test_vnext_orchestrator.py tests/test_main_cli.py tests/test_run_review.py tests/test_yfinance_cache_resilience.py tests/test_console_run_all.py`：60 passed，28 warnings。
+- `.venv/bin/python -m py_compile src/agent_analysis/orchestrator.py src/main.py src/tools_common.py tests/test_vnext_orchestrator.py tests/test_main_cli.py tests/test_yfinance_cache_resilience.py`：通过。
+- 完整 run：`.venv/bin/python src/console_run_all.py --models deepseek-v4-flash,deepseek-v4-pro --workbench-modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity --skip-legacy-report`：生成 `output/analysis/vnext/20260617_023048`，最终 `approval_status=approved_with_reservations`、`publish_quality_status=publishable`。
+- 最终快照验证 run：`.venv/bin/python src/console_run_all.py --data-json output/data/data_collected_v9_live.json --models deepseek-v4-flash,deepseek-v4-pro --workbench-modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity --skip-legacy-report`：生成 `output/analysis/vnext/20260617_024610`，所有 stage 一次通过，Run Review 无 fail/observe。
+- 仍保留的非阻断日志边界：TGA 早期历史缓存存在百万美元/十亿美元混合，代码已逐点转换修复；未完成美国日线被记录为 INFO 和 `no_completed_daily_bar`，不是数据失败。
+
+### 数据合同与行情源降噪：避免已解释降级和未收盘日线导致频繁 fail
+
+完成内容：
+
+- 调整 `src/data_evidence.py` 的 fallback 缺原因判定：`fallback_reason` 仍是首选字段，但 `degraded_reason`、`unavailable_reason`、`no_data_reason`、payload notes 等有效解释也会被认可。真正没有解释的核心 fallback 仍会 hard block。
+- `src/tools_common.py` 为实时日线下载增加美国市场日期夹取：当本机日期已经进入新一天、但纽约市场日线尚未完成时，自动把 Yahoo/Twelve 日线请求的 `end` 限制到最近已完成的美国日线，减少 `Data doesn't exist for startDate` 和 10s/60s 重试。
+- 将 `XLY/XLP` 移出 Twelve Data 优先通道；这两个标的在日志中 Twelve Data 返回 400，后续走 Yahoo/缓存路径，避免多一次已知不稳定请求。`QQQ/HYG/QQEW` 保留 Twelve Data 优先，因为日志中这些路径正常。
+- 新增测试覆盖：已写明 `degraded_reason` 的核心 fallback 不再被误拦；未完成美国日线请求会被夹取；`XLY` 不再走 Twelve Data 优先路径。
+
+验证结果：
+
+- `.venv/bin/python -m pytest tests/test_data_evidence_contract.py tests/test_yfinance_cache_resilience.py tests/test_l4_forward_earnings_quality.py tests/test_runtime_resilience.py`：38 passed，28 warnings。
+- `.venv/bin/python -m py_compile src/data_evidence.py src/tools_common.py tests/test_data_evidence_contract.py tests/test_yfinance_cache_resilience.py`：通过。
+
+### 最新 run failed：补齐 L4 估值代理口径的 fallback_reason
+
+完成内容：
+
+- 复查 `output/logs/control_service/20260617_002637_792.log`，确认本次失败不是 Wind 缺数据，也不是 `resume_from_existing`；Wind NDX 快照已成功返回。
+- 真正阻断点是 DataIntegrity 发布闸门：`get_ndx_pe_and_earnings_yield` 和 `get_ndx_forward_earnings_quality` 在成分股模型口径被标记为 degraded 时，带有 fallback 链但 `fallback_reason` 仍为 `none`，触发 `fallback_without_reason` 硬拦截。
+- `src/tools_L4.py` 为两项 L4 核心估值/盈利质量代理补齐可审计的 fallback 原因：说明它们是用于收益率、覆盖率、盈利质量和修正趋势的成分股模型/代理上下文；Wind/官方汇总锚点仍独立采集，不被冒充。
+- 新增回归测试，模拟成分股来源分歧导致 degraded 的场景，确认这两项不会再因缺 fallback 原因被 DataEvidence 合同硬拦。
+
+验证结果：
+
+- `.venv/bin/python -m pytest tests/test_l4_forward_earnings_quality.py tests/test_data_evidence_contract.py tests/test_l4_external_valuation_sources.py tests/test_vnext_packet_builder.py`：50 passed，6 warnings。
+- `.venv/bin/python -m py_compile src/tools_L4.py tests/test_l4_forward_earnings_quality.py`：通过。
+
 ## 2026-06-16
+
+### 最新失败日志复查：减少 VXN/VIX 重复拉取并加固 Invesco 请求
+
+完成内容：
+
+- 复查 `20260616_220040_725.log` 中除硬失败和 Wind 解析外的异常：VIX/VXN 重复拉取导致 Yahoo 空结果重试约 79 秒；QQQ Top10 集中度的 Invesco 官方接口返回 406；宏观缓存过期和 yfinance 成分覆盖不足为数据边界/降级问题。
+- `src/tools_L1.py` 新增本进程内 VIX/VXN 现值缓存：同一轮 live run 里 `get_vix` / `get_vxn` 已经成功取过时，`get_vxn_vix_ratio` 会复用结果，避免重复触发 Yahoo 重试；回测模式不使用该 live 缓存。
+- `src/tools_L3.py` 将 Invesco QQQ holdings 请求头对齐为普通浏览器请求形态，包含浏览器 UA、`Accept: application/json, text/plain, */*`、`Accept-Language`、`Origin` 和官方页面 `Referer`。现场复测 Invesco 仍可能返回 406，说明还有对方接口风控/临时拒绝风险，不能把它当作已完全解决。
+- 新增回归测试覆盖 VXN live 缓存和 Invesco 请求头。
+
+验证结果：
+
+- `.venv/bin/python -m pytest -q tests/test_runtime_resilience.py tests/test_l3_top10_concentration.py tests/test_data_layer_integrity_fixes.py::test_qqq_top10_concentration_does_not_use_current_holdings_for_backtest`：10 passed，4 warnings。
+- `.venv/bin/python -m py_compile src/tools_L1.py src/tools_L3.py`：通过。
+
+### 控制台任务状态框刷新交互
+
+完成内容：
+
+- 将控制台主界面的任务状态框改为可点击刷新区域：状态框本身带 `role=button`、键盘焦点和提示文案。
+- 点击状态框会刷新当前任务状态；没有活动任务时会给出“尚无可刷新的任务”的明确反馈。
+- 刷新成功时会在状态文案后追加“已刷新 HH:MM:SS”，并带有轻量按下反馈。
+
+验证结果：
+
+- `.venv/bin/python -m pytest -q tests/test_research_console.py tests/test_open_research_console.py tests/test_control_service.py tests/test_console_run_all.py`：18 passed，4 warnings。
+- `.venv/bin/python -m py_compile src/research_console.py`：通过。
+- `.venv/bin/python src/open_research_console.py` 重新生成控制台后，浏览器检查确认状态框 `role=button`、`tabindex=0`、鼠标指针为 `pointer`，点击后显示“尚无可刷新的任务”。
+
+### Wind NDX 快照解析修复：识别多段 step 表格和新分位字段
+
+完成内容：
+
+- 修复 `src/tools_L4.py` 的 Wind NDX 估值解析：支持 Wind 返回的多段 `Step` 表格结构，能继续进入内层 `rows` 读取数据。
+- 支持 `columns` 为对象列表的格式，优先读取 `columns[].name` 作为真实列名。
+- 支持 Wind 新字段名：`最新市盈率在过去一年中的分位数`、`最新市净率在过去一年中的分位数`、`最新市销率在过去一年中的分位数`、`最新风险溢价在过去一年中的分位数`。
+- 支持用 `过去一年风险溢价序号` / `过去一年风险溢价最大序号` 还原风险溢价排名。
+- 用 2026-06-16 实际采集文件中的 Wind payload 验证，已能解析出 PE 35.2443、PB 10.3391、PS 7.4103、风险溢价 1.1049、PE 分位 39.2、PB 分位 88.4、PS 分位 64.0、风险溢价分位 68.4。
+
+验证结果：
+
+- `.venv/bin/python -m pytest -q tests/test_l4_external_valuation_sources.py tests/test_l4_data_authority.py tests/test_vnext_packet_builder.py tests/test_data_evidence_contract.py`：55 passed，4 warnings。
+- `.venv/bin/python -m py_compile src/tools_L4.py`：通过。
+- 直接调用 `get_ndx_wind_valuation_snapshot()`：返回 `availability=available`、`source_tier=licensed_provider/Wind`，并解析出 PE 35.24、PB 10.34、PS 7.41、风险溢价 1.1049、风险溢价分位 68.4。
+
+### 最新 run 失败排查：控制台入口补齐 resume 参数合同
+
+完成内容：
+
+- 排查 `/Users/aidianchi/Desktop/ndx_mac/output/logs/control_service/20260616_220040_725.log`，确认数据采集已完成并写出 `output/data/data_collected_v9_live.json`，真正导致任务退出的是 `src/console_run_all.py` 调用 `run_pipeline` 时缺少 `resume_from_existing` 字段。
+- 修正 `src/console_run_all.py`：控制台完整流程显式传入 `resume_from_existing=False`。
+- 加固 `src/main.py`：`run_pipeline` 对缺失的 `resume_from_existing` 默认按 `False` 处理，避免薄包装入口漏传可选字段时直接崩溃。
+- 新增控制台回归测试，锁定 `console_run_all` 会把 resume 默认值传给主流程。
+
+验证结果：
+
+- `.venv/bin/python -m pytest -q tests/test_console_run_all.py tests/test_main_cli.py`：13 passed，4 warnings。
+- `.venv/bin/python -m py_compile src/main.py src/console_run_all.py`：通过。
+
+### 研究控制台重做实施：从混合参数面板改为简洁启动器
+
+完成内容：
+
+- 重写 `src/research_console.py`：主界面只保留三种运行模式、末次数据摘要、回测开关、新闻材料开关、单一开始按钮、运行状态，以及最新报告 / workbench / 日志入口。
+- 将模型选择、Wind L4 主锚开关、人工覆盖、workbench 模块和开发者命令移入默认折叠的高级设置；主界面不再常驻 Trendonify、workbench 模块多选、人工数据大表、命令黑框和数据源健康表。
+- `用已有数据分析` 改为走 `src/console_run_all.py --data-json ...`，因此会继续生成 native brief、workbench 和日志，而不是只跑半截分析。
+- `src/control_service.py` 新增 `env_overrides` 白名单，只允许 `NDX_DISABLE_WIND_L4` 为空或 `"1"`；关闭 Wind L4 时通过受控环境覆盖传入子进程，不拼接任意环境变量。
+- 更新 `src/open_research_console.py` ready / stale markers，要求新版本 `console_simple_launcher_v1`，并拒绝旧控制台主界面标记。
+- 更新控制台、启动脚本和 control service 测试，锁定新启动器合同和 Wind 环境覆盖安全边界。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile src/research_console.py src/control_service.py src/open_research_console.py`：通过。
+- `.venv/bin/python -m pytest -q tests/test_research_console.py tests/test_open_research_console.py tests/test_control_service.py tests/test_console_run_all.py`：17 passed，4 warnings。
+- `.venv/bin/python src/open_research_console.py` 打开 `http://127.0.0.1:8765` 成功，页面版本为 `console_simple_launcher_v1`。
+- Chrome 桌面首屏检查：主界面只显示三种运行模式、回测、新闻、开始按钮和末次数据；命令预览不在首屏；未发现 Trendonify 主入口。
+- Chrome 390px 宽度检查：`scrollWidth=390`、`clientWidth=390`，无横向滚动；顶部入口和主按钮完整显示。
+- 交互命令检查：完整运行、仅收集数据、用已有数据分析、回测、新闻和关闭 Wind L4 生成的命令 / 环境覆盖符合设计。
 
 ### 研究控制台重做计划：从参数面板改成用户启动器
 

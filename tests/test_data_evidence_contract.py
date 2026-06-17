@@ -133,6 +133,28 @@ def test_fallback_without_reason_blocks_core_but_only_degrades_noncore():
     assert any(issue["code"] == "fallback_without_reason" for issue in noncore_issues["degraded"])
 
 
+def test_fallback_degraded_reason_counts_as_explanation_for_core_metric():
+    payload = normalize_data_evidence(
+        {
+            "name": "Core fallback with degraded explanation",
+            "value": 1.0,
+            "source_name": "fallback source",
+            "data_quality": {
+                "availability": "degraded",
+                "fallback_chain": ["primary", "fallback"],
+                "fallback_reason": "none",
+                "degraded_reason": "primary source rejected the latest request; cached prior observation used with boundary disclosed",
+            },
+        },
+        function_id="get_vix",
+        layer=2,
+    )
+
+    issues = data_evidence_issues(payload, function_id="get_vix")
+
+    assert not any(issue["code"] == "fallback_without_reason" for issue in issues["hard_block"])
+
+
 def test_collector_attaches_contract_to_every_indicator(monkeypatch, tmp_path):
     monkeypatch.setattr(collector_module.path_config, "data_dir", str(tmp_path))
     monkeypatch.setattr(

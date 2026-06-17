@@ -362,6 +362,9 @@ class LLMEngine:
         repaired = text.strip().lstrip("\ufeff")
         # Model occasionally closes a one-item array as ["text") instead of ["text"].
         repaired = re.sub(r'(?<=")\s*\)\s*([,\]])', r']\1', repaired)
+        # DeepSeek JSON mode can occasionally end a Chinese string-list item with
+        # a full-width bracket instead of the required closing quote/bracket.
+        repaired = re.sub(r'(?<!")】\s*([,\r\n])', r'"]\1', repaired)
         # Standard JSON does not allow trailing commas.
         repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
         return repaired

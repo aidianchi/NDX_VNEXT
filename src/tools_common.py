@@ -109,7 +109,7 @@ YF_FRAME_CACHE_PREFER_MAX_AGE_SECONDS = 60 * 60 * 12
 # 退避周期偏长，是为了让 Yahoo 限流（429）窗口有机会自动恢复。
 # 2026-05 多次 run 显示：2 秒间隔的重试都落在 Yahoo cooldown 窗口内，反复撞墙。
 YF_DOWNLOAD_RETRY_DELAYS_SECONDS = (10, 60)
-TWELVE_DATA_PRIORITY_TICKERS = {"QQQ", "HYG", "QQEW", "XLY", "XLP"}
+TWELVE_DATA_PRIORITY_TICKERS = {"QQQ", "HYG", "QQEW"}
 YF_RUNTIME_EVENT_LIMIT = 200
 
 _YF_RUNTIME_EVENTS: List[Dict[str, Any]] = []
@@ -154,6 +154,17 @@ def _record_yfinance_runtime_event(event: Dict[str, Any]) -> None:
         _YF_RUNTIME_EVENTS.append(payload)
         if len(_YF_RUNTIME_EVENTS) > YF_RUNTIME_EVENT_LIMIT:
             del _YF_RUNTIME_EVENTS[: len(_YF_RUNTIME_EVENTS) - YF_RUNTIME_EVENT_LIMIT]
+
+
+def _recent_yfinance_event_matches(ticker: str, *, status: str, failure_type: str) -> bool:
+    with _YF_RUNTIME_LOCK:
+        recent_events = list(_YF_RUNTIME_EVENTS[-8:])
+    for event in reversed(recent_events):
+        if str(event.get("ticker") or "") != str(ticker):
+            continue
+        if str(event.get("status") or "") == status and str(event.get("failure_type") or "") == failure_type:
+            return True
+    return False
 
 
 def get_yfinance_runtime_diagnostics() -> Dict[str, Any]:
@@ -422,6 +433,59 @@ def _is_twelve_data_priority_download(tickers: Any, interval: str, auto_adjust: 
     return ticker in TWELVE_DATA_PRIORITY_TICKERS
 
 
+def _previous_weekday(day: pd.Timestamp) -> pd.Timestamp:
+    while day.weekday() >= 5:
+        day = day - pd.Timedelta(days=1)
+    return day
+
+
+def _latest_completed_us_daily_date(now: Optional[Any] = None) -> pd.Timestamp:
+    if now is None:
+        current = pd.Timestamp.now(tz="America/New_York")
+    else:
+        current = pd.Timestamp(now)
+        current = current.tz_localize("America/New_York") if current.tzinfo is None else current.tz_convert("America/New_York")
+
+    day = pd.Timestamp(current.date())
+    if current.weekday() >= 5:
+        return _previous_weekday(day)
+    if current.hour < 17:
+        return _previous_weekday(day - pd.Timedelta(days=1))
+    return day
+
+
+def _clamp_live_daily_download_end(end: Optional[Any], interval: str) -> Optional[Any]:
+    if end is None or interval != "1d":
+        return end
+    try:
+        requested_end = pd.to_datetime(end)
+    except Exception:
+        return end
+    if pd.isna(requested_end):
+        return end
+    safe_exclusive_end = _latest_completed_us_daily_date() + pd.Timedelta(days=1)
+    if requested_end.normalize() > safe_exclusive_end.normalize():
+        clamped = safe_exclusive_end.strftime("%Y-%m-%d")
+        logging.info("Clamping daily market-data end date from %s to %s until US daily bar is complete", end, clamped)
+        return clamped
+    return end
+
+
+def _daily_download_window_has_no_rows(start: Optional[Any], end: Optional[Any], interval: str) -> bool:
+    if interval != "1d" or start is None or end is None:
+        return False
+    try:
+        start_day = pd.to_datetime(start).normalize()
+        end_day = pd.to_datetime(end).normalize()
+    except Exception:
+        return False
+    if pd.isna(start_day) or pd.isna(end_day):
+        return False
+    # yfinance treats daily end as exclusive. After live-date clamping, an
+    # incremental cache refresh may have no completed daily bar left to fetch.
+    return start_day >= end_day
+
+
 def _format_twelve_date(value: Optional[Any]) -> Optional[str]:
     if value is None:
         return None
@@ -518,8 +582,26 @@ def cached_yf_download(
     if not YF_AVAILABLE and not get_twelve_data_api_key():
         return pd.DataFrame()
 
+    end = _clamp_live_daily_download_end(end, interval)
     requested_tickers = _requested_ticker_list(tickers)
     ticker_key = ",".join(requested_tickers) if len(requested_tickers) > 1 else (requested_tickers[0] if requested_tickers else str(tickers))
+    if _daily_download_window_has_no_rows(start, end, interval):
+        _record_yfinance_runtime_event({
+            "operation": "download",
+            "ticker": ticker_key,
+            "status": "skipped",
+            "source": "window_guard",
+            "failure_type": "no_completed_daily_bar",
+            "failure_reason": f"daily download window has no completed rows after end clamp: start={start}, end={end}",
+            "elapsed_ms": 0.0,
+        })
+        logging.info(
+            "Skipping %s daily download because the clamped window has no completed rows: start=%s, end=%s",
+            ticker_key,
+            start,
+            end,
+        )
+        return pd.DataFrame()
 
     cache_key = ":".join(
         [
@@ -928,7 +1010,13 @@ def _fetch_yf_history(ticker: str, start_date: Optional[Any] = None, end_date: O
             df = clean_yfinance_dataframe(df)
             
             if df.empty or "close" not in df.columns:
-                logging.error(f"{ticker} 返回空数据或缺少 close 列；cached_yf_download 已完成内部退避")
+                if _recent_yfinance_event_matches(ticker, status="skipped", failure_type="no_completed_daily_bar"):
+                    logging.info(
+                        "%s 今日尚无已完成的美国日线；本次增量请求无新行，后续指标会使用可用缓存或写明数据边界",
+                        ticker,
+                    )
+                else:
+                    logging.error(f"{ticker} 返回空数据或缺少 close 列；cached_yf_download 已完成内部退避")
                 return pd.DataFrame(columns=["date", "value"])
 
             # 【核心修复】：先提取close列并重命名，保持DatetimeIndex

@@ -109,6 +109,7 @@ def _enum_value(value: Any) -> Any:
 
 
 _SEVERITY_HIGH_MEDIUM = frozenset({"high", "medium"})
+_EVIDENCE_REF_PATTERN = re.compile(r"L[1-5]\.[A-Za-z_][A-Za-z0-9_]*")
 
 PRICE_REFLECTION_CATEGORIES: Dict[str, Dict[str, str]] = {
     "credit": {
@@ -1844,7 +1845,10 @@ class VNextOrchestrator:
             "internal_conflict_analysis 和 cross_layer_hooks，识别跨层共振、冲突、传导机制与不确定性。\n\n"
             "必须优先使用 indicator_analyses[].reasoning_process 中已经完成的专业推理；"
             "如果要提出冲突，必须指出冲突来自哪些层、哪些指标或哪些机制。\n"
-            "输出仍保持 BridgeMemo 结构，但 conflicts 和 cross_layer_claims 需要尽量引用具体 function_id。"
+            "输出仍保持 BridgeMemo 结构，但 conflicts 和 cross_layer_claims 需要引用具体 function_id。\n"
+            "cross_layer_claims[].supporting_facts 只能填写 evidence ref 字符串，格式如 "
+            "\"L4.get_ndx_pe_and_earnings_yield\"；不要写中文事实句、数值解释或自然语言，"
+            "这些解释应放在 claim 或 mechanism。"
         )
         bridge_contract += (
             "\nBridge v2 新增字段必须尽量原生填写：\n"
@@ -2284,6 +2288,8 @@ class VNextOrchestrator:
             for text_key in ("local_conclusion", "layer_synthesis", "internal_conflict_analysis", "notes"):
                 if normalized.get(text_key) is not None and not isinstance(normalized.get(text_key), str):
                     normalized[text_key] = json.dumps(normalized[text_key], ensure_ascii=False, default=str)
+            if "local_conclusion" in normalized:
+                normalized["local_conclusion"] = self._truncate_text(normalized.get("local_conclusion"), 500)
             raw_core_facts = normalized.get("core_facts", []) or []
             if isinstance(raw_core_facts, (str, bytes, dict)) or not isinstance(raw_core_facts, list):
                 raw_core_facts = [raw_core_facts]
@@ -2327,9 +2333,15 @@ class VNextOrchestrator:
         if stage_key in {"bridge", "thesis", "reviser"}:
             for key in ("conflicts", "retained_conflicts", "remaining_conflicts"):
                 if isinstance(normalized.get(key), list):
-                    normalized[key] = [self._normalize_conflict(item) for item in normalized[key]]
+                    normalized[key] = [
+                        conflict
+                        for conflict in (self._normalize_conflict(item) for item in normalized[key])
+                        if conflict
+                    ]
             if stage_key == "bridge":
                 normalization_notes = self._coerce_string_list(normalized.get("normalization_notes"))
+                if "implication_for_ndx" in normalized:
+                    normalized["implication_for_ndx"] = self._truncate_text(normalized.get("implication_for_ndx"), 500)
                 if isinstance(normalized.get("typed_conflicts"), list):
                     normalized["typed_conflicts"] = [
                         self._normalize_typed_conflict(item)
@@ -2340,6 +2352,21 @@ class VNextOrchestrator:
                     normalized["typed_conflicts"] = self._derive_typed_conflicts(normalized.get("conflicts", []))
                     if normalized["typed_conflicts"]:
                         normalization_notes.append("typed_conflicts_derived_from_legacy_conflicts")
+                bridge_fallback_refs = self._bridge_fallback_evidence_refs(normalized)
+                if isinstance(normalized.get("cross_layer_claims"), list):
+                    claims = []
+                    claim_refs_normalized = False
+                    for item in normalized["cross_layer_claims"]:
+                        if not isinstance(item, dict):
+                            continue
+                        claim = self._normalize_cross_layer_claim(item, bridge_fallback_refs)
+                        claims.append(claim)
+                        if claim.get("_supporting_facts_normalized"):
+                            claim_refs_normalized = True
+                            claim.pop("_supporting_facts_normalized", None)
+                    normalized["cross_layer_claims"] = claims
+                    if claim_refs_normalized:
+                        normalization_notes.append("cross_layer_claim_supporting_facts_normalized_to_evidence_refs")
                 if isinstance(normalized.get("resonance_chains"), list):
                     normalized["resonance_chains"] = [
                         self._normalize_resonance_chain(item)
@@ -2347,11 +2374,12 @@ class VNextOrchestrator:
                         if isinstance(item, dict)
                     ]
                 if isinstance(normalized.get("transmission_paths"), list):
-                    normalized["transmission_paths"] = [
+                    transmission_paths = [
                         self._normalize_transmission_path(item)
                         for item in normalized["transmission_paths"]
                         if isinstance(item, dict)
                     ]
+                    normalized["transmission_paths"] = self._dedupe_bridge_transmission_paths(transmission_paths)
                 if isinstance(normalized.get("principal_contradiction"), dict):
                     normalized["principal_contradiction"] = self._normalize_principal_contradiction(
                         normalized["principal_contradiction"],
@@ -2466,7 +2494,12 @@ class VNextOrchestrator:
                 revised_thesis = normalized.get("revised_thesis")
                 if isinstance(revised_thesis, dict) and isinstance(revised_thesis.get("retained_conflicts"), list):
                     revised_thesis["retained_conflicts"] = [
-                        self._normalize_conflict(item) for item in revised_thesis["retained_conflicts"]
+                        conflict
+                        for conflict in (
+                            self._normalize_conflict(item)
+                            for item in revised_thesis["retained_conflicts"]
+                        )
+                        if conflict
                     ]
         if stage_key == "final":
             if not isinstance(normalized.get("token_usage"), dict):
@@ -2623,8 +2656,29 @@ class VNextOrchestrator:
         if not isinstance(conflict, dict):
             return {}
         normalized = dict(conflict)
-        normalized.setdefault("description", "")
-        normalized.setdefault("implication", normalized.get("description") or "需继续跟踪其对最终立场的影响。")
+        if not any(str(value or "").strip() for value in normalized.values()):
+            return {}
+        normalized["conflict_type"] = str(
+            normalized.get("conflict_type")
+            or normalized.get("conflict_id")
+            or normalized.get("type")
+            or "normalized_conflict"
+        )
+        severity = str(normalized.get("severity") or "medium").lower()
+        normalized["severity"] = severity if severity in {"high", "medium", "low"} else "medium"
+        normalized["description"] = str(
+            normalized.get("description")
+            or normalized.get("summary")
+            or normalized.get("claim")
+            or normalized.get("conflict_type")
+            or "模型输出的冲突项缺少描述，已降级为结构占位。"
+        )
+        normalized["implication"] = str(
+            normalized.get("implication")
+            or normalized.get("action_implication")
+            or normalized.get("description")
+            or "需继续跟踪其对最终立场的影响。"
+        )
         if not normalized.get("involved_layers"):
             layers = re.findall(r"L[1-5]", normalized.get("conflict_type", "") + " " + normalized.get("description", ""))
             normalized["involved_layers"] = sorted(set(layers)) or ["L1", "L4"]
@@ -2674,6 +2728,65 @@ class VNextOrchestrator:
         normalized["status"] = status if status in {"unresolved", "confirmed", "weakened"} else "unresolved"
         return normalized
 
+    def _bridge_fallback_evidence_refs(self, bridge: Dict[str, Any]) -> List[str]:
+        refs: List[str] = []
+
+        def add(raw_refs: Any) -> None:
+            for ref in self._coerce_string_list(raw_refs):
+                if _EVIDENCE_REF_PATTERN.fullmatch(ref) and ref not in refs:
+                    refs.append(ref)
+
+        for key in (
+            "typed_conflicts",
+            "resonance_chains",
+            "transmission_paths",
+            "secondary_contradictions",
+            "price_reflection_map",
+        ):
+            for item in bridge.get(key) or []:
+                if isinstance(item, dict):
+                    add(item.get("evidence_refs"))
+                    add(item.get("counterevidence_refs"))
+        principal = bridge.get("principal_contradiction")
+        if isinstance(principal, dict):
+            add(principal.get("evidence_refs"))
+            for signal in principal.get("transformation_signals") or []:
+                if isinstance(signal, dict):
+                    add(signal.get("evidence_refs"))
+        return refs
+
+    def _normalize_cross_layer_claim(self, item: Dict[str, Any], fallback_refs: List[str]) -> Dict[str, Any]:
+        normalized = dict(item)
+        raw_supporting_facts = self._coerce_string_list(normalized.get("supporting_facts"))
+        valid_refs = [
+            ref for ref in raw_supporting_facts
+            if _EVIDENCE_REF_PATTERN.fullmatch(ref)
+        ]
+        invalid_notes = [ref for ref in raw_supporting_facts if ref not in valid_refs]
+        if invalid_notes:
+            existing_notes = self._coerce_string_list(normalized.get("supporting_fact_notes"))
+            normalized["supporting_fact_notes"] = list(dict.fromkeys(existing_notes + invalid_notes))
+        if not valid_refs and fallback_refs:
+            text = " ".join(
+                [
+                    str(normalized.get("claim") or ""),
+                    str(normalized.get("mechanism") or ""),
+                    " ".join(invalid_notes),
+                ]
+            )
+            layers = {
+                f"L{match}"
+                for match in re.findall(r"L\s*([1-5])", text, flags=re.IGNORECASE)
+            }
+            if layers:
+                valid_refs = [ref for ref in fallback_refs if ref.split(".", 1)[0] in layers]
+            if not valid_refs:
+                valid_refs = list(fallback_refs)
+        normalized["supporting_facts"] = list(dict.fromkeys(valid_refs))
+        if invalid_notes or normalized["supporting_facts"] != raw_supporting_facts:
+            normalized["_supporting_facts_normalized"] = True
+        return normalized
+
     def _normalize_resonance_chain(self, item: Dict[str, Any]) -> Dict[str, Any]:
         normalized = dict(item)
         normalized["chain_id"] = str(normalized.get("chain_id") or normalized.get("id") or "resonance_chain")
@@ -2694,14 +2807,48 @@ class VNextOrchestrator:
         normalized["path_id"] = str(normalized.get("path_id") or normalized.get("id") or "transmission_path")
         normalized["source_layer"] = self._normalize_layer_label(normalized.get("source_layer") or normalized.get("source") or "L1")
         normalized["target_layer"] = self._normalize_layer_label(normalized.get("target_layer") or normalized.get("target") or "L4")
-        normalized["mechanism"] = str(normalized.get("mechanism") or "")
-        normalized["implication"] = str(normalized.get("implication") or "")
+        normalized["mechanism"] = str(normalized.get("mechanism") or normalized.get("description") or "")
+        normalized["implication"] = str(
+            normalized.get("implication")
+            or normalized.get("action_implication")
+            or normalized.get("portfolio_implication")
+            or normalized.get("description")
+            or normalized.get("mechanism")
+            or ""
+        )
         normalized["confidence"] = self._normalize_confidence(normalized.get("confidence"))
         value = normalized.get("evidence_refs")
         normalized["evidence_refs"] = self._coerce_string_list(value)
         value = normalized.get("event_refs")
         normalized["event_refs"] = self._coerce_event_refs_list(value)
         return normalized
+
+    def _dedupe_bridge_transmission_paths(self, paths: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        normalized_paths: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for index, path in enumerate(paths):
+            if not isinstance(path, dict):
+                continue
+            normalized = dict(path)
+            raw_id = str(normalized.get("path_id") or "").strip()
+            source = self._normalize_layer_label(normalized.get("source_layer") or "L1")
+            target = self._normalize_layer_label(normalized.get("target_layer") or "L4")
+            base_id = raw_id
+            if not base_id or base_id == "transmission_path" or base_id in seen:
+                base_id = f"{str(source).lower()}_to_{str(target).lower()}_{index + 1}"
+            path_id = base_id
+            suffix = 2
+            while path_id in seen:
+                path_id = f"{base_id}_{suffix}"
+                suffix += 1
+            seen.add(path_id)
+            normalized["path_id"] = path_id
+            normalized["source_layer"] = source
+            normalized["target_layer"] = target
+            if not str(normalized.get("implication") or "").strip():
+                normalized["implication"] = str(normalized.get("mechanism") or normalized.get("description") or "")
+            normalized_paths.append(normalized)
+        return normalized_paths
 
     def _normalize_contradiction_transformation_signal(self, item: Dict[str, Any]) -> Dict[str, Any]:
         normalized = dict(item)
@@ -3072,6 +3219,14 @@ class VNextOrchestrator:
             if text:
                 coerced.append(text)
         return coerced
+
+    def _truncate_text(self, value: Any, max_length: int) -> str:
+        text = str(value or "")
+        if len(text) <= max_length:
+            return text
+        if max_length <= 3:
+            return text[:max_length]
+        return text[: max_length - 3].rstrip() + "..."
 
     def _normalize_confidence(self, confidence: Any) -> str:
         if not isinstance(confidence, str):

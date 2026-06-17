@@ -1438,12 +1438,15 @@ class VNextReportGenerator:
         fcf_yield = _safe_number(_first_present(value, "FCFYield", "FCF_Yield"))
         sources = [source for source in _as_list(value.get("ThirdPartyChecks")) if isinstance(source, dict)]
         percentile = _safe_number(_first_present(wind_value, "PEHistoricalPercentile", "pe_historical_percentile"))
+        percentile_window = _first_present(wind_value, "PEHistoricalPercentileWindow", "pe_historical_percentile_window") or "historical"
         if percentile is None:
             percentile = _safe_number(_first_present(value, "PE_TTM_percentile_10y", "PE_TTM_percentile_5y"))
+            percentile_window = "fallback"
         for source in sources:
             source_percentile = _safe_number(source.get("historical_percentile", source.get("percentile_10y")))
             if source_percentile is not None:
                 percentile = source_percentile
+                percentile_window = "third-party"
                 break
         ticks = []
         if percentile is not None:
@@ -1458,7 +1461,7 @@ class VNextReportGenerator:
   <b>Wind</b>
   <span>NDX PE/PB/PS + Risk Premium</span>
   <strong>{_fmt_number(pe, digits=2)}x</strong>
-  <small>PE percentile {_fmt_number(percentile, suffix='%', digits=1)} · RP {_fmt_number(wind_risk_premium, suffix='%', digits=2)}</small>
+  <small>PE percentile {_escape(str(percentile_window))} {_fmt_number(percentile, suffix='%', digits=1)} · RP {_fmt_number(wind_risk_premium, suffix='%', digits=2)}</small>
 </li>
 """
             )
@@ -2151,12 +2154,13 @@ class VNextReportGenerator:
         return self._wrap_indicator_visual(ref, "m7-fundamentals", "M7 fundamentals heatmap", body, details=True)
 
     def _wind_valuation_indicator_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        pe_window = value.get("PEHistoricalPercentileWindow") or "historical"
         rows = [
             ("PE", value.get("PE"), "x"),
             ("PB", value.get("PB"), "x"),
             ("PS", value.get("PS"), "x"),
             ("Risk Premium", value.get("RiskPremium"), "%"),
-            ("PE percentile", value.get("PEHistoricalPercentile"), "%"),
+            (f"PE percentile {pe_window}", value.get("PEHistoricalPercentile"), "%"),
             ("RP percentile", value.get("RiskPremiumHistoricalPercentile"), "%"),
         ]
         metrics = "".join(

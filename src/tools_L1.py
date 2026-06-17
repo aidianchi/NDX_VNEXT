@@ -4,6 +4,8 @@
 NDX Agent · 第1层数据获取函数
 """
 
+from copy import deepcopy
+
 try:
     from .tools_common import *
     from .tools_common import _fetch_fred_series, _fetch_yf_history
@@ -14,6 +16,8 @@ except ImportError:
 # =====================================================
 # 第1层函数
 # =====================================================
+
+_VOL_LEVEL_CACHE = {}
 
 def _get_yf_series_with_analysis(ticker: str, name: str, end_date: Optional[str] = None, use_ma20_trend: bool = False) -> Dict[str, Any]:
     """
@@ -157,6 +161,8 @@ def _vix_payload_from_frame(vix_df: pd.DataFrame, *, source_name: str) -> Option
 
 def get_vix(end_date: str = None) -> Dict[str, Any]:
     """获取VIX恐慌指数，使用持久化缓存并返回历史统计。V5.8修复版：增强错误处理和Alpha Vantage备用。"""
+    if not end_date and "VIX" in _VOL_LEVEL_CACHE:
+        return deepcopy(_VOL_LEVEL_CACHE["VIX"])
     if not YF_AVAILABLE:
         logging.warning("yfinance 不可用，尝试 Alpha Vantage 备用方案")
         return _get_vix_from_alphavantage(end_date=end_date)
@@ -174,6 +180,8 @@ def get_vix(end_date: str = None) -> Dict[str, Any]:
             )
             if payload:
                 logging.info(f"成功从缓存获取 VIX 数据: {payload['value']['level']} (日期: {payload['value']['date']})")
+                if not end_date:
+                    _VOL_LEVEL_CACHE["VIX"] = deepcopy(payload)
                 return payload
     except Exception as e:
         logging.warning(f"TimeSeriesManager 获取 VIX 数据失败: {e}，尝试直接获取")
@@ -184,8 +192,13 @@ def get_vix(end_date: str = None) -> Dict[str, Any]:
     # 如果yfinance也失败，尝试Alpha Vantage
     if result.get("value") is None:
         logging.warning("yfinance 直接获取 VIX 失败，尝试 Alpha Vantage 备用方案")
-        return _get_vix_from_alphavantage(end_date=end_date)
+        result = _get_vix_from_alphavantage(end_date=end_date)
+        if not end_date and result.get("value") is not None:
+            _VOL_LEVEL_CACHE["VIX"] = deepcopy(result)
+        return result
     
+    if not end_date:
+        _VOL_LEVEL_CACHE["VIX"] = deepcopy(result)
     return result
 
 
@@ -254,11 +267,15 @@ def _get_vix_from_alphavantage(end_date: str = None) -> Dict[str, Any]:
 
 def get_vxn(end_date: str = None) -> Dict[str, Any]:
     """获取VXN纳指恐慌指数。分层降噪：现值 + 趋势比(Spot/MA20)。V5.8修复版：增强错误处理。"""
+    if not end_date and "VXN" in _VOL_LEVEL_CACHE:
+        return deepcopy(_VOL_LEVEL_CACHE["VXN"])
     result = _get_yf_series_with_analysis(ticker="^VXN", name="VXN Index", end_date=end_date, use_ma20_trend=True)
     
     # 如果yfinance失败，记录详细错误
     if result.get("value") is None:
         logging.error(f"VXN 获取失败: {result.get('notes', 'Unknown error')}")
+    elif not end_date:
+        _VOL_LEVEL_CACHE["VXN"] = deepcopy(result)
     
     return result
 

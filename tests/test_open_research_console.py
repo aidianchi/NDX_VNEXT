@@ -17,10 +17,15 @@ def test_pids_on_port_returns_all_listeners(monkeypatch):
     assert open_research_console._pid_on_port(8765) == 2678
 
 
-def test_stale_console_markers_catch_old_manual_confidence_form():
-    assert 'data-manual-field="confidence"' in open_research_console.STALE_CONSOLE_MARKERS
-    assert "使用人工数据" in open_research_console.CONSOLE_READY_MARKERS
-    assert "news_event_data_links.json" in open_research_console.CONSOLE_READY_MARKERS
+def test_console_markers_require_simple_launcher_and_reject_old_panel():
+    assert open_research_console.CONSOLE_VERSION == "console_simple_launcher_v1"
+    assert "运行模式" in open_research_console.CONSOLE_READY_MARKERS
+    assert "开始完整运行" in open_research_console.CONSOLE_READY_MARKERS
+    assert "是否回测" in open_research_console.CONSOLE_READY_MARKERS
+    assert "收集新闻材料" in open_research_console.CONSOLE_READY_MARKERS
+    assert "采集 Trendonify" in open_research_console.STALE_CONSOLE_MARKERS
+    assert "交互工作台模块" in open_research_console.STALE_CONSOLE_MARKERS
+    assert "高级 JSON 预览" in open_research_console.STALE_CONSOLE_MARKERS
 
 
 def test_choose_service_restarts_existing_ready_service(monkeypatch, tmp_path):

@@ -435,6 +435,59 @@ def test_bridge_normalize_coerces_nested_event_refs_without_stringifying_dicts(t
     assert BridgeMemo.model_validate(normalized)
 
 
+def test_bridge_normalize_dedupes_transmission_path_ids_and_fills_implication(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+
+    payload = {
+        "bridge_type": "macro_valuation",
+        "layers_connected": ["L1", "L2", "L4", "L5"],
+        "implication_for_ndx": "需要保留冲突。",
+        "typed_conflicts": [
+            {
+                "conflict_id": "real_rate_vs_valuation",
+                "conflict_type": "macro_valuation",
+                "severity": "high",
+                "confidence": "high",
+                "description": "实际利率与估值冲突。",
+                "mechanism": "折现率上升压缩估值。",
+                "implication": "核心仓要谨慎。",
+                "involved_layers": ["L1", "L4"],
+                "evidence_refs": ["L1.get_10y_real_rate", "L4.get_ndx_pe_and_earnings_yield"],
+                "falsifiers": ["实际利率回落"],
+            }
+        ],
+        "transmission_paths": [
+            {
+                "path_id": "transmission_path",
+                "source_layer": "L1",
+                "target_layer": "L4",
+                "mechanism": "实际利率上升传导到估值压缩。",
+                "evidence_refs": ["L1.get_10y_real_rate", "L4.get_ndx_pe_and_earnings_yield"],
+            },
+            {
+                "path_id": "transmission_path",
+                "source_layer": "L2",
+                "target_layer": "L5",
+                "mechanism": "信用压力传导到价格趋势。",
+                "evidence_refs": ["L2.get_hy_oas_bp", "L5.get_qqq_technical_indicators"],
+            },
+        ],
+    }
+
+    normalized = orchestrator._normalize_payload("bridge", payload)
+
+    paths = normalized["transmission_paths"]
+    assert [item["path_id"] for item in paths] == ["l1_to_l4_1", "l2_to_l5_2"]
+    assert paths[0]["implication"] == "实际利率上升传导到估值压缩。"
+    assert paths[1]["implication"] == "信用压力传导到价格趋势。"
+    memo = BridgeMemo.model_validate(normalized)
+    assert orchestrator._validate_bridge_memo_v2(memo) == []
+
+
 def test_bridge_prompt_anchors_event_refs_as_string_list(tmp_path: Path):
     orchestrator = VNextOrchestrator(
         available_models=["fake"],

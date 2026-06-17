@@ -1,5 +1,6 @@
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -121,3 +122,38 @@ def test_console_summary_syncs_native_paths_back_to_run_summary(tmp_path):
     assert '"workbench": "/tmp/workbench.html"' in updated
     assert '"prompt_inspector": "/tmp/prompt_inspector.html"' in updated
     assert "console_run_summary.json" in updated
+
+
+def test_console_run_all_supplies_resume_default_to_pipeline(tmp_path, monkeypatch):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    captured = {}
+
+    monkeypatch.setattr(
+        console_run_all,
+        "parse_args",
+        lambda: SimpleNamespace(
+            date=None,
+            data_json=None,
+            models="deepseek-v4-flash",
+            workbench_modules="price_technical",
+            skip_legacy_report=True,
+            enable_legacy_charts=False,
+            enable_news=False,
+        ),
+    )
+    monkeypatch.setattr(console_run_all, "setup_logging", lambda: None)
+    monkeypatch.setattr(console_run_all, "_maybe_refresh_trendonify_sidecar", lambda: "")
+
+    def fake_run_pipeline(args):
+        captured["resume_from_existing"] = getattr(args, "resume_from_existing", None)
+        return {"run_dir": str(run_dir), "report_path": ""}
+
+    monkeypatch.setattr(console_run_all, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(console_run_all.PromptInspectorGenerator, "run", lambda self, run_dir: "/tmp/prompt.html")
+    monkeypatch.setattr(console_run_all.VNextReportGenerator, "run", lambda self, run_dir, template="brief": "/tmp/brief.html")
+    monkeypatch.setattr(console_run_all.InteractiveChartWorkbenchGenerator, "run", lambda self, run_dir, modules: "/tmp/workbench.html")
+    monkeypatch.setattr(console_run_all.path_config, "logs_dir", str(tmp_path / "logs"))
+
+    assert console_run_all.main() == 0
+    assert captured["resume_from_existing"] is False

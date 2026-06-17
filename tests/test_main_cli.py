@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from main import build_run_dir, parse_args
+from main import _schema_guard_summary, build_run_dir, parse_args
 
 
 def test_main_disables_legacy_charts_by_default(monkeypatch):
@@ -83,3 +83,19 @@ def test_build_run_dir_allows_existing_run_id_for_resume(tmp_path, monkeypatch):
     run_dir = build_run_dir(None, run_id="resume_run", allow_existing=True)
 
     assert run_dir == str(existing)
+
+
+def test_schema_guard_summary_surfaces_review_required_issues():
+    class _SchemaReport:
+        passed = False
+        quality_status = "review_required"
+        structural_issues = []
+        consistency_issues = ["Bridge supporting_facts invalid"]
+        missing_fields = []
+
+    summary = _schema_guard_summary({"schema_guard_report": _SchemaReport()})
+
+    assert summary["passed"] is False
+    assert summary["quality_status"] == "review_required"
+    assert summary["issue_count"] == 1
+    assert summary["consistency_issues"] == ["Bridge supporting_facts invalid"]

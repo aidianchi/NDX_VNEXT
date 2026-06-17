@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from control_service import _python_bound_args, validate_command
+from control_service import JobStore, _python_bound_args, validate_command, validate_env_overrides
 
 
 def test_control_service_allows_main_news_command():
@@ -59,3 +59,30 @@ def test_control_service_binds_python_to_service_interpreter():
 
     assert args[0] == sys.executable
     assert args[1:] == ["src/main.py", "--models", "deepseek-v4-flash"]
+
+
+def test_control_service_allows_only_wind_l4_env_override():
+    assert validate_env_overrides({"NDX_DISABLE_WIND_L4": "1"}) == {"NDX_DISABLE_WIND_L4": "1"}
+    assert validate_env_overrides({"NDX_DISABLE_WIND_L4": ""}) == {"NDX_DISABLE_WIND_L4": ""}
+
+    with pytest.raises(ValueError):
+        validate_env_overrides({"PYTHONPATH": "/tmp"})
+
+    with pytest.raises(ValueError):
+        validate_env_overrides({"NDX_DISABLE_WIND_L4": "true"})
+
+
+def test_control_service_records_env_overrides_for_job(tmp_path, monkeypatch):
+    monkeypatch.setattr("control_service._repo_root", lambda: tmp_path)
+    script = tmp_path / "noop.py"
+    script.write_text("print('ok')\n", encoding="utf-8")
+    store = JobStore(root=tmp_path / "logs")
+
+    state = store.create_job(
+        ["python3", str(script)],
+        env_overrides={"NDX_DISABLE_WIND_L4": "1"},
+    )
+    job = store.status(state["job_id"], include_log_tail=True)
+
+    assert job["env_overrides"] == {"NDX_DISABLE_WIND_L4": "1"}
+    assert "noop.py" in " ".join(job["requested_command"])

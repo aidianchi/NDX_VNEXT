@@ -85,6 +85,25 @@ def test_vxn_vix_ratio_returns_missing_data_instead_of_raising(monkeypatch):
     assert "VXN=None" in result["notes"]
 
 
+def test_live_vxn_reuses_in_process_cache(monkeypatch):
+    tools_L1._VOL_LEVEL_CACHE.clear()
+    calls = {"count": 0}
+
+    def fake_yf_series(ticker, name, end_date=None, use_ma20_trend=False):
+        calls["count"] += 1
+        return {"name": name, "value": {"level": 25.0, "date": "2026-06-16"}}
+
+    monkeypatch.setattr(tools_L1, "_get_yf_series_with_analysis", fake_yf_series)
+
+    first = tools_L1.get_vxn()
+    first["value"]["level"] = 99.0
+    second = tools_L1.get_vxn()
+
+    assert calls["count"] == 1
+    assert second["value"]["level"] == 25.0
+    tools_L1._VOL_LEVEL_CACHE.clear()
+
+
 def test_get_vix_backtest_reads_historical_cache_without_current_refresh(tmp_path, monkeypatch):
     cache_path = tmp_path / "VIX.csv"
     pd.DataFrame(

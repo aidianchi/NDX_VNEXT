@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -169,6 +170,101 @@ def test_cached_yf_download_prefers_twelve_data_for_priority_etf(tmp_path: Path,
     assert float(result.iloc[0]["Close"]) == 101.0
     assert requests_seen
     assert requests_seen[0][1]["symbol"] == "QQQ"
+
+
+def test_cached_yf_download_does_not_use_twelve_data_for_xly_xlp(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(tools_common.path_config, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(tools_common, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_common, "CACHE_AVAILABLE", False)
+    monkeypatch.setattr(tools_common, "get_twelve_data_api_key", lambda: "test-key")
+
+    def _unexpected_twelve_data(*args, **kwargs):
+        raise AssertionError("XLY/XLP should use yfinance/cache path instead of Twelve Data priority")
+
+    class _YF:
+        @staticmethod
+        def download(*args, **kwargs):
+            index = pd.to_datetime(["2026-01-02"])
+            return pd.DataFrame({"Close": [101.0]}, index=index)
+
+    monkeypatch.setattr(tools_common.requests, "get", _unexpected_twelve_data)
+    monkeypatch.setattr(tools_common, "yf", _YF)
+
+    result = tools_common.cached_yf_download("XLY", start="2026-01-01", end="2026-01-03")
+
+    assert not result.empty
+    assert float(result.iloc[0]["Close"]) == 101.0
+
+
+def test_cached_yf_download_clamps_unfinished_us_daily_end(tmp_path: Path, monkeypatch):
+    _disable_twelve_data(monkeypatch)
+    monkeypatch.setattr(tools_common.path_config, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(tools_common, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_common, "CACHE_AVAILABLE", False)
+    monkeypatch.setattr(tools_common, "_latest_completed_us_daily_date", lambda now=None: pd.Timestamp("2026-06-16"))
+
+    seen = {}
+
+    class _YF:
+        @staticmethod
+        def download(*args, **kwargs):
+            seen["end"] = kwargs.get("end")
+            index = pd.to_datetime(["2026-06-16"])
+            return pd.DataFrame({"Close": [100.0]}, index=index)
+
+    monkeypatch.setattr(tools_common, "yf", _YF)
+
+    result = tools_common.cached_yf_download("HG=F", start="2025-01-01", end="2026-06-18")
+
+    assert not result.empty
+    assert seen["end"] == "2026-06-17"
+
+
+def test_cached_yf_download_skips_when_clamped_daily_window_has_no_rows(tmp_path: Path, monkeypatch):
+    _disable_twelve_data(monkeypatch)
+    tools_common.reset_yfinance_runtime_diagnostics()
+    monkeypatch.setattr(tools_common.path_config, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(tools_common, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_common, "CACHE_AVAILABLE", False)
+    monkeypatch.setattr(tools_common, "_latest_completed_us_daily_date", lambda now=None: pd.Timestamp("2026-06-15"))
+
+    class _YF:
+        @staticmethod
+        def download(*args, **kwargs):
+            raise AssertionError("no provider call is needed when the daily window has no completed rows")
+
+    monkeypatch.setattr(tools_common, "yf", _YF)
+    monkeypatch.setattr(tools_common.time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("no retry needed")))
+
+    result = tools_common.cached_yf_download("HG=F", start="2026-06-17", end="2026-06-18")
+
+    assert result.empty
+    diag = tools_common.get_yfinance_runtime_diagnostics()["yfinance"]
+    assert diag["by_status"]["skipped"] == 1
+    assert diag["by_failure_type"]["no_completed_daily_bar"] == 1
+
+
+def test_fetch_yf_history_logs_unfinished_daily_bar_as_info(tmp_path: Path, monkeypatch, caplog):
+    _disable_twelve_data(monkeypatch)
+    tools_common.reset_yfinance_runtime_diagnostics()
+    monkeypatch.setattr(tools_common.path_config, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(tools_common, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_common, "CACHE_AVAILABLE", False)
+    monkeypatch.setattr(tools_common, "_latest_completed_us_daily_date", lambda now=None: pd.Timestamp("2026-06-15"))
+
+    class _YF:
+        @staticmethod
+        def download(*args, **kwargs):
+            raise AssertionError("no provider call is needed when the daily window has no completed rows")
+
+    monkeypatch.setattr(tools_common, "yf", _YF)
+
+    with caplog.at_level(logging.INFO):
+        result = tools_common._fetch_yf_history("HG=F", start_date="2026-06-17", end_date="2026-06-17")
+
+    assert result.empty
+    assert "今日尚无已完成的美国日线" in caplog.text
+    assert "返回空数据或缺少 close 列" not in caplog.text
 
 
 def test_cached_yf_download_does_not_store_empty_frame_in_memory_cache(tmp_path: Path, monkeypatch):

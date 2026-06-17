@@ -18,26 +18,27 @@ except ImportError:
 
 
 DEFAULT_PORT = 8765
-CONSOLE_VERSION = "console_logs_entry_v4"
+CONSOLE_VERSION = "console_simple_launcher_v1"
 CONSOLE_READY_MARKERS = (
     "NDX vNext 研究控制台",
-    "使用人工数据",
-    "historicalDateMode",
+    "运行模式",
+    "开始完整运行",
+    "是否回测",
+    "收集新闻材料",
+    "打开最新报告",
     "function artifactUrl(path)",
     CONSOLE_VERSION,
-    'value="logs_only"',
-    "最新日志",
-    "旧版 HTML 已退出日常入口",
-    "官方事件底账与市场连接观察",
-    "news_event_data_links.json",
 )
 STALE_CONSOLE_MARKERS = (
     'data-manual-field="confidence"',
     "置信度",
     'value="visual_check"',
     "视觉回归</h3>",
-    "不生成旧版 HTML",
-    "临时启用旧版 charts",
+    "采集 Trendonify",
+    "Trendonify sidecar 标记为信任",
+    "交互工作台模块",
+    "高级 JSON 预览",
+    'value="logs_only"',
 )
 
 
