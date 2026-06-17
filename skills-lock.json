@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "tushare-finance": {
+      "source": "wind_info/wind-skills",
+      "sourceType": "git",
+      "skillPath": "skills/tushare-finance-skill/SKILL.md",
+      "computedHash": "042aa50a9a5ad835905e09d4eadec3e85f2f19b246d132e757f8513e271b2f3e"
+    }
+  }
+}
