@@ -4,7 +4,315 @@
 
 ---
 
+## 2026-06-18
+
+### 正式 reporter：修复核心图册居中留白与目录对齐
+
+完成内容：
+
+- 按用户在浏览器批注中指出的“右边留空 / 左右留空 / 导航居中是否合理”继续返修核心阅读区。
+- 将 brief 顶部章节导航从居中装饰改为与正文左边线对齐，符合研报目录的阅读习惯。
+- 核心证据图册的 sparkline 从 420×92 小画布改为 760×132 宽画布，避免宽屏卡片里 SVG 使用默认等比居中而产生大面积左右空白。
+- 图册里的 SVG 左对齐显示，保留仅 10px 的图内安全边距；正文段落仍保留合理行长限制，避免长行影响阅读。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile src/agent_analysis/vnext_reporter.py`：通过。
+- `.venv/bin/python -m pytest tests/test_vnext_reporter.py -q`：19 通过，4 个第三方库 deprecation warnings。
+- `.venv/bin/python src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20260617_024610 --template brief`：成功重新生成 `output/reports/vnext_brief_20260617_0230_20260617_0246.html`。
+- Chrome 877×763 视口复验：导航左边线与正文 shell 左边线差值为 0；QQQ 与 ERP 图在 SVG 内左右空白各约 10px；页面横向溢出为 0。
+
+### 正式 reporter：返修 L1-L5 展开态宽屏排版硬伤
+
+完成内容：
+
+- 按用户截图复核并返修三处仍不合格的桌面排版：微图标签压住折线、证据/发言权说明占据错误窄栏、L4 估值宽表被挤成半栏。
+- 微图生成逻辑增加顶部标签安全区；标签不再和折线路径共享同一垂直区域，并用文字描边提高可读性。
+- L1-L5 展开底稿里的复杂指标可视化改为整行铺开；估值交叉校验表从窄栏恢复为 1110px 左右的可读宽表。
+- “证据发言权”改为默认折叠的一行说明，避免普通阅读时被审计解释盒撑开；同时修正 `.layer-detail summary` 选择器过宽导致嵌套 summary 继承大标题 grid 的问题。
+- 指标 ref 芯片放宽并覆盖断词规则，避免长函数名最后一个字母单独掉行。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile src/agent_analysis/vnext_reporter.py`：通过。
+- `.venv/bin/python -m pytest tests/test_vnext_reporter.py -q`：19 通过，4 个第三方库 deprecation warnings。
+- `.venv/bin/python src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20260617_024610 --template brief`：成功重新生成 `output/reports/vnext_brief_20260617_0230_20260617_0246.html`。
+- Chrome 1440×1000 桌面复验：`bodyOverflowX=0`；5 个 layer 全部展开；41 个证据合约按钮；41 个“证据发言权”默认折叠；微图标签垂直遮挡数为 0。
+- 重点截图复验：`get_vxn_vix_ratio` 卡片高度从过度展开收至 255px；L4 估值表容器宽 1110px、无内部横向裁切；长 ref `get_ndx_pe_and_earnings_yield` 一行显示。
+- 证据合约抽屉交互复验：点击 `L2.get_vxn_vix_ratio` 的“证据合约”后右侧抽屉打开，显示 8 行合约字段，并包含数据日期字段。
+
+### 正式 reporter：证据合约改为抽屉，修复 L1-L5 桌面展开排版
+
+完成内容：
+
+- 按用户确认的阅读策略，将指标正文里的完整“证据合约”从默认展开底稿中移除，改为轻量证据状态条：`数据时间｜来源｜缺口｜证据合约`。
+- `数据时间` 优先使用数据本身对应的 `data_date / as_of_date / effective_date / vintage_date`，不再把 run 采集时间作为正文第一信息；`collected_at_utc` 保留在抽屉中供审计排查。
+- 每个指标新增“证据合约”按钮，点击后复用右侧证据抽屉展示完整合约，包括合约版本、来源、来源等级、数据日期、采集时间、可用性、授权边界、方法口径、估值来源对照、异常与缺口。
+- 修复 L1-L5 展开底稿桌面排版根因：去掉 `.indicator-list li.no-micro` 的窄栏限制，指标主行和详情行在 1440px 桌面视口下铺满约 1134px，不再被压成约 500px 窄列。
+- 指标详情区改为“相对位置/可视化”和“证据发言权”并排；完整数据质量不再参与正文网格占位，避免右侧大面积空白和审计盒竖排。
+- 清理旧静态 `data-quality-box` 渲染路径、估值来源静态列表渲染函数和对应 CSS，避免两套证据展示逻辑并存。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile src/agent_analysis/vnext_reporter.py`：通过。
+- `.venv/bin/python -m pytest tests/test_vnext_reporter.py -q`：19 通过，4 个第三方库 deprecation warnings。
+- `.venv/bin/python src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20260617_024610 --template brief`：成功重新生成 `output/reports/vnext_brief_20260617_0230_20260617_0246.html`。
+- 本机 Chrome 以 1440×1000 桌面视口打开最新 HTML、展开全部五层底稿：41 个指标、41 个证据状态条、41 个证据合约按钮；旧 `.data-quality-box` 渲染数为 0；检测到的窄栏指标数为 0。
+- 抽屉交互验证：点击第一条 `证据合约` 后右侧抽屉成功打开；抽屉内显示完整数据证据合约，`missing / not_available / available / official` 等机器值已转成人话。
+
+### 正式 reporter：修复 L1-L5 展开态微图占位浪费
+
+完成内容：
+
+- 按用户在 `get_qqq_qqew_ratio` 展开底稿处的批注，修复 L1-L5 指标展开态的布局。
+- 指标展开态改为两层结构：第一层放指标名、可信度、时间戳、当前读数和微图；第二层再铺开相对位置、数据质量、证据合约和误读防线。
+- 微图不再独占右侧整列，也不再与大量数据质量文字错位；审计细节改为横向使用整行空间。
+- 指标名列加宽并改为上下排布，避免长函数名被压成竖排。
+
+验证结果：
+
+- `.venv/bin/python src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20260617_024610 --template brief`：成功重新生成正式报告。
+- `.venv/bin/python -m pytest tests/test_vnext_reporter.py`：19 通过，4 个第三方库 deprecation warnings。
+- 使用本机 Chrome 打开生成后的 HTML，展开 L3 并裁切 `#evidence-L3-get_qqq_qqew_ratio`：页面无横向溢出；指标主行宽度约为 `190 / 568 / 340`，微图贴近读数，审计细节下方铺满约 1134px 宽度。
+
+### 正式 reporter：桌面版排版深修与视觉验收
+
+完成内容：
+
+- 针对最新正式 `brief` 的电脑浏览器阅读问题继续收口：去掉左侧 sticky rail 遗留逻辑，主体固定为居中纸面宽度，避免内容被挤到右侧。
+- 主判断区改为更克制的买方图册 memo：压缩重复动作层，保留“本页读法 / 价格定价 / 赔率判断 / 优先复核”四格摘要，减少开头冗余。
+- 六张核心图卡保留，但把 evidence refs 默认折叠，正文先读判断和图，审计入口按需展开。
+- 冲突区改成读者语言：主要冲突、互相确认、压力传导、Bridge 判断、需保留的旧口径冲突；raw id 收进审计细节，避免正文像后台字段。
+- L1-L5 底稿摘要改为分行叙事和中文置信度；增加“置信度不是模型自信程度”的解释，避免黑箱误解。
+- 修复桌面排版硬伤：删除悬浮导航遮挡正文、清理 12px 以下小字、修复标题层级跳级、加深弱文字对比度、移除多处英文后台标签。
+- 字体栈从 Inter 优先改为 Mac 中文阅读更自然的 Avenir Next / PingFang / Hiragino，降低产品后台感。
+
+验证结果：
+
+- `.venv/bin/python src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20260617_024610 --template brief`：成功生成 `output/reports/vnext_brief_20260617_0230_20260617_0246.html`。
+- `.venv/bin/python -m pytest tests/test_vnext_reporter.py`：19 通过，4 个第三方库 deprecation warnings。
+- `impeccable --json output/reports/vnext_brief_20260617_0230_20260617_0246.html`：低对比、过小字号、标题跳级、裁切等硬伤清零；仅剩章节编号/section kicker 重复这类刻意保留的阅读顺序建议项。
+- 使用本机 Chrome 以 1280×900 桌面视口重新渲染并裁切检查：页面无横向溢出，主体宽 1180px 居中，导航为普通流式位置不再遮挡中段内容，所有可见文字不低于 12px，6 个 proof refs 默认折叠。
+- 肉眼复核首屏、主判断图册、冲突与共振、L1-L5 底稿：核心阅读链条成立，右侧拥挤和无效留白问题已显著缓解。
+
 ## 2026-06-17
+
+### 正式 reporter 收口：墨兰纸面 · 可审计买方投资判断书
+
+完成内容：
+
+- 将正式 `brief` 从 demo 迁移阶段进一步收口为五个并列阅读入口：主判断、风险与反证、冲突与共振、L1-L5 底稿、数据与审计。
+- 首屏改为买方 memo 结构：一句主判断、三条仓位动作、最大反证、中文置信度解释、审批状态、发布状态、指标覆盖和输入跨度。
+- 核心图册固定为 6 张证据卡：QQQ 价格趋势、估值赔率、10Y 实际利率、HY OAS 总量利差、CCC-BB 质量利差、QQQ/QQEW 内部结构。
+- 图册和底稿微图修正金融语义：正式 10年/5年分位只来自指标读数或正式历史统计；技术指标显示动量、距离、ATR、MACD柱、CMF 等语义读数，不再默认展示短窗口“图内位置/分位”。
+- 正式 `brief` 不再把全量运行包塞入主 HTML。页面脚本只保留 evidence drawer 所需的轻量 indicator 索引；完整大 JSON 留在 run 目录，并新增报告旁的 `_audit_index.json` 指向 DataIntegrity、run summary、Prompt Inspector、L1-L5、Bridge、chart series 和 sidecar 新闻材料。
+- 新闻源与治理区不再作为主阅读章节出现，改为数据与审计里的侧边材料入口；避免主报告退化为后台展示页。
+- 版式改为墨兰纸面：克制蓝墨 accent、首屏左右结构、双证据段改为左文右侧纵向证据卡，避免两张信息密集卡片并排挤压。
+- 更新 `tests/test_vnext_reporter.py`，把旧“新闻源/治理主章节/大 JSON 展开”的契约改为“轻量 brief + 外部审计索引”的新契约。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile src/agent_analysis/vnext_reporter.py`：通过。
+- `.venv/bin/python -m pytest tests/test_vnext_reporter.py`：19 通过，4 个第三方库 deprecation warnings。
+- `.venv/bin/python src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20260617_024610 --template brief`：成功生成 `output/reports/vnext_brief_20260617_0230_20260617_0246.html`。
+- 主 HTML 体积从上一轮约 23.8MB 降至约 0.43MB；旁路审计索引 `output/reports/vnext_brief_20260617_0230_20260617_0246_audit_index.json` 约 4.8KB。
+- HTML 结构检查：导航为 `主判断 / 风险与反证 / 冲突与共振 / L1-L5 底稿 / 数据与审计`；章节编号为 01-05；包含 6 张 proof card、5 个 layer detail、26 个 indicator micro chart；无 `新闻源` 主章节、无 `Governance` 主章节、无 raw JSON 展开。
+- 金融语义检查：未出现 `近90日分位`、`近1年分位`、`图内位置`、`页面使用的原生 JSON`。
+- `impeccable` 禁用项扫描：未发现 `#000` / `#fff`、渐变文字、粗侧边色条、负字距或流式字体缩放。
+- 使用本机 Chrome headless 打开本地 HTML 截图检查：页面可渲染，首屏可见主判断/动作/反证/置信度，无横向溢出，6 张证据卡、5 层底稿和 26 个微图均存在。
+
+### 正式 reporter：迁移买方图册 Memo 为默认 brief 报告
+
+完成内容：
+
+- 将已确认的“买方图册 Memo”从 demo 迁入正式 `vnext_reporter.py`，最新 run 生成 `brief` 时直接输出新的主阅读层，而不是继续生成旧版总览。
+- 正式报告阅读顺序调整为：买方图册 Memo、风险与反证、新闻源、冲突与共振、L1-L5 底稿、数据与审计、总览。
+- 主报告保留买方动作层、三段动作含义、主判断、优先反证和四段图册式推理链：市场状态、硬约束、信用信号、市场宽度。
+- L1-L5 底稿迁入正式报告：每层保留可展开审计、分条叙事、风险旗标、跨层钩子、关键指标读数、数据质量、权限类型和误读防线。
+- 主图册和底稿微图统一使用正式金融语义口径：能读到 `10年分位` / `5年分位` 的指标用对应窗口；覆盖不足时显式显示 `图自YY.MM.DD`；技术指标则展示更合适的动量、距离、方向或风险读数。
+- 置信度标签改为中文高/中/低，并保留为提示性信息；底层审计仍以数据质量、反证和权限边界为准。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile src/agent_analysis/vnext_reporter.py`：通过。
+- `.venv/bin/python -m pytest tests/test_vnext_reporter.py`：19 通过。
+- `.venv/bin/python src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/20260617_024610 --template brief`：成功生成正式报告 `output/reports/vnext_brief_20260617_0230_20260617_0246.html`。
+- HTML 检查：正式报告包含 `买方图册 Memo`、`新闻源`、`L1-L5 可展开审计层`、`Permission Type`、`Agent Health`；未发现 `近90日分位` 或 `近1年分位` 作为页面标签。
+- `impeccable` 禁用项扫描：未发现 `#000` / `#fff`、渐变文字、粗侧边色条、负字距或流式字体缩放。
+- 浏览器插件因本地 `file://` 跳转安全策略阻止打开新页面；未绕过该限制。本次以生成器、测试和 HTML 结构检查完成验证。
+
+### 买方图册 Memo demo：10年分位对应10年微图，覆盖不足必须显式标注
+
+完成内容：
+
+- 按用户反馈继续修正微图语义：凡图上标注 `10年分位` 或 `5年分位`，微图自动改为对应年份窗口，而不是默认近 90 个点。
+- `sparkline` 新增按年份取样逻辑；同时对长日频序列做降采样，避免 10 年日频 path 让 HTML 过度膨胀。
+- 主报告中实际利率、VXN、QQQ/QQEW、Damodaran ERP 等具备 10 年图表序列的指标，微图起始时间现在回到 2016 年附近。
+- HY OAS、CCC-BB 质量利差的 `chart_time_series` 当前仅从 2023-06 开始；页面不伪装为 10 年图，而是在标签里显式显示 `图自23.06.19`，同时仍保留正式 10 年分位。
+- L1-L5 底稿微图继承同一规则：正式 10年/5年分位对应长窗口图；技术指标仍保持短窗口语义图。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile scripts/generate_report_demos.py`：通过。
+- `.venv/bin/python scripts/generate_report_demos.py`：成功重新生成 12 个页面。
+- HTML 检查：`demo_memo_chartbook.html` 中 `近90日分位` 为 0、`近1年分位` 为 0；存在 2016 起始的 10年图；HY OAS / CCC-BB 等覆盖不足图显示 `图自23.06.19`。
+- 输出体积检查：`demo_memo_chartbook.html` 约 104KB，`demo_layers.html` 约 102KB，降采样后没有因 10 年日频图造成异常膨胀。
+- `impeccable` 禁用项扫描：未发现 `#000` / `#fff`、渐变文字、粗侧边色条、负字距或流式字体缩放。
+
+### 买方图册 Memo demo：分位口径从短窗口修正为金融语义口径
+
+完成内容：
+
+- 按用户质疑修正买方图册主报告的分位使用原则：不再把小图最后 90 个点或近 1 年位置称为历史分位。
+- 主报告证据卡优先使用最后一次 run 中 L1-L5 已计算的正式 10 年历史分位。
+- QQQ 价格卡取消价格分位，改为价格、20日动量、距SMA60、Donchian通道位置和 MACD柱。原因是价格本身长期漂移，价格分位容易误导。
+- VXN、10Y实际利率、HY OAS、CCC-BB质量利差、QQQ/QQEW 改为正式 10年分位：分别约 72%、96%、4%、95%、99%。
+- 小图默认标签从 `近90日分位` 降级为 `图内位置`，并优先被正式分位或语义标签覆盖。
+- L1-L5 底稿微图也优先从本层读数中提取正式 10年/5年分位；技术指标继续显示 RSI、ATR、MACD柱、成交量、CMF 等语义读数。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile scripts/generate_report_demos.py`：通过。
+- `.venv/bin/python scripts/generate_report_demos.py`：成功重新生成 12 个页面。
+- HTML 检查：`demo_memo_chartbook.html` 中 `近90日分位` 为 0、`近1年分位` 为 0；主报告出现 `10年分位 96% / 72% / 4% / 95% / 99%`。
+- 全部 demo HTML 检查：未发现 `近90日分位` 或 `近1年分位` 残留。
+
+### 买方图册 Memo demo：修复双图段落拥挤与置信度黑箱感
+
+完成内容：
+
+- 按浏览器批注修复买方图册主报告中 `01 / Market state`、`03 / Credit signal` 的版式错误：两张证据卡不再挤在右侧窄栏，而是文字在上、两张图卡横向铺满。
+- 保留 `02 / Hard constraint`、`04 / Market breadth` 的单图左右结构，因为一张图时该结构顺读性较好。
+- 图卡数字 chip 改为自适应最小宽度，避免被压成竖牌，解决“右边拥挤错位”的根因。
+- 所有置信度标签从 `high/medium/low` 改为中文 `高/中/低`。
+- 在 L1-L5 审计层增加置信度说明：当前置信度是各层 agent 对本层证据覆盖、数据质量和反证压力的自评，页面只作提示；正式版应拆成可审计评分项。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile scripts/generate_report_demos.py`：通过。
+- `.venv/bin/python scripts/generate_report_demos.py`：成功重新生成 12 个页面。
+- HTML 检查：`demo_memo_chartbook.html` 有 2 个双证据 `memo-pair` 段落、6 张证据卡；`置信度 medium` 已为 0，`置信度 中` 出现 6 处。
+- 877px 桌面截图检查：双证据段落两张卡片宽度约 408px，数字 chip 最小宽度约 119px；单图段落卡片宽度约 503px。
+- `impeccable` 禁用项扫描：未发现 `#000` / `#fff`、渐变文字、粗侧边色条、负字距或流式字体缩放。
+
+### 买方图册 Memo demo：底稿指标改为左文右图
+
+完成内容：
+
+- 按浏览器批注调整 `demo_layers.html` 的指标底稿布局：有微图的指标改为左侧读数与叙事、右侧微图，减少纵向拖沓。
+- 没有可靠微图的指标保持单列文本，不为了版式整齐留下空白图位，也不伪造走势。
+- 右侧微图高度略放大，保留左下角起始时间和语义化标签，使它更像“审计图”而不是正文下面的一条装饰线。
+- 移动端继续回到上下排列，避免窄屏左右挤压。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile scripts/generate_report_demos.py`：通过。
+- `.venv/bin/python scripts/generate_report_demos.py`：成功重新生成 12 个页面。
+- HTML 检查：`demo_layers.html` 有 26 个 `has-micro` 左文右图条目、15 个 `no-micro` 单列条目；保留 26 个起始时间标注；`当前分位` 仍为 0。
+- `impeccable` 禁用项扫描：未发现 `#000` / `#fff`、渐变文字、粗侧边色条、负字距或流式字体缩放。
+
+### 买方图册 Memo demo：微图标注改为“按指标语义发言”
+
+完成内容：
+
+- 按浏览器批注修正 L1-L5 底稿页微图标注逻辑：不再把“分位”当作所有微图的默认答案。
+- 微图左下角新增小号起始时间，读者可以一眼知道这段走势从什么时候开始，而不需要猜测窗口长度。
+- 保留分位只给真正适合用分位解释的指标，例如实际利率、信用利差、VIX/VXN、QQQ/QQEW、ERP 等。
+- ATR、RSI、MACD、OBV、成交量、CMF、价格等指标改为展示各自最该看的核心读数，例如 `ATR 15.69`、`RSI 62.5`、`MACD柱 -3.10`，避免错误暗示。
+- 移除 ADX 等缺少合适独立时间序列时的伪微图；没有可靠图就只保留当前读数和叙事，不为了美观伪造证据。
+- 顺手把底稿页里仍像机器字段的质量自检内容压成普通句子，减少阅读噪音。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile scripts/generate_report_demos.py`：通过。
+- `.venv/bin/python scripts/generate_report_demos.py`：成功重新生成 12 个页面。
+- HTML 检查：`demo_layers.html` 中 `当前分位` 已为 0；保留 26 个起始时间标注、12 个近 90 日分位标注；ATR/RSI/MACD 显示语义化读数。
+- 证据边界检查：未发现 ADX 区块继续使用 QQQ 价格假微图；未发现 `coverage_complete` 等内部字段泄漏。
+- `impeccable` 禁用项扫描：未发现 `#000` / `#fff`、渐变文字、粗侧边色条、负字距或流式字体缩放。
+
+### 买方图册 Memo demo：优化墨蓝纸面版 L1-L5 摘要与底稿微图
+
+完成内容：
+
+- 按浏览器批注优化墨蓝纸面版底部 L1-L5 展开层：把每层长段摘要拆成 3 条可扫读摘要，并对关键指标名、百分比、bp、SMA/MACD/RSI 等读数做克制加粗。
+- 展开后的层结论改为分句叙事列表，避免大段灰字造成阅读疲劳。
+- 独立 `demo_layers.html` 的指标区从“函数名 + 单句读数”升级为“指标名 / 置信度 / 当前读数 / narrative 解释 / 可用微图”。
+- 从本次 run 已有 `chart_time_series.json` 恢复可用微图；没有独立时间序列的指标不伪造图，只保留读数和解释。
+- 清理跨层钩子里嵌套 JSON 字符串的展示问题，避免底稿页暴露内部字段结构。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile scripts/generate_report_demos.py`：通过。
+- `.venv/bin/python scripts/generate_report_demos.py`：成功重新生成 12 个页面。
+- HTML 结构检查：`demo_memo_chartbook.html` 保留 5 个 L1-L5 展开层、5 个分行摘要、5 个分句叙事列表、23 个底稿微图；`demo_layers.html` 保留 5 个展开层、5 个分行摘要、5 个分句叙事列表、27 个底稿微图。
+- 页面文本检查：不再暴露 `target_layer` / 嵌套 JSON 字符串；L1/L2 指标叙事中可检索到“曲线已从倒挂修复”“VXN 处于历史偏高百分位”等 narrative 内容。
+
+### 买方图册 Memo demo：按 impeccable 深度美化，新增三种审美方向
+
+完成内容：
+
+- 按 `impeccable` 的产品界面规则重做买方图册 Memo 的视觉系统：保留浅底纸面和研究工具气质，但强化标题层级、段落换行、分条动作、证据卡色彩含义和数字标签。
+- 新增三种同内容审美版本：`demo_memo_chartbook.html`（A 墨蓝纸面）、`demo_memo_chartbook_warm.html`（B 暖纸投委）、`demo_memo_chartbook_crisp.html`（C 清爽研究台）。
+- 三版共享同一套最后一次 run 数据、同一套章节、同一套 6 张核心图、24 个佐证数据标签和 L1-L5 可展开审计入口，避免因换风格造成信息缺失。
+- 图表证据卡按语义区分颜色：价格、宏观约束、风险、信用确认、内部结构分别使用不同强调色；颜色只承担状态和证据类型，不做装饰性炫技。
+- 标题改为“小编号 / 中文标题 / 分条观点”的顺读节奏，使主文更像买方研报，而不是连续堆叠的页面卡片。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile scripts/generate_report_demos.py`：通过。
+- `.venv/bin/python scripts/generate_report_demos.py`：成功生成 12 个页面，新增 2 个买方图册 Memo 审美备选版。
+- HTML 结构检查：三版均为 1 个 H1、6 个 SVG、6 条图表 path、24 个佐证数据 chip、6 个当前分位标注、5 个 L1-L5 展开层；动作含义保留“核心仓 / 战术仓 / 等待资金”三行。
+- `impeccable` 禁用项扫描：未发现 `#000` / `#fff`、渐变文字、粗侧边色条、负字距或流式字体缩放。
+
+### 买方图册 Memo demo：改为并列章节导航，完整信息按阅读任务分房间
+
+完成内容：
+
+- 按浏览器批注调整 demo 信息架构：主导航不再把多个候选形态并列在前，而是以“买方图册 Memo”为第一入口，后续并列放置“风险与反证”“冲突与共振”“L1-L5 底稿”“数据与审计”“总览”。
+- 新增 `demo_risks.html`：集中展示动作分层、三段时间框架、失效条件、价格反映地图和必须保留的风险。
+- 新增 `demo_conflicts.html`：集中展示主要矛盾、typed conflicts、resonance chains、传导路径和未解决问题。
+- 新增 `demo_layers.html`：按 L1-L5 展开每层 agent 底稿，包含本层结论、风险旗标、层内冲突、质量自检、跨层钩子和指标读数。
+- 新增 `demo_audit.html`：集中展示发布闸门、DataIntegrity、Schema Guard、Run Review、fallback 和证据合同提示。
+- 旧候选 demo 仍保留在总览页作为对照，不再抢占主阅读顺序。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile scripts/generate_report_demos.py`：通过。
+- `.venv/bin/python scripts/generate_report_demos.py`：成功生成 10 个页面，新增 4 个并列章节页。
+- HTML 结构检查：主导航顺序为 `买方图册 Memo -> 风险与反证 -> 冲突与共振 -> L1-L5 底稿 -> 数据与审计 -> 总览`；主报告页保留 6 张图、24 个佐证数据标签、5 个可展开层；底稿页保留 5 个展开层。
+
+### 买方图册 Memo demo：把顺读正文、证据图册和 L1-L5 展开审计合成一版
+
+完成内容：
+
+- 在现有一次性 demo 生成器中新增 `demo_memo_chartbook.html`，作为“买方 memo + 图册式证据 + L1-L5 可展开审计”的合体候选版。
+- 新 demo 用买方 memo 组织阅读顺序：主判断、动作含义、优先反证，然后按市场状态、实际利率约束、信用确认/分化、内部结构四段展开。
+- 每个关键判断旁嵌入图册证据卡：图表保留简洁视觉，同时补充近1年分位、20日动量/变化、均线距离、MACD柱、阈值距离等轻量佐证数字。
+- 保留 L1-L5 agent 价值：正文下方提供 5 个可展开层，包含本层结论、风险旗标和关键指标读数，不把底稿噪音塞入主阅读流。
+- 同步给原图册小图增加“当前分位”左侧标注，回应浏览器批注中“只有图不够，需要分位/动量等佐证”的问题。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile scripts/generate_report_demos.py`：通过。
+- `.venv/bin/python scripts/generate_report_demos.py`：成功生成 6 个页面，新增 `demo_memo_chartbook.html`。
+- HTML 结构检查：合体 demo 有 1 个 H1、6 个 SVG、6 条图表 path、24 个佐证数据 chip、5 个 L1-L5 可展开审计层；图册页也包含“当前分位”标注。
+- 内置浏览器自动打开本地 `file://` 页面被 Browser 安全策略拦截；未绕过该限制。当前结果已完成静态结构校验，需人工刷新/打开本地 HTML 做最终视觉确认。
+
+### Native brief 重构前 demo 组：用最后一次 run 数据生成 4 种研报形态候选
+
+完成内容：
+
+- 基于最新 publishable run `output/analysis/vnext/20260617_024610` 的既有 artifacts，新增一次性 demo 生成器 `scripts/generate_report_demos.py`。
+- 生成 4 个候选研报形态和总览页：买方 Memo、投委会 Briefing、证据阶梯、图册式报告，输出在 `output/reports/report_demos_20260617_024610/`。
+- demo 只重排最后一次 run 的 Final / Bridge / Risk / L1-L5 agent 内容和 chart time series，不重新推理、不引入新数据源。
+- 按前序输出体验审计结论，demo 主阅读流避免展开完整指标底稿、Audit Trail、原生 JSON 和内部字段名；底稿感保留为证据 ref / 层级入口。
+
+验证结果：
+
+- `.venv/bin/python -m py_compile scripts/generate_report_demos.py`：通过。
+- `.venv/bin/python scripts/generate_report_demos.py`：成功生成 `index.html`、`demo_memo.html`、`demo_briefing.html`、`demo_evidence_ladder.html`、`demo_chartbook.html`。
+- HTML 结构检查：5 个页面均有 H1 和导航链接；图册式报告包含 6 个 SVG 图表。
+- Chrome 本地预览检查：`index.html` 与 `demo_chartbook.html` 可打开；`scrollWidth == clientWidth == 980`，无横向溢出；图册页 6 个 SVG 均含 path。
 
 ### L4 Wind PE 分位窗口修复：10年分位回到主锚，forward PE 仍不可由 Wind 直接升级
 

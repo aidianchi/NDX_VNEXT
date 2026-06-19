@@ -5,9 +5,9 @@ import html
 import json
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:
     from ..config import path_config
@@ -22,6 +22,28 @@ LAYER_TITLES = {
     "L3": "Market Internals",
     "L4": "Valuation",
     "L5": "Price Trend",
+}
+
+LAYER_TITLES_ZH = {
+    "L1": "宏观与利率",
+    "L2": "信用与波动",
+    "L3": "内部结构",
+    "L4": "估值与盈利",
+    "L5": "价格与执行",
+}
+
+DISPLAY_LABELS = {
+    "same_day_or_days": "未来几天",
+    "one_to_three_months": "1-3 个月",
+    "six_to_twelve_months": "6-12 个月",
+    "core_position": "核心仓",
+    "tactical_position": "战术仓",
+    "waiting_cash": "等待资金",
+    "partially_reflected": "部分反映",
+    "not_reflected": "尚未反映",
+    "largely_reflected": "大体反映",
+    "unclear": "不清楚",
+    "macro_valuation": "宏观与估值",
 }
 
 TEMPLATE_DESCRIPTIONS = {
@@ -139,6 +161,66 @@ def _label(value: Any, kind: str) -> str:
     return table.get(str(value), str(value or ""))
 
 
+def _display_label(value: Any) -> str:
+    raw = str(value or "")
+    return DISPLAY_LABELS.get(raw, raw.replace("_", " "))
+
+
+def _source_tier_label(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    labels = {
+        "official": "官方来源",
+        "official_provider": "官方数据商",
+        "official_macro": "官方宏观数据",
+        "licensed_provider": "授权数据商",
+        "licensed_manual": "授权手动数据",
+        "component_model": "成分模型估算",
+        "third_party_estimate": "第三方估算",
+        "proxy": "代理指标",
+        "unavailable": "不可用",
+        "manual": "手动输入",
+    }
+    parts = []
+    for part in re.split(r"([/·,;]\s*)", raw):
+        token = part.strip()
+        if not token:
+            continue
+        if re.fullmatch(r"[/·,;]\s*", part):
+            parts.append(part)
+        else:
+            parts.append(labels.get(token, token.replace("_", " ")))
+    return "".join(parts)
+
+
+def _plain_value(value: Any) -> str:
+    raw = str(value or "").strip()
+    if raw in {"not_available", "N/A", "none", "None"}:
+        return "未记录"
+    if raw == "available":
+        return "可用"
+    if raw == "unavailable":
+        return "不可用"
+    if raw == "historical percentile unavailable: source does not provide explicit percentile/rank":
+        return "历史分位不可用：来源未提供明确分位或排名"
+    quality_labels = {
+        "missing_source_url": "未记录来源链接",
+        "license_note_defaulted": "授权说明使用默认值",
+        "vintage_date_not_available": "未记录版本日",
+        "coverage_missing_or_unspecified": "覆盖率未记录或未说明",
+        "live_current_field": "实时字段，非历史版本",
+        "official_ndx_forward_earnings_quality_series_not_available_automatically_component_and_yahoo_revision_proxies_used_as_supporting_context": "未自动取得官方 NDX 前瞻盈利质量序列，改用成分模型和 Yahoo 盈利修正作为辅助背景",
+        "public_endpoint_review_required": "公开端点需要复核",
+    }
+    if raw in quality_labels:
+        return quality_labels[raw]
+    if raw.startswith("excluded_constituents_due_to_missing_or_incomplete_price_data:"):
+        suffix = raw.split(":", 1)[1].strip()
+        return f"部分成分股因价格数据缺失或不完整被排除：{suffix}"
+    return raw
+
+
 def _load_json(path: Path, default: Any) -> Any:
     if not path.exists():
         return default
@@ -225,6 +307,293 @@ def _safe_number(value: Any) -> Optional[float]:
         return None
 
 
+def _text(value: Any, limit: Optional[int] = None) -> str:
+    raw = re.sub(r"\s+", " ", "" if value is None else str(value)).strip()
+    if limit and len(raw) > limit:
+        return raw[: limit - 1].rstrip() + "…"
+    return raw
+
+
+def _sentence(value: Any, limit: int = 180) -> str:
+    raw = _text(value)
+    if len(raw) <= limit:
+        return raw
+    for mark in "。；;，,":
+        pos = raw.rfind(mark, 0, limit)
+        if pos > 48:
+            return raw[: pos + 1]
+    return raw[: limit - 1].rstrip() + "…"
+
+
+def _split_sentences(value: Any, max_items: int = 3, item_limit: int = 96) -> List[str]:
+    raw = _text(value)
+    if not raw:
+        return []
+    parts = [part.strip() for part in re.split(r"(?<=[。；;])", raw) if part.strip()]
+    if len(parts) < 2:
+        parts = [part.strip() for part in re.split(r"[，,]", raw) if part.strip()]
+    snippets: List[str] = []
+    for part in parts:
+        clean = part.strip("，,；; ")
+        if not clean:
+            continue
+        snippets.append(_sentence(clean, item_limit))
+        if len(snippets) >= max_items:
+            break
+    return snippets or [_sentence(raw, item_limit)]
+
+
+def _rich_text(value: Any) -> str:
+    rendered = _escape(value)
+    patterns = [
+        r"SMA\d+",
+        r"MACD柱?",
+        r"RSI",
+        r"ADX",
+        r"OBV",
+        r"CMF",
+        r"VXN/VIX",
+        r"HY OAS",
+        r"IG OAS",
+        r"CCC-BB",
+        r"QQQ/QQEW",
+        r"Forward PE",
+        r"Trailing PE",
+        r"risk_on",
+        r"risk_off",
+        r"Top10",
+        r"M7",
+        r"NDX",
+        r"QQQ",
+        r"(?<![\w.])-?\d+(?:\.\d+)?(?:%|bp|B|万亿美元|亿美元|倍|点)",
+    ]
+    combined = re.compile("|".join(f"({pattern})" for pattern in patterns))
+    return combined.sub(lambda match: f"<strong>{match.group(0)}</strong>", rendered)
+
+
+def _summary_fragments(value: Any, max_items: int = 3) -> str:
+    return "".join(
+        f"<span>{_rich_text(item)}</span>"
+        for item in _split_sentences(value, max_items=max_items, item_limit=96)
+    )
+
+
+def _narrative_list(value: Any, max_items: int = 5) -> str:
+    return "<ul class=\"memo-narrative-list\">" + "".join(
+        f"<li>{_rich_text(item)}</li>"
+        for item in _split_sentences(value, max_items=max_items, item_limit=150)
+    ) + "</ul>"
+
+
+def _numeric_series(rows: Sequence[Dict[str, Any]], field: str = "value") -> List[float]:
+    values: List[float] = []
+    for row in rows:
+        value = _safe_number(row.get(field))
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _percentile_rank(values: Sequence[float], current: float) -> Optional[float]:
+    clean = [value for value in values if isinstance(value, (int, float))]
+    if not clean:
+        return None
+    return 100 * sum(value <= current for value in clean) / len(clean)
+
+
+def _fmt_pct(value: Optional[float], digits: int = 0, signed: bool = False) -> str:
+    if value is None:
+        return "N/A"
+    sign = "+" if signed and value > 0 else ""
+    return f"{sign}{value:.{digits}f}%"
+
+
+def _fmt_bps(value: Optional[float]) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value * 100:+.0f}bp"
+
+
+def _fmt_percentile(value: Any, digits: int = 0) -> str:
+    percentile = _normalize_percent(value)
+    if percentile is None:
+        return "N/A"
+    return f"{percentile:.{digits}f}%"
+
+
+def _series_delta(rows: Sequence[Dict[str, Any]], field: str, periods: int) -> Optional[float]:
+    values = _numeric_series(rows, field)
+    if len(values) <= periods:
+        return None
+    return values[-1] - values[-1 - periods]
+
+
+def _series_return(rows: Sequence[Dict[str, Any]], field: str, periods: int) -> Optional[float]:
+    values = _numeric_series(rows, field)
+    if len(values) <= periods or abs(values[-1 - periods]) < 0.000001:
+        return None
+    return (values[-1] / values[-1 - periods] - 1) * 100
+
+
+def _short_date(value: Any) -> str:
+    raw = str(value or "")
+    match = re.search(r"(\d{4})-(\d{2})-(\d{2})", raw)
+    if match:
+        return f"{match.group(1)[2:]}.{match.group(2)}.{match.group(3)}"
+    match = re.search(r"(\d{4})-(\d{2})", raw)
+    if match:
+        return f"{match.group(1)[2:]}.{match.group(2)}"
+    return raw[:8]
+
+
+def _parse_row_date(value: Any) -> Optional[datetime]:
+    raw = str(value or "")
+    for fmt, length in (("%Y-%m-%d", 10), ("%Y-%m", 7)):
+        try:
+            return datetime.strptime(raw[:length], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _spark_sample(rows: Sequence[Dict[str, Any]], years: Optional[float]) -> List[Dict[str, Any]]:
+    all_rows = list(rows)
+    if not all_rows:
+        return []
+    if years is None:
+        return all_rows[-90:]
+    end_date = next((_parse_row_date(row.get("time")) for row in reversed(all_rows) if _parse_row_date(row.get("time"))), None)
+    if end_date is None:
+        return all_rows
+    cutoff = end_date - timedelta(days=int(365.25 * years))
+    sample = [row for row in all_rows if (_parse_row_date(row.get("time")) or end_date) >= cutoff]
+    return sample if len(sample) >= 2 else all_rows
+
+
+def _downsample_rows(rows: Sequence[Dict[str, Any]], max_points: int) -> List[Dict[str, Any]]:
+    items = list(rows)
+    if len(items) <= max_points:
+        return items
+    if max_points < 2:
+        return items[-max_points:]
+    last_index = len(items) - 1
+    indexes = sorted({round(i * last_index / (max_points - 1)) for i in range(max_points)})
+    return [items[index] for index in indexes]
+
+
+def _years_from_annotation(annotation: Optional[str]) -> Optional[int]:
+    raw = annotation or ""
+    if "10年分位" in raw or "10 年分位" in raw:
+        return 10
+    if "5年分位" in raw or "5 年分位" in raw:
+        return 5
+    return None
+
+
+def _compact_value(value: Optional[float], digits: int = 2, suffix: str = "") -> str:
+    if value is None:
+        return "N/A"
+    if abs(value) >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.1f}B{suffix}"
+    if abs(value) >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M{suffix}"
+    return f"{value:.{digits}f}{suffix}"
+
+
+def _sparkline(
+    rows: Sequence[Dict[str, Any]],
+    field: str = "value",
+    width: int = 420,
+    height: int = 92,
+    annotation: Optional[str] = None,
+    show_guide: bool = True,
+    window_years: Optional[float] = None,
+    max_points: int = 180,
+) -> str:
+    sample = _downsample_rows(
+        _spark_sample(rows, window_years if window_years is not None else _years_from_annotation(annotation)),
+        max_points,
+    )
+    values: List[Tuple[int, float]] = []
+    for index, row in enumerate(sample):
+        value = _safe_number(row.get(field))
+        if value is not None:
+            values.append((index, value))
+    if len(values) < 2:
+        return "<svg class=\"spark\" viewBox=\"0 0 420 92\" role=\"img\"></svg>"
+    low = min(value for _, value in values)
+    high = max(value for _, value in values)
+    if abs(high - low) < 0.0001:
+        high = low + 1
+    top_pad = 26 if annotation else 10
+    bottom_pad = 16
+    side_pad = 10
+    denominator = max(1, len(sample) - 1)
+    path = []
+    for index, value in values:
+        x = side_pad + (width - side_pad * 2) * index / denominator
+        y = top_pad + (height - top_pad - bottom_pad) * (1 - (value - low) / (high - low))
+        path.append(("M" if not path else "L") + f"{x:.1f},{y:.1f}")
+    first = values[0][1]
+    last_index, last = values[-1]
+    direction = "up" if last >= first else "down"
+    last_x = side_pad + (width - side_pad * 2) * last_index / denominator
+    last_y = top_pad + (height - top_pad - bottom_pad) * (1 - (last - low) / (high - low))
+    start = _short_date(next((row.get("time") for row in sample if row.get("time")), ""))
+    requested_years = window_years if window_years is not None else _years_from_annotation(annotation)
+    first_date = next((_parse_row_date(row.get("time")) for row in sample if _parse_row_date(row.get("time"))), None)
+    end_date = next((_parse_row_date(row.get("time")) for row in reversed(sample) if _parse_row_date(row.get("time"))), None)
+    coverage_years = ((end_date - first_date).days / 365.25) if first_date and end_date else None
+    label = annotation or ""
+    if annotation and requested_years and coverage_years is not None and coverage_years < requested_years * 0.8:
+        label = f"{label} · 图自{start}"
+    guide = (
+        f"<line class=\"pct-guide\" x1=\"10\" x2=\"{last_x:.1f}\" y1=\"{last_y:.1f}\" y2=\"{last_y:.1f}\"/>"
+        if show_guide and label
+        else ""
+    )
+    label_text = f"<text class=\"pct-label\" x=\"10\" y=\"18\">{_escape(label)}</text>" if label else ""
+    return (
+        f"<svg class=\"spark {direction}\" viewBox=\"0 0 {width} {height}\" role=\"img\">"
+        f"{guide}"
+        f"{label_text}"
+        f"<path d=\"{' '.join(path)}\"/>"
+        f"<text class=\"spark-start\" x=\"10\" y=\"{height - 6}\">{_escape(start)}</text>"
+        f"<text x=\"{width-10}\" y=\"18\" text-anchor=\"end\">{high:.2f}</text>"
+        "</svg>"
+    )
+
+
+INDICATOR_CHARTS = {
+    "get_fed_funds_rate": ("FED_FUNDS", "value"),
+    "get_m2_yoy": ("M2_YOY", "value"),
+    "get_net_liquidity_momentum": ("NET_LIQUIDITY", "value"),
+    "get_10y_treasury": ("US10Y", "value"),
+    "get_10y_real_rate": ("US10Y_REAL", "value"),
+    "get_10y_breakeven": ("US10Y_BREAKEVEN", "value"),
+    "get_vix": ("VIX", "value"),
+    "get_vxn": ("VXN", "value"),
+    "get_hy_oas_bp": ("HY_OAS", "value"),
+    "get_ig_oas_bp": ("IG_OAS", "value"),
+    "get_hy_quality_spread_bp": ("HY_QUALITY_SPREAD", "value"),
+    "get_hyg_momentum": ("HYG", "value"),
+    "get_vxn_vix_ratio": ("VXN_VIX_RATIO", "value"),
+    "get_qqq_qqew_ratio": ("QQQ_QQEW_RATIO", "value"),
+    "get_equity_risk_premium": ("DAMODARAN_ERP_MONTHLY", "value"),
+    "get_damodaran_us_implied_erp": ("DAMODARAN_ERP_MONTHLY", "value"),
+    "get_l5_deterministic_snapshot": ("QQQ_OHLCV", "close"),
+    "get_qqq_technical_indicators": ("QQQ_OHLCV", "close"),
+    "get_rsi_qqq": ("QQQ_OHLCV", "rsi14"),
+    "get_atr_qqq": ("QQQ_OHLCV", "atr14"),
+    "get_macd_qqq": ("QQQ_OHLCV", "macd_histogram"),
+    "get_obv_qqq": ("QQQ_OHLCV", "obv"),
+    "get_volume_analysis_qqq": ("QQQ_OHLCV", "volume"),
+    "get_price_volume_quality_qqq": ("QQQ_OHLCV", "cmf20"),
+    "get_donchian_channels_qqq": ("QQQ_OHLCV", "close"),
+    "get_multi_scale_ma_position": ("QQQ_OHLCV", "close"),
+}
+
+
 def _first_present(mapping: Dict[str, Any], *keys: str) -> Any:
     if not isinstance(mapping, dict):
         return None
@@ -275,7 +644,14 @@ def _run_minute_stamp(run_path: Path) -> str:
 
 
 def _json_for_script(payload: Any) -> str:
-    return json.dumps(payload, ensure_ascii=False, indent=2).replace("</", "<\\/")
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+
+
+def _compact_text(value: Any, limit: int = 420) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -454,6 +830,70 @@ function listItems(items) {
   return values.length ? values.map((item) => `<li>${escapeHtml(item)}</li>`).join('') : '<li>无</li>';
 }
 
+function plainValue(value) {
+  if (value === null || value === undefined || value === '') return '未记录';
+  if (Array.isArray(value)) return value.length ? value.map(plainValue).join(' → ') : '未记录';
+  if (typeof value === 'object') return JSON.stringify(value, null, 2);
+  const raw = String(value).trim();
+  const labels = {
+    not_available: '未记录',
+    'N/A': '未记录',
+    none: '未记录',
+    None: '未记录',
+    available: '可用',
+    unavailable: '不可用',
+    official: '官方来源',
+    official_public: '官方公开来源',
+    third_party_estimate: '第三方估算',
+    component_model: '成分模型估算',
+    proxy: '代理指标',
+    missing_source_url: '未记录来源链接',
+    license_note_defaulted: '授权说明使用默认值',
+    vintage_date_not_available: '未记录版本日',
+    coverage_missing_or_unspecified: '覆盖率未记录或未说明',
+    public_endpoint_review_required: '公开端点需要复核',
+  };
+  return labels[raw] || raw;
+}
+
+function qualityRows(dataQuality) {
+  const dq = dataQuality || {};
+  const rows = [
+    ['合约版本', dq.contract_version],
+    ['数据源', [dq.provider, dq.source_name, dq.source_url].filter((item) => item && String(item).toLowerCase() !== 'missing').join(' / ')],
+    ['来源等级', plainValue(dq.source_tier)],
+    ['数据日期', `数据日：${plainValue(dq.data_date)}；截至日：${plainValue(dq.as_of_date)}；生效日：${plainValue(dq.effective_date)}；版本日：${plainValue(dq.vintage_date)}`],
+    ['采集时间', dq.collected_at_utc],
+    ['可用性 / 耗时', `${plainValue(dq.availability)} · ${plainValue(dq.collection_duration_ms)} ms`],
+    ['备用路径 / 授权边界', `${plainValue(dq.fallback_reason)} · ${plainValue(dq.license_note)}`],
+    ['失败类型', dq.failure_type],
+    ['方法与公式口径', dq.methodology || dq.formula],
+  ];
+  if (dq.coverage) rows.push(['覆盖率', plainValue(dq.coverage)]);
+  if (Array.isArray(dq.valuation_sources) && dq.valuation_sources.length) {
+    rows.push(['估值来源对照', dq.valuation_sources.map((source) => {
+      const name = source.source_name || source.source_id || 'unknown';
+      const metric = source.metric || '';
+      const date = source.data_date || '';
+      const availability = source.availability || '';
+      return `${plainValue(name)}｜${plainValue(metric)}｜${plainValue(date)}｜${plainValue(availability)}`;
+    }).join('\\n')]);
+  }
+  rows.push(['异常与缺口', Array.isArray(dq.anomalies) && dq.anomalies.length ? dq.anomalies.map(plainValue).join('\\n') : '无异常或缺口记录。']);
+  if (Array.isArray(dq.fallback_chain) && dq.fallback_chain.length) rows.push(['备用路径', dq.fallback_chain.join(' → ')]);
+  if (dq.source_disagreement) rows.push(['来源分歧', plainValue(dq.source_disagreement)]);
+  return rows
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([label, value]) => `<div class="contract-row"><b>${escapeHtml(label)}</b><p>${escapeHtml(plainValue(value))}</p></div>`)
+    .join('');
+}
+
+function contractHtml(item) {
+  const rows = qualityRows(item.data_quality);
+  if (!rows) return '<div class="drawer-empty">这条证据没有记录数据证据合约。</div>';
+  return `<div class="drawer-section drawer-contract"><h3>证据合约</h3>${rows}</div>`;
+}
+
 function positionRuler(reading) {
   const text = String(reading || '');
   const patterns = [
@@ -575,6 +1015,33 @@ function openDrawer(ref, label, triggerEl) {
       <ul>${listItems(item.falsifiers)}</ul>
       <div class="risk-chip-row">${risks}</div>
     </div>
+    ${contractHtml(item)}
+    <div class="drawer-section">
+      <button class="ref-chip" data-jump-target="${escapeHtml(targetId)}" data-layer-target="${escapeHtml(layer)}">跳到完整底稿</button>
+      <button class="ref-chip" data-copy-ref="${escapeHtml(canonical)}">复制 ref</button>
+    </div>
+  `;
+  showDrawer();
+}
+
+function openEvidenceContract(ref, triggerEl) {
+  lastDrawerTrigger = triggerEl || null;
+  const canonical = canonicalRef(ref);
+  const entry = indicatorIndex.get(canonical);
+  if (!entry) {
+    drawerContent.innerHTML = `
+      <p class="drawer-ref">${escapeHtml(canonical)}</p>
+      <div class="drawer-empty">这条证据没有命中具体的指标卡。</div>
+    `;
+    showDrawer();
+    return;
+  }
+  const { layer, item } = entry;
+  const targetId = `evidence-${slug(canonical)}`;
+  drawerContent.innerHTML = `
+    <p class="drawer-ref">${escapeHtml(canonical)}</p>
+    <h2>${escapeHtml(item.metric || item.function_id)}</h2>
+    ${contractHtml(item)}
     <div class="drawer-section">
       <button class="ref-chip" data-jump-target="${escapeHtml(targetId)}" data-layer-target="${escapeHtml(layer)}">跳到完整底稿</button>
       <button class="ref-chip" data-copy-ref="${escapeHtml(canonical)}">复制 ref</button>
@@ -597,6 +1064,12 @@ document.querySelectorAll('[data-layer-jump]').forEach((tile) => {
 document.querySelectorAll('[data-ref]').forEach((button) => {
   button.addEventListener('click', () => {
     openDrawer(button.dataset.ref, button.dataset.label || button.textContent, button);
+  });
+});
+
+document.querySelectorAll('[data-contract-ref]').forEach((button) => {
+  button.addEventListener('click', () => {
+    openEvidenceContract(button.dataset.contractRef, button);
   });
 });
 
@@ -657,11 +1130,74 @@ class VNextReportGenerator:
         artifacts = self._load_artifacts(run_path)
         template = self._normalize_template(template)
         style = self._normalize_style(style)
-        html_text = self._render(run_path, artifacts, template, style, include_legacy_agent_io_audit)
         destination = Path(output_path) if output_path else self._default_output_path(run_path, artifacts, template, style)
         destination.parent.mkdir(parents=True, exist_ok=True)
+        audit_index_path = None
+        if template == "brief":
+            audit_index_path = destination.with_name(f"{destination.stem}_audit_index.json")
+            self._write_audit_index(run_path, artifacts, audit_index_path)
+        html_text = self._render(
+            run_path,
+            artifacts,
+            template,
+            style,
+            include_legacy_agent_io_audit,
+            audit_index_path=audit_index_path,
+        )
         destination.write_text(html_text, encoding="utf-8")
         return str(destination)
+
+    def _write_audit_index(self, run_path: Path, artifacts: Dict[str, Any], destination: Path) -> None:
+        """Write a small manifest that points to full audit artifacts without embedding them in HTML."""
+        artifact_files = [
+            "analysis_packet.json",
+            "synthesis_packet.json",
+            "final_adjudication.json",
+            "thesis_draft.json",
+            "analysis_revised.json",
+            "critique.json",
+            "risk_boundary_report.json",
+            "schema_guard_report.json",
+            "run_review_report.json",
+            "outcome_review_report.json",
+            "data_integrity_report.json",
+            "context_brief.json",
+            "chart_time_series.json",
+            "llm_stage_diagnostics.json",
+            "news_event_ledger.json",
+            "news_event_data_links.json",
+            "news_layer_analysis.json",
+            "run_summary.json",
+        ]
+        layer_files = [f"layer_cards/{layer}.json" for layer in ["L1", "L2", "L3", "L4", "L5"]]
+        bridge_files = [
+            str(path.relative_to(run_path))
+            for path in sorted((run_path / "bridge_memos").glob("*.json"))
+            if path.is_file()
+        ]
+        prompt_dir = run_path / "prompt_audit"
+        run_summary = artifacts.get("run_summary", {}) if isinstance(artifacts.get("run_summary"), dict) else {}
+
+        def row(relative_path: str) -> Dict[str, Any]:
+            path = run_path / relative_path
+            return {
+                "path": str(path),
+                "relative_path": relative_path,
+                "exists": path.exists(),
+                "bytes": path.stat().st_size if path.exists() else 0,
+            }
+
+        index = {
+            "kind": "vnext_brief_audit_index",
+            "run_dir": str(run_path),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "prompt_inspector": run_summary.get("prompt_inspector", ""),
+            "data_integrity_status": (artifacts.get("data_integrity_report", {}) or {}).get("publish_status"),
+            "artifact_files": [row(item) for item in [*artifact_files, *layer_files, *bridge_files]],
+            "prompt_audit_dir": str(prompt_dir),
+            "prompt_audit_exists": prompt_dir.exists(),
+        }
+        destination.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _default_output_path(self, run_path: Path, artifacts: Dict[str, Any], template: str, style: str) -> Path:
         meta = artifacts.get("synthesis_packet", {}).get("packet_meta", {})
@@ -720,6 +1256,7 @@ class VNextReportGenerator:
             "news_event_ledger": _load_json(run_path / "news_event_ledger.json", {}),
             "news_event_data_links": _load_json(run_path / "news_event_data_links.json", {}),
             "news_layer_analysis": _load_json(run_path / "news_layer_analysis.json", {}),
+            "chart_time_series": _load_json(run_path / "chart_time_series.json", {}),
             "layers": layers,
             "bridges": bridges,
             "run_summary": _load_json(run_path / "run_summary.json", {}),
@@ -732,6 +1269,7 @@ class VNextReportGenerator:
         template: str,
         style: str,
         include_legacy_agent_io_audit: bool = False,
+        audit_index_path: Optional[Path] = None,
     ) -> str:
         self._enrich_indicator_data_quality(artifacts)
         final = artifacts["final_adjudication"]
@@ -739,26 +1277,7 @@ class VNextReportGenerator:
         meta = synthesis.get("packet_meta", {})
         template_name = TEMPLATE_DESCRIPTIONS[template]["name"]
         title = f"vNext {template_name} · {final.get('final_stance', 'N/A')}"
-        payload = {
-            "run_dir": str(run_path),
-            "final_adjudication": final,
-            "analysis_packet": artifacts["analysis_packet"],
-            "synthesis_packet": synthesis,
-            "layers": artifacts["layers"],
-            "bridges": artifacts["bridges"],
-            "risk_boundary_report": artifacts["risk_boundary_report"],
-            "news_event_ledger": artifacts.get("news_event_ledger", {}),
-            "news_event_data_links": artifacts.get("news_event_data_links", {}),
-            "news_layer_analysis": artifacts.get("news_layer_analysis", {}),
-            "critique": artifacts["critique"],
-            "schema_guard_report": artifacts["schema_guard_report"],
-            "run_review_report": artifacts.get("run_review_report", {}),
-            "outcome_review_report": artifacts.get("outcome_review_report", {}),
-            "data_integrity_report": artifacts.get("data_integrity_report", {}),
-            "context_brief": artifacts.get("context_brief", {}),
-            "layer_context_briefs": artifacts.get("layer_context_briefs", {}),
-            "llm_stage_diagnostics": artifacts.get("llm_stage_diagnostics", {}),
-        }
+        payload = self._drawer_payload(run_path, artifacts)
         payload_json = _json_for_script(payload)
         fonts_url = STYLE_FONTS.get(style, STYLE_FONTS["slate_v2"])
         return f"""<!DOCTYPE html>
@@ -774,12 +1293,12 @@ class VNextReportGenerator:
 </head>
 <body class="template-{_escape(template)} style-{style}">
   <a class="skip-link" href="#main">跳到主内容</a>
-  <span class="sr-only">NDX vNext Native Artifact UI Layer Workbench Source Tier Coverage Confirming Indicators</span>
+  <span class="sr-only">NDX 投资判断书 五层底稿 核心证据 审计入口</span>
   <div class="shell">
     {self._hero(final, meta, run_path, template, artifacts)}
-    {self._navigation()}
+    {self._navigation(template)}
     {self._template_intro(template)}
-    <main id="main">{self._main_sections(template, run_path, artifacts, final, payload_json, include_legacy_agent_io_audit)}</main>
+    <main id="main">{self._main_sections(template, run_path, artifacts, final, payload_json, include_legacy_agent_io_audit, audit_index_path)}</main>
   </div>
   <aside class="evidence-drawer" id="evidence-drawer" aria-hidden="true" role="dialog" aria-modal="true" aria-label="证据详情">
     <div class="drawer-backdrop" data-close-drawer></div>
@@ -793,6 +1312,77 @@ class VNextReportGenerator:
 </body>
 </html>
 """
+
+    def _drawer_payload(self, run_path: Path, artifacts: Dict[str, Any]) -> Dict[str, Any]:
+        layers: Dict[str, Dict[str, Any]] = {}
+        for layer, card in (artifacts.get("layers") or {}).items():
+            if not isinstance(card, dict):
+                continue
+            items = []
+            for item in _as_list(card.get("indicator_analyses")):
+                if not isinstance(item, dict) or not item.get("function_id"):
+                    continue
+                items.append(
+                    {
+                        "function_id": item.get("function_id"),
+                        "metric": item.get("metric"),
+                        "normalized_state": item.get("normalized_state"),
+                        "confidence": item.get("confidence"),
+                        "current_reading": _compact_text(item.get("current_reading"), 520),
+                        "narrative": _compact_text(item.get("narrative"), 700),
+                        "canonical_question": _compact_text(item.get("canonical_question"), 360),
+                        "reasoning_process": _compact_text(item.get("reasoning_process"), 900),
+                        "first_principles_chain": [_compact_text(value, 260) for value in _as_list(item.get("first_principles_chain"))[:6]],
+                        "misread_guards": [_compact_text(value, 260) for value in _as_list(item.get("misread_guards"))[:6]],
+                        "falsifiers": [_compact_text(value, 260) for value in _as_list(item.get("falsifiers"))[:6]],
+                        "risk_flags": [_compact_text(value, 80) for value in _as_list(item.get("risk_flags"))[:6]],
+                        "data_quality": self._drawer_data_quality(item.get("data_quality")),
+                    }
+                )
+            layers[str(layer)] = {"indicator_analyses": items}
+        return {"run_dir": str(run_path), "layers": layers}
+
+    def _drawer_data_quality(self, data_quality: Any) -> Dict[str, Any]:
+        if not isinstance(data_quality, dict) or not data_quality:
+            return {}
+        keys = [
+            "contract_version",
+            "provider",
+            "source_name",
+            "source_url",
+            "source_tier",
+            "data_date",
+            "as_of_date",
+            "effective_date",
+            "vintage_date",
+            "collected_at_utc",
+            "availability",
+            "collection_duration_ms",
+            "fallback_reason",
+            "license_note",
+            "failure_type",
+            "methodology",
+            "formula",
+            "coverage",
+            "anomalies",
+            "fallback_chain",
+            "source_disagreement",
+            "valuation_sources",
+        ]
+        compact: Dict[str, Any] = {}
+        for key in keys:
+            value = data_quality.get(key)
+            if value in (None, "", [], {}):
+                continue
+            if isinstance(value, str):
+                compact[key] = _compact_text(value, 1200)
+            elif isinstance(value, list):
+                compact[key] = value[:12]
+            elif isinstance(value, dict):
+                compact[key] = value
+            else:
+                compact[key] = value
+        return compact
 
     def _enrich_indicator_data_quality(self, artifacts: Dict[str, Any]) -> None:
         raw_data = artifacts.get("analysis_packet", {}).get("raw_data", {})
@@ -894,6 +1484,7 @@ class VNextReportGenerator:
         final: Dict[str, Any],
         payload_json: str,
         include_legacy_agent_io_audit: bool = False,
+        audit_index_path: Optional[Path] = None,
     ) -> str:
         renderers = {
             "decision": lambda: self._decision_section(artifacts),
@@ -909,8 +1500,23 @@ class VNextReportGenerator:
                 artifacts,
                 payload_json,
                 include_legacy_agent_io_audit=include_legacy_agent_io_audit,
+                audit_index_path=audit_index_path,
             ),
         }
+        if template == "brief":
+            return (
+                self._memo_chartbook_section(artifacts)
+                + self._risks_section(artifacts, "02 · 风险与反证")
+                + self._conflicts_section(artifacts, "03 · 冲突与共振")
+                + self._brief_layers_section(artifacts)
+                + self._audit_section(
+                    run_path,
+                    artifacts,
+                    payload_json,
+                    include_legacy_agent_io_audit=include_legacy_agent_io_audit,
+                    audit_index_path=audit_index_path,
+                )
+            )
         return "".join(renderers[key]() for key in TEMPLATE_ORDER[template])
 
     def _template_intro(self, template: str) -> str:
@@ -981,6 +1587,50 @@ class VNextReportGenerator:
         reader = self._reader_final(final)
         hero_title = reader.get("one_liner") or final.get("final_stance", "N/A")
         hero_note = self._reader_note(final)
+        if template == "brief":
+            actions = _as_list(final.get("portfolio_actions"))
+            action_rows = "".join(
+                f"<li><b>{_escape(_display_label(item.get('bucket')))}</b><span>{_escape(item.get('action') or item.get('rationale') or '')}</span></li>"
+                for item in actions[:3]
+                if isinstance(item, dict)
+            ) or f"<li><b>动作</b><span>{_escape(final.get('payoff_assessment') or '等待动作层结论。')}</span></li>"
+            invalidations = _as_list(final.get("invalidation_conditions"))
+            primary_break = invalidations[0] if invalidations else "暂无结构化优先反证。"
+            confidence_label = _label(confidence, "confidence")
+            confidence_note = "看四件事：证据是否够用，数据是否可靠，关键矛盾是否还压着结论，反证是否足以改判断。"
+            data_date = meta.get("data_date") or analysis_meta.get("data_date") or backtest_date
+            return f"""
+<header class="hero brief-hero" id="top">
+  <div class="eyebrow">NDX 投资判断书</div>
+  <div class="brief-hero-grid">
+    <div class="brief-verdict">
+      <h1>{_escape(hero_title)}</h1>
+      <p>{_escape(final.get('state_diagnosis') or hero_note)}</p>
+    </div>
+    <aside class="brief-action-card" aria-label="动作和反证">
+      <div>
+        <b>仓位动作</b>
+        <ul>{action_rows}</ul>
+      </div>
+      <div>
+        <b>最需要盯住的反证</b>
+        <p>{_escape(primary_break)}</p>
+      </div>
+      <div>
+        <b>可信度：{_escape(confidence_label)}</b>
+        <p>{_escape(confidence_note)}</p>
+      </div>
+    </aside>
+  </div>
+  <div class="brief-meta-line">
+    <span>数据日期 {_escape(data_date or 'N/A')}</span>
+    <span>审批 {_escape(_label(approval, 'approval'))}</span>
+    <span>发布状态 {_escape(_label(publish_status, 'publish_status'))}</span>
+    <span>指标覆盖 {_escape(success)}</span>
+    <span>输入跨度 {_escape(observation_range)}</span>
+  </div>
+</header>
+"""
         return f"""
 <header class="hero" id="top">
   <div class="eyebrow">NDX vNext Native Artifact UI · {_escape(template_name)}</div>
@@ -991,7 +1641,7 @@ class VNextReportGenerator:
     </div>
     <aside class="verdict-card" aria-label="最终判断核心字段">
       <div class="verdict-row"><span>审批</span><strong>{_escape(_label(approval, 'approval'))}</strong></div>
-      <div class="verdict-row"><span>置信度</span><strong class="pill {_confidence_class(confidence)}">{_escape(_label(confidence, 'confidence'))}</strong></div>
+      <div class="verdict-row"><span>可信度</span><strong class="pill {_confidence_class(confidence)}">{_escape(_label(confidence, 'confidence'))}</strong></div>
       <div class="verdict-row"><span>发布状态</span><strong class="pill {_severity_class(publish_status)}">{_escape(_label(publish_status, 'publish_status'))}</strong></div>
       <div class="verdict-row"><span>分析目标日</span><strong class="mono">{_escape(meta.get('data_date', 'N/A'))}</strong></div>
       <div class="verdict-row"><span>回测日</span><strong class="mono">{_escape(backtest_date)}</strong></div>
@@ -1009,7 +1659,17 @@ class VNextReportGenerator:
 </header>
 """
 
-    def _navigation(self) -> str:
+    def _navigation(self, template: str = "brief") -> str:
+        if template == "brief":
+            return """
+<nav class="nav" aria-label="章节导航">
+  <a href="#decision">主判断</a>
+  <a href="#risks">风险与反证</a>
+  <a href="#conflicts">冲突与共振</a>
+  <a href="#layers">L1-L5 底稿</a>
+  <a href="#audit">数据与审计</a>
+</nav>
+"""
         return """
 <nav class="nav" aria-label="章节导航">
   <a href="#decision">判断</a>
@@ -1296,6 +1956,454 @@ class VNextReportGenerator:
 </section>
 """
 
+    def _chart_rows(self, artifacts: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
+        charts = artifacts.get("chart_time_series", {})
+        series = charts.get("series") if isinstance(charts, dict) else {}
+        item = series.get(key) if isinstance(series, dict) else None
+        rows = item.get("rows") if isinstance(item, dict) else None
+        return rows if isinstance(rows, list) else []
+
+    def _historical_percentile(self, artifacts: Dict[str, Any], layer: str, function_id: str, window: str = "10y") -> Optional[float]:
+        value = self._metric_value(artifacts, layer, function_id)
+        candidates = [
+            value.get(f"percentile_{window}"),
+            value.get(f"{window}_percentile"),
+            value.get(f"{window.upper()}Percentile"),
+        ]
+        for container_key in ("relativity", "historical_stats"):
+            container = value.get(container_key)
+            if isinstance(container, dict):
+                candidates.append(container.get(f"percentile_{window}"))
+        if window == "10y":
+            candidates.extend(
+                [
+                    value.get("PEHistoricalPercentile"),
+                    value.get("RiskPremiumHistoricalPercentile"),
+                ]
+            )
+        for candidate in candidates:
+            percentile = _normalize_percent(candidate)
+            if percentile is not None:
+                return percentile
+        return None
+
+    def _reading_percentile_label(self, reading: Any) -> Optional[str]:
+        raw = str(reading or "")
+        match = re.search(r"(10\s*年(?:分位|百分位))\s*[:：]?\s*(\d+(?:\.\d+)?)%", raw)
+        if match:
+            return f"10年分位 {float(match.group(2)):.0f}%"
+        match = re.search(r"(5\s*年(?:分位|百分位))\s*[:：]?\s*(\d+(?:\.\d+)?)%", raw)
+        if match:
+            return f"5年分位 {float(match.group(2)):.0f}%"
+        return None
+
+    def _indicator_value_from_reading(self, function_id: str, reading: Any, fallback: Optional[float]) -> Optional[float]:
+        raw = str(reading or "")
+        if function_id == "get_macd_qqq":
+            match = re.search(r"柱\s*(-?\d+(?:\.\d+)?)", raw)
+            if match:
+                return float(match.group(1))
+        value = _safe_number(raw)
+        return value if value is not None else fallback
+
+    def _micro_annotation(self, function_id: str, rows: Sequence[Dict[str, Any]], field: str, reading: Any = None) -> Tuple[Optional[str], bool]:
+        values = _numeric_series(rows, field)
+        last = values[-1] if values else None
+        current = self._indicator_value_from_reading(function_id, reading, last)
+        if function_id in {
+            "get_10y_treasury",
+            "get_10y_real_rate",
+            "get_10y_breakeven",
+            "get_fed_funds_rate",
+            "get_m2_yoy",
+            "get_vix",
+            "get_vxn",
+            "get_hy_oas_bp",
+            "get_ig_oas_bp",
+            "get_hy_quality_spread_bp",
+            "get_qqq_qqew_ratio",
+            "get_damodaran_us_implied_erp",
+        }:
+            return (self._reading_percentile_label(reading), True)
+        if function_id == "get_net_liquidity_momentum":
+            return (f"20日变化 {_compact_value(_series_delta(rows, field, 20), 1, 'B')}", False)
+        if function_id == "get_hyg_momentum":
+            return (f"20日变化 {_fmt_pct(_series_return(rows, field, 20), 1, signed=True)}", True)
+        if function_id == "get_vxn_vix_ratio":
+            return (f"比值 {_compact_value(last, 2)}", True)
+        if function_id in {"get_l5_deterministic_snapshot", "get_qqq_technical_indicators", "get_donchian_channels_qqq", "get_multi_scale_ma_position"}:
+            return (f"价格 {_compact_value(current, 2)}", True)
+        if function_id == "get_rsi_qqq":
+            return (f"RSI {_compact_value(current, 1)}", True)
+        if function_id == "get_atr_qqq":
+            return (f"ATR {_compact_value(current, 2)}", False)
+        if function_id == "get_macd_qqq":
+            return (f"MACD柱 {_compact_value(current, 2)}", True)
+        if function_id == "get_obv_qqq":
+            return (f"OBV {_compact_value(last, 1)}", False)
+        if function_id == "get_volume_analysis_qqq":
+            return (f"成交量 {_compact_value(last, 1)}", False)
+        if function_id == "get_price_volume_quality_qqq":
+            return (f"CMF {_compact_value(last, 2)}", True)
+        if function_id == "get_equity_risk_premium":
+            return (f"ERP {_compact_value(last, 2, '%')}", True)
+        return (None, True)
+
+    def _indicator_micro_chart(self, artifacts: Dict[str, Any], indicator: Any) -> str:
+        if isinstance(indicator, dict):
+            function_id = str(indicator.get("function_id") or "")
+            reading = indicator.get("current_reading")
+        else:
+            function_id = str(indicator or "")
+            reading = None
+        mapping = INDICATOR_CHARTS.get(function_id)
+        if not mapping:
+            return ""
+        key, field = mapping
+        rows = self._chart_rows(artifacts, key)
+        if len(rows) < 2:
+            return ""
+        annotation, show_guide = self._micro_annotation(function_id, rows, field, reading)
+        return f"<div class=\"indicator-micro\">{_sparkline(rows, field, width=260, height=76, annotation=annotation, show_guide=show_guide)}</div>"
+
+    def _stat_chip(self, label: str, value: str, tone: str = "neutral") -> str:
+        return (
+            f"<span class=\"stat-chip {_escape(tone)}\">"
+            f"<b>{_escape(label)}</b><strong>{_escape(value)}</strong>"
+            "</span>"
+        )
+
+    def _proof_card(
+        self,
+        artifacts: Dict[str, Any],
+        *,
+        title: str,
+        layer: str,
+        chart_key: str,
+        field: str,
+        takeaway: str,
+        stats: Sequence[Tuple[str, str, str]],
+        refs: Sequence[str],
+        tone: str = "price",
+        spark_annotation: Optional[str] = None,
+        show_guide: bool = True,
+    ) -> str:
+        rows = self._chart_rows(artifacts, chart_key)
+        if len(_numeric_series(rows, field)) < 2:
+            return ""
+        stat_html = "".join(self._stat_chip(label, value, tone_value) for label, value, tone_value in stats)
+        ref_list = list(refs)
+        return f"""
+<article class="proof-card tone-{_escape(tone)}">
+  <div class="proof-head"><h3>{_escape(title)}</h3><span class="proof-layer">{_escape(layer)}</span></div>
+  {_sparkline(rows, field, width=760, height=132, annotation=spark_annotation, show_guide=show_guide)}
+  <div class="stat-rail">{stat_html}</div>
+  <p>{_escape(takeaway)}</p>
+  <details class="proof-evidence">
+    <summary>证据 refs · {len(ref_list)}</summary>
+    <div class="ref-row">{self._ref_chips(ref_list)}</div>
+  </details>
+</article>
+"""
+
+    def _qqq_price_stats(self, artifacts: Dict[str, Any]) -> List[Tuple[str, str, str]]:
+        rows = self._chart_rows(artifacts, "QQQ_OHLCV")
+        last = rows[-1] if rows else {}
+        close = _safe_number(last.get("close"))
+        ma60 = _safe_number(last.get("ma60"))
+        macd_hist = _safe_number(last.get("macd_histogram"))
+        dist_ma60 = (close / ma60 - 1) * 100 if close is not None and ma60 else None
+        raw = self._metric_value(artifacts, "L5", "get_qqq_technical_indicators")
+        donchian = raw.get("donchian_position_pct")
+        vxn_rows = self._chart_rows(artifacts, "VXN")
+        vxn_values = _numeric_series(vxn_rows, "value")
+        vxn_last = vxn_values[-1] if vxn_values else None
+        return [
+            ("价格", _fmt_number(close, digits=2), "neutral"),
+            ("20日动量", _fmt_pct(_series_return(rows, "close", 20), 1, signed=True), "good"),
+            ("距SMA60", _fmt_pct(dist_ma60, 1, signed=True), "good"),
+            ("VXN温度", _fmt_number(vxn_last, digits=1), "risk" if vxn_last is not None and vxn_last >= 25 else "watch"),
+            ("通道位置", _fmt_pct(_safe_number(donchian), 1), "watch"),
+            ("MACD柱", _fmt_number(macd_hist, digits=2), "risk" if macd_hist is not None and macd_hist < 0 else "neutral"),
+        ]
+
+    def _formal_value_stats(
+        self,
+        artifacts: Dict[str, Any],
+        *,
+        chart_key: str,
+        field: str,
+        layer: str,
+        function_id: str,
+        value_label: str,
+        value_suffix: str = "",
+        change_kind: str = "pct",
+        percentile_window: str = "10y",
+        percentile_tone: str = "watch",
+        extra: Sequence[Tuple[str, str, str]] = (),
+    ) -> List[Tuple[str, str, str]]:
+        rows = self._chart_rows(artifacts, chart_key)
+        values = _numeric_series(rows, field)
+        last = values[-1] if values else None
+        delta20 = _series_delta(rows, field, 20)
+        if change_kind == "bps":
+            change = _fmt_bps(delta20)
+        elif change_kind == "points":
+            change = f"{delta20:+.1f}点" if delta20 is not None else "N/A"
+        else:
+            change = _fmt_pct(_series_return(rows, field, 20), 1, signed=True)
+        stats = [
+            (value_label, f"{_fmt_number(last, digits=2)}{value_suffix}" if last is not None else "N/A", "neutral"),
+            (f"{percentile_window.replace('y', '年')}分位", _fmt_percentile(self._historical_percentile(artifacts, layer, function_id, percentile_window)), percentile_tone),
+            ("20日变化", change, "risk" if (delta20 or 0) > 0 else "good"),
+        ]
+        stats.extend(extra)
+        return stats
+
+    def _memo_chartbook_section(self, artifacts: Dict[str, Any]) -> str:
+        final = artifacts.get("final_adjudication", {}) or {}
+        reader = self._reader_final(final)
+        invalidations = _as_list(final.get("invalidation_conditions"))
+        primary_break = invalidations[0] if invalidations else "等待新的反证条件。"
+        invalidation_rows = "".join(f"<li>{_escape(_sentence(item, 88))}</li>" for item in invalidations[:3]) or "<li>暂无结构化失效条件。</li>"
+        readout_state = _sentence(final.get("state_diagnosis") or reader.get("one_liner") or final.get("final_stance"), 110)
+        readout_priced = _sentence(final.get("priced_narrative", ""), 96)
+        readout_payoff = _sentence(final.get("payoff_assessment", ""), 96)
+        reasons = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(reader.get("three_reasons"))[:3])
+        support_chains = "".join(
+            f"""
+<article class="chain-card memo-chain-card">
+  <div class="chain-index">{index:02d}</div>
+  <div class="chain-body">
+    <h3>{_escape(chain.get('chain_description', '未命名证据链'))}</h3>
+    <div class="ref-row">{self._ref_chips(chain.get('evidence_refs', []))}</div>
+  </div>
+</article>
+"""
+            for index, chain in enumerate(_as_list(final.get("key_support_chains"))[:3], start=1)
+            if isinstance(chain, dict)
+        )
+
+        rate_values = _numeric_series(self._chart_rows(artifacts, "US10Y_REAL"), "value")
+        rate_stats = self._formal_value_stats(
+            artifacts,
+            chart_key="US10Y_REAL",
+            field="value",
+            layer="L1",
+            function_id="get_10y_real_rate",
+            value_label="实际利率",
+            value_suffix="%",
+            change_kind="bps",
+            percentile_tone="risk",
+            extra=[("距2.30%", _fmt_bps((rate_values[-1] - 2.30) if rate_values else None), "watch")],
+        )
+        hy_stats = self._formal_value_stats(
+            artifacts,
+            chart_key="HY_OAS",
+            field="value",
+            layer="L2",
+            function_id="get_hy_oas_bp",
+            value_label="HY OAS",
+            value_suffix="%",
+            change_kind="bps",
+            percentile_tone="good",
+            extra=[("信用总量", "极宽", "good")],
+        )
+        quality_stats = self._formal_value_stats(
+            artifacts,
+            chart_key="HY_QUALITY_SPREAD",
+            field="value",
+            layer="L2",
+            function_id="get_hy_quality_spread_bp",
+            value_label="CCC-BB",
+            value_suffix="%",
+            change_kind="bps",
+            percentile_tone="risk",
+            extra=[("内部分化", "极高", "risk")],
+        )
+        ratio_stats = self._formal_value_stats(
+            artifacts,
+            chart_key="QQQ_QQEW_RATIO",
+            field="value",
+            layer="L3",
+            function_id="get_qqq_qqew_ratio",
+            value_label="QQQ/QQEW",
+            change_kind="pct",
+            percentile_tone="risk",
+            extra=[("5年分位", _fmt_percentile(self._historical_percentile(artifacts, "L3", "get_qqq_qqew_ratio", "5y")), "risk")],
+        )
+        erp_rows = self._chart_rows(artifacts, "DAMODARAN_ERP_MONTHLY")
+        erp_values = _numeric_series(erp_rows, "value")
+        erp_last = erp_values[-1] if erp_values else None
+        erp_delta_12m = (erp_values[-1] - erp_values[-13]) if len(erp_values) > 12 else None
+        valuation_value = self._metric_value(artifacts, "L4", "get_ndx_pe_and_earnings_yield")
+        real_values_for_stats = _numeric_series(self._chart_rows(artifacts, "US10Y_REAL"), "value")
+        real_last_for_stats = real_values_for_stats[-1] if real_values_for_stats else None
+        erp_stats = [
+            ("ERP", _fmt_number(erp_last, suffix="%", digits=2), "neutral"),
+            ("12月变化", _fmt_bps(erp_delta_12m), "good" if (erp_delta_12m or 0) > 0 else "risk"),
+            (
+                "Trailing PE",
+                _fmt_number(
+                    _safe_number(_first_present(valuation_value, "PE", "TrailingPE", "PE_TTM", "pe_ttm")),
+                    digits=2,
+                ),
+                "risk",
+            ),
+            (
+                "实际利率",
+                _fmt_number(real_last_for_stats, suffix="%", digits=2),
+                "risk",
+            ),
+        ]
+        cards_top = self._proof_card(
+            artifacts,
+            title="QQQ 价格趋势",
+            layer="L5 价格与执行",
+            chart_key="QQQ_OHLCV",
+            field="close",
+            takeaway="价格处于上升趋势，但动量和波动读数决定追涨赔率。这里不用价格分位，而看趋势、均线距离、波动温度和 MACD 柱。",
+            stats=self._qqq_price_stats(artifacts),
+            refs=["L5.get_l5_deterministic_snapshot", "L5.get_macd_qqq", "L2.get_vxn"],
+            tone="price",
+            spark_annotation="价格趋势",
+        )
+        cards_rates = self._proof_card(
+            artifacts,
+            title="10Y 实际利率",
+            layer="L1 宏观约束",
+            chart_key="US10Y_REAL",
+            field="value",
+            takeaway="真实折现率仍是估值压力主轴。只要它维持高位，NDX 的上涨更依赖盈利和流动性支撑。",
+            stats=rate_stats,
+            refs=["L1.get_10y_real_rate", "L1.get_10y_treasury"],
+            tone="macro",
+            spark_annotation=f"10年分位 {_fmt_percentile(self._historical_percentile(artifacts, 'L1', 'get_10y_real_rate'))}",
+        )
+        credit_cards = [
+            self._proof_card(
+                artifacts,
+                title="HY OAS 总量利差",
+                layer="L2 信用总量",
+                chart_key="HY_OAS",
+                field="value",
+                takeaway="整体信用利差很低，说明市场仍愿意承担风险，这是 risk-on 的重要确认。",
+                stats=hy_stats,
+                refs=["L2.get_hy_oas_bp"],
+                tone="credit",
+                spark_annotation=f"10年分位 {_fmt_percentile(self._historical_percentile(artifacts, 'L2', 'get_hy_oas_bp'))}",
+            ),
+            self._proof_card(
+                artifacts,
+                title="CCC-BB 质量利差",
+                layer="L2 信用分层",
+                chart_key="HY_QUALITY_SPREAD",
+                field="value",
+                takeaway="低质信用没有同步乐观，说明宽松风险偏好下仍有一条质量分化暗线。",
+                stats=quality_stats,
+                refs=["L2.get_hy_quality_spread_bp"],
+                tone="risk",
+                spark_annotation=f"10年分位 {_fmt_percentile(self._historical_percentile(artifacts, 'L2', 'get_hy_quality_spread_bp'))}",
+            ),
+        ]
+        cards_credit = "".join(card for card in credit_cards if card)
+        cards_structure = self._proof_card(
+            artifacts,
+            title="QQQ / QQEW",
+            layer="L3 内部结构",
+            chart_key="QQQ_QQEW_RATIO",
+            field="value",
+            takeaway="等权补涨改善了市场宽度，但集中度绝对位置仍然很高，不能把广度改善误读成结构风险消失。",
+            stats=ratio_stats,
+            refs=["L3.get_qqq_qqew_ratio", "L3.get_qqq_top10_concentration"],
+            tone="structure",
+            spark_annotation=f"10年分位 {_fmt_percentile(self._historical_percentile(artifacts, 'L3', 'get_qqq_qqew_ratio'))}",
+        )
+        cards_valuation = self._proof_card(
+            artifacts,
+            title="估值赔率",
+            layer="L4 估值与盈利",
+            chart_key="DAMODARAN_ERP_MONTHLY",
+            field="value",
+            takeaway="估值赔率要同时看利润收益、利率和风险溢价。若 ERP 偏薄且实际利率高，价格上涨对盈利兑现的依赖会更强。",
+            stats=erp_stats,
+            refs=["L4.get_equity_risk_premium", "L4.get_ndx_pe_and_earnings_yield", "L1.get_10y_real_rate"],
+            tone="macro",
+            spark_annotation="ERP 月度路径",
+            show_guide=False,
+        )
+        proof_card_count = sum(1 for card in [cards_top, cards_rates, cards_structure, cards_valuation, *credit_cards] if card)
+        return f"""
+<section class="panel memo-chartbook" id="decision">
+  <div class="section-kicker">01 · 主判断与核心图册</div>
+  <h2>核心证据图</h2>
+  <p class="section-note">每张图只回答一个判断问题。本次展示 {_escape(proof_card_count)} 张有有效时间序列支撑的核心图；没有证据的图不补位，新增关键证据会自然进入这里或进入补充证据。</p>
+  <section class="memo-readout">
+    <div>
+      <b>本页读法</b>
+      <p>{_escape(readout_state)}</p>
+    </div>
+    <div>
+      <b>价格定价</b>
+      <p>{_escape(readout_priced)}</p>
+    </div>
+    <div>
+      <b>赔率判断</b>
+      <p>{_escape(readout_payoff)}</p>
+    </div>
+    <div>
+      <b>优先复核</b>
+      <ul>{invalidation_rows}</ul>
+    </div>
+  </section>
+
+  <section class="memo-flow memo-pair">
+    <div class="memo-copy">
+      <p class="kicker">01 · 市场状态</p>
+      <h3>先判断市场状态</h3>
+      <p class="lede">{_escape(final.get('final_stance'))}</p>
+      <ul class="clean">{reasons or '<li>暂无结构化三条理由。</li>'}</ul>
+    </div>
+    <div class="grid-2">{cards_top}{cards_valuation}</div>
+  </section>
+
+  <section class="memo-flow">
+    <div class="memo-copy">
+      <p class="kicker">02 · 硬约束</p>
+      <h3>再看最硬的约束</h3>
+      <p>本轮报告的核心矛盾不是单纯“涨多了”，而是高实际利率与价格趋势同时存在。价格能继续走强，但估值容错率被利率压住。</p>
+      <p class="small">这类图旁边必须放正式分位和阈值距离，因为它要回答的是“压力有多硬”，不是“线往哪走”。</p>
+    </div>
+    {cards_rates}
+  </section>
+
+  <section class="memo-flow memo-pair">
+    <div class="memo-copy">
+      <p class="kicker">03 · 信用信号</p>
+      <h3>信用给出确认，也给出警告</h3>
+      <p>总量信用利差极低，确认风险偏好仍然宽；但质量利差维持高位，说明资金并没有无差别追逐低质资产。</p>
+      <p class="small">这里保留两张图，是因为“总量宽松”和“内部分化”同时成立，任何一张图单独出现都会误导。</p>
+    </div>
+    <div class="grid-2">{cards_credit}</div>
+  </section>
+
+  <section class="memo-flow">
+    <div class="memo-copy">
+      <p class="kicker">04 · 市场宽度</p>
+      <h3>结构改善，但不能把风险抹平</h3>
+      <p>等权补涨是好消息，它降低了“只有少数巨头上涨”的脆弱性；但集中度仍在高位，组合仍然暴露于头部权重和盈利兑现风险。</p>
+    </div>
+    {cards_structure}
+  </section>
+
+  <section class="memo-support-chain">
+    <h3>主论点证据链</h3>
+    <p class="section-note">这里保留主论点和 evidence refs 的连接。正文先顺读，审计入口再展开。</p>
+    <div class="chain-grid">{support_chains or '<p>无证据链。</p>'}</div>
+  </section>
+</section>
+"""
+
     def _news_section(self, artifacts: Dict[str, Any]) -> str:
         ledger = artifacts.get("news_event_ledger", {})
         data_links = artifacts.get("news_event_data_links", {})
@@ -1472,7 +2580,7 @@ class VNextReportGenerator:
   <b>{_escape(source.get('source_name', 'source'))}</b>
   <span>{_escape(source.get('metric', ''))}</span>
   <strong>{_fmt_number(source.get('value'), digits=2)}</strong>
-  <small>{'percentile ' + _fmt_number(source.get('historical_percentile', source.get('percentile_10y')), suffix='%', digits=1) if _safe_number(source.get('historical_percentile', source.get('percentile_10y'))) is not None else 'No Historical Percentile'}</small>
+  <small>{'历史分位 ' + _fmt_number(source.get('historical_percentile', source.get('percentile_10y')), suffix='%', digits=1) if _safe_number(source.get('historical_percentile', source.get('percentile_10y'))) is not None else '未提供历史分位'}</small>
 </li>
 """
             )
@@ -1548,7 +2656,7 @@ class VNextReportGenerator:
 </article>
 """
 
-    def _risks_section(self, artifacts: Dict[str, Any]) -> str:
+    def _risks_section(self, artifacts: Dict[str, Any], section_kicker: str = "04 · 风险边界") -> str:
         risk = artifacts.get("risk_boundary_report", {}) or {}
         boundary = risk.get("boundary_status", {}) if isinstance(risk.get("boundary_status"), dict) else {}
         boundary_cards = "".join(
@@ -1580,9 +2688,9 @@ class VNextReportGenerator:
         )
         return f"""
 <section class="panel" id="risks">
-  <div class="section-kicker">04 · 风险边界</div>
-  <h2>什么会让判断失效</h2>
-  <p class="section-note">风险不是附录。这里展示必须保留的风险、当前边界状态，以及未来最应该观察的触发条件。</p>
+  <div class="section-kicker">{_escape(section_kicker)}</div>
+  <h2>如果发生这些事，我就改判断</h2>
+  <p class="section-note">风险不是附录。这里不写泛泛提示，只列当前判断最需要被反驳、复核或降级的条件。</p>
   <div class="risk-board">
     <div>
       <h3>边界状态</h3>
@@ -1597,7 +2705,7 @@ class VNextReportGenerator:
 </section>
 """
 
-    def _conflicts_section(self, artifacts: Dict[str, Any]) -> str:
+    def _conflicts_section(self, artifacts: Dict[str, Any], section_kicker: str = "05 · 冲突地图") -> str:
         bridge_cards = []
         for bridge in artifacts["bridges"]:
             claims = "".join(
@@ -1629,34 +2737,34 @@ class VNextReportGenerator:
             bridge_cards.append(
                 f"""
 <div class="bridge-card">
-  <h3>{_escape(bridge.get('bridge_type', 'Bridge'))}</h3>
+  <h3>{_escape(_display_label(bridge.get('bridge_type', 'Bridge')))}</h3>
   <p>{_escape(bridge.get('implication_for_ndx', ''))}</p>
   <div class="typed-map-grid">
     <section>
-      <h4>Typed Conflicts</h4>
+      <h4>主要冲突</h4>
       {typed_conflicts or '<p>无</p>'}
     </section>
     <section>
-      <h4>Resonance Chains</h4>
+      <h4>互相确认</h4>
       {resonance_chains or '<p>无</p>'}
     </section>
     <section>
-      <h4>Transmission Paths</h4>
+      <h4>压力传导</h4>
       {transmission_paths or '<p>无</p>'}
     </section>
   </div>
   <div class="bridge-columns">
-    <div><h4>Cross-Layer Claims</h4>{claims or '<p>无</p>'}</div>
-    <div><h4>Legacy Compatibility Conflicts</h4>{conflicts or '<p>无</p>'}</div>
+    <div><h4>Bridge 形成的判断</h4>{claims or '<p>无</p>'}</div>
+    <div><h4>需保留的旧口径冲突</h4>{conflicts or '<p>无</p>'}</div>
   </div>
 </div>
 """
             )
         return f"""
 <section class="panel" id="conflicts">
-  <div class="section-kicker">05 · 冲突地图</div>
-  <h2>证据之间如何互相支撑、互相打架</h2>
-  <p class="section-note">Bridge 是 vNext 的核心价值之一：它不是再写一遍指标，而是指出哪些层互相支撑、互相冲突，以及压力如何传导。</p>
+  <div class="section-kicker">{_escape(section_kicker)}</div>
+  <h2>冲突与共振</h2>
+  <p class="section-note">这里不追求顺滑，而是保留真正影响判断的张力：哪些证据在确认结论，哪些证据在提醒结论可能过度。</p>
   {''.join(bridge_cards) or '<p>无 Bridge Memo。</p>'}
 </section>
 """
@@ -1667,14 +2775,15 @@ class VNextReportGenerator:
             conflict_id = str(conflict.get("conflict_id") or conflict.get("conflict_type") or "typed_conflict")
             layers = " / ".join(str(layer) for layer in _as_list(conflict.get("involved_layers")))
             falsifiers = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(conflict.get("falsifiers")))
+            title = _sentence(conflict.get("description") or conflict.get("conflict_type") or "跨层冲突", 48)
             cards.append(
                 f"""
 <article class="typed-map-card conflict-card {_severity_class(conflict.get('severity'))}" data-typed-conflict="{_escape(conflict_id)}">
   <div class="conflict-head">
-    <span>{_escape(conflict_id)}</span>
+    <span>{_escape(title)}</span>
     <b>{_escape(_label(conflict.get('severity', 'medium'), 'severity'))} · {_escape(_label(conflict.get('confidence', 'medium'), 'confidence'))}</b>
   </div>
-  <small>{_escape(conflict.get('conflict_type', 'conflict'))} · {_escape(layers)}</small>
+  <small>{_escape(layers)}</small>
   <div class="conflict-axis">
     <span>{_escape(layers.split(' / ')[0] if layers else '证据 A')}</span>
     <i></i>
@@ -1683,10 +2792,11 @@ class VNextReportGenerator:
   <p>{_escape(conflict.get('description', ''))}</p>
   <p><b>机制：</b>{_escape(conflict.get('mechanism', ''))}</p>
   <p><b>含义：</b>{_escape(conflict.get('implication', ''))}</p>
-  <div class="ref-row">{self._ref_chips(conflict.get('evidence_refs', []))}</div>
   <details>
-    <summary>反证条件</summary>
-    <ul>{falsifiers or '<li>None</li>'}</ul>
+    <summary>审计：证据 refs / 反证条件</summary>
+    <div class="ref-row">{self._ref_chips(conflict.get('evidence_refs', []))}</div>
+    <p class="technical-id">id: {_escape(conflict_id)}</p>
+    <ul>{falsifiers or '<li>无</li>'}</ul>
   </details>
 </article>
 """
@@ -1700,24 +2810,25 @@ class VNextReportGenerator:
             layers = " -> ".join(str(layer) for layer in (_as_list(chain.get("involved_layers")) or _as_list(chain.get("layers"))))
             confirming = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(chain.get("confirming_indicators")))
             falsifiers = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(chain.get("falsifiers")))
+            title = chain.get("description") or "共振证据链"
             cards.append(
                 f"""
 <article class="typed-map-card" data-resonance-chain="{_escape(chain_id)}">
   <div class="conflict-head">
-    <span>{_escape(chain_id)}</span>
+    <span>{_escape(title)}</span>
     <b>{_escape(_label(chain.get('confidence', 'medium'), 'confidence'))}</b>
   </div>
   <small>{_escape(layers)}</small>
-  <p>{_escape(chain.get('description', ''))}</p>
   <p><b>机制：</b>{_escape(chain.get('mechanism', ''))}</p>
   <p><b>含义：</b>{_escape(chain.get('implication', ''))}</p>
-  <div class="ref-row">{self._ref_chips(chain.get('evidence_refs', []))}</div>
   <details>
-    <summary>确认指标 / 反证条件</summary>
-    <h5>确认指标</h5>
-    <ul>{confirming or '<li>None</li>'}</ul>
-    <h5>反证条件</h5>
-    <ul>{falsifiers or '<li>None</li>'}</ul>
+    <summary>审计：证据 refs / 确认指标 / 反证条件</summary>
+    <div class="ref-row">{self._ref_chips(chain.get('evidence_refs', []))}</div>
+    <p class="technical-id">id: {_escape(chain_id)}</p>
+    <h4>确认指标</h4>
+    <ul>{confirming or '<li>无</li>'}</ul>
+    <h4>反证条件</h4>
+    <ul>{falsifiers or '<li>无</li>'}</ul>
   </details>
 </article>
 """
@@ -1734,17 +2845,117 @@ class VNextReportGenerator:
                 f"""
 <article class="typed-map-card" data-transmission-path="{_escape(path_id)}">
   <div class="conflict-head">
-    <span>{_escape(path_id)}</span>
+    <span>{_escape(source)} 影响 {_escape(target)}</span>
     <b>{_escape(_label(path.get('confidence', 'medium'), 'confidence'))}</b>
   </div>
-  <div class="path-line"><b>{_escape(source)}</b><span>-></span><b>{_escape(target)}</b></div>
+  <div class="path-line"><b>{_escape(source)}</b><span>影响</span><b>{_escape(target)}</b></div>
   <p>{_escape(path.get('mechanism', ''))}</p>
   <p><b>含义：</b>{_escape(path.get('implication', ''))}</p>
-  <div class="ref-row">{self._ref_chips(path.get('evidence_refs', []))}</div>
+  <details>
+    <summary>审计：证据 refs</summary>
+    <div class="ref-row">{self._ref_chips(path.get('evidence_refs', []))}</div>
+    <p class="technical-id">id: {_escape(path_id)}</p>
+  </details>
 </article>
 """
             )
         return "".join(cards)
+
+    def _brief_layer_detail(self, layer: str, card: Dict[str, Any], artifacts: Dict[str, Any]) -> str:
+        full_conclusion = card.get("layer_synthesis") or card.get("local_conclusion")
+        confidence = card.get("confidence", "medium")
+        indicators = []
+        for item in _as_list(card.get("indicator_analyses")):
+            if not isinstance(item, dict):
+                continue
+            function_id = str(item.get("function_id") or "")
+            reading = _sentence(item.get("current_reading"), 160)
+            narrative = _sentence(item.get("narrative"), 190)
+            micro = self._indicator_micro_chart(artifacts, item)
+            visual = self._indicator_visual(layer, function_id, item, artifacts)
+            ref = f"{layer}.{function_id}"
+            timestamp_chip = self._timestamp_chip(item.get("data_quality"), ref=ref)
+            canon_detail = ""
+            if item.get("permission_type") or item.get("canonical_question"):
+                guards = "".join(f"<li>{_escape(value)}</li>" for value in _as_list(item.get("misread_guards")))
+                falsifiers = "".join(f"<li>{_escape(value)}</li>" for value in _as_list(item.get("falsifiers")))
+                canon_detail = f"""
+<details class="canon-box">
+  <summary>证据发言权</summary>
+  <h4>发言边界</h4>
+  <p>{_escape(item.get('permission_type', ''))}</p>
+  <h4>它回答的问题</h4>
+  <p>{_escape(item.get('canonical_question', ''))}</p>
+  <h4>避免误读</h4>
+  <ul>{guards or '<li>无</li>'}</ul>
+  <h4>推翻条件</h4>
+  <ul>{falsifiers or '<li>无</li>'}</ul>
+</details>
+"""
+            row_class = "has-micro" if micro else "no-micro"
+            indicators.append(
+                f"""
+<li class="{row_class}" id="evidence-{_slug(ref)}" data-evidence-ref="{_escape(ref)}">
+  <div class="indicator-main">
+    <div class="indicator-id">
+      <button class="ref-chip" data-ref="{_escape(ref)}">{_escape(function_id)}</button>
+      <span class="pill {_confidence_class(item.get('confidence'))}">可信度 {_escape(_label(item.get('confidence', 'medium'), 'confidence'))}</span>
+    </div>
+    <div class="indicator-copy">
+      {timestamp_chip}
+      <p>{_rich_text(reading)}</p>
+      <small>{_rich_text(narrative)}</small>
+    </div>
+    {micro}
+  </div>
+  <div class="indicator-extra">{visual}{canon_detail}</div>
+</li>
+"""
+            )
+        risks = "".join(
+            f"<span class=\"pill\">{_escape(_label(flag, 'risk_flag'))}</span>"
+            for flag in _as_list(card.get("risk_flags"))[:4]
+        )
+        hooks = "".join(
+            f"<li><b>{_escape(hook.get('target_layer', ''))}</b> {_escape(hook.get('question', ''))}</li>"
+            for hook in _as_list(card.get("cross_layer_hooks"))
+            if isinstance(hook, dict)
+        )
+        return f"""
+<details class="layer-detail">
+  <summary>
+    <span class="layer-title">{_escape(layer)} · {_escape(LAYER_TITLES_ZH.get(layer, LAYER_TITLES.get(layer, '')))}</span>
+    <span class="layer-summary">{_summary_fragments(full_conclusion)}</span>
+    <span class="pill {_confidence_class(confidence)}">可信度 {_escape(_label(confidence, 'confidence'))}</span>
+  </summary>
+  <div class="layer-body">
+    {_narrative_list(full_conclusion)}
+    <div class="meta">{risks}</div>
+    <details class="hook-box">
+      <summary>跨层待验证问题</summary>
+      <ul>{hooks or '<li>无</li>'}</ul>
+    </details>
+    <ul class="indicator-list">{''.join(indicators) or '<li class="no-micro">无指标级分析。</li>'}</ul>
+  </div>
+</details>
+"""
+
+    def _brief_layers_section(self, artifacts: Dict[str, Any]) -> str:
+        layers = artifacts.get("layers", {}) or {}
+        cards = "".join(
+            self._brief_layer_detail(layer, layers.get(layer, {}), artifacts)
+            for layer in ["L1", "L2", "L3", "L4", "L5"]
+        )
+        return f"""
+<section class="panel layers-panel brief-layers-panel" id="layers">
+  <div class="section-kicker">04 · L1-L5 底稿</div>
+  <h2>L1-L5 五层底稿</h2>
+  <p class="section-note">正文只呈现影响判断的内容。每一层 agent 的原始价值保留在这里：读者可以展开看本层结论、风险旗标、关键指标读数和微图。</p>
+  <p class="section-note">可信度不是模型自信程度。它提示本层证据是否够用、数据是否可靠、反证是否足够强；具体原因要回到展开后的底稿。</p>
+  <h3 class="sr-only">五层展开细节</h3>
+  <div class="layer-stack">{cards}</div>
+</section>
+"""
 
     def _layers_section(self, artifacts: Dict[str, Any]) -> str:
         layers = artifacts.get("layers", {}) or {}
@@ -2540,25 +3751,25 @@ class VNextReportGenerator:
             f"<span>{_escape(_label(flag, 'risk_flag'))}</span>"
             for flag in _as_list(item.get("risk_flags"))
         )
-        data_quality = self._data_quality_box(item.get("data_quality"))
         canon_detail = ""
         if item.get("permission_type") or item.get("canonical_question"):
             guards = "".join(f"<li>{_escape(value)}</li>" for value in _as_list(item.get("misread_guards")))
             falsifiers = "".join(f"<li>{_escape(value)}</li>" for value in _as_list(item.get("falsifiers")))
             canon_detail = f"""
-  <div class="canon-box">
-    <h5>Permission Type</h5>
+  <details class="canon-box">
+    <summary>证据发言权</summary>
+    <h4>发言边界</h4>
     <p>{_escape(item.get('permission_type', ''))}</p>
-    <h5>Canonical Question</h5>
+    <h4>它回答的问题</h4>
     <p>{_escape(item.get('canonical_question', ''))}</p>
-    <h5>Misread Guards</h5>
-    <ul>{guards or '<li>None</li>'}</ul>
-    <h5>Falsifiers</h5>
-    <ul>{falsifiers or '<li>None</li>'}</ul>
-  </div>
+    <h4>避免误读</h4>
+    <ul>{guards or '<li>无</li>'}</ul>
+    <h4>推翻条件</h4>
+    <ul>{falsifiers or '<li>无</li>'}</ul>
+  </details>
 """
         visual = self._indicator_visual(layer, function_id, item, artifacts)
-        timestamp_chip = self._timestamp_chip(item.get("data_quality"))
+        timestamp_chip = self._timestamp_chip(item.get("data_quality"), ref=ref)
         return f"""
 <article class="indicator-card" id="evidence-{_slug(ref)}" data-evidence-ref="{_escape(ref)}">
   <div class="indicator-top">
@@ -2573,7 +3784,6 @@ class VNextReportGenerator:
   {_position_ruler(percentile)}
   {visual}
   <p>{_escape(item.get('narrative', ''))}</p>
-  {data_quality}
   {canon_detail}
   <details>
     <summary>展开推理过程</summary>
@@ -2585,161 +3795,70 @@ class VNextReportGenerator:
 </article>
 """
 
-    def _data_quality_box(self, data_quality: Any) -> str:
+    def _timestamp_chip(self, data_quality: Any, ref: str = "") -> str:
+        """Render the compact evidence status shown in indicator card headers."""
         if not isinstance(data_quality, dict) or not data_quality:
             return ""
-        coverage = data_quality.get("coverage", {})
-        anomalies = data_quality.get("anomalies", [])
-        fallback = data_quality.get("fallback_chain", [])
-        disagreement = data_quality.get("source_disagreement", {})
-        valuation_sources = self._valuation_source_rows(data_quality.get("valuation_sources", []))
-        source_line = " / ".join(
-            str(item)
-            for item in (
-                data_quality.get("provider"),
-                data_quality.get("source_name"),
-                data_quality.get("source_url"),
-            )
-            if item
-        )
-        date_line = (
-            f"data={data_quality.get('data_date', '')}; "
-            f"as_of={data_quality.get('as_of_date', '')}; "
-            f"effective={data_quality.get('effective_date', '')}; "
-            f"vintage={data_quality.get('vintage_date', '')}"
-        )
-        coverage_html = ""
-        if isinstance(coverage, dict) and coverage:
-            coverage_html = f"""
-    <h5>覆盖率</h5>
-    <pre>{_escape(json.dumps(coverage, ensure_ascii=False, indent=2, default=str))}</pre>
-"""
-        elif coverage:
-            coverage_html = f"""
-    <h5>覆盖率</h5>
-    <p>{_escape(str(coverage))}</p>
-"""
-        anomaly_items = _as_list(anomalies)
-        if anomaly_items:
-            anomaly_html = "<ul>" + "".join(f"<li>{_escape(item)}</li>" for item in anomaly_items) + "</ul>"
-        else:
-            anomaly_html = "<p>无异常或缺口记录。</p>"
-        disagreement_html = ""
-        if isinstance(disagreement, dict) and disagreement:
-            disagreement_html = f"""
-    <h5>来源分歧</h5>
-    <pre>{_escape(json.dumps(disagreement, ensure_ascii=False, indent=2, default=str))}</pre>
-"""
-        return f"""
-  <div class="data-quality-box">
-    <h5>证据合约</h5>
-    <p>{_escape(data_quality.get('contract_version', ''))}</p>
-    <h5>数据源</h5>
-    <p>{_escape(source_line)}</p>
-    <h5>来源等级</h5>
-    <p>{_escape(data_quality.get('source_tier', ''))}</p>
-    <h5>数据日期 / as-of / effective / vintage</h5>
-    <p>{_escape(date_line)}</p>
-    <h5>采集时间</h5>
-    <p>{_escape(data_quality.get('collected_at_utc', ''))}</p>
-    <h5>可用性 / 耗时</h5>
-    <p>{_escape(_label(data_quality.get('availability', ''), 'availability'))} · {_escape(data_quality.get('collection_duration_ms', ''))} ms</p>
-    <h5>Fallback / 授权边界</h5>
-    <p>{_escape(data_quality.get('fallback_reason', ''))} · {_escape(data_quality.get('license_note', ''))}</p>
-    <h5>失败类型</h5>
-    <p>{_escape(data_quality.get('failure_type', ''))}</p>
-    <h5>方法与公式口径</h5>
-    <p>{_escape(data_quality.get('methodology', '') or data_quality.get('formula', ''))}</p>
-    {coverage_html}
-    {valuation_sources}
-    <h5>异常与缺口</h5>
-    {anomaly_html}
-    <h5>备用路径</h5>
-    <p>{_escape(' -> '.join(str(item) for item in _as_list(fallback)))}</p>
-    {disagreement_html}
-  </div>
-"""
-
-    def _timestamp_chip(self, data_quality: Any) -> str:
-        """Render a compact timestamp chip for indicator card header."""
-        if not isinstance(data_quality, dict):
-            return ""
-        collected_at = data_quality.get("collected_at_utc")
-        if not collected_at:
-            return ""
-        try:
-            parsed = datetime.fromisoformat(str(collected_at).replace("Z", "+00:00"))
-            formatted = parsed.strftime("%Y-%m-%d %H:%M UTC")
-        except ValueError:
-            formatted = str(collected_at)
+        data_time = self._evidence_data_time(data_quality)
+        source = self._evidence_source_label(data_quality)
+        gaps = self._evidence_gap_label(data_quality)
         source_tier = str(data_quality.get("source_tier", ""))
         manual_badge = " · 手动输入" if "手动输入" in source_tier else ""
-        return f'<span class="timestamp-chip" title="指标数据采集时间">{formatted}{manual_badge}</span>'
+        button = ""
+        if ref:
+            button = f'<button type="button" class="evidence-contract-button" data-contract-ref="{_escape(ref)}">证据合约</button>'
+        return (
+            '<span class="timestamp-chip evidence-status" title="数据本身对应的时间，不是本次 run 的采集时间">'
+            f'<span>数据时间：{_escape(data_time)}</span>'
+            f'<span>来源：{_escape(source)}{_escape(manual_badge)}</span>'
+            f'<span>{_escape(gaps)}</span>'
+            f'{button}'
+            '</span>'
+        )
 
-    def _valuation_source_rows(self, sources: Any) -> str:
-        rows = []
-        for source in _as_list(sources):
-            if not isinstance(source, dict):
+    def _evidence_data_time(self, data_quality: Dict[str, Any]) -> str:
+        for key in ("data_date", "as_of_date", "effective_date", "vintage_date"):
+            value = _plain_value(data_quality.get(key))
+            if value and value != "未记录":
+                return value
+        return "未记录"
+
+    def _evidence_source_label(self, data_quality: Dict[str, Any]) -> str:
+        for key in ("source_name", "provider"):
+            value = str(data_quality.get(key) or "").strip()
+            if value and value.lower() != "missing":
+                return value
+        source_url = str(data_quality.get("source_url") or "").strip()
+        if source_url and source_url.lower() != "missing":
+            return source_url
+        return "未记录"
+
+    def _evidence_gap_label(self, data_quality: Dict[str, Any]) -> str:
+        gaps: List[str] = []
+        source_url = str(data_quality.get("source_url") or "").strip().lower()
+        if not source_url or source_url == "missing":
+            gaps.append("缺少来源链接")
+        if self._evidence_data_time(data_quality) == "未记录":
+            gaps.append("缺少数据时间")
+        for item in _as_list(data_quality.get("anomalies")):
+            text = _plain_value(item)
+            if not text or "来源链接" in text:
                 continue
-            percentile = source.get("historical_percentile", source.get("percentile_10y"))
-            percentile_text = "No Historical Percentile" if percentile is None else str(percentile)
-            details = [
-                f"metric={source.get('metric', '')}",
-                f"value={self._source_value_summary(source.get('value'))}",
-                f"percentile={percentile_text}",
-                f"date={source.get('data_date', '')}",
-                f"availability={source.get('availability', '')}",
-            ]
-            if source.get("tbond_rate") is not None:
-                details.append(f"tbond_rate={source.get('tbond_rate')}")
-            if source.get("scope"):
-                details.append(str(source.get("scope")))
-            if source.get("unavailable_reason"):
-                details.append(f"unavailable_reason={source.get('unavailable_reason')}")
-            rows.append(
-                "<li>"
-                f"<b>{_escape(source.get('source_name', source.get('source_id', '')))}</b> "
-                f"<span>{_escape(source.get('source_tier', ''))}</span>"
-                f"<small>{_escape(' | '.join(details))}</small>"
-                "</li>"
-            )
-        if not rows:
-            return ""
-        return f"""
-    <h5>Valuation Sources</h5>
-    <ul class="valuation-source-list">{''.join(rows)}</ul>
-"""
-
-    def _source_value_summary(self, value: Any) -> str:
-        if not isinstance(value, dict):
-            return "" if value is None else str(value)
-        preferred = [
-            "PE_TTM",
-            "PE",
-            "TrailingPE",
-            "ForwardPE",
-            "PB",
-            "FCFYield",
-            "manual_erp",
-            "manual_erp_percentile_5y",
-            "manual_erp_percentile_10y",
-            "implied_erp_fcfe",
-            "erp_t12m_adjusted_payout",
-        ]
-        parts = []
-        for key in preferred:
-            if value.get(key) is not None:
-                parts.append(f"{key}={value.get(key)}")
-        if parts:
-            return "; ".join(parts[:5])
-        return f"{len(value)} fields"
+            gaps.append(text)
+            if len(gaps) >= 2:
+                break
+        if not gaps:
+            return "无明显缺口"
+        if len(gaps) == 1:
+            return gaps[0]
+        return f"{gaps[0]}，另{len(gaps) - 1}个缺口"
 
     def _summarize_value(self, value: Any) -> str:
         if isinstance(value, dict):
             keys = list(value.keys())
-            return f"{len(keys)} keys: {', '.join(str(key) for key in keys[:6])}"
+            return f"{len(keys)}项字段：{', '.join(str(key) for key in keys[:6])}"
         if isinstance(value, list):
-            return f"{len(value)} items"
+            return f"{len(value)}项"
         return "" if value is None else str(value)
 
     def _governance_section(self, artifacts: Dict[str, Any]) -> str:
@@ -3028,12 +4147,12 @@ class VNextReportGenerator:
         else:
             prompt_link = "<span>未发现 prompt_audit 目录。</span>"
         health_cards = [
-            ("L1-L5 context isolation", "通过" if not isolation_breaches else "有风险", "未发现其他层 runtime highlights 或全局跨层信号进入 layer context brief。" if not isolation_breaches else "；".join(isolation_breaches[:3])),
-            ("Prompt capture", f"已保存 {prompt_stage_count} 个 stage" if prompt_stage_count else "未保存", "完整 prompt 原文应查看独立 Agent 原文检查器。"),
-            ("Stage validation", "通过" if not failed_count else "失败", f"retry={retry_count}；failed={failed_count}；artifact=llm_stage_diagnostics.json。"),
-            ("Prompt size", f"{largest[0]} · {largest[1]} chars" if largest[0] else "未记录", "异常膨胀需要在 Prompt Inspector 中定位具体材料。"),
-            ("Evidence trace", "轻量可追踪", "关键 evidence refs 的完整语义追踪仍属于后续升级，不在 brief 正文展开。"),
-            ("Prompt Inspector", "独立入口", prompt_link),
+            ("五层隔离检查", "通过" if not isolation_breaches else "有风险", "未发现其他层本轮材料进入 L1-L5 单层上下文。" if not isolation_breaches else "；".join(isolation_breaches[:3])),
+            ("Agent 原文留档", f"已保存 {prompt_stage_count} 个阶段" if prompt_stage_count else "未保存", "完整原文应查看独立 Agent 原文检查器。"),
+            ("阶段校验", "通过" if not failed_count else "失败", f"重试={retry_count}；失败={failed_count}；文件=llm_stage_diagnostics.json。"),
+            ("输入长度", f"{largest[0]} · {largest[1]} 字符" if largest[0] else "未记录", "若异常膨胀，需要在 Agent 原文检查器中定位具体材料。"),
+            ("证据追踪", "轻量可追踪", "关键 evidence refs 可以追到来源；完整语义追踪仍属于后续升级。"),
+            ("Agent 原文检查器", "独立入口", prompt_link),
         ]
         cards = "".join(
             f"""
@@ -3047,8 +4166,8 @@ class VNextReportGenerator:
         )
         return f"""
   <div class="audit-boundaries agent-health" id="agent-health">
-    <h3>Agent Health</h3>
-    <p>正文只保留健康摘要；完整 prompt 原文、结构化输入、raw response、hash 和污染证据请进入独立 Agent 原文检查器。</p>
+    <h3>Agent 运行健康</h3>
+    <p>正文只保留健康摘要；完整原文、结构化输入、原始回答、hash 和污染检查请进入独立 Agent 原文检查器。</p>
     <div class="audit-grid">{cards}</div>
   </div>
 """
@@ -3060,6 +4179,7 @@ class VNextReportGenerator:
         payload_json: str,
         *,
         include_legacy_agent_io_audit: bool = False,
+        audit_index_path: Optional[Path] = None,
     ) -> str:
         token_usage = artifacts["final_adjudication"].get("token_usage", {})
         meta = artifacts.get("synthesis_packet", {}).get("packet_meta", {}) or {}
@@ -3125,19 +4245,40 @@ class VNextReportGenerator:
         observation_range = _observation_date_range(analysis_packet.get("raw_data", {}))
         collector_timestamp = meta.get("collector_timestamp_utc") or analysis_meta.get("collector_timestamp_utc")
         generated_at = meta.get("generated_at") or analysis_meta.get("generated_at")
+        run_summary = artifacts.get("run_summary", {}) if isinstance(artifacts.get("run_summary"), dict) else {}
+        prompt_inspector = run_summary.get("prompt_inspector") or ""
+        audit_paths = [
+            ("审计索引", str(audit_index_path) if audit_index_path else "未生成"),
+            ("本次运行摘要", str(run_path / "run_summary.json")),
+            ("数据完整性检查", str(run_path / "data_integrity_report.json")),
+            ("Agent 原文检查器", str(prompt_inspector) if prompt_inspector else "未记录"),
+            ("L1-L5 底稿", str(run_path / "layer_cards")),
+            ("Bridge 冲突共振", str(run_path / "bridge_memos")),
+            ("图表时间序列", str(run_path / "chart_time_series.json")),
+            ("新闻侧边材料", str(run_path / "news_event_ledger.json")),
+        ]
+        audit_path_rows = "".join(
+            f"<li><b>{_escape(label)}</b><span>{_escape(path)}</span></li>"
+            for label, path in audit_paths
+        )
         return f"""
 <section class="panel" id="audit">
-  <div class="section-kicker">08 · Audit Trail</div>
-  <h2>审计与原始 artifact</h2>
+  <div class="section-kicker">05 · 数据与审计</div>
+  <h2>主页面只留索引，完整底稿在外部 artifact</h2>
+  <p class="section-note">可审计不等于把所有 JSON 塞进正文。这里保留数据包路径、发布闸门、Agent 原文检查器、L1-L5 输出和图表源入口；大文件仍在 run 目录中。</p>
   <div class="audit-grid">
-    <div><b>Run Dir</b><p>{_escape(run_path)}</p></div>
-    <div><b>Token Usage</b><p>{_escape(_token_usage_summary(token_usage))}</p></div>
-    <div><b>Data Integrity</b><p>{_escape(_label(integrity_status, 'publish_status'))}</p></div>
-    <div><b>Backtest Date</b><p>{_escape(meta.get('backtest_date') or analysis_meta.get('backtest_date') or 'N/A')}</p></div>
-    <div><b>Input Date Span</b><p>{_escape(observation_range)}</p></div>
-    <div><b>Collected At</b><p>{_escape(_format_timestamp(collector_timestamp))}</p></div>
-    <div><b>Generated At</b><p>{_escape(_format_timestamp(generated_at))}</p></div>
-    <div><b>YF Diagnostics</b><p>{_escape(runtime_summary or '无异常记录')}</p></div>
+    <div><b>运行目录</b><p>{_escape(run_path)}</p></div>
+    <div><b>模型用量</b><p>{_escape(_token_usage_summary(token_usage))}</p></div>
+    <div><b>数据完整性</b><p>{_escape(_label(integrity_status, 'publish_status'))}</p></div>
+    <div><b>回测日期</b><p>{_escape(meta.get('backtest_date') or analysis_meta.get('backtest_date') or 'N/A')}</p></div>
+    <div><b>输入数据跨度</b><p>{_escape(observation_range)}</p></div>
+    <div><b>采集时间</b><p>{_escape(_format_timestamp(collector_timestamp))}</p></div>
+    <div><b>生成时间</b><p>{_escape(_format_timestamp(generated_at))}</p></div>
+    <div><b>Yahoo 数据诊断</b><p>{_escape(runtime_summary or '无异常记录')}</p></div>
+  </div>
+  <div class="audit-boundaries">
+    <h3>审计入口</h3>
+    <ul>{audit_path_rows}</ul>
   </div>
   <div class="audit-boundaries">
     <h3>回测数据边界</h3>
@@ -3150,10 +4291,6 @@ class VNextReportGenerator:
   </div>
   {self._agent_health_section(run_path, artifacts)}
   {self._agent_io_audit_section(run_path, artifacts) if include_legacy_agent_io_audit else ''}
-  <details class="raw-json">
-    <summary>展开页面使用的原生 JSON</summary>
-    <pre>{_escape(payload_json)}</pre>
-  </details>
 </section>
 """
 

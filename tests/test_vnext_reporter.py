@@ -551,41 +551,47 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     html = Path(report_path).read_text(encoding="utf-8")
 
     # Structural assertions (present in every template)
-    assert "NDX vNext Native Artifact UI" in html
+    assert "NDX 投资判断书" in html
     assert "主论点证据链" in html
-    assert "新闻源" in html
-    assert "官方事件底账" in html
-    assert "Layer Workbench" in html
+    assert "主判断" in html
+    assert "风险与反证" in html
+    assert "冲突与共振" in html
+    assert "L1-L5 底稿" in html
+    assert "数据与审计" in html
+    assert "新闻源" not in html
+    assert "新闻侧边材料" in html
+    assert "五层底稿" in html
     assert "evidence-L1-get_10y_real_rate" in html
     assert "L1_vs_L4" in html
-    assert "Objective Firewall" in html
-    assert "Permission Type" in html
-    assert "Typed Conflicts" in html
-    assert "Transmission Paths" in html
+    assert "证据发言权" in html
+    assert "主要冲突" in html
+    assert "压力传导" in html
     assert "real_rate_vs_valuation" in html
     assert "rates_to_valuation" in html
     assert "risk_off_resonance" in html
-    assert "Source Tier" in html
+    assert "来源等级" in html
     assert "component_model" in html
-    assert "Valuation Sources" in html
+    assert "估值来源对照" in html
     assert "Trendonify" in html
     assert "WorldPERatio" in html
     assert "34.1" in html
     assert "86.0" in html
-    assert "No Historical Percentile" in html
+    assert '"data_quality"' in html
+    assert "data-contract-ref" in html
     assert "403 Forbidden" in html
     assert "US equity market reference, not NDX-specific" in html
-    assert "Coverage" in html
+    assert "覆盖率" in html
     assert "NDX Simple Yield Gap" in html
-    assert "Confirming Indicators" in html
-    assert "买方动作层" in html
-    assert "核心仓、战术仓、等待者分开处理" in html
+    assert "确认指标" in html
+    assert "本页读法" in html
+    assert "优先复核" in html
+    assert "分批试探" in html
     assert "这不是低风险环境，但可能是高风险高赔率候选。" in html
     assert "价格已反映部分坏消息。" in html
     assert "高风险高赔率候选。" in html
-    assert "tactical_position" in html
+    assert "战术仓" in html
     assert "分批试探。" in html
-    assert "失效/复核清单" in html
+    assert "优先复核" in html
     assert "回测数据边界" in html
     assert "get_ndx_forward_earnings_quality" in html
     assert "historical source required" in html
@@ -599,18 +605,20 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert "<b>warning</b>" not in html
     assert "2 个阶段；输入 30，输出 15，合计 45" in html
     assert "{&#x27;prompt_tokens&#x27;:" not in html
-    assert "分析目标日" in html
-    assert "输入数据日期跨度" in html
+    assert "数据日期" in html
+    assert "输入跨度" in html
     assert "采集时间" in html
     assert "生成时间" in html
-    assert "YF Diagnostics" in html
-    assert "Agent Health" in html
+    assert "Yahoo 数据诊断" in html
+    assert "Agent 运行健康" in html
     assert "Agent 原文检查器" in html
-    assert "已保存 1 个 stage" in html
+    assert "已保存 1 个阶段" in html
     assert "Agent IO Audit" not in html
     assert "L1-L5 输入边界卡" not in html
     assert "other layer runtime highlights absent" not in html
     assert "llm_stage_diagnostics.json" in html
+    assert "审计索引" in html
+    assert "页面使用的原生 JSON" not in html
     assert 'data-typed-conflict="real_rate_vs_valuation"' in html
     assert 'data-transmission-path="rates_to_valuation"' in html
     assert 'data-resonance-chain="risk_off_resonance"' in html
@@ -648,7 +656,15 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     payload_match = re.search(r'<script type="application/json" id="vnext-data">(.*?)</script>', html, re.S)
     assert payload_match
     assert "&quot;" not in payload_match.group(1)
-    json.loads(payload_match.group(1))
+    payload = json.loads(payload_match.group(1))
+    assert "analysis_packet" not in payload
+    assert "chart_time_series" not in payload
+    assert payload["layers"]["L1"]["indicator_analyses"][0]["function_id"] == "get_10y_real_rate"
+    audit_index = Path(report_path).with_name(f"{Path(report_path).stem}_audit_index.json")
+    assert audit_index.exists()
+    audit_payload = json.loads(audit_index.read_text(encoding="utf-8"))
+    assert audit_payload["kind"] == "vnext_brief_audit_index"
+    assert any(item["relative_path"] == "analysis_packet.json" for item in audit_payload["artifact_files"])
 
     atlas_path = reporter.run(run_dir, template="atlas")
     atlas_html = Path(atlas_path).read_text(encoding="utf-8")
@@ -1110,10 +1126,9 @@ def test_vnext_reporter_handles_missing_data_quality(tmp_path: Path):
     report_path = reporter.run(run_dir)
     html = Path(report_path).read_text(encoding="utf-8")
 
-    # Should NOT contain data quality headers when data_quality is absent
-    assert "来源等级" not in html
-    # CSS always contains the class definition; assert no rendered element
+    # Should NOT render an inline data quality box when data_quality is absent.
     assert '<div class="data-quality-box">' not in html
+    assert "data-contract-ref=\"L1.get_10y_real_rate\"" not in html
     # But layer cards should still render
     assert "layer-card" in html
     assert "evidence-L1-get_10y_real_rate" in html
@@ -1319,21 +1334,31 @@ def test_enrich_indicator_data_quality_with_existing_dq():
 
 
 def test_timestamp_chip_formatting():
-    """_timestamp_chip renders a friendly UTC timestamp."""
+    """_timestamp_chip renders the data date, source, and contract drawer entry."""
     reporter = VNextReportGenerator(reports_dir="/tmp")
 
-    # Standard ISO timestamp
-    chip = reporter._timestamp_chip({"collected_at_utc": "2026-05-13T19:12:34+00:00"})
-    assert "2026-05-13 19:12 UTC" in chip
+    chip = reporter._timestamp_chip(
+        {
+            "data_date": "2026-05-13",
+            "provider": "FRED",
+            "source_name": "FRED",
+            "source_url": "",
+            "collected_at_utc": "2026-05-13T19:12:34+00:00",
+        },
+        ref="L1.get_fed_funds_rate",
+    )
+    assert "数据时间：2026-05-13" in chip
+    assert "来源：FRED" in chip
+    assert "缺少来源链接" in chip
+    assert "data-contract-ref" in chip
     assert "timestamp-chip" in chip
 
-    # Z-suffix timestamp
-    chip_z = reporter._timestamp_chip({"collected_at_utc": "2026-05-13T19:12:34Z"})
-    assert "2026-05-13 19:12 UTC" in chip_z
+    chip_effective = reporter._timestamp_chip({"effective_date": "2026-05-12", "provider": "manual"})
+    assert "数据时间：2026-05-12" in chip_effective
 
-    # Manual override badge
     chip_manual = reporter._timestamp_chip({
-        "collected_at_utc": "2026-05-13T19:12:34Z",
+        "data_date": "2026-05-13",
+        "provider": "Manual",
         "source_tier": "official · 手动输入",
     })
     assert "手动输入" in chip_manual
@@ -1411,6 +1436,8 @@ def test_timestamp_chip_appears_in_brief_html(tmp_path: Path):
     report_path = reporter.run(run_dir)
     html = Path(report_path).read_text(encoding="utf-8")
 
-    # Timestamp chip should appear in the HTML
+    # Evidence status should appear in the HTML with data time, not run collection time.
     assert "timestamp-chip" in html
-    assert "2026-05-13 19:12 UTC" in html
+    assert "数据时间：未记录" in html
+    assert "来源：未记录" in html
+    assert "证据合约" in html
