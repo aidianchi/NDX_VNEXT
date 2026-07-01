@@ -4,6 +4,135 @@
 
 ---
 
+## 2026-06-30
+
+### 三层研报架构工程接入第一版
+
+完成内容：
+
+- 实施第一层 data-only 隔离：`AnalysisPacketBuilder` 默认不再把 `event_refs` 写入分析包；`--enable-news` 仍可生成新闻/事件材料，但不再传给纯数据 Bridge / Thesis 主链。
+- 新增 `event_narrative_ledger.json` 第二层产物：把现有 `news_event_ledger`、`news_event_data_links`、`news_layer_analysis` 整理成 claim 级事件与叙事账本，写清来源、发布时间、信息可见时间、影响链路、能力边界和待验证条件。
+- 新增 `pure_data_report.json` 第一层 manifest：明确纯数据报告的 artifact 入口和禁止输入，包括 news sidecar、browser sidecar、event refs 等。
+- 新增 `integrated_synthesis_report.json` 第三层产物：读取纯数据报告和事件账本，输出综合判断、冲突矩阵、未解释项、降级 claim 和发布闸门；DataIntegrity blocked 时只允许 audit-only，不输出正式综合主判断。
+- 控制台、`/latest-product` 和 native brief 审计入口增加三层产物链接：纯数据研报、事件与叙事账本、综合总报告。
+- 调研 Wind skill 后采用保守接入策略：已装 `wind-mcp-skill` 可作为未来第二层公告/新闻/宏观候选来源；本轮不安装额外 Wind 工作流 skill，不让 Wind 新闻事件进入第一层正式数据证据链。
+
+验证结果：
+
+- 语法检查：`py_compile` 覆盖 `src/main.py`、新增三层产物模块、packet builder、reporter、console 和 control service，通过。
+- 聚焦测试 1：`tests/test_three_layer_artifacts.py tests/test_vnext_packet_builder.py tests/test_news_layer_analyzer.py tests/test_news_event_data_linker.py -q`：26 通过。
+- 聚焦测试 2：`tests/test_main_cli.py tests/test_main_collect_only.py tests/test_control_service.py tests/test_research_console.py -q`：20 通过。
+- 聚焦测试 3：`tests/test_vnext_reporter.py tests/test_vnext_orchestrator.py tests/test_bridge_v2.py tests/test_run_review.py -q`：61 通过。
+
+剩余风险：
+
+- 第三层综合报告第一版是规则化 JSON 裁决，不是新的 LLM 长文报告；后续可在 data-only 边界稳定后再增加更强的可读正文。
+- Wind 公告/新闻来源尚未工程化为自动采集器；当前只是为第二层保留明确边界和接入位置。
+
+### 三层研报架构第一性原理审查与对抗式修复
+
+完成内容：
+
+- 新增 `docs/2026-06-30_THREE_LAYER_ARCHITECTURE_FIRST_PRINCIPLES_REVIEW.md`，对 6 月 27 日三篇三层架构想法文档做第一性原理审查、对抗式挑错和修复版架构整理。
+- 明确总体结论：三层架构方向正确，但不能只理解成“三份报告”；更稳健的定义是数据、事件、综合判断三种证据状态隔离生产、分级升级、受控交叉。
+- 找出关键破口：当前代码里 `event_refs` 已可进入 Bridge / Thesis，因此若要严格实现“第一层纯数据研报”，需要 data-only Bridge / Thesis / Final 运行路径，不能让事件材料进入数据侧综合。
+- 建议把第二层从“新闻摘要”升级为“事件与叙事账本”，按 claim 粒度记录来源、发布日期、事件日期、信息可见时间、金融链路、能力边界和待验证条件。
+- 建议把第三层从“综合长文”升级为“综合矛盾裁决报告”，每个重要判断必须有判断对象、解释等级、数据支持、事件支持、价格反映、反证、未解决张力、失效条件和发布闸门。
+
+验证结果：
+
+- 文档审查和研究结论沉淀，无运行链路修改；后续工程接入仍需按 `NEXT_STEPS.md` 的三层研报架构攻坚拆分实施。
+
+## 2026-06-27
+
+### 三层研报架构文档与后续路线重写
+
+完成内容：
+
+- 新增 `docs/2026-06-27_THREE_LAYER_REPORT_ARCHITECTURE_PLAIN.md`，用通俗语言说明三层结构：纯数据研报、新闻/事件简报、综合总报告。
+- 明确三份报告独立生成、独立入口、独立阅读：纯数据研报继续保持现有 vNext 正式数据链，新闻/事件简报单独解释外部世界，综合总报告读取前两者后做交叉质询并给出谨慎但明确的解释。
+- 更新 `NEXT_STEPS.md`，把 P1 后续攻坚改为“三层研报架构接入攻坚”，完成标准聚焦三份报告独立落盘、互相引用但不互相覆盖。
+- 删除不合适的旧研究 skill 文件；同时撤回新建 skill 的尝试。当前阶段先不新建 skill，优先把产品结构、阅读入口和工程路线讲清楚。
+
+验证结果：
+
+- 文档和路线变更，无运行链路修改；后续仍需工程化接入 `news_event_brief` 与 `integrated_synthesis_report`。
+
+## 2026-06-26
+
+### L3 集中度口径：从 QQQ/QQEW 迁移到 NDX/NDXE
+
+完成内容：
+
+- 新增 `get_ndx_ndxe_ratio`，使用 `^NDX / ^NDXE` 日线收盘价计算市值加权 Nasdaq-100 相对等权 Nasdaq-100 的强弱、MA20 趋势和 5 年 / 10 年分位。
+- 将主采集链、packet builder、canon、Prompt、报告核心图册、workbench、chart_time_series、demo 脚本和测试迁移到 `get_ndx_ndxe_ratio` / `NDX_NDXE_RATIO`。
+- 保留 `get_qqq_qqew_ratio` 和 `QQQ_QQEW_RATIO` 作为旧 run 兼容入口；新 run 不再把 QQEW 当作纯 NDXE 代理。
+- 更新 `RESEARCH_CANON.md`、`ARCHITECTURE.md`、`NEXT_STEPS.md` 和权威证据研究文档，明确底层研究口径优先用 NDX/NDXE，ETF 代理只能作为交易实现或辅助核对。
+
+验证结果：
+
+- `scripts/probe_ndx_ndxe_ratio.py --end-date 2025-04-09`：可用，`latest_ratio=2.657693`，5 年分位 `94.59%`，10 年分位 `97.30%`，共同交易日 `2773`。
+- 真实函数轻测：`get_ndx_ndxe_ratio("2025-04-09")` 返回 `series_id=NDX_NDXE_RATIO`，旧 `get_qqq_qqew_ratio` 返回同一新口径并标记 `replacement_function_id=get_ndx_ndxe_ratio`。
+- 聚焦测试：`.venv/bin/python -m pytest tests/test_l3_breadth_data.py::test_ndx_ndxe_ratio_yfinance_request_includes_effective_date tests/test_chart_time_series_artifacts.py tests/test_interactive_chart_workbench.py tests/test_deep_research_canon.py tests/test_vnext_packet_builder.py tests/test_tools_smoke.py tests/test_objective_firewall.py tests/test_vnext_orchestrator.py -q`：79 通过，5 个 warning。
+- 语法检查：`py_compile` 覆盖本次触及的主要 Python 文件，通过。
+- 备注：包含 `tests/test_data_evidence_contract.py` 的更宽测试组合中仍有 1 个既有失败：`VNextReportGenerator` 缺少 `_data_quality_box`；该失败不属于本次 NDX/NDXE 迁移路径。
+
+### 双轨研究路线修正：替代“数据先行、新闻后行”
+
+完成内容：
+
+- 重写 `docs/2026-06-24_AUTHORITATIVE_EVIDENCE_RESEARCH_PLAIN.md`：把旧的“数据先发现问题、新闻后补语境”改为“数据轨道与事件轨道独立观察、受控交叉、分级升级”。
+- 更新 `NEXT_STEPS.md`：P1 攻坚项改为“数据与事件双轨研究接入攻坚”，完成标准改为分开产出 `cross_track_questions.json`、`event_track_observations.json`，再由受控交叉层输出候选语境。
+- 改造本地 skill `/Users/aidianchi/.codex/skills/authoritative-evidence-research/`：保留来源分级、候选状态、人工复核和升级规则；删除“从数据提出的问题开始”的单向流程，改为 `event_track_scan`、`data_track_question_intake`、`controlled_cross_review`、`formal_source_gap` 四种模式。
+
+验证结果：
+
+- 文档和 skill 变更，无运行链路修改；后续仍需工程化接入 run 目录、控制台和 brief。
+
+## 2026-06-24
+
+### AGENTS.md 入口重写与通俗沟通前置
+
+完成内容：
+
+- 重写 `AGENTS.md`，把“先跟用户讲清楚”放到最前面，明确默认用通俗语言说明改什么、为什么、影响和验证结果。
+- 将 AGENTS.md 从 67 行压缩到 35 行，只保留通俗沟通要求、项目一句话目标、硬红线和按需读取入口。
+- 删除常用命令清单和通用执行纪律；命令仍由 `README.md` 承担，具体验证流程由任务相关文档按需提供。
+
+验证结果：
+
+- 文档变更，无运行链路修改；已人工复读 `AGENTS.md`，确认通俗沟通要求在最前，关键架构红线仍保留，常用命令不再常驻。
+
+### 权威证据研究助理通俗说明文档
+
+完成内容：
+
+- 新增 `docs/2026-06-24_AUTHORITATIVE_EVIDENCE_RESEARCH_PLAIN.md`，用通俗语言梳理新闻源降级、问题驱动研究助理、skill 当前能力和后续接入路线。
+- 明确当前推荐分工：L1-L5 / Bridge / Thesis / Risk / DataIntegrity 负责提出问题，Research Intake 负责整理问题，`authoritative-evidence-research` skill 负责候选研究，不直接进入 L1-L5 或 `evidence_ref`。
+- 明确下一步不是扩大新闻功能，而是先做 `external_context_requests` 问题出口，再接控制台调用 skill，最后建立候选材料升级规则。
+
+验证结果：
+
+- 文档变更，无运行链路修改；已人工复读确认覆盖“用户想法、已做 skill、当前功能、下一步计划”四项。
+
+### 数据源可用性：修复 L5/Twelve Data 来源标记、Clash 规则与发布闸门
+
+完成内容：
+
+- 复查 `20260618_215209` 最新失败 run，确认 L5 全部无有效指标、L4 Wind 与 L5/yfinance/Twelve Data 在 Clash 全局模式下可恢复，根因偏向网络路由与 fallback 可观测性不足。
+- 修复 `cached_yf_download`：Twelve Data / yfinance / 持久缓存 / 内存缓存会给 DataFrame 写入真实来源标签；Twelve Data 优先路径失败会进入运行诊断，不再被静默吞掉。
+- 修复 L5 输出：`get_l5_deterministic_snapshot`、`get_qqq_technical_indicators`、`get_multi_scale_ma_position` 不再写死 `source_name="yfinance"`，而是透传真实数据源；yfinance 未安装但 Twelve Data 可用时仍可取 QQQ 日线。
+- 加严 DataIntegrity 发布闸门：真实多指标 run 总体置信度低于 60% 时阻断；L1-L5 任一正式层在至少 3 个指标下成功数为 0 时阻断，避免 L5 全挂仍被标成 publishable。
+- 修复 Clash 规则模式：保持 DeepSeek 直连在最前，新增 NDX 数据源代理规则，包括 Yahoo/yfinance、Twelve Data、Alpha Vantage、FRED/StLouisFed、Nasdaq、Invesco、SEC、Finnhub、SimFin、CNN/Fed/BLS/BEA、Damodaran/WorldPERatio/Trendonify 等；保留配置备份 `clash-verge.yaml.bak_20260624_2000`。
+
+验证结果：
+
+- 规则模式运行态确认：Clash controller 返回 `mode=rule`，TUN 开启，新增规则已进入运行态。
+- 网络轻测：DeepSeek 直连返回 401（网络通，未带鉴权）、Yahoo chart 返回 200、Twelve Data 返回 200。
+- 真实数据轻测：`cached_yf_download("QQQ", 2026-06-01..2026-06-24)` 返回 16 行，最后日期 `2026-06-23`，来源标签为 `Twelve Data`。
+- Wind L4 轻测：`get_ndx_wind_valuation_snapshot()` 返回可用，来源为 `Wind index_data.get_index_fundamentals`。
+- 聚焦测试：`.venv/bin/python -m pytest tests/test_yfinance_cache_resilience.py tests/test_ta_l5_and_pdr_sources.py tests/test_l4_external_valuation_sources.py tests/test_core_checker.py tests/test_run_review.py -q`：58 通过。
+
 ## 2026-06-18
 
 ### 正式 reporter：修复核心图册居中留白与目录对齐

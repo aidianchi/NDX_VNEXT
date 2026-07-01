@@ -515,8 +515,9 @@ class VNextOrchestrator:
             "context_brief": _model_dump(context_brief),
             "candidate_cross_layer_links": [_model_dump(link) for link in packet.candidate_cross_layer_links],
             "layer_cards": [_model_dump(card) for card in layer_cards],
-            "event_refs": packet.event_refs,
         }
+        if packet.event_refs:
+            bridge_payload["event_refs"] = packet.event_refs
         checkpoint = self._load_stage_checkpoint(
             self.bridge_dir / "bridge_0.json",
             BridgeMemo,
@@ -1350,7 +1351,7 @@ class VNextOrchestrator:
                 f"analysis_packet.raw_data.{layer}",
             ]
         return {
-            "bridge": ["context_brief.json", "layer_cards/L1-L5.json", "analysis_packet.event_refs"],
+            "bridge": ["context_brief.json", "layer_cards/L1-L5.json"],
             "thesis": ["synthesis_packet.json"],
             "critic": ["governance_input(thesis + synthesis + layer cards)"],
             "critic_retry": ["governance_input(thesis + synthesis + schema feedback + layer cards)"],
@@ -1739,9 +1740,9 @@ class VNextOrchestrator:
         if stage_key.startswith("l") and stage_key.endswith("_analyst"):
             prompt_body = self._compose_layer_prompt(stage_key, prompt_body, prompt_payload)
         elif stage_key == "bridge":
-            prompt_body = self._compose_bridge_prompt(prompt_body)
+            prompt_body = self._compose_bridge_prompt(prompt_body, prompt_payload)
         elif stage_key == "thesis":
-            prompt_body = self._compose_thesis_prompt(prompt_body)
+            prompt_body = self._compose_thesis_prompt(prompt_body, prompt_payload)
         fields = list(getattr(model_cls, "model_fields", {}).keys())
         schema_hint = ", ".join(fields) if fields else model_cls.__name__
         return (
@@ -1757,6 +1758,10 @@ class VNextOrchestrator:
 
     def _sanitize_prompt_payload(self, stage_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Return the exact payload that may be serialized into an LLM prompt."""
+        if stage_key == "bridge":
+            return self._strip_empty_event_prompt_fields(payload)
+        if stage_key == "thesis":
+            return self._strip_empty_event_prompt_fields(payload)
         if not (stage_key.startswith("l") and stage_key.endswith("_analyst")):
             return payload
         sanitized = dict(payload)
@@ -1769,6 +1774,19 @@ class VNextOrchestrator:
             raw_data = self._summarize_l4_raw_data_for_prompt(raw_data)
         sanitized["layer_raw_data"] = raw_data
         return sanitized
+
+    def _strip_empty_event_prompt_fields(self, payload: Any) -> Any:
+        if isinstance(payload, dict):
+            stripped: Dict[str, Any] = {}
+            for key, value in payload.items():
+                cleaned = self._strip_empty_event_prompt_fields(value)
+                if key in {"event_refs", "event_index", "key_event_refs"} and cleaned in ({}, [], None):
+                    continue
+                stripped[key] = cleaned
+            return stripped
+        if isinstance(payload, list):
+            return [self._strip_empty_event_prompt_fields(item) for item in payload]
+        return payload
 
     def _compose_layer_prompt(self, stage_key: str, prompt_body: str, payload: Dict[str, Any]) -> str:
         layer = str(payload.get("layer") or stage_key[:2].upper())
@@ -1838,7 +1856,8 @@ class VNextOrchestrator:
         parts = [part for part in [canon_prompt, few_shot, v2_contract, prompt_body] if part]
         return "\n\n".join(parts)
 
-    def _compose_bridge_prompt(self, prompt_body: str) -> str:
+    def _compose_bridge_prompt(self, prompt_body: str, payload: Optional[Dict[str, Any]] = None) -> str:
+        has_event_input = payload is None or bool(payload.get("event_refs"))
         bridge_contract = (
             "## vNext v2 Bridge Contract\n"
             "Bridge 的职责不是重新解释单个指标，而是读取各 LayerCard 的 indicator_analyses、layer_synthesis、"
@@ -1852,25 +1871,30 @@ class VNextOrchestrator:
         )
         bridge_contract += (
             "\nBridge v2 新增字段必须尽量原生填写：\n"
-            "- typed_conflicts: 结构化冲突地图，包含 conflict_id、conflict_type、severity、confidence、description、mechanism、implication、involved_layers、evidence_refs、event_refs、falsifiers。\n"
-            "- resonance_chains: 跨层共振链，必须包含 involved_layers、evidence_refs、event_refs、mechanism、confirming_indicators、falsifiers、implication；没有证据或确认指标时降低 confidence。\n"
-            "- transmission_paths: 跨层传导路径，说明压力或支撑如何从 source_layer 传到 target_layer，可选 event_refs 只能表示催化剂或背景。\n"
+            "- typed_conflicts: 结构化冲突地图，包含 conflict_id、conflict_type、severity、confidence、description、mechanism、implication、involved_layers、evidence_refs、falsifiers。\n"
+            "- resonance_chains: 跨层共振链，必须包含 involved_layers、evidence_refs、mechanism、confirming_indicators、falsifiers、implication；没有证据或确认指标时降低 confidence。\n"
+            "- transmission_paths: 跨层传导路径，说明压力或支撑如何从 source_layer 传到 target_layer。\n"
             "- principal_contradiction: 主要矛盾地图，必须说明 contradiction_id、summary、why_principal、dominant_side、secondary_side、price_reflection、action_implication、conflict_refs、evidence_refs、transformation_signals。\n"
             "- secondary_contradictions: 次要矛盾列表，说明为什么当前不是主导项，以及它如何约束行动力度、节奏或置信度。\n"
             "- price_reflection_map: 判断关键风险/叙事是否已经进入价格，可用 not_reflected / partially_reflected / largely_reflected / over_reflected / unclear。\n"
             "- contradiction_transformation_signals: 会让主次矛盾或矛盾主导方面发生转化的可观察信号。\n"
             "- unresolved_questions: 仍需 Thesis/Critic/Risk 保留的问题。\n"
             "旧字段 conflicts 仍要填写，用于兼容；typed_conflicts 是更高优先级的 Bridge v2 产物。\n"
-            "如果输入包含 event_refs，Bridge 可以引用 event_ref 解释触发/背景/观察，但不得把事件写成 evidence_ref，也不得说事件“证明”某个数值指标结论。\n"
+        )
+        if has_event_input:
+            bridge_contract += (
+                "如果输入包含 event_refs，Bridge 可以引用 event_ref 解释触发/背景/观察，但不得把事件写成 evidence_ref，也不得说事件“证明”某个数值指标结论。\n"
             "\n## 顶层 BridgeMemo.event_refs 字段类型（强约束）\n"
             "- BridgeMemo.event_refs 类型固定为 List[str]，只放事件 ID 字符串，例如：[\"event:6479503280a4bf43\", \"event:f71e0fd17b6261c5\"]。\n"
             "- 输入里的 event_refs 是 Dict[event_id, 事件元数据]（标题、来源、时间），仅供你引用 ID；禁止把这种 dict 形态复制到输出。\n"
             "- 不要写成 {\"event:xxx\": \"...\"} 之类的 dict、对象或映射；如果没有要保留的事件，请写 []。\n"
             "- typed_conflicts/resonance_chains/transmission_paths 内部的 event_refs 同样是 List[str]。\n"
-        )
+            )
         return f"{bridge_contract}\n\n{prompt_body}"
 
-    def _compose_thesis_prompt(self, prompt_body: str) -> str:
+    def _compose_thesis_prompt(self, prompt_body: str, payload: Optional[Dict[str, Any]] = None) -> str:
+        synthesis_payload = payload.get("synthesis_packet") if isinstance(payload, dict) else {}
+        has_event_input = bool(isinstance(synthesis_payload, dict) and synthesis_payload.get("event_index"))
         thesis_contract = (
             "## vNext v2 Decision Thesis Contract\n"
             "你现在只消费 synthesis_packet。不要重新分析原始数据，不要替 L1-L5 补写单指标推理。"
@@ -1883,8 +1907,13 @@ class VNextOrchestrator:
             "\n必须读取 synthesis_packet.objective_firewall_summary，检查投资对象、指标发言权、跨层验证和最强反证。"
             "如果 objective_firewall_summary 的 object_clear、authority_clear 或 cross_layer_verified 为 false，"
             "不得给出强结论，必须降低 confidence 并在 dependencies/retained_conflicts 中保留相应边界。"
-            "如果使用 synthesis_packet.event_index，只能把 event_refs 写成催化剂、背景或观察事项；"
-            "不得让 event_refs 替代 key_support_chains[].evidence_refs。"
+        )
+        if has_event_input:
+            thesis_contract += (
+                "如果使用 synthesis_packet.event_index，只能把 event_refs 写成催化剂、背景或观察事项；"
+                "不得让 event_refs 替代 key_support_chains[].evidence_refs。"
+            )
+        thesis_contract += (
             "\n\nDecision Semantics 必填语义："
             "state_diagnosis 说明当前市场状态；priced_narrative 说明价格正在定价什么、哪些坏消息已/未反映；"
             "payoff_assessment 必须区分高风险高赔率、高风险低赔率、低风险低赔率等；"

@@ -15,6 +15,8 @@ try:
     from .chart_time_series_artifacts import write_chart_time_series_artifact
     from .config import MODEL_CONFIGS, path_config
     from .core import DataCollector, DataIntegrity, ReportGenerator
+    from .event_narrative_ledger import write_event_narrative_ledger
+    from .integrated_synthesis_report import build_pure_data_report_manifest, write_integrated_synthesis_report
     from .news_event_data_linker import write_news_event_data_links
     from .news_event_ledger import NewsEventLedgerBuilder
     from .news_layer_analyzer import write_news_layer_analysis
@@ -26,6 +28,8 @@ except ImportError:
     from chart_time_series_artifacts import write_chart_time_series_artifact
     from config import MODEL_CONFIGS, path_config
     from core import DataCollector, DataIntegrity, ReportGenerator
+    from event_narrative_ledger import write_event_narrative_ledger
+    from integrated_synthesis_report import build_pure_data_report_manifest, write_integrated_synthesis_report
     from news_event_data_linker import write_news_event_data_links
     from news_event_ledger import NewsEventLedgerBuilder
     from news_layer_analyzer import write_news_layer_analysis
@@ -295,9 +299,32 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         json.dump(integrity_report, handle, ensure_ascii=False, indent=2, default=str)
         handle.write("\n")
     if integrity_report.get("blocked") or integrity_report.get("unpublishable"):
+        event_narrative_ledger_path = ""
+        if args.enable_news and news_event_ledger_payload:
+            event_narrative_ledger_path = write_event_narrative_ledger(
+                run_dir,
+                event_ledger=news_event_ledger_payload,
+                event_ledger_path=news_event_ledger_path,
+                effective_date=backtest_date,
+            )
+        pure_data_report_path = os.path.join(run_dir, "pure_data_report.json")
+        pure_data_report_payload = build_pure_data_report_manifest(
+            run_dir=run_dir,
+            data_integrity_report=integrity_report,
+            output_path=pure_data_report_path,
+        )
+        integrated_synthesis_report_path = write_integrated_synthesis_report(
+            run_dir,
+            pure_data_report=pure_data_report_payload,
+            data_integrity_report=integrity_report,
+            event_narrative_ledger_path=event_narrative_ledger_path or None,
+        )
         summary = {
             "run_dir": run_dir,
             "data_integrity_report": integrity_path,
+            "pure_data_report": pure_data_report_path,
+            "event_narrative_ledger": event_narrative_ledger_path,
+            "integrated_synthesis_report": integrated_synthesis_report_path,
             "report_path": "",
             "chart_time_series": "",
             "final_stance": "",
@@ -316,9 +343,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     builder = AnalysisPacketBuilder()
     packet = builder.build(
         data_json,
-        event_ledger=news_event_ledger_payload,
-        event_ledger_path=news_event_ledger_path or None,
-        context={"news_event_ledger_path": news_event_ledger_path} if news_event_ledger_path else None,
+        context={"news_event_ledger_path": news_event_ledger_path, "event_material_policy": "layer_2_only_not_in_prompt"} if news_event_ledger_path else None,
         output_path=os.path.join(run_dir, "analysis_packet.json"),
     )
     chart_time_series_path = write_chart_time_series_artifact(
@@ -328,6 +353,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     )
     news_event_data_links_path = ""
     news_layer_analysis_path = ""
+    event_narrative_ledger_path = ""
     if args.enable_news and news_event_ledger_payload:
         news_event_data_links_path = write_news_event_data_links(
             run_dir,
@@ -344,6 +370,15 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
             news_event_data_links=news_event_data_links_payload,
             event_ledger_path=news_event_ledger_path,
             news_event_data_links_path=news_event_data_links_path,
+        )
+        event_narrative_ledger_path = write_event_narrative_ledger(
+            run_dir,
+            event_ledger=news_event_ledger_payload,
+            news_event_data_links=news_event_data_links_payload,
+            event_ledger_path=news_event_ledger_path,
+            news_layer_analysis_path=news_layer_analysis_path,
+            news_event_data_links_path=news_event_data_links_path,
+            effective_date=backtest_date,
         )
 
     orchestrator = VNextOrchestrator(
@@ -371,6 +406,20 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         json.dump(logic_json, handle, ensure_ascii=False, indent=2)
         handle.write("\n")
 
+    pure_data_report_path = os.path.join(run_dir, "pure_data_report.json")
+    pure_data_report_payload = build_pure_data_report_manifest(
+        run_dir=run_dir,
+        data_integrity_report=integrity_report,
+        artifacts=artifacts,
+        output_path=pure_data_report_path,
+    )
+    integrated_synthesis_report_path = write_integrated_synthesis_report(
+        run_dir,
+        pure_data_report=pure_data_report_payload,
+        data_integrity_report=integrity_report,
+        event_narrative_ledger_path=event_narrative_ledger_path or None,
+    )
+
     report_path = ""
     if not args.skip_report:
         reporter = ReportGenerator(use_charts=not args.disable_charts)
@@ -389,6 +438,9 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "news_event_ledger": news_event_ledger_path,
         "news_event_data_links": news_event_data_links_path,
         "news_layer_analysis": news_layer_analysis_path,
+        "event_narrative_ledger": event_narrative_ledger_path,
+        "pure_data_report": pure_data_report_path,
+        "integrated_synthesis_report": integrated_synthesis_report_path,
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
         "approval_status": _enum_value(getattr(artifacts["final_adjudication"], "approval_status", "")),
         "run_review_report": os.path.join(run_dir, "run_review_report.json"),

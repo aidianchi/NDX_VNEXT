@@ -37,9 +37,9 @@ def _mock_data_json():
             },
             {
                 "layer": 3,
-                "metric_name": "QQQ/QQEW Ratio",
-                "function_id": "get_qqq_qqew_ratio",
-                "raw_data": {"name": "QQQ/QQEW Ratio", "value": {"level": 1.15, "relativity": {"percentile_10y": 88.0}}},
+                "metric_name": "NDX/NDXE Ratio",
+                "function_id": "get_ndx_ndxe_ratio",
+                "raw_data": {"name": "NDX/NDXE Ratio", "value": {"level": 2.9, "relativity": {"percentile_10y": 88.0}}},
                 "error": None,
                 "collection_timestamp_utc": "2026-04-24T00:00:04Z",
             },
@@ -174,7 +174,7 @@ def test_packet_builder_hides_inactive_manual_metric_values_and_carries_backtest
     assert packet.context["strict_backtest_invariants"]["declared_limitations"][0]["invariant_id"] == "alfred_first_vintage_not_enforced"
 
 
-def test_packet_builder_keeps_event_refs_separate_from_layer_data():
+def test_packet_builder_defaults_to_data_only_even_when_event_ledger_is_provided():
     builder = AnalysisPacketBuilder()
     event_ledger = {
         "events": [
@@ -196,6 +196,38 @@ def test_packet_builder_keeps_event_refs_separate_from_layer_data():
     }
 
     packet = builder.build(_mock_data_json(), manual_overrides={"active": False, "metrics": {}}, event_ledger=event_ledger)
+
+    assert packet.event_refs == {}
+    assert "event:abc123" not in packet.raw_data["L1"]
+
+
+def test_packet_builder_can_keep_event_refs_for_legacy_compatibility():
+    builder = AnalysisPacketBuilder()
+    event_ledger = {
+        "events": [
+            {
+                "event_id": "event:abc123",
+                "dedupe_id": "abc123",
+                "source_id": "federal_reserve_press_all",
+                "source_name": "Federal Reserve Press Releases",
+                "source_tier": "official_macro",
+                "event_type": "policy_or_financial_conditions",
+                "title": "Federal Reserve issues FOMC statement",
+                "url": "https://www.federalreserve.gov/example.htm",
+                "published_at": "Fri, 08 May 2026 18:00:00 GMT",
+                "layers": ["L1", "L2", "L4"],
+                "symbols": [],
+                "confidence": "high",
+            }
+        ]
+    }
+
+    packet = builder.build(
+        _mock_data_json(),
+        manual_overrides={"active": False, "metrics": {}},
+        event_ledger=event_ledger,
+        allow_event_refs=True,
+    )
 
     assert "event:abc123" in packet.event_refs
     assert packet.event_refs["event:abc123"]["usage_boundary"].startswith("event_ref only")

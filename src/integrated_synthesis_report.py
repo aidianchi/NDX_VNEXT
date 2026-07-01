@@ -1,0 +1,277 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _load_json(path: str | Path, default: Any) -> Any:
+    file_path = Path(path)
+    if not file_path.exists():
+        return default
+    with file_path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _write_json(path: str | Path, payload: Dict[str, Any]) -> str:
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return str(output)
+
+
+def _as_list(value: Any) -> List[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _compact_refs(values: List[Any], limit: int = 8) -> List[str]:
+    refs: List[str] = []
+    for value in values:
+        if isinstance(value, str) and value and value not in refs:
+            refs.append(value)
+        if len(refs) >= limit:
+            break
+    return refs
+
+
+def build_pure_data_report_manifest(
+    *,
+    run_dir: str | Path,
+    data_integrity_report: Dict[str, Any],
+    artifacts: Optional[Dict[str, Any]] = None,
+    output_path: Optional[str | Path] = None,
+) -> Dict[str, Any]:
+    """Write a manifest that declares the data-only layer-1 artifact set."""
+    run_path = Path(run_dir)
+    final = getattr((artifacts or {}).get("final_adjudication"), "model_dump", lambda **_: (artifacts or {}).get("final_adjudication", {}))(mode="json") if artifacts else _load_json(run_path / "final_adjudication.json", {})
+    synthesis = getattr((artifacts or {}).get("synthesis_packet"), "model_dump", lambda **_: (artifacts or {}).get("synthesis_packet", {}))(mode="json") if artifacts else _load_json(run_path / "synthesis_packet.json", {})
+    prompt_policy = {
+        "data_only": True,
+        "forbidden_runtime_inputs": [
+            "news_event_ledger",
+            "news_layer_analysis",
+            "event_narrative_ledger",
+            "browser_sidecar",
+            "event_refs",
+        ],
+        "note": "Layer 1 is the pure data report. Event materials can only appear in layer 2 and layer 3 artifacts.",
+    }
+    payload = {
+        "schema_version": "pure_data_report_v1",
+        "generated_at_utc": _utc_now_iso(),
+        "run_dir": str(run_path),
+        "publish_status": data_integrity_report.get("publish_status") or ("blocked" if data_integrity_report.get("blocked") else ""),
+        "prompt_policy": prompt_policy,
+        "final_stance": final.get("final_stance", "") if isinstance(final, dict) else "",
+        "approval_status": final.get("approval_status", "") if isinstance(final, dict) else "",
+        "principal_contradictions": synthesis.get("principal_contradictions", []) if isinstance(synthesis, dict) else [],
+        "source_artifacts": {
+            "analysis_packet": str(run_path / "analysis_packet.json"),
+            "layer_cards": str(run_path / "layer_cards"),
+            "bridge_memos": str(run_path / "bridge_memos"),
+            "synthesis_packet": str(run_path / "synthesis_packet.json"),
+            "thesis_draft": str(run_path / "thesis_draft.json"),
+            "risk_boundary_report": str(run_path / "risk_boundary_report.json"),
+            "final_adjudication": str(run_path / "final_adjudication.json"),
+            "data_integrity_report": str(run_path / "data_integrity_report.json"),
+        },
+    }
+    if output_path:
+        _write_json(output_path, payload)
+    return payload
+
+
+class IntegratedSynthesisReportBuilder:
+    """Build the layer-3 report without polluting data-only artifacts."""
+
+    def build(
+        self,
+        *,
+        pure_data_report: Dict[str, Any],
+        event_narrative_ledger: Optional[Dict[str, Any]] = None,
+        data_integrity_report: Optional[Dict[str, Any]] = None,
+        output_path: Optional[str | Path] = None,
+        source_paths: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        data_integrity_report = data_integrity_report or {}
+        event_narrative_ledger = event_narrative_ledger or {}
+        publish_gate = self._publish_gate(data_integrity_report, event_narrative_ledger)
+        events = _as_list(event_narrative_ledger.get("events"))
+        claims = [
+            claim
+            for event in events
+            if isinstance(event, dict)
+            for claim in _as_list(event.get("claims"))
+            if isinstance(claim, dict)
+        ]
+        judgment = self._main_judgment(pure_data_report, claims, publish_gate)
+        payload = {
+            "schema_version": "integrated_synthesis_report_v1",
+            "generated_at_utc": _utc_now_iso(),
+            "policy": {
+                "inputs": ["pure_data_report", "event_narrative_ledger"],
+                "no_backflow_rule": "This report must not feed back into L1-L5, Bridge, Thesis, Risk, Reviser, or Final.",
+                "evidence_rule": "Event claims can support explanation grades, not L1-L5 evidence_refs.",
+            },
+            "source_artifacts": source_paths or {},
+            "integrated_judgments": [judgment] if judgment else [],
+            "conflict_matrix": self._conflict_matrix(claims),
+            "unexplained_items": self._unexplained_items(claims, publish_gate),
+            "downgraded_claims": self._downgraded_claims(claims),
+            "publish_gate": publish_gate,
+        }
+        if output_path:
+            _write_json(output_path, payload)
+        return payload
+
+    def _publish_gate(self, data_integrity: Dict[str, Any], event_ledger: Dict[str, Any]) -> Dict[str, Any]:
+        status = data_integrity.get("publish_status") or ("blocked" if data_integrity.get("blocked") else "publishable")
+        blocking_reasons = _as_list(data_integrity.get("blocking_reasons"))
+        if status in {"blocked", "unpublishable"} or data_integrity.get("blocked"):
+            return {
+                "status": "audit_only",
+                "reason": "DataIntegrity blocked or marked the pure data report unpublishable.",
+                "blocking_reasons": blocking_reasons,
+                "formal_investment_conclusion_allowed": False,
+            }
+        if not _as_list(event_ledger.get("events")):
+            return {
+                "status": "publishable_with_caveats",
+                "reason": "No layer-2 event ledger was available; integrated report is data-led with limited external context.",
+                "blocking_reasons": [],
+                "formal_investment_conclusion_allowed": True,
+            }
+        return {
+            "status": "publishable_integrated_report",
+            "reason": "Pure data report is publishable and layer-2 event ledger is available.",
+            "blocking_reasons": [],
+            "formal_investment_conclusion_allowed": True,
+        }
+
+    def _main_judgment(self, pure_data: Dict[str, Any], claims: List[Dict[str, Any]], publish_gate: Dict[str, Any]) -> Dict[str, Any]:
+        data_refs = self._principal_data_refs(pure_data)
+        event_refs = _compact_refs([claim.get("claim_id") for claim in claims], limit=6)
+        allowed = bool(publish_gate.get("formal_investment_conclusion_allowed"))
+        if not allowed:
+            claim = "当前不能发布正式综合投资结论；只能说明数据闸门阻断原因和后续观察。"
+            grade = "not_explained"
+            confidence = "low"
+        elif data_refs and event_refs:
+            claim = "纯数据判断可发布，事件账本只能作为解释线索；综合结论必须以数据侧判断为主，并保留事件待验证边界。"
+            grade = "integrated_explanation"
+            confidence = "medium"
+        else:
+            claim = "纯数据判断可发布，但外部事件材料不足，综合解释应降级为数据侧解读。"
+            grade = "data_supported_read"
+            confidence = "medium"
+        return {
+            "judgment_object": "NDX",
+            "claim": claim,
+            "explanation_grade": grade,
+            "confidence": confidence,
+            "data_support": data_refs,
+            "event_support": event_refs,
+            "price_reflection": "unclear",
+            "counterevidence": [
+                "事件材料不得替代正式数据证据。",
+                "新闻与价格同向变化不构成因果证明。",
+            ],
+            "unresolved_tension": self._unresolved_tensions(pure_data, claims),
+            "falsifiers": [
+                "DataIntegrity 转为 blocked/unpublishable。",
+                "后续正式数据反驳事件叙事对应的金融链路。",
+                "事件事实被更高等级来源更正或撤回。",
+            ],
+            "watchlist": sorted({link for claim in claims for link in _as_list(claim.get("affected_financial_links"))})[:8],
+            "publishability_note": publish_gate.get("reason", ""),
+        }
+
+    def _principal_data_refs(self, pure_data: Dict[str, Any]) -> List[str]:
+        refs: List[str] = []
+        for item in _as_list(pure_data.get("principal_contradictions")):
+            if isinstance(item, dict):
+                refs.extend(_as_list(item.get("evidence_refs")))
+        return _compact_refs(refs, limit=8)
+
+    def _unresolved_tensions(self, pure_data: Dict[str, Any], claims: List[Dict[str, Any]]) -> List[str]:
+        tensions = []
+        if not self._principal_data_refs(pure_data):
+            tensions.append("纯数据主要矛盾缺少可压缩引用，综合层只能降低置信度。")
+        if claims:
+            tensions.append("事件账本只说明外部材料可能影响的金融链路，仍需数据确认。")
+        else:
+            tensions.append("缺少事件账本，无法判断新闻/事件是否解释数据异常。")
+        return tensions
+
+    def _conflict_matrix(self, claims: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "claim_id": claim.get("claim_id"),
+                "conflict_type": "event_claim_requires_data_confirmation",
+                "data_side": "pure_data_report",
+                "event_side": claim.get("claim_type"),
+                "status": "unresolved",
+                "required_check": claim.get("needs_data_confirmation", True),
+            }
+            for claim in claims[:12]
+        ]
+
+    def _unexplained_items(self, claims: List[Dict[str, Any]], publish_gate: Dict[str, Any]) -> List[Dict[str, Any]]:
+        items = []
+        if publish_gate.get("status") == "audit_only":
+            items.append({"item": "data_integrity_blocked", "reason": publish_gate.get("reason", "")})
+        for claim in claims:
+            if claim.get("needs_data_confirmation"):
+                items.append({
+                    "item": claim.get("claim_id"),
+                    "reason": "Event claim has not been confirmed by pure data evidence.",
+                })
+        return items[:12]
+
+    def _downgraded_claims(self, claims: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        downgraded = []
+        for claim in claims:
+            source_type = str(claim.get("source_type") or "")
+            if source_type not in {"official_fact", "company_disclosure", "primary_market_data_release"} or claim.get("needs_data_confirmation"):
+                downgraded.append({
+                    "claim_id": claim.get("claim_id"),
+                    "source_type": source_type,
+                    "downgraded_to": "plausible_hypothesis" if source_type != "unverified_signal" else "weak_signal",
+                    "reason": "Claims without data confirmation cannot become strong investment conclusions.",
+                })
+        return downgraded[:12]
+
+
+def write_integrated_synthesis_report(
+    run_dir: str | Path,
+    *,
+    pure_data_report: Optional[Dict[str, Any]] = None,
+    event_narrative_ledger: Optional[Dict[str, Any]] = None,
+    data_integrity_report: Optional[Dict[str, Any]] = None,
+    pure_data_report_path: Optional[str | Path] = None,
+    event_narrative_ledger_path: Optional[str | Path] = None,
+    data_integrity_report_path: Optional[str | Path] = None,
+) -> str:
+    run_path = Path(run_dir)
+    pure_path = Path(pure_data_report_path) if pure_data_report_path else run_path / "pure_data_report.json"
+    event_path = Path(event_narrative_ledger_path) if event_narrative_ledger_path else run_path / "event_narrative_ledger.json"
+    integrity_path = Path(data_integrity_report_path) if data_integrity_report_path else run_path / "data_integrity_report.json"
+    output_path = run_path / "integrated_synthesis_report.json"
+    IntegratedSynthesisReportBuilder().build(
+        pure_data_report=pure_data_report if pure_data_report is not None else _load_json(pure_path, {}),
+        event_narrative_ledger=event_narrative_ledger if event_narrative_ledger is not None else _load_json(event_path, {}),
+        data_integrity_report=data_integrity_report if data_integrity_report is not None else _load_json(integrity_path, {}),
+        output_path=output_path,
+        source_paths={
+            "pure_data_report": str(pure_path),
+            "event_narrative_ledger": str(event_path),
+            "data_integrity_report": str(integrity_path),
+        },
+    )
+    return str(output_path)
+

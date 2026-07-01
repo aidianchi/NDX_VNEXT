@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from urllib.parse import quote
 
 try:
     from ..config import path_config
@@ -234,6 +235,28 @@ def _escape(value: Any) -> str:
     return html.escape(str(value), quote=True)
 
 
+def _artifact_href(path: Any) -> str:
+    text = str(path or "").strip()
+    if not text or text in {"未生成", "未记录"}:
+        return ""
+    if re.match(r"^https?://", text):
+        return text
+    candidate = Path(text).expanduser()
+    if candidate.exists():
+        return f"/artifact?path={quote(str(candidate.resolve()), safe='')}"
+    if text.startswith("/"):
+        return f"/artifact?path={quote(text, safe='')}"
+    return ""
+
+
+def _artifact_link(label: Any, path: Any) -> str:
+    path_text = str(path or "").strip()
+    href = _artifact_href(path_text)
+    if not href:
+        return f"<span>{_escape(path_text or '未记录')}</span>"
+    return f'<a href="{_escape(href)}">{_escape(path_text)}</a>'
+
+
 def _canonical_ref(ref: Any) -> str:
     text = str(ref or "").strip()
     if ":" in text:
@@ -356,6 +379,7 @@ def _rich_text(value: Any) -> str:
         r"HY OAS",
         r"IG OAS",
         r"CCC-BB",
+        r"NDX/NDXE",
         r"QQQ/QQEW",
         r"Forward PE",
         r"Trailing PE",
@@ -578,7 +602,8 @@ INDICATOR_CHARTS = {
     "get_hy_quality_spread_bp": ("HY_QUALITY_SPREAD", "value"),
     "get_hyg_momentum": ("HYG", "value"),
     "get_vxn_vix_ratio": ("VXN_VIX_RATIO", "value"),
-    "get_qqq_qqew_ratio": ("QQQ_QQEW_RATIO", "value"),
+    "get_ndx_ndxe_ratio": ("NDX_NDXE_RATIO", "value"),
+    "get_qqq_qqew_ratio": ("NDX_NDXE_RATIO", "value"),
     "get_equity_risk_premium": ("DAMODARAN_ERP_MONTHLY", "value"),
     "get_damodaran_us_implied_erp": ("DAMODARAN_ERP_MONTHLY", "value"),
     "get_l5_deterministic_snapshot": ("QQQ_OHLCV", "close"),
@@ -1164,9 +1189,12 @@ class VNextReportGenerator:
             "context_brief.json",
             "chart_time_series.json",
             "llm_stage_diagnostics.json",
+            "pure_data_report.json",
             "news_event_ledger.json",
             "news_event_data_links.json",
             "news_layer_analysis.json",
+            "event_narrative_ledger.json",
+            "integrated_synthesis_report.json",
             "run_summary.json",
         ]
         layer_files = [f"layer_cards/{layer}.json" for layer in ["L1", "L2", "L3", "L4", "L5"]]
@@ -1253,9 +1281,12 @@ class VNextReportGenerator:
             "context_brief": _load_json(run_path / "context_brief.json", {}),
             "layer_context_briefs": layer_contexts,
             "llm_stage_diagnostics": _load_json(run_path / "llm_stage_diagnostics.json", {}),
+            "pure_data_report": _load_json(run_path / "pure_data_report.json", {}),
             "news_event_ledger": _load_json(run_path / "news_event_ledger.json", {}),
             "news_event_data_links": _load_json(run_path / "news_event_data_links.json", {}),
             "news_layer_analysis": _load_json(run_path / "news_layer_analysis.json", {}),
+            "event_narrative_ledger": _load_json(run_path / "event_narrative_ledger.json", {}),
+            "integrated_synthesis_report": _load_json(run_path / "integrated_synthesis_report.json", {}),
             "chart_time_series": _load_json(run_path / "chart_time_series.json", {}),
             "layers": layers,
             "bridges": bridges,
@@ -1931,6 +1962,8 @@ class VNextReportGenerator:
 
     def _metric_value(self, artifacts: Dict[str, Any], layer: str, function_id: str) -> Dict[str, Any]:
         metric = self._raw_metric(artifacts, layer, function_id)
+        if not metric and function_id == "get_ndx_ndxe_ratio":
+            metric = self._raw_metric(artifacts, layer, "get_qqq_qqew_ratio")
         value = metric.get("value")
         return value if isinstance(value, dict) else {}
 
@@ -1940,6 +1973,8 @@ class VNextReportGenerator:
             return {}
         for item in _as_list(card.get("indicator_analyses")):
             if isinstance(item, dict) and item.get("function_id") == function_id:
+                return item
+            if function_id == "get_ndx_ndxe_ratio" and isinstance(item, dict) and item.get("function_id") == "get_qqq_qqew_ratio":
                 return item
         return {}
 
@@ -1960,6 +1995,8 @@ class VNextReportGenerator:
         charts = artifacts.get("chart_time_series", {})
         series = charts.get("series") if isinstance(charts, dict) else {}
         item = series.get(key) if isinstance(series, dict) else None
+        if item is None and key == "NDX_NDXE_RATIO" and isinstance(series, dict):
+            item = series.get("QQQ_QQEW_RATIO")
         rows = item.get("rows") if isinstance(item, dict) else None
         return rows if isinstance(rows, list) else []
 
@@ -2021,6 +2058,7 @@ class VNextReportGenerator:
             "get_hy_oas_bp",
             "get_ig_oas_bp",
             "get_hy_quality_spread_bp",
+            "get_ndx_ndxe_ratio",
             "get_qqq_qqew_ratio",
             "get_damodaran_us_implied_erp",
         }:
@@ -2223,14 +2261,14 @@ class VNextReportGenerator:
         )
         ratio_stats = self._formal_value_stats(
             artifacts,
-            chart_key="QQQ_QQEW_RATIO",
+            chart_key="NDX_NDXE_RATIO",
             field="value",
             layer="L3",
-            function_id="get_qqq_qqew_ratio",
-            value_label="QQQ/QQEW",
+            function_id="get_ndx_ndxe_ratio",
+            value_label="NDX/NDXE",
             change_kind="pct",
             percentile_tone="risk",
-            extra=[("5年分位", _fmt_percentile(self._historical_percentile(artifacts, "L3", "get_qqq_qqew_ratio", "5y")), "risk")],
+            extra=[("5年分位", _fmt_percentile(self._historical_percentile(artifacts, "L3", "get_ndx_ndxe_ratio", "5y")), "risk")],
         )
         erp_rows = self._chart_rows(artifacts, "DAMODARAN_ERP_MONTHLY")
         erp_values = _numeric_series(erp_rows, "value")
@@ -2309,15 +2347,15 @@ class VNextReportGenerator:
         cards_credit = "".join(card for card in credit_cards if card)
         cards_structure = self._proof_card(
             artifacts,
-            title="QQQ / QQEW",
+            title="NDX / NDXE",
             layer="L3 内部结构",
-            chart_key="QQQ_QQEW_RATIO",
+            chart_key="NDX_NDXE_RATIO",
             field="value",
-            takeaway="等权补涨改善了市场宽度，但集中度绝对位置仍然很高，不能把广度改善误读成结构风险消失。",
+            takeaway="NDX 相对 NDXE 说明市值加权指数相对等权指数的强弱。比值高或继续上行时，要把头部集中和广度不足作为结构风险保留下来。",
             stats=ratio_stats,
-            refs=["L3.get_qqq_qqew_ratio", "L3.get_qqq_top10_concentration"],
+            refs=["L3.get_ndx_ndxe_ratio", "L3.get_qqq_top10_concentration"],
             tone="structure",
-            spark_annotation=f"10年分位 {_fmt_percentile(self._historical_percentile(artifacts, 'L3', 'get_qqq_qqew_ratio'))}",
+            spark_annotation=f"10年分位 {_fmt_percentile(self._historical_percentile(artifacts, 'L3', 'get_ndx_ndxe_ratio'))}",
         )
         cards_valuation = self._proof_card(
             artifacts,
@@ -3325,7 +3363,7 @@ class VNextReportGenerator:
             window = windows.get(label)
             if isinstance(window, dict):
                 spread_rows.append(
-                    f"<span><b>{_escape(label)} QQQ-QQEW</b>{_fmt_number(window.get('market_cap_minus_equal_weight_pct'), suffix='%', digits=2)}</span>"
+                    f"<span><b>{_escape(label)} NDX-NDXE</b>{_fmt_number(window.get('market_cap_minus_equal_weight_pct'), suffix='%', digits=2)}</span>"
                 )
         body = f"""
 <div class="metric-strip">
@@ -4141,7 +4179,12 @@ class VNextReportGenerator:
         run_summary = artifacts.get("run_summary", {}) or {}
         prompt_inspector = run_summary.get("prompt_inspector") if isinstance(run_summary, dict) else ""
         if prompt_inspector:
-            prompt_link = f'<a href="{_escape(prompt_inspector)}">打开 Agent 原文检查器</a>'
+            prompt_href = _artifact_href(prompt_inspector)
+            prompt_link = (
+                f'<a href="{_escape(prompt_href)}">打开 Agent 原文检查器</a>'
+                if prompt_href
+                else f"<span>{_escape(prompt_inspector)}</span>"
+            )
         elif prompt_stage_count:
             prompt_link = "<span>已保存 prompt audit；可生成独立 Agent 原文检查器。</span>"
         else:
@@ -4255,10 +4298,13 @@ class VNextReportGenerator:
             ("L1-L5 底稿", str(run_path / "layer_cards")),
             ("Bridge 冲突共振", str(run_path / "bridge_memos")),
             ("图表时间序列", str(run_path / "chart_time_series.json")),
-            ("新闻侧边材料", str(run_path / "news_event_ledger.json")),
+            ("第一层：纯数据研报", str(run_path / "pure_data_report.json")),
+            ("第二层：事件与叙事账本", str(run_path / "event_narrative_ledger.json")),
+            ("第三层：综合矛盾裁决", str(run_path / "integrated_synthesis_report.json")),
+            ("旧新闻侧边材料", str(run_path / "news_event_ledger.json")),
         ]
         audit_path_rows = "".join(
-            f"<li><b>{_escape(label)}</b><span>{_escape(path)}</span></li>"
+            f"<li><b>{_escape(label)}</b>{_artifact_link(label, path)}</li>"
             for label, path in audit_paths
         )
         return f"""

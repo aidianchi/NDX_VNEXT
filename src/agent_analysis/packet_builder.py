@@ -74,7 +74,7 @@ LAYER_FUNCTIONS = {
     "L3": {
         "get_advance_decline_line",
         "get_percent_above_ma",
-        "get_qqq_qqew_ratio",
+        "get_ndx_ndxe_ratio",
         "get_qqq_top10_concentration",
         "get_m7_fundamentals",
         "get_new_highs_lows",
@@ -292,6 +292,7 @@ class AnalysisPacketBuilder:
         context: Optional[Dict[str, Any]] = None,
         event_ledger: Optional[Dict[str, Any]] = None,
         event_ledger_path: Optional[str] = None,
+        allow_event_refs: bool = False,
         output_path: Optional[str] = None,
     ) -> AnalysisPacket:
         manual_overrides = _sanitize_manual_overrides(
@@ -303,7 +304,11 @@ class AnalysisPacketBuilder:
             for layer in LAYER_NAMES
         }
         candidate_links = self._build_candidate_links(facts_by_layer)
-        event_refs = self._build_event_refs(event_ledger=event_ledger, event_ledger_path=event_ledger_path)
+        event_refs = (
+            self._build_event_refs(event_ledger=event_ledger, event_ledger_path=event_ledger_path)
+            if allow_event_refs
+            else {}
+        )
         packet = AnalysisPacket(
             meta=self._build_meta(data_json, manual_overrides, grouped_raw_data),
             raw_data=grouped_raw_data,
@@ -802,7 +807,7 @@ class AnalysisPacketBuilder:
 
         if layer == "L3":
             usable_count = sum(1 for payload in metrics.values() if not _payload_unavailable_reason(payload))
-            breadth_ratio_pct = self._metric_level(metrics, "get_qqq_qqew_ratio", "percentile_10y", "percentile_1y", "percentile")
+            breadth_ratio_pct = self._metric_level(metrics, "get_ndx_ndxe_ratio", "percentile_10y", "percentile_1y", "percentile")
             top10_weight = self._metric_level(metrics, "get_qqq_top10_concentration", "top10_weight_pct")
             ad_line_trend = self._metric_text(metrics, "get_advance_decline_line", "trend", "direction")
             pct_above = self._metric_level(
@@ -908,7 +913,7 @@ class AnalysisPacketBuilder:
                 "L3_L5",
                 "广度走弱但价格趋势仍强，趋势质量与集中度风险需要被单独讨论。",
                 "l3_deteriorating_but_l5_still_uptrend",
-                ["L3.get_advance_decline_line", "L3.get_qqq_qqew_ratio", "L5.get_qqq_technical_indicators", "L5.get_adx_qqq"],
+                ["L3.get_advance_decline_line", "L3.get_ndx_ndxe_ratio", "L5.get_qqq_technical_indicators", "L5.get_adx_qqq"],
             )
         if states.get("L2") == "risk_on" and states.get("L4") == "expensive":
             add(
@@ -935,7 +940,7 @@ class AnalysisPacketBuilder:
                 "L3_L5",
                 "默认检查广度对趋势的支撑质量。",
                 "default_breadth_trend_check",
-                ["L3.get_qqq_qqew_ratio", "L5.get_qqq_technical_indicators"],
+                ["L3.get_ndx_ndxe_ratio", "L5.get_qqq_technical_indicators"],
             )
         return links
 

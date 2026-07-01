@@ -898,7 +898,10 @@ async function openLatestProductForMode(jobId) {
     if (summary.native_brief) reports.push({ label: 'Brief 报告', path: summary.native_brief });
     if (summary.workbench) reports.push({ label: 'Workbench', path: summary.workbench });
     if (summary.report_path && summary.report_path !== summary.native_brief) reports.push({ label: '完整报告', path: summary.report_path });
-    if (summary.news_event_ledger) reports.push({ label: '事件底账', path: summary.news_event_ledger });
+    if (summary.pure_data_report) reports.push({ label: '纯数据研报', path: summary.pure_data_report });
+    if (summary.event_narrative_ledger) reports.push({ label: '事件与叙事账本', path: summary.event_narrative_ledger });
+    if (summary.integrated_synthesis_report) reports.push({ label: '综合总报告', path: summary.integrated_synthesis_report });
+    if (summary.news_event_ledger) reports.push({ label: '旧事件底账', path: summary.news_event_ledger });
     if (summary.news_event_data_links) reports.push({ label: '市场连接观察', path: summary.news_event_data_links });
     const linksHtml = reports.map(r =>
       `<a href="${artifactUrl(r.path)}" target="_blank" rel="noopener" style="margin-left:8px;padding:2px 8px;border:1px solid #215f8f;border-radius:4px;text-decoration:none;color:#215f8f;font-size:13px;">${r.label}</a>`
