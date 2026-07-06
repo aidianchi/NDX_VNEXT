@@ -18,6 +18,7 @@ NDX Agent vNext SubAgent 架构 - 数据契约模块
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
+from uuid import uuid4
 
 try:
     from pydantic import BaseModel, Field, field_validator
@@ -95,6 +96,261 @@ class PermissionType(str, Enum):
     COMPOSITE = "composite"   # 合成型：由多个输入组合而来
     TECHNICAL = "technical"   # 技术型：价格、动量、波动和交易节奏
     STRUCTURAL = "structural" # 结构型：广度、集中度、领导力质量
+
+
+class InquiryMessageType(str, Enum):
+    """
+    反馈环里的四类受控追问。
+
+    【白话解释】
+    任何反向追问都不能私下回拨 L1-L5；必须先变成这里的一类消息，
+    再由 InquiryRouter 决定是否开一张受控任务书。
+    """
+    OBSERVATION_INQUIRY = "observation_inquiry"
+    EVENT_CHALLENGE = "event_challenge"
+    ADJUDICATION_GAP = "adjudication_gap"
+    EVIDENCE_UPGRADE_REQUEST = "evidence_upgrade_request"
+
+
+FeedbackStage = Literal[
+    "L1",
+    "L2",
+    "L3",
+    "L4",
+    "L5",
+    "bridge",
+    "synthesis",
+    "inquiry_router",
+    "investigation",
+    "integrated_synthesis",
+]
+
+
+class AgentBudget(BaseModel):
+    """Visible budget for one controlled investigation task."""
+    model_config = {"extra": "allow"}
+
+    max_tool_calls: int = Field(0, ge=0, description="最多工具调用次数；0 表示只定义任务、不执行")
+    max_minutes: int = Field(0, ge=0, description="最多运行分钟数；0 表示只定义任务、不执行")
+    max_source_refs: int = Field(0, ge=0, description="最多可引入的来源引用数量")
+
+
+class EvidenceSourceAuthority(BaseModel):
+    """
+    最小证据权威字段。
+
+    阶段 1 先不做完整 Evidence Passport，但调查报告必须说清来源是什么级别、
+    能证明什么、不能证明什么，避免外部材料散落成“看起来像正式证据”的碎片。
+    """
+    model_config = {"extra": "allow"}
+
+    evidence_ref: str = Field(..., description="证据引用 ID 或 artifact 路径")
+    source_ref: str = Field("", description="来源名称、URL、文件或数据源引用")
+    source_tier: Literal[
+        "official",
+        "licensed_provider",
+        "licensed_manual",
+        "formal_data_source",
+        "trusted_sidecar",
+        "candidate_external_material",
+        "proxy",
+        "unknown",
+    ] = Field("unknown", description="来源权威等级")
+    authority_note: str = Field("", description="为什么该来源有或没有发言权")
+    supports: List[str] = Field(default_factory=list, description="它支持哪些 claim")
+    limitations: List[str] = Field(default_factory=list, description="它不能证明什么")
+
+
+class EvidencePassport(BaseModel):
+    """
+    阶段 4 统一证据护照。
+
+    【白话解释】
+    每一条可以被引用的材料都要有一张身份证：它从哪里来、权威等级是什么、
+    能证明什么、不能证明什么、什么情况下必须降级。
+    """
+    model_config = {"extra": "allow"}
+
+    evidence_id: str = Field(..., description="统一证据 ID；数据、事件、调查、假说和最终 claim 共用同一种引用空间")
+    evidence_kind: Literal["data", "event", "investigation", "hypothesis", "final_claim", "unknown"] = Field(
+        "unknown",
+        description="证据类型",
+    )
+    source_ref: str = Field("", description="来源 artifact、数据函数、URL 或任务引用")
+    source_tier: Literal[
+        "official",
+        "licensed_provider",
+        "licensed_manual",
+        "formal_data_source",
+        "trusted_sidecar",
+        "candidate_external_material",
+        "proxy",
+        "derived_inference",
+        "unknown",
+    ] = Field("unknown", description="统一来源权威等级")
+    permission_type: Optional[PermissionType] = Field(None, description="数据/指标的发言权类型")
+    authority_model: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="能支持什么、不能支持什么、需要哪些确认",
+    )
+    downgrade_rules: List[str] = Field(default_factory=list, description="触发降级或阻断的规则")
+    data_quality: Dict[str, Any] = Field(default_factory=dict, description="数据侧 data_quality 原样摘要")
+    effective_date: str = Field("", description="该证据适用的数据日期或历史可见日期")
+    verified: bool = Field(False, description="是否已通过本轮权限与完整性检查")
+    linked_claim_ids: List[str] = Field(default_factory=list, description="引用该证据的 claim")
+    limitations: List[str] = Field(default_factory=list, description="该证据不能证明什么")
+
+
+class EvidenceRegistry(BaseModel):
+    """统一证据注册表。"""
+    model_config = {"extra": "allow"}
+
+    schema_version: str = Field("evidence_registry_v1", description="schema 版本")
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    effective_date: str = Field("", description="本注册表适用日期")
+    passports: Dict[str, EvidencePassport] = Field(default_factory=dict, description="evidence_id -> EvidencePassport")
+    source_tier_policy: Dict[str, Any] = Field(default_factory=dict, description="统一 source tier / authority / downgrade 规则")
+    downgrade_summary: List[Dict[str, Any]] = Field(default_factory=list, description="本轮降级或阻断摘要")
+    no_backflow_rule: str = Field(
+        "EvidenceRegistry is downstream audit material; it must not rewrite or be injected into L1-L5 layer cards.",
+        description="证据注册表不得反向污染 L1-L5",
+    )
+
+
+class ClaimLedgerEntry(BaseModel):
+    """
+    阶段 4 最终 claim 台账条目。
+
+    每条重要自然语言结论必须能追问：支持证据、反证、推理步骤、失效条件和是否通过检查。
+    """
+    model_config = {"extra": "allow"}
+
+    claim_id: str = Field(..., description="稳定 claim ID")
+    source_stage: Literal["thesis", "final", "integrated_synthesis"] = Field("final", description="claim 来源阶段")
+    claim_text: str = Field(..., min_length=1, description="自然语言结论")
+    claim_type: Literal[
+        "market_state",
+        "valuation",
+        "timing",
+        "risk_boundary",
+        "action_translation",
+        "price_reflection",
+        "integrated_explanation",
+        "other",
+    ] = Field("other", description="claim 类型")
+    evidence_refs: List[str] = Field(default_factory=list, description="支持证据 refs")
+    counter_evidence_refs: List[str] = Field(default_factory=list, description="反证 refs")
+    inference_steps: List[str] = Field(default_factory=list, description="从证据到 claim 的推理步骤")
+    falsification_conditions: List[str] = Field(default_factory=list, description="失效条件")
+    verified: bool = Field(False, description="是否有足够证据、反证和失效条件支撑可发布")
+    downgrade_reason: str = Field("", description="未通过时的降级或阻断原因")
+    authority_status: Literal["verified", "downgraded", "blocked"] = Field("downgraded", description="权限检查结果")
+
+
+class ClaimLedger(BaseModel):
+    """Thesis / Final 自然语言结论台账。"""
+    model_config = {"extra": "allow"}
+
+    schema_version: str = Field("claim_ledger_v1", description="schema 版本")
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    effective_date: str = Field("", description="本台账适用日期")
+    entries: List[ClaimLedgerEntry] = Field(default_factory=list, description="重要 claim 条目")
+    publish_gate: Dict[str, Any] = Field(default_factory=dict, description="基于 claim 完整性和证据权限的发布检查")
+    evidence_registry_ref: str = Field("evidence_registry.json", description="对应统一证据注册表")
+    no_backflow_rule: str = Field(
+        "ClaimLedger is generated after Thesis/Final and must not feed back into L1-L5.",
+        description="claim 台账不得反向污染 L1-L5",
+    )
+
+
+class InquiryMessage(BaseModel):
+    """
+    受控追问消息。
+
+    它只说明“谁因为什么问题想问什么”，不携带禁止上下文里的运行时结论。
+    """
+    model_config = {"extra": "allow"}
+
+    message_id: str = Field(default_factory=lambda: f"inq_{uuid4().hex[:12]}", description="消息 ID")
+    message_type: InquiryMessageType = Field(..., description="四类受控消息之一")
+    sender_stage: FeedbackStage = Field(..., description="发起阶段")
+    target_stage: FeedbackStage = Field(..., description="目标阶段")
+    trigger: str = Field(..., min_length=1, description="触发追问的观察或缺口")
+    question: str = Field(..., min_length=1, description="需要回答的具体问题")
+    allowed_context_refs: List[str] = Field(default_factory=list, description="允许读取的上下文或 artifact 引用")
+    forbidden_context_refs: List[str] = Field(default_factory=list, description="明确禁止读取的上下文或 artifact 引用")
+    effective_date: str = Field(..., min_length=1, description="该追问适用的数据日期或历史可见日期")
+
+
+class AgentSpec(BaseModel):
+    """
+    受控调查任务书。
+
+    它不是自由 Agent 的许可，而是一张边界清楚的任务单：能看什么、不能看什么、
+    能用什么工具、预算多少、什么时候停、什么算成功。
+    """
+    model_config = {"extra": "allow"}
+
+    agent_id: str = Field(default_factory=lambda: f"agent_{uuid4().hex[:12]}", description="任务 ID")
+    originating_message_id: str = Field(..., description="来源 InquiryMessage ID")
+    research_question: str = Field(..., min_length=1, description="本任务要回答的问题")
+    allowed_context_refs: List[str] = Field(..., min_length=1, description="允许读取的上下文")
+    forbidden_context_refs: List[str] = Field(..., min_length=1, description="禁止读取的上下文")
+    allowed_tools: List[str] = Field(default_factory=list, description="允许工具；空列表表示阶段 1 不执行")
+    budget: AgentBudget = Field(default_factory=AgentBudget, description="预算")
+    stop_conditions: List[str] = Field(..., min_length=1, description="停止条件")
+    success_criteria: List[str] = Field(..., min_length=1, description="成功标准")
+    required_output: Dict[str, Any] = Field(..., description="必须产出的字段说明")
+
+
+class InvestigationReport(BaseModel):
+    """
+    受控调查结果单。
+
+    它可以被 Bridge V2 或后续综合层读取，但不能回写 L1-L5 layer card。
+    """
+    model_config = {"extra": "allow"}
+
+    investigation_id: str = Field(default_factory=lambda: f"inv_{uuid4().hex[:12]}", description="调查报告 ID")
+    originating_agent_id: str = Field(..., description="来源 AgentSpec ID")
+    finding: str = Field(..., min_length=1, description="调查发现")
+    evidence_refs: List[str] = Field(default_factory=list, description="支持证据")
+    counter_evidence_refs: List[str] = Field(default_factory=list, description="反证")
+    claims_supported: List[str] = Field(default_factory=list, description="被支持的 claim")
+    claims_challenged: List[str] = Field(default_factory=list, description="被挑战的 claim")
+    cannot_establish: List[str] = Field(default_factory=list, description="仍不能证明的事项")
+    confidence: Confidence = Field(Confidence.LOW, description="调查结论置信度")
+    limits: List[str] = Field(default_factory=list, description="限制和口径边界")
+    source_authority: List[EvidenceSourceAuthority] = Field(
+        default_factory=list,
+        description="最小来源权威字段；阶段 4 可升级为 Evidence Passport",
+    )
+    effective_date: str = Field(..., min_length=1, description="调查适用的数据日期或历史可见日期")
+
+
+class InquiryRouterDecision(BaseModel):
+    """InquiryRouter 对单条消息的接单或拒单记录。"""
+    model_config = {"extra": "allow"}
+
+    message_id: str = Field(..., description="被处理的消息 ID")
+    message_type: InquiryMessageType = Field(..., description="消息类型")
+    status: Literal["accepted", "rejected"] = Field(..., description="接单或拒单")
+    agent_spec: Optional[AgentSpec] = Field(None, description="接单时生成的任务书")
+    rejection_reason: str = Field("", description="拒单原因；拒单时必填")
+    trigger: str = Field("", description="原始触发来源，便于审计")
+
+
+class InquiryRouterOutput(BaseModel):
+    """InquiryRouter 的批量输出。"""
+    model_config = {"extra": "allow"}
+
+    schema_version: str = Field("inquiry_router_output_v1", description="schema 版本")
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    input_messages: List[InquiryMessage] = Field(default_factory=list, description="路由器收到的原始消息")
+    decisions: List[InquiryRouterDecision] = Field(default_factory=list, description="逐条消息处理结果")
+    agent_specs: List[AgentSpec] = Field(default_factory=list, description="生成的任务书")
+    rejected_messages: List[InquiryRouterDecision] = Field(default_factory=list, description="被拒绝但可审计的消息")
+    router_policy: Dict[str, Any] = Field(default_factory=dict, description="路由规则摘要")
 
 
 # ============================================================================
@@ -526,6 +782,104 @@ class PriceReflectionAssessment(BaseModel):
     missing_evidence: List[str] = Field(default_factory=list, description="仍缺少的证据")
 
 
+class CompetingHypothesis(BaseModel):
+    """
+    最小竞争假说。
+
+    一个假说只有在同时写清支持、反证、诊断力证据、解释不了什么和失效条件后，
+    才能进入 Thesis 前的裁决比较。
+    """
+    model_config = {"extra": "allow"}
+
+    hypothesis_id: str = Field(..., description="稳定假说 ID")
+    hypothesis_text: str = Field(..., min_length=1, description="假说文本")
+    source: Literal["bridge_v2", "counter_thesis", "investigation", "deterministic_fallback"] = Field(
+        "deterministic_fallback",
+        description="假说来源",
+    )
+    support_evidence_refs: List[str] = Field(default_factory=list, description="支持证据")
+    counter_evidence_refs: List[str] = Field(default_factory=list, description="反证")
+    diagnostic_evidence_refs: List[str] = Field(default_factory=list, description="最能区分本假说和对立假说的证据")
+    cannot_explain: List[str] = Field(default_factory=list, description="该假说解释不了或解释力弱的现象")
+    falsification_conditions: List[str] = Field(default_factory=list, description="会让该假说失效的条件")
+    confidence: Confidence = Field(Confidence.LOW, description="当前置信度")
+    status: Literal["candidate", "leading", "downgraded", "split", "kept_unresolved"] = Field(
+        "candidate",
+        description="裁决状态",
+    )
+    adjudication_reason: str = Field("", description="为什么是当前状态")
+    source_refs: List[str] = Field(default_factory=list, description="来源 artifact 或字段引用")
+
+
+class CounterThesisDraft(BaseModel):
+    """第一次反方构建产物；不得读取 Thesis。"""
+    model_config = {"extra": "allow"}
+
+    schema_version: str = Field("counter_thesis_v1", description="schema 版本")
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    independence_boundary: str = Field(
+        "Counter-Thesis is generated before Thesis and may read only SynthesisPacket / Bridge V2, not Thesis.",
+        description="反方独立性边界",
+    )
+    input_refs: List[str] = Field(default_factory=list, description="允许输入")
+    forbidden_context_refs: List[str] = Field(default_factory=list, description="禁止输入")
+    hypotheses: List[CompetingHypothesis] = Field(default_factory=list, description="反方假说")
+    principal_counterargument: str = Field("", description="最强反方论点")
+    cannot_establish: List[str] = Field(default_factory=list, description="反方仍不能证明的事项")
+    prompt_input_audit: Dict[str, Any] = Field(default_factory=dict, description="输入审计")
+
+
+class AdjudicationChangeRecord(BaseModel):
+    """非单调重判记录：新证据改变、分叉或降级判断时必须保留旧版本。"""
+    model_config = {"extra": "allow"}
+
+    version_id: str = Field(..., description="版本记录 ID")
+    previous_hypothesis_id: str = Field("", description="旧主导或候选假说")
+    new_hypothesis_id: str = Field("", description="新主导、分叉或被保留假说")
+    trigger_evidence_refs: List[str] = Field(default_factory=list, description="触发改判/降级/分叉的证据")
+    change_type: Literal["initial", "no_change", "downgrade", "split", "reversal", "kept_unresolved"] = Field(
+        "initial",
+        description="变化类型",
+    )
+    old_status: str = Field("", description="旧状态")
+    new_status: str = Field("", description="新状态")
+    reason: str = Field("", description="改判、降级或保留争议的原因")
+    effective_date: str = Field("", description="适用日期")
+
+
+class HypothesisCompetition(BaseModel):
+    """Thesis 前的最小竞争裁决卷宗。"""
+    model_config = {"extra": "allow"}
+
+    schema_version: str = Field("hypothesis_competition_v1", description="schema 版本")
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    input_refs: List[str] = Field(default_factory=list, description="允许输入")
+    forbidden_context_refs: List[str] = Field(default_factory=list, description="禁止输入")
+    hypotheses: List[CompetingHypothesis] = Field(default_factory=list, description="竞争假说")
+    leading_hypothesis_id: str = Field("", description="当前领先假说；不足以裁决时为空")
+    retained_disputes: List[str] = Field(default_factory=list, description="必须保留的争议")
+    downgrade_or_split_events: List[AdjudicationChangeRecord] = Field(
+        default_factory=list,
+        description="由强反证触发的降级、分叉或争议保留记录",
+    )
+    insufficient_evidence_reason: str = Field("", description="不足以形成两个假说或无法裁决时说明原因")
+    fallback_warnings: List[str] = Field(default_factory=list, description="principal_contradiction / price_reflection 兜底痕迹")
+    principal_contradiction_quality: str = Field("", description="native / fallback / missing")
+    price_reflection_quality: str = Field("", description="native / fallback / missing")
+    adjudication_notes: List[str] = Field(default_factory=list, description="裁决说明")
+
+
+class AdjudicationHistory(BaseModel):
+    """本轮竞争裁决版本历史。"""
+    model_config = {"extra": "allow"}
+
+    schema_version: str = Field("adjudication_history_v1", description="schema 版本")
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    effective_date: str = Field("", description="适用日期")
+    records: List[AdjudicationChangeRecord] = Field(default_factory=list, description="版本记录")
+    current_hypothesis_ids: List[str] = Field(default_factory=list, description="当前仍有效的假说 ID")
+
+
 class PrincipalContradiction(BaseModel):
     """The main contradiction that should dominate synthesis."""
     model_config = {"extra": "allow"}
@@ -723,6 +1077,22 @@ class SynthesisPacket(BaseModel):
         default_factory=list,
         description="Bridge v3 主要矛盾候选；Thesis 必须显式消费并选择/解释主导项",
     )
+    competing_hypotheses: List[CompetingHypothesis] = Field(
+        default_factory=list,
+        description="阶段 3：Thesis 前必须看到的竞争假说，至少包含主线与反方候选",
+    )
+    hypothesis_competition_summary: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="阶段 3：竞争裁决摘要，完整卷宗另存 hypothesis_competition.json",
+    )
+    adjudication_history: List[AdjudicationChangeRecord] = Field(
+        default_factory=list,
+        description="阶段 3：非单调重判记录摘要",
+    )
+    counter_thesis_boundary: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="阶段 3：Counter-Thesis 独立性边界和输入审计摘要",
+    )
     objective_firewall_summary: Optional[ObjectiveFirewallSummary] = Field(
         None,
         description="强结论前的客观性防火墙摘要"
@@ -734,6 +1104,10 @@ class SynthesisPacket(BaseModel):
     event_index: Dict[str, Dict[str, Any]] = Field(
         default_factory=dict,
         description="可选事件索引，键形如 event:<dedupe_id>；不得作为数值证据"
+    )
+    evidence_registry_summary: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="阶段 4：统一 Evidence Passport 注册表摘要，完整产物另存 evidence_registry.json",
     )
     synthesis_guidance: List[str] = Field(
         default_factory=list,
@@ -1138,6 +1512,11 @@ class GovernanceInputPacket(BaseModel):
         description="与高严重度冲突和 Thesis 支撑链相关的 event_index 子集；不能作为数值证据"
     )
 
+    evidence_registry_summary: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="阶段 4：统一证据注册摘要，用于治理阶段检查证据权限和降级规则",
+    )
+
     # ── 已知数据缺口（尤其是 L3 广度缺失） ──
     known_data_gaps: List[str] = Field(default_factory=list, description="已知数据缺口")
 
@@ -1287,6 +1666,10 @@ class FinalAdjudication(BaseModel):
         default_factory=list,
         description="最终价格反映判断地图",
     )
+    claim_ledger: Optional[ClaimLedger] = Field(
+        default=None,
+        description="阶段 4：最终自然语言结论的 claim-level 台账；完整产物另存 final_claim_ledger.json",
+    )
 
     model_config = {"extra": "allow"}
 
@@ -1299,9 +1682,9 @@ class RunReviewFinding(BaseModel):
     """One post-run finding attributed to the stage that should learn from it."""
     model_config = {"extra": "allow"}
 
-    category: Literal["data", "bridge", "thesis", "risk", "final", "expression"] = Field(
+    category: Literal["data", "feedback", "competition", "evidence", "bridge", "thesis", "risk", "final", "expression"] = Field(
         ...,
-        description="问题归因层：数据、Bridge、Thesis、Risk、Final 或表达层",
+        description="问题归因层：数据、反馈环、竞争裁决、Bridge、Thesis、Risk、Final 或表达层",
     )
     severity: Literal["pass", "observe", "fail"] = Field(..., description="复盘结论")
     finding: str = Field(..., description="具体发现")

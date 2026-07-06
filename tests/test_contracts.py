@@ -16,6 +16,21 @@ from agent_analysis.contracts import (
     RiskBoundaryReport,
     AnalysisRevised,
     FinalAdjudication,
+    AgentBudget,
+    AgentSpec,
+    AdjudicationChangeRecord,
+    AdjudicationHistory,
+    ClaimLedger,
+    ClaimLedgerEntry,
+    CompetingHypothesis,
+    CounterThesisDraft,
+    EvidencePassport,
+    EvidenceRegistry,
+    EvidenceSourceAuthority,
+    HypothesisCompetition,
+    InquiryMessage,
+    InquiryMessageType,
+    InvestigationReport,
     PriceReflectionAssessment,
     PrincipalContradiction,
     ReaderFinal,
@@ -43,6 +58,181 @@ def test_conflict_severity_enum_values():
 
 def test_permission_type_enum_values():
     assert PermissionType.PROXY.value == "proxy"
+
+
+def test_feedback_message_types_are_strongly_typed_and_serializable():
+    for message_type in InquiryMessageType:
+        message = InquiryMessage(
+            message_type=message_type,
+            sender_stage="bridge",
+            target_stage="L2",
+            trigger="Bridge 发现关键证据缺口。",
+            question="历史上类似缺口是否存在反证？",
+            allowed_context_refs=["bridge_memos/bridge_0.json"],
+            forbidden_context_refs=["thesis_draft.json", "final_adjudication.json"],
+            effective_date="2026-07-06",
+        )
+        data = message.model_dump(mode="json")
+        assert data["message_type"] == message_type.value
+        assert data["allowed_context_refs"] == ["bridge_memos/bridge_0.json"]
+        assert data["forbidden_context_refs"] == ["thesis_draft.json", "final_adjudication.json"]
+
+
+def test_agent_spec_declares_context_budget_stop_and_success_contracts():
+    spec = AgentSpec(
+        originating_message_id="inq_test",
+        research_question="L3 广度背离是否足以挑战趋势判断？",
+        allowed_context_refs=["layer_cards/L3.json", "bridge_memos/bridge_0.json"],
+        forbidden_context_refs=["thesis_draft.json", "final_adjudication.json"],
+        allowed_tools=["read_allowed_artifacts"],
+        budget=AgentBudget(max_tool_calls=0, max_minutes=0, max_source_refs=0),
+        stop_conditions=["budget_exhausted"],
+        success_criteria=["separate evidence and counter evidence"],
+        required_output={"contract": "InvestigationReport"},
+    )
+    data = spec.model_dump(mode="json")
+    assert data["budget"]["max_tool_calls"] == 0
+    assert "thesis_draft.json" in data["forbidden_context_refs"]
+    assert data["required_output"]["contract"] == "InvestigationReport"
+
+
+def test_investigation_report_carries_minimal_evidence_and_authority_fields():
+    report = InvestigationReport(
+        originating_agent_id="agent_test",
+        finding="广度证据不足以单独推翻趋势，但会降低趋势质量置信度。",
+        evidence_refs=["L3.get_percent_above_ma"],
+        counter_evidence_refs=["L5.get_qqq_technical_indicators"],
+        claims_supported=["breadth_quality_constrains_trend"],
+        claims_challenged=["trend_is_broadly_confirmed"],
+        cannot_establish=["不能证明估值便宜"],
+        confidence=Confidence.MEDIUM,
+        limits=["只基于允许 artifacts，不读取 Thesis 或 Final。"],
+        source_authority=[
+            EvidenceSourceAuthority(
+                evidence_ref="L3.get_percent_above_ma",
+                source_ref="analysis_packet.raw_data.L3",
+                source_tier="formal_data_source",
+                authority_note="正式数据侧指标，但只能说明广度，不能证明估值。",
+                supports=["breadth_quality_constrains_trend"],
+                limitations=["不能说明估值是否便宜"],
+            )
+        ],
+        effective_date="2026-07-06",
+    )
+    data = report.model_dump(mode="json")
+    assert data["source_authority"][0]["source_tier"] == "formal_data_source"
+    assert data["counter_evidence_refs"] == ["L5.get_qqq_technical_indicators"]
+    assert data["cannot_establish"] == ["不能证明估值便宜"]
+
+
+def test_evidence_passport_and_claim_ledger_stage4_contracts_roundtrip():
+    registry = EvidenceRegistry(
+        effective_date="2026-07-06",
+        passports={
+            "L1.get_10y_real_rate": EvidencePassport(
+                evidence_id="L1.get_10y_real_rate",
+                evidence_kind="data",
+                source_ref="FRED",
+                source_tier="official",
+                permission_type=PermissionType.FACT,
+                authority_model={
+                    "can_support": "观察真实利率压力",
+                    "cannot_support": ["不能证明估值便宜"],
+                },
+                downgrade_rules=[],
+                effective_date="2026-07-06",
+                verified=True,
+            )
+        },
+    )
+    ledger = ClaimLedger(
+        effective_date="2026-07-06",
+        entries=[
+            ClaimLedgerEntry(
+                claim_id="claim:final:rates",
+                source_stage="final",
+                claim_text="真实利率仍是估值压力的重要来源。",
+                claim_type="market_state",
+                evidence_refs=["L1.get_10y_real_rate"],
+                counter_evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+                inference_steps=["真实利率影响折现率。"],
+                falsification_conditions=["真实利率快速回落。"],
+                verified=True,
+                authority_status="verified",
+            )
+        ],
+        publish_gate={"status": "pass"},
+    )
+
+    restored_registry = EvidenceRegistry.model_validate(registry.model_dump(mode="json"))
+    restored_ledger = ClaimLedger.model_validate(ledger.model_dump(mode="json"))
+
+    assert restored_registry.passports["L1.get_10y_real_rate"].source_tier == "official"
+    assert restored_ledger.entries[0].claim_id == "claim:final:rates"
+    assert restored_ledger.entries[0].verified is True
+
+
+def test_competing_hypothesis_contract_requires_auditable_adjudication_fields():
+    base = CompetingHypothesis(
+        hypothesis_id="hyp_base",
+        hypothesis_text="主线解释：高估值与高利率是主要矛盾。",
+        source="bridge_v2",
+        support_evidence_refs=["L1.real_rate", "L4.valuation"],
+        counter_evidence_refs=["investigation_reports/inv_gap.json"],
+        diagnostic_evidence_refs=["L4.valuation"],
+        cannot_explain=["为何趋势仍强。"],
+        falsification_conditions=["真实利率快速回落且盈利上修。"],
+        confidence=Confidence.MEDIUM,
+        status="kept_unresolved",
+        adjudication_reason="调查报告保留价格反映缺口。",
+    )
+    counter = CompetingHypothesis(
+        hypothesis_id="hyp_counter",
+        hypothesis_text="反方解释：趋势强说明市场已部分消化估值压力。",
+        source="counter_thesis",
+        support_evidence_refs=["L5.trend"],
+        counter_evidence_refs=["L4.valuation"],
+        diagnostic_evidence_refs=["L5.trend"],
+        cannot_explain=["不能证明估值便宜。"],
+        falsification_conditions=["趋势跌破关键均线。"],
+    )
+    counter_thesis = CounterThesisDraft(
+        input_refs=["synthesis_packet.json", "bridge_memos/bridge_v2.json"],
+        forbidden_context_refs=["thesis_draft.json", "final_adjudication.json"],
+        hypotheses=[counter],
+        principal_counterargument=counter.hypothesis_text,
+    )
+    record = AdjudicationChangeRecord(
+        version_id="adj_1",
+        previous_hypothesis_id=base.hypothesis_id,
+        new_hypothesis_id=counter.hypothesis_id,
+        trigger_evidence_refs=["investigation_reports/inv_gap.json"],
+        change_type="kept_unresolved",
+        old_status="candidate",
+        new_status="kept_unresolved",
+        reason="强反证不足以反转，但足以禁止单一路径吸收。",
+        effective_date="2026-07-06",
+    )
+    competition = HypothesisCompetition(
+        input_refs=["synthesis_packet.json", "bridge_memos/bridge_v2.json"],
+        forbidden_context_refs=["thesis_draft.json"],
+        hypotheses=[base, counter],
+        downgrade_or_split_events=[record],
+        retained_disputes=["价格反映程度仍未解决。"],
+        fallback_warnings=["price_reflection_map_derived_by_code"],
+    )
+    history = AdjudicationHistory(
+        effective_date="2026-07-06",
+        records=[record],
+        current_hypothesis_ids=[base.hypothesis_id, counter.hypothesis_id],
+    )
+
+    restored = HypothesisCompetition.model_validate(competition.model_dump(mode="json"))
+
+    assert counter_thesis.forbidden_context_refs == ["thesis_draft.json", "final_adjudication.json"]
+    assert restored.hypotheses[0].counter_evidence_refs == ["investigation_reports/inv_gap.json"]
+    assert restored.downgrade_or_split_events[0].change_type == "kept_unresolved"
+    assert history.records[0].reason.startswith("强反证")
 
 
 def test_layer_analysis_serialization():

@@ -4,6 +4,39 @@
 
 ---
 
+## 2026-07-06
+
+### vNext 阶段 3：最小竞争裁决落地
+
+完成内容：
+
+- 新增竞争裁决合同：`CompetingHypothesis`、`CounterThesisDraft`、`HypothesisCompetition`、`AdjudicationChangeRecord` 和 `AdjudicationHistory`。
+- 在 Bridge V2 之后、Thesis 之前生成 `counter_thesis.json`、`hypothesis_competition.json`、`adjudication_history.json` 和 `competition_adjudication_manifest.json`。
+- Counter-Thesis 首次生成只读取 `synthesis_packet.json`、`bridge_memos/bridge_v2.json` 和 `investigation_reports/*.json`，并显式禁止读取 `thesis_draft.json`、`analysis_revised.json`、`final_adjudication.json`。
+- `SynthesisPacket` 增加竞争假说摘要，让 Thesis 正式综合前能看到至少主线解释和反方解释；调查结果只能改变假说状态、保留争议或触发重判记录，不回写 L1-L5 layer card。
+- 新增非单调重判记录：当 InvestigationReport 挑战强单一路径裁决，或主要矛盾/价格反映来自代码兜底时，保留旧假说、触发证据和降级/保留争议原因。
+- Run Review 新增 `competition` 归因检查：缺竞争卷宗会 fail，Counter-Thesis 未禁读 Thesis 会 fail，兜底生成的 principal_contradiction / price_reflection 会 observe，降级/分叉/保留争议记录会被审计。
+
+验证结果：
+
+- 语法检查：`python3 -m py_compile src/agent_analysis/contracts.py src/agent_analysis/orchestrator.py src/agent_analysis/run_review.py` 通过。
+- 聚焦测试：`python3 -m pytest tests/test_contracts.py tests/test_run_review.py tests/test_vnext_orchestrator.py -q`：58 通过，4 个环境/依赖 warning。
+
+对抗式审查结论：
+
+- 反方独立性：测试确认 `counter_thesis.json` 在 Thesis 生成前出现，`prompt_input_audit.thesis_read=false`，并把 `thesis_draft.json` 放入 forbidden context。
+- 反证不被吞：受控调查的 `claims_challenged` / `cannot_establish` 会进入竞争假说的反证、不能解释项和 `downgrade_or_split_events`，不会直接强化主线。
+- 改判可审计：`adjudication_history.json` 保留旧假说、新假说、触发证据、变化类型和原因。
+- 兜底可见：Bridge 的 `normalization_notes` 中只要出现主要矛盾或价格反映兜底，竞争卷宗会记录 `fallback_warnings`，Run Review 标记为 observe。
+- 隔离边界：新增竞争产物只被 Thesis / governance 读取；L1-L5 输入策略仍禁止 `investigation_reports`、Bridge、Thesis、Final 和事件侧链进入。
+
+剩余风险：
+
+- 第一版 Counter-Thesis 是确定性最小构建器，不是完整 LLM 深度反方研究；它优先保证边界、版本和审计链，解释质量后续可增强。
+- 当前重判逻辑以调查报告挑战项和兜底痕迹为触发条件，尚未做更细的证据权重模型；阶段 4 的统一 Evidence Passport / claim 台账会继续增强证据级追踪。
+
+---
+
 ## 2026-07-01
 
 ### 第二层新闻事件研报重构落地
@@ -2642,6 +2675,32 @@
 验证结果：
 
 - `35 passed, 133 warnings`
+
+---
+
+## 2026-07-06
+
+### 完成 vNext 实施路线图阶段 4：统一证据与最终 claim 台账
+
+完成内容：
+
+- 新增统一 `EvidencePassport` / `EvidenceRegistry` 合同，覆盖数据、事件、受控调查、竞争假说和最终 claim。
+- 新增 `ClaimLedger` / `ClaimLedgerEntry`，为 Thesis / Final 的重要自然语言结论登记证据、反证、推理步骤、失效条件和验证状态。
+- 编排器生成并落盘 `evidence_registry.json` 与 `final_claim_ledger.json`；Final 原始检查点保持不被 claim 台账回写污染，恢复运行可继续复用。
+- 统一 source tier / authority / downgrade 规则：事件、标题新闻、代理指标、派生假说和最终 claim 不得越权充当强主证据。
+- Run Review 新增证据与 claim 台账对抗式审查：缺证据、缺反证、缺失效条件、弱权限证据无降级规则都会被标记。
+- Integrated Synthesis Report 读取证据注册表和 claim 台账摘要，但不允许其反向污染 L1-L5 或纯数据主链。
+
+验证结果：
+
+- `python3 -m py_compile src/agent_analysis/contracts.py src/agent_analysis/orchestrator.py src/agent_analysis/run_review.py src/integrated_synthesis_report.py src/data_evidence.py`
+- `python3 -m pytest -q`
+- 结果：`441 passed, 4 warnings`
+
+剩余风险：
+
+- 当前 claim ledger 为确定性生成，能保证可审计字段完整；后续阶段 5 仍需把读者出口和语义发布闸门做得更细。
+- 事件材料进入统一注册表后仍默认弱权限，只能做解释线索；正式升级为主证据仍需要单独数据源升级流程。
 
 ---
 
