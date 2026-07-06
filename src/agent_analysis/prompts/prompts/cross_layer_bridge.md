@@ -191,7 +191,7 @@
     {
       "conflict_type": "L5_uptrend_vs_L3_breadth_deterioration",
       "severity": "high",
-      "description": "L5 指数趋势向上且创新高，L3 腾落线下降、QQQ/QQEW 比率 1.15 处于高位",
+      "description": "L5 指数趋势向上且创新高，L3 腾落线下降、NDX/NDXE 处于高历史分位",
       "implication": "趋势由少数权重股硬撑。若头部权重股失速或广度继续恶化，趋势脆弱性会放大",
       "involved_layers": ["L3", "L5"]
     }

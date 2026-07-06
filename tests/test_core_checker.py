@@ -33,6 +33,45 @@ def test_data_integrity_some_failures():
     assert "数据完整性偏低" in report["notes"]
 
 
+def test_data_integrity_blocks_publish_when_confidence_below_floor():
+    data = {
+        "indicators": [
+            {"layer": 1, "function_id": "get_fed_funds_rate", "metric_name": "Fed Funds", "value": 5.25},
+            {"layer": 1, "function_id": "get_10y", "metric_name": "10Y", "value": 4.2},
+            {"layer": 2, "function_id": "get_vix", "metric_name": "VIX", "error": "Timeout"},
+            {"layer": 3, "function_id": "get_breadth", "metric_name": "Breadth", "error": "Missing"},
+            {"layer": 5, "function_id": "get_adx", "metric_name": "ADX", "error": "Missing"},
+        ]
+    }
+
+    report = DataIntegrity().run(data)
+
+    assert report["publish_status"] == "blocked"
+    assert any("low_data_integrity_confidence" in reason for reason in report["blocking_reasons"])
+
+
+def test_data_integrity_blocks_publish_when_formal_layer_has_no_successes():
+    data = {
+        "indicators": [
+            {"layer": 1, "function_id": "l1_a", "value": 1},
+            {"layer": 1, "function_id": "l1_b", "value": 1},
+            {"layer": 2, "function_id": "l2_a", "value": 1},
+            {"layer": 2, "function_id": "l2_b", "value": 1},
+            {"layer": 3, "function_id": "l3_a", "value": 1},
+            {"layer": 4, "function_id": "l4_a", "value": 1},
+            {"layer": 5, "function_id": "l5_a", "metric_name": "L5 A", "error": "Timeout"},
+            {"layer": 5, "function_id": "l5_b", "metric_name": "L5 B", "error": "Timeout"},
+            {"layer": 5, "function_id": "l5_c", "metric_name": "L5 C", "error": "Timeout"},
+        ]
+    }
+
+    report = DataIntegrity().run(data)
+
+    assert report["confidence_percent"] >= DataIntegrity.MIN_PUBLISH_CONFIDENCE_PERCENT
+    assert report["publish_status"] == "blocked"
+    assert any("critical_layer_no_success" in reason and "L5 success=0/3" in reason for reason in report["blocking_reasons"])
+
+
 def test_data_integrity_reports_yfinance_runtime_diagnostics():
     data = {
         "indicators": [

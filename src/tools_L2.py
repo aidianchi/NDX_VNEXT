@@ -10,12 +10,15 @@ except ImportError:
     from tools_common import *
 
 from datetime import timezone
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:
     from .tools_L3 import get_ndx100_components
 except ImportError:
     from tools_L3 import get_ndx100_components
+
+_NDX100_PRICE_PANEL_RUN_CACHE: Dict[str, Tuple[List[str], pd.DataFrame]] = {}
+NDX100_ARCHIVE_DOWNLOAD_BATCH_SIZE = 20
 
 
 def _yf_daily_end_inclusive(effective_date: datetime) -> datetime:
@@ -34,6 +37,183 @@ def _filter_daily_frame_to_effective_date(df: pd.DataFrame, effective_date: date
     return filtered[filtered.index <= effective]
 
 
+def _ndx100_price_archive_dir() -> str:
+    path = os.path.join(path_config.cache_dir, "market_archive", "ndx100_component_prices")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _archive_ticker_slug(ticker: str) -> str:
+    return str(ticker).upper().replace("/", "_").replace("\\", "_").replace(".", "-")
+
+
+def _archive_target_date(effective_date: datetime, historical_date: Optional[str]) -> pd.Timestamp:
+    requested = pd.Timestamp(effective_date).tz_localize(None).normalize()
+    if historical_date:
+        return requested
+    try:
+        completed = _latest_completed_us_daily_date().tz_localize(None).normalize()
+        return min(requested, completed)
+    except Exception:
+        return requested
+
+
+def _read_ndx100_component_price_archive(
+    tickers: Iterable[str],
+    start_date: datetime,
+    effective_date: datetime,
+) -> pd.DataFrame:
+    frames: Dict[str, pd.Series] = {}
+    start = pd.Timestamp(start_date).tz_localize(None).normalize()
+    end = pd.Timestamp(effective_date).tz_localize(None).normalize()
+    for ticker in tickers:
+        path = os.path.join(_ndx100_price_archive_dir(), f"{_archive_ticker_slug(ticker)}.csv")
+        if not os.path.exists(path):
+            continue
+        try:
+            frame = pd.read_csv(path, parse_dates=["date"])
+            if frame.empty or "close" not in frame.columns:
+                continue
+            frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
+            frame = frame.dropna(subset=["date", "close"])
+            frame = frame[(frame["date"] >= start) & (frame["date"] <= end)]
+            if frame.empty:
+                continue
+            frames[str(ticker).upper()] = frame.set_index("date")["close"].sort_index()
+        except Exception as exc:
+            logging.warning("Failed reading NDX100 price archive for %s: %s", ticker, exc)
+    if not frames:
+        return pd.DataFrame()
+    close = pd.DataFrame(frames).sort_index()
+    close.index = pd.to_datetime(close.index).tz_localize(None)
+    return close
+
+
+def _write_ndx100_component_price_archive(frame: pd.DataFrame) -> None:
+    close = _extract_component_close_prices(frame)
+    if close.empty:
+        return
+    close = close.copy()
+    close.index = pd.to_datetime(close.index).tz_localize(None).normalize()
+    for ticker in close.columns:
+        series = pd.to_numeric(close[ticker], errors="coerce").dropna()
+        if series.empty:
+            continue
+        path = os.path.join(_ndx100_price_archive_dir(), f"{_archive_ticker_slug(ticker)}.csv")
+        new_rows = pd.DataFrame({"date": series.index, "close": series.values})
+        try:
+            if os.path.exists(path):
+                old_rows = pd.read_csv(path, parse_dates=["date"])
+                rows = pd.concat([old_rows, new_rows], ignore_index=True)
+            else:
+                rows = new_rows
+            rows["date"] = pd.to_datetime(rows["date"], errors="coerce")
+            rows["close"] = pd.to_numeric(rows["close"], errors="coerce")
+            rows = rows.dropna(subset=["date", "close"])
+            rows = rows.sort_values("date").drop_duplicates("date", keep="last")
+            rows.to_csv(path, index=False)
+        except Exception as exc:
+            logging.warning("Failed writing NDX100 price archive for %s: %s", ticker, exc)
+
+
+def _archive_close_to_yf_panel(close: pd.DataFrame) -> pd.DataFrame:
+    if close.empty:
+        return pd.DataFrame()
+    panel = pd.concat({"Close": close.sort_index()}, axis=1)
+    panel.attrs["source_name"] = "local NDX100 component price archive"
+    panel.attrs["market_data_source"] = "ndx100_component_price_archive"
+    return panel
+
+
+def _component_archive_missing_tickers(
+    close: pd.DataFrame,
+    tickers: List[str],
+    start_date: datetime,
+    target_date: pd.Timestamp,
+) -> List[str]:
+    if close.empty:
+        return list(tickers)
+    start = pd.Timestamp(start_date).tz_localize(None).normalize()
+    missing: List[str] = []
+    for ticker in tickers:
+        key = str(ticker).upper()
+        if key not in close.columns:
+            missing.append(ticker)
+            continue
+        series = close[key].dropna()
+        if series.empty:
+            missing.append(ticker)
+            continue
+        if series.index.min().normalize() > start + pd.Timedelta(days=10):
+            missing.append(ticker)
+            continue
+        if series.index.max().normalize() < target_date - pd.Timedelta(days=5):
+            missing.append(ticker)
+    return missing
+
+
+def _component_price_source_name(frame: pd.DataFrame) -> str:
+    source = ""
+    if isinstance(frame, pd.DataFrame):
+        source = str(frame.attrs.get("source_name") or frame.attrs.get("market_data_source") or "").strip()
+    return source or "yfinance"
+
+
+def _ensure_component_ticker_columns(frame: pd.DataFrame, tickers: List[str]) -> pd.DataFrame:
+    if not isinstance(frame, pd.DataFrame) or frame.empty or isinstance(frame.columns, pd.MultiIndex):
+        return frame
+    if len(tickers) != 1:
+        return frame
+    ticker = str(tickers[0]).upper()
+    return pd.concat({ticker: frame}, axis=1).swaplevel(0, 1, axis=1).sort_index(axis=1)
+
+
+def _download_ndx100_missing_price_archive(
+    tickers: List[str],
+    start_date: datetime,
+    end_date: datetime,
+) -> None:
+    if not YF_AVAILABLE or not tickers:
+        return
+    for offset in range(0, len(tickers), NDX100_ARCHIVE_DOWNLOAD_BATCH_SIZE):
+        batch = tickers[offset : offset + NDX100_ARCHIVE_DOWNLOAD_BATCH_SIZE]
+        try:
+            frame = yf.download(
+                batch if len(batch) > 1 else batch[0],
+                start=start_date,
+                end=end_date,
+                interval="1d",
+                progress=False,
+                auto_adjust=False,
+                threads=True,
+            )
+            frame = _ensure_component_ticker_columns(frame, batch)
+            frame = _filter_daily_frame_to_effective_date(frame, end_date - timedelta(days=1))
+            if not _extract_component_close_prices(frame).empty:
+                _write_ndx100_component_price_archive(frame)
+        except Exception as exc:
+            logging.warning("NDX100 archive batch download failed for %s: %s", ",".join(batch), str(exc)[:160])
+            if len(batch) == 1:
+                continue
+            for ticker in batch:
+                try:
+                    frame = yf.download(
+                        ticker,
+                        start=start_date,
+                        end=end_date,
+                        interval="1d",
+                        progress=False,
+                        auto_adjust=False,
+                        threads=False,
+                    )
+                    frame = _ensure_component_ticker_columns(frame, [ticker])
+                    frame = _filter_daily_frame_to_effective_date(frame, end_date - timedelta(days=1))
+                    if not _extract_component_close_prices(frame).empty:
+                        _write_ndx100_component_price_archive(frame)
+                except Exception as ticker_exc:
+                    logging.warning("NDX100 archive ticker download failed for %s: %s", ticker, str(ticker_exc)[:160])
+
+
 # =====================================================
 # 第2层函数
 # =====================================================
@@ -50,142 +230,167 @@ def _get_ndx100_common_price_data(
     """
     ndx100_components = get_ndx100_components(end_date=historical_date)
     common_start = effective_date - timedelta(days=lookback_days)
-    data = cached_yf_download(
-        ndx100_components,
-        start=common_start,
-        end=_yf_daily_end_inclusive(effective_date),
-        interval="1d",
-        progress=False,
-        auto_adjust=False,
+    target_date = _archive_target_date(effective_date, historical_date)
+    cache_key = ":".join(
+        [
+            target_date.strftime("%Y-%m-%d"),
+            str(lookback_days),
+            historical_date or "live",
+            ",".join(sorted(str(ticker).upper() for ticker in ndx100_components)),
+        ]
     )
-    data = _filter_daily_frame_to_effective_date(data, effective_date)
-    return ndx100_components, data
+    if cache_key in _NDX100_PRICE_PANEL_RUN_CACHE:
+        cached_components, cached_data = _NDX100_PRICE_PANEL_RUN_CACHE[cache_key]
+        return list(cached_components), cached_data.copy()
+
+    archived_close = _read_ndx100_component_price_archive(ndx100_components, common_start, target_date)
+    missing_tickers = _component_archive_missing_tickers(archived_close, ndx100_components, common_start, target_date)
+
+    if missing_tickers:
+        _download_ndx100_missing_price_archive(
+            missing_tickers,
+            common_start,
+            _yf_daily_end_inclusive(effective_date),
+        )
+        archived_close = _read_ndx100_component_price_archive(ndx100_components, common_start, target_date)
+
+    if not archived_close.empty:
+        result = _archive_close_to_yf_panel(archived_close)
+    else:
+        result = pd.DataFrame()
+    result = _filter_daily_frame_to_effective_date(result, effective_date)
+    _NDX100_PRICE_PANEL_RUN_CACHE[cache_key] = (list(ndx100_components), result.copy())
+    return ndx100_components, result
 
 
-def get_qqq_qqew_ratio(end_date: str = None) -> Dict[str, Any]:
-    """获取QQQ/QQEW比率及其动量与相对性 - 优先yfinance，失败时用Alpha Vantage（修复版）"""
+def _cap_weight_equal_weight_ratio_from_yfinance(
+    *,
+    end_date: Optional[str],
+    numerator_ticker: str,
+    denominator_ticker: str,
+    numerator_label: str,
+    denominator_label: str,
+    metric_name: str,
+    series_id: str,
+) -> Dict[str, Any]:
+    """Calculate cap-weighted vs equal-weight relative strength from daily closes."""
     if end_date:
         effective_date = datetime.strptime(end_date, "%Y-%m-%d")
     else:
         effective_date = datetime.now()
 
-    # 优先尝试yfinance
-    if YF_AVAILABLE:
-        try:
-            # 拉长历史长度用于10年百分位评估
-            start_date = effective_date - timedelta(days=365 * 11)
-
-            qqq = cached_yf_download('QQQ', start=start_date, end=_yf_daily_end_inclusive(effective_date), progress=False, auto_adjust=False)
-            qqew = cached_yf_download('QQEW', start=start_date, end=_yf_daily_end_inclusive(effective_date), progress=False, auto_adjust=False)
-
-            qqq = _filter_daily_frame_to_effective_date(clean_yfinance_dataframe(qqq), effective_date)
-            qqew = _filter_daily_frame_to_effective_date(clean_yfinance_dataframe(qqew), effective_date)
-
-            if not qqq.empty and not qqew.empty and 'close' in qqq.columns and 'close' in qqew.columns:
-                df = pd.concat(
-                    [qqq['close'].rename('qqq'), qqew['close'].rename('qqew')],
-                    axis=1
-                ).dropna()
-                if len(df) >= 3:
-                    ratio_series = df['qqq'] / df['qqew']
-                    latest_ratio = float(ratio_series.iloc[-1])
-                    latest_qqq = float(df['qqq'].iloc[-1])
-                    latest_qqew = float(df['qqew'].iloc[-1])
-                    ratio_df = pd.DataFrame({"date": ratio_series.index, "value": ratio_series.values})
-                    value_out = {
-                        "level": round(latest_ratio, 4),
-                        "date": ratio_series.index[-1].strftime("%Y-%m-%d"),
-                        "relativity": calculate_long_term_stats(ratio_df, latest_ratio),
-                    }
-                    if len(ratio_series) >= 20:
-                        ratio_ma20 = float(ratio_series.rolling(20, min_periods=20).mean().iloc[-1])
-                        value_out["ratio_trend_vs_ma20"] = "above" if latest_ratio > ratio_ma20 else "below"
-                        value_out["ratio_ma20"] = round(ratio_ma20, 4)
-                    if len(df) >= 60:
-                        qqq_ma60 = float(df['qqq'].rolling(60, min_periods=60).mean().iloc[-1])
-                        value_out["qqq_price_vs_ma60"] = "above" if latest_qqq > qqq_ma60 else "below"
-                        value_out["qqq_ma60"] = round(qqq_ma60, 2)
-                    return {
-                        "name": "QQQ/QQEW Ratio",
-                        "series_id": "CALCULATED",
-                        "value": value_out,
-                        "unit": "ratio",
-                        "source_name": "yfinance",
-                        "notes": f"QQQ/QQEW；分层降噪：比值趋势(MA20)+价格趋势(MA60)。QQQ={latest_qqq:.2f}, QQEW={latest_qqew:.2f}"
-                    }
-        except Exception as e:
-            print(f"yfinance failed for QQQ/QQEW: {str(e)[:50]}")
-
-    # 降级到Alpha Vantage
-    alphavantage_api_key = get_alphavantage_api_key()
-    if not alphavantage_api_key:
+    if not YF_AVAILABLE:
         return {
-            "name": "QQQ/QQEW Ratio",
+            "name": metric_name,
             "value": {"level": None, "date": None, "momentum": None, "relativity": None},
-            "notes": "Both yfinance and Alpha Vantage unavailable"
+            "notes": "yfinance unavailable",
         }
 
     try:
-        params_qqq = {"function": "TIME_SERIES_DAILY", "symbol": "QQQ", "apikey": alphavantage_api_key}
-        qqq_data = safe_request(get_alphavantage_base_url(), params_qqq)
-        if not qqq_data or "Note" in qqq_data:
-            return {"name": "QQQ/QQEW Ratio", "value": None, "notes": "API limit reached"}
+        start_date = effective_date - timedelta(days=365 * 11)
 
-        time.sleep(13)
-        params_qqew = {"function": "TIME_SERIES_DAILY", "symbol": "QQEW", "apikey": alphavantage_api_key}
-        qqew_data = safe_request(get_alphavantage_base_url(), params_qqew)
-        if not qqew_data:
-            return {"name": "QQQ/QQEW Ratio", "value": None, "notes": "Failed to fetch QQEW"}
+        numerator = cached_yf_download(
+            numerator_ticker,
+            start=start_date,
+            end=_yf_daily_end_inclusive(effective_date),
+            progress=False,
+            auto_adjust=False,
+        )
+        denominator = cached_yf_download(
+            denominator_ticker,
+            start=start_date,
+            end=_yf_daily_end_inclusive(effective_date),
+            progress=False,
+            auto_adjust=False,
+        )
 
-        qqq_ts = qqq_data.get("Time Series (Daily)", {})
-        qqew_ts = qqew_data.get("Time Series (Daily)", {})
+        numerator = _filter_daily_frame_to_effective_date(clean_yfinance_dataframe(numerator), effective_date)
+        denominator = _filter_daily_frame_to_effective_date(clean_yfinance_dataframe(denominator), effective_date)
 
-        # 过滤日期
-        qqq_ts_filtered = {k: v for k, v in qqq_ts.items() if datetime.strptime(k, "%Y-%m-%d") <= effective_date}
-        qqew_ts_filtered = {k: v for k, v in qqew_ts.items() if datetime.strptime(k, "%Y-%m-%d") <= effective_date}
+        if numerator.empty or denominator.empty or "close" not in numerator.columns or "close" not in denominator.columns:
+            return {"name": metric_name, "value": None, "notes": f"{numerator_label}/{denominator_label} close series unavailable"}
 
-        common_dates = sorted(set(qqq_ts_filtered.keys()) & set(qqew_ts_filtered.keys()))
-        if len(common_dates) < 3:
-            return {"name": "QQQ/QQEW Ratio", "value": None, "notes": "No sufficient common dates"}
+        df = pd.concat(
+            [numerator["close"].rename("numerator"), denominator["close"].rename("denominator")],
+            axis=1,
+        ).dropna()
+        df = df[(df["numerator"] > 0) & (df["denominator"] > 0)]
+        if len(df) < 3:
+            return {"name": metric_name, "value": None, "notes": f"Insufficient common {numerator_label}/{denominator_label} history"}
 
-        records = []
-        for d in common_dates:
-            try:
-                qqq_close = float(qqq_ts_filtered[d]["4. close"])
-                qqew_close = float(qqew_ts_filtered[d]["4. close"])
-                if qqew_close > 0:
-                    records.append({"date": pd.to_datetime(d), "value": qqq_close / qqew_close})
-            except Exception:
-                continue
-
-        if len(records) < 3:
-            return {"name": "QQQ/QQEW Ratio", "value": None, "notes": "Insufficient valid ratio observations"}
-
-        df = pd.DataFrame(records).sort_values("date")
-        latest_ratio = float(df.iloc[-1]["value"])
-        latest_date_val = df.iloc[-1]["date"].strftime("%Y-%m-%d")
-        ratio_s = df.set_index("date")["value"]
+        ratio_series = df["numerator"] / df["denominator"]
+        latest_ratio = float(ratio_series.iloc[-1])
+        latest_numerator = float(df["numerator"].iloc[-1])
+        latest_denominator = float(df["denominator"].iloc[-1])
+        ratio_df = pd.DataFrame({"date": ratio_series.index, "value": ratio_series.values})
+        latest_date_val = ratio_series.index[-1].strftime("%Y-%m-%d")
         value_out = {
             "level": round(latest_ratio, 4),
             "date": latest_date_val,
-            "relativity": calculate_long_term_stats(df, latest_ratio),
+            "relativity": calculate_long_term_stats(ratio_df, latest_ratio, as_of_date=latest_date_val),
+            "numerator": numerator_label,
+            "denominator": denominator_label,
+            "numerator_close": round(latest_numerator, 2),
+            "denominator_close": round(latest_denominator, 2),
         }
-        if len(ratio_s) >= 20:
-            ratio_ma20 = float(ratio_s.rolling(20, min_periods=20).mean().iloc[-1])
+        if len(ratio_series) >= 20:
+            ratio_ma20 = float(ratio_series.rolling(20, min_periods=20).mean().iloc[-1])
             value_out["ratio_trend_vs_ma20"] = "above" if latest_ratio > ratio_ma20 else "below"
             value_out["ratio_ma20"] = round(ratio_ma20, 4)
-        analysis = value_out
+        if len(df) >= 60:
+            numerator_ma60 = float(df["numerator"].rolling(60, min_periods=60).mean().iloc[-1])
+            value_out["cap_weight_price_vs_ma60"] = "above" if latest_numerator > numerator_ma60 else "below"
+            value_out["cap_weight_ma60"] = round(numerator_ma60, 2)
 
         return {
-            "name": "QQQ/QQEW Ratio",
-            "series_id": "CALCULATED",
-            "value": analysis,
+            "name": metric_name,
+            "series_id": series_id,
+            "value": value_out,
             "unit": "ratio",
-            "source_name": "Alpha Vantage (fallback)",
-            "notes": f"Calculated from Alpha Vantage daily closes; latest date {latest_date_val}."
+            "source_name": "yfinance/Yahoo daily close",
+            "source_tier": "market_data_provider",
+            "data_quality": {
+                "source_tier": "market_data_provider",
+                "data_date": latest_date_val,
+                "formula": f"{numerator_ticker} close / {denominator_ticker} close",
+                "coverage": {
+                    "common_observations": int(len(ratio_series)),
+                    "first_common_date": ratio_series.index[0].strftime("%Y-%m-%d"),
+                    "latest_common_date": latest_date_val,
+                },
+                "fallback_chain": ["yfinance/Yahoo", "unavailable"],
+                "anomalies": [],
+            },
+            "notes": (
+                f"{numerator_label}/{denominator_label}；分层降噪：比值趋势(MA20)+市值加权指数价格趋势(MA60)。"
+                f"{numerator_label}={latest_numerator:.2f}, {denominator_label}={latest_denominator:.2f}。"
+                "该比值只说明市值加权相对等权的结构强弱，不能证明估值便宜或宏观宽松。"
+            ),
         }
     except Exception as e:
-        return {"name": "QQQ/QQEW Ratio", "value": None, "notes": f"Error: {str(e)}"}
+        return {"name": metric_name, "value": None, "notes": f"Error: {str(e)}"}
+
+
+def get_ndx_ndxe_ratio(end_date: str = None) -> Dict[str, Any]:
+    """获取 NDX/NDXE 比率及历史分位，用于观察市值加权相对等权 Nasdaq-100 的集中度。"""
+    return _cap_weight_equal_weight_ratio_from_yfinance(
+        end_date=end_date,
+        numerator_ticker="^NDX",
+        denominator_ticker="^NDXE",
+        numerator_label="NDX",
+        denominator_label="NDXE",
+        metric_name="NDX/NDXE Ratio",
+        series_id="NDX_NDXE_RATIO",
+    )
+
+
+def get_qqq_qqew_ratio(end_date: str = None) -> Dict[str, Any]:
+    """Deprecated compatibility alias: the main L3 ratio now uses NDX/NDXE."""
+    result = get_ndx_ndxe_ratio(end_date=end_date)
+    if isinstance(result, dict):
+        result["legacy_function_id"] = "get_qqq_qqew_ratio"
+        result["replacement_function_id"] = "get_ndx_ndxe_ratio"
+    return result
 
 
 def get_hy_quality_spread_bp(end_date: str = None) -> Dict[str, Any]:
@@ -408,7 +613,7 @@ def get_advance_decline_line(end_date: str = None) -> Dict[str, Any]:
             },
             "unit": "cumulative_count",
             "source_tier": "component_model",
-            "source_name": "yfinance",
+            "source_name": _component_price_source_name(data),
             "data_quality": _breadth_quality(
                 data_date=latest_date_val,
                 formula="daily advancing constituents - declining constituents, cumulatively summed",
@@ -490,7 +695,7 @@ def get_percent_above_ma(end_date: str = None) -> Dict[str, Any]:
             },
             "unit": "percent",
             "source_tier": "component_model",
-            "source_name": "yfinance",
+            "source_name": _component_price_source_name(data),
             "data_quality": _breadth_quality(
                 data_date=latest_date_val,
                 formula="latest component close above 50-day and 200-day moving average",
@@ -562,7 +767,7 @@ def get_new_highs_lows(end_date: str = None) -> Dict[str, Any]:
             },
             "unit": "count/percent",
             "source_tier": "component_model",
-            "source_name": "yfinance (NDX100 components)",
+            "source_name": _component_price_source_name(data),
             "data_quality": _breadth_quality(
                 data_date=latest_date_val,
                 formula="component latest close equals 252-trading-day high or low",
@@ -625,7 +830,7 @@ def get_mcclellan_oscillator_nasdaq_or_nyse(end_date: str = None) -> Dict[str, A
             },
             "unit": "net_advancers_ema_spread",
             "source_tier": "component_model",
-            "source_name": "yfinance (NDX100 components)",
+            "source_name": _component_price_source_name(data),
             "data_quality": _breadth_quality(
                 data_date=latest_date_val,
                 formula="19-day EMA(net advances) - 39-day EMA(net advances)",

@@ -34,10 +34,10 @@ def test_research_console_generates_simple_launcher(tmp_path: Path, monkeypatch)
     assert "NDX vNext 研究控制台" in html
     assert "console_simple_launcher_v1" in html
     assert "运行模式" in html
-    assert "完整运行" in html
-    assert "仅收集数据" in html
-    assert "用已有数据分析" in html
-    assert "开始完整运行" in html
+    assert "纯数据报告" in html
+    assert "事件新闻报告" in html
+    assert "综合报告" in html
+    assert "开始综合报告" in html
     assert 'id="runStatus" class="run-status is-idle" role="button" tabindex="0"' in html
     assert "点击刷新任务状态" in html
     assert "function refreshStatusFromBox()" in html
@@ -46,8 +46,8 @@ def test_research_console_generates_simple_launcher(tmp_path: Path, monkeypatch)
     assert "是否回测" in html
     assert 'id="backtestMode"' in html
     assert 'id="backtestDate"' in html
-    assert "收集新闻材料" in html
-    assert "新闻材料只作为旁证，不直接进入 L1-L5 主证据" in html
+    assert "综合报告会同时生成纯数据报告和事件新闻报告" in html
+    assert "事件材料不进入 L1-L5 主证据" in html
     assert "末次数据" in html
     assert "data_collected_v9_20260509.json" in html
     assert "打开最新报告" in html
@@ -60,8 +60,9 @@ def test_research_console_generates_simple_launcher(tmp_path: Path, monkeypatch)
     assert 'id="manualActive"' in html
     assert "开发者命令" in html
     assert "src/console_run_all.py" in html
+    assert "src/main.py" in html
+    assert "--event-only" in html
     assert "--data-json" in html
-    assert "--collect-only" in html
     assert "--enable-news" in html
     assert "fetch(`${controlOrigin}/run`" in html
     assert "env_overrides: envOverrides()" in html

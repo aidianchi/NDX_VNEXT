@@ -1,6 +1,6 @@
 #!/bin/zsh
 set -e
-cd "$(dirname "$0")"
+cd "/Users/aidianchi/Desktop/ndx_mac"
 
 PYTHON="$PWD/.venv/bin/python"
 if [ ! -x "$PYTHON" ]; then

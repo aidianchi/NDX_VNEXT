@@ -199,7 +199,7 @@ def test_chart_time_series_artifact_adds_workbench_modules_and_research_series()
             "US10Y": lambda lookback_days: _value_frame([4.4, 4.35]),
             "US10Y_REAL": lambda lookback_days: _value_frame([2.1, 2.05]),
             "US10Y_BREAKEVEN": lambda lookback_days: _value_frame([2.3, 2.28]),
-            "QQQ_QQEW_RATIO": lambda lookback_days: _value_frame([4.7, 4.8]),
+            "NDX_NDXE_RATIO": lambda lookback_days: _value_frame([2.8, 2.9]),
             "NET_LIQUIDITY": lambda lookback_days: _value_frame([6100, 6120]),
             "WALCL": lambda lookback_days: _value_frame([7600, 7610]),
             "TGA": lambda lookback_days: _value_frame([600, 590]),

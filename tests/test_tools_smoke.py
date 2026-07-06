@@ -60,12 +60,14 @@ def test_l2_file_functions_importable():
     from tools_L2 import (
         get_advance_decline_line,
         get_percent_above_ma,
+        get_ndx_ndxe_ratio,
         get_qqq_qqew_ratio,
         get_new_highs_lows,
         get_cnn_fear_greed_index,
     )
     assert callable(get_advance_decline_line)
     assert callable(get_percent_above_ma)
+    assert callable(get_ndx_ndxe_ratio)
 
 
 def test_l3_file_functions_importable():

@@ -15,7 +15,7 @@ L3 回答"趋势是否健康"。广度决定可持续性，集中度决定脆弱
 2. **analysis_packet.json** 中的 L3 数据：
    - advance_decline_line: 腾落线
    - percent_above_ma_50/200: 成分股高于均线比例
-   - qqq_qqew_ratio: 市值加权 vs 等权重比率
+   - ndx_ndxe_ratio: 市值加权 Nasdaq-100 vs 等权 Nasdaq-100 比率
    - new_highs_lows: 新高新低指数
    - m7_fundamentals: 七巨头健康度
 
@@ -26,14 +26,14 @@ L3 回答"趋势是否健康"。广度决定可持续性，集中度决定脆弱
   "layer": "L3",
   "core_facts": [
     {
-      "metric": "qqq_qqew_ratio",
+      "metric": "ndx_ndxe_ratio",
       "value": 1.15,
       "historical_percentile": 88.0,
       "trend": "rising",
       "magnitude": "high"
     }
   ],
-  "local_conclusion": "内部健康度恶化，QQQ/QQEW 比率达 1.15 处于历史高位，显示头部集中度极高。腾落线下降，上涨主要由七巨头驱动，趋势根基不稳。",
+  "local_conclusion": "内部健康度恶化，NDX/NDXE 比率处于历史高位，显示头部集中度极高。腾落线下降，上涨主要由七巨头驱动，趋势根基不稳。",
   "confidence": "high",
   "risk_flags": ["extreme_concentration", "breadth_deterioration", "leadership_narrowing"],
   "cross_layer_hooks": [
@@ -73,11 +73,12 @@ L3 回答"趋势是否健康"。广度决定可持续性，集中度决定脆弱
    - < 50%：广度恶化
    - 比例下降但指数上涨：危险信号
 
-3. **QQQ/QQEW 比率（关键指标）**
-   - > 1.1：头部集中，脆弱
-   - < 1.05：广度健康
+3. **NDX/NDXE 比率（关键指标）**
+   - 高分位：头部集中，结构更脆弱
+   - 低分位或回落：等权口径相对改善
    - 趋势比绝对值更重要
    - 比率上升 + 指数新高 = "假强势"
+   - QQEW 只能作为旧兼容/历史代理，不能未经核对当作纯 NDXE
 
 4. **QQQ 官方 Top10 / M7 权重**
    - 读取 `get_qqq_top10_concentration` 的 `effective_date`、Top10 权重、M7 权重和 Top10 相对等权基准的超额权重
@@ -104,7 +105,7 @@ L3 回答"趋势是否健康"。广度决定可持续性，集中度决定脆弱
 ### 关键信号
 
 1. 是否出现广度背离？（指数新高 + 腾落线未新高）
-2. 集中度是否达到极端水平？（QQQ/QQEW > 1.15）
+2. 集中度是否达到极端水平？（NDX/NDXE 处于高历史分位）
 3. Top10/M7 官方权重是否说明指数被少数公司推动？
 4. 七巨头是否有隐患？
 
@@ -124,13 +125,13 @@ L3 回答"趋势是否健康"。广度决定可持续性，集中度决定脆弱
 纳斯达克100的特殊性：
 - 七巨头占比超 50%
 - 传统广度指标容易被误导
-- QQQ/QQEW 比率是最关键指标
+- NDX/NDXE 比率是最关键指标
 - 必须结合 M7 基本面分析
 
 ## 质量检查
 
 - [ ] 是否检查了腾落线与指数的背离？
-- [ ] 是否评估了 QQQ/QQEW 比率？
+- [ ] 是否评估了 NDX/NDXE 比率？
 - [ ] 是否检查了新高新低？
 - [ ] 是否询问 L5（广度→趋势）？
 - [ ] 是否询问 L4（集中度→估值风险）？

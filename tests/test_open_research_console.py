@@ -20,9 +20,8 @@ def test_pids_on_port_returns_all_listeners(monkeypatch):
 def test_console_markers_require_simple_launcher_and_reject_old_panel():
     assert open_research_console.CONSOLE_VERSION == "console_simple_launcher_v1"
     assert "运行模式" in open_research_console.CONSOLE_READY_MARKERS
-    assert "开始完整运行" in open_research_console.CONSOLE_READY_MARKERS
+    assert "开始综合报告" in open_research_console.CONSOLE_READY_MARKERS
     assert "是否回测" in open_research_console.CONSOLE_READY_MARKERS
-    assert "收集新闻材料" in open_research_console.CONSOLE_READY_MARKERS
     assert "采集 Trendonify" in open_research_console.STALE_CONSOLE_MARKERS
     assert "交互工作台模块" in open_research_console.STALE_CONSOLE_MARKERS
     assert "高级 JSON 预览" in open_research_console.STALE_CONSOLE_MARKERS

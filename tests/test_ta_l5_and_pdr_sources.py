@@ -89,6 +89,8 @@ def test_l5_yfinance_requests_include_effective_date_for_daily_history(monkeypat
     captured = {}
     frame = _ohlcv_frame()
     frame.index = pd.bdate_range(end="2025-04-09", periods=len(frame))
+    frame.attrs["source_name"] = "Twelve Data"
+    frame.attrs["market_data_source"] = "twelve_data_priority"
 
     def fake_download(ticker, **kwargs):
         captured["ticker"] = ticker
@@ -103,12 +105,14 @@ def test_l5_yfinance_requests_include_effective_date_for_daily_history(monkeypat
     assert captured["ticker"] == "QQQ"
     assert pd.Timestamp(captured["end"]).date().isoformat() == "2025-04-10"
     assert result["date"] == "2025-04-09"
+    assert result["source_name"] == "Twelve Data"
 
 
 def test_l5_multi_scale_ma_requests_include_effective_date(monkeypatch):
     captured = {}
     frame = _ohlcv_frame()
     frame.index = pd.bdate_range(end="2025-04-09", periods=len(frame))
+    frame.attrs["source_name"] = "Twelve Data"
 
     def fake_download(ticker, **kwargs):
         captured["end"] = kwargs.get("end")
@@ -121,6 +125,7 @@ def test_l5_multi_scale_ma_requests_include_effective_date(monkeypatch):
 
     assert pd.Timestamp(captured["end"]).date().isoformat() == "2025-04-10"
     assert result["value"]["date"] == "2025-04-09"
+    assert result["source_name"] == "Twelve Data"
 
 
 def test_pandas_datareader_fred_fallback_normalizes_to_date_value(monkeypatch):

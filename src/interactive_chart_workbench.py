@@ -468,7 +468,8 @@ class InteractiveChartWorkbenchGenerator:
             "IG_OAS": "IG OAS",
             "US10Y": "10Y Treasury",
             "DAMODARAN_ERP_MONTHLY": "Damodaran ERP",
-            "QQQ_QQEW_RATIO": "QQQ/QQEW",
+            "NDX_NDXE_RATIO": "NDX/NDXE",
+            "QQQ_QQEW_RATIO": "QQQ/QQEW (legacy)",
             "NET_LIQUIDITY": "Net Liquidity",
             "WALCL": "WALCL",
             "TGA": "TGA",
@@ -671,7 +672,7 @@ class InteractiveChartWorkbenchGenerator:
         hints = {
             "volatility_credit": "VIX、VXN、HY/IG OAS 与 QQQ 放在同一工作台，观察“价格强但保险费/信用先警告”。",
             "rates_valuation": "10Y、真实利率、breakeven 与 Damodaran ERP 同屏，观察估值折现压力。",
-            "breadth_concentration": "QQQ/QQEW 与价格同屏，观察上涨是否集中在头部权重。",
+            "breadth_concentration": "NDX/NDXE 与价格同屏，观察上涨是否集中在头部权重。",
             "liquidity": "净流动性、WALCL、TGA、RRP 与风险资产同屏，观察资金面传导。",
         }
         sections = []

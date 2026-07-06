@@ -40,7 +40,7 @@ def test_synthesis_packet_includes_objective_firewall_summary(tmp_path: Path):
         raw_data={
             "L1": {"get_10y_real_rate": {"value": {"level": 1.9}}},
             "L2": {"get_vix": {"value": {"level": 18.0}}},
-            "L3": {"get_qqq_qqew_ratio": {"value": {"level": 1.15}}},
+            "L3": {"get_ndx_ndxe_ratio": {"value": {"level": 2.9}}},
             "L4": {"get_ndx_pe_and_earnings_yield": {"value": {"PE_TTM": 32.5}}},
             "L5": {"get_rsi_qqq": {"value": {"level": 62.0}}},
         },

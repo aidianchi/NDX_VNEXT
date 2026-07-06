@@ -75,6 +75,56 @@ def test_qqq_top10_concentration_parses_invesco_holdings(monkeypatch):
     assert value["market_cap_vs_equal_weight"]["windows"]["1m"]["market_cap_minus_equal_weight_pct"] == 2.4
 
 
+def test_qqq_top10_concentration_uses_local_official_snapshot_when_live_fetch_fails(tmp_path, monkeypatch):
+    holdings = [
+        {"ticker": f"T{i}", "issuerName": f"Company {i}", "percentageOfTotalNetAssets": weight}
+        for i, weight in enumerate([9, 8, 7, 6, 5, 4, 3, 2, 1.5, 1, 0.5], start=1)
+    ]
+    monkeypatch.setattr(tools_L3.path_config, "cache_dir", str(tmp_path))
+    tools_L3._write_qqq_holdings_snapshot(
+        {
+            "effectiveDate": "2026-05-07",
+            "effectiveBusinessDate": "2026-05-07",
+            "totalNumberOfHoldings": 100,
+            "holdings": holdings,
+        }
+    )
+    monkeypatch.setattr(tools_L3, "_fetch_invesco_qqq_holdings", lambda: (None, "HTTP 406"))
+    monkeypatch.setattr(tools_L3, "_concentration_weight_change_proxy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        tools_L3,
+        "_qqq_equal_weight_performance_spread",
+        lambda *args, **kwargs: {"availability": "available", "windows": {}},
+    )
+
+    result = tools_L3.get_qqq_top10_concentration()
+
+    assert result["source_tier"] == "official_provider_cached"
+    assert result["value"]["effective_date"] == "2026-05-07"
+    assert result["value"]["top10_weight_pct"] == 46.5
+    assert "invesco_live_unavailable_used_cached_snapshot" in result["data_quality"]["anomalies"]
+    assert "HTTP 406" in result["notes"]
+
+
+def test_qqq_top10_concentration_ignores_incomplete_local_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(tools_L3.path_config, "cache_dir", str(tmp_path))
+    tools_L3._write_qqq_holdings_snapshot(
+        {
+            "effectiveDate": "2026-05-07",
+            "effectiveBusinessDate": "2026-05-07",
+            "totalNumberOfHoldings": 1,
+            "holdings": [{"ticker": "MSFT", "percentageOfTotalNetAssets": 8.1}],
+        }
+    )
+    monkeypatch.setattr(tools_L3, "_fetch_invesco_qqq_holdings", lambda: (None, "HTTP 406"))
+
+    result = tools_L3.get_qqq_top10_concentration()
+
+    assert result["value"] is None
+    assert result["source_tier"] == "official_provider"
+    assert "HTTP 406" in result["notes"]
+
+
 def test_l3_state_can_use_top10_concentration_as_structural_warning():
     data = {
         "timestamp_utc": "2026-05-09T00:00:00Z",

@@ -29,8 +29,8 @@ L3 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 
 - `get_advance_decline_line`: 腾落线。最直接的累计广度信号；若数据弱，也要说明可用性限制。
 - `get_percent_above_ma`: 成分股高于均线比例。衡量上涨参与度是否广泛。
-- `get_qqq_qqew_ratio`: QQQ/QQEW。市值加权相对等权指数的强弱，识别头部集中和“将军/士兵”背离。
-- `get_qqq_top10_concentration`: QQQ 官方 Top10 / M7 权重锚。用于回答“指数到底被谁推动”，必须读取 `effective_date`、Top10 权重、M7 权重、Top10 相对等权基准的超额权重，以及 QQQ 相对 QQEW 的表现差。官方当前持仓是硬锚；历史集中度变化若标注为 proxy，不能写成官方历史权重。
+- `get_ndx_ndxe_ratio`: NDX/NDXE。市值加权 Nasdaq-100 相对等权 Nasdaq-100 的强弱，识别头部集中和“将军/士兵”背离。QQEW 只能作为旧兼容/历史代理，不能未经核对当作纯 NDXE。
+- `get_qqq_top10_concentration`: QQQ 官方 Top10 / M7 权重锚。用于回答“指数到底被谁推动”，必须读取 `effective_date`、Top10 权重、M7 权重、Top10 相对等权基准的超额权重，以及 NDX 相对 NDXE 的表现差。官方当前持仓是硬锚；历史集中度变化若标注为 proxy，不能写成官方历史权重。
 - `get_m7_fundamentals`: 七巨头基本面。判断集中度是否有盈利质量支撑。
 - `get_new_highs_lows`: 新高新低。识别动能扩散、衰竭和趋势后段特征。
 - `get_mcclellan_oscillator_nasdaq_or_nyse`: McClellan Oscillator。短中期广度动能。
@@ -40,7 +40,7 @@ L3 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 典型机制：
 
 - 指数上涨 + 腾落线不确认 -> 参与股票减少 -> 趋势依赖少数权重 -> 回撤脆弱性上升。
-- QQQ/QQEW 极高或持续上行 -> 市值权重强于等权 -> 头部集中 -> 单一巨头业绩冲击会放大为指数冲击。
+- NDX/NDXE 极高或持续上行 -> 市值权重强于等权 -> 头部集中 -> 单一巨头业绩冲击会放大为指数冲击。
 - Top10 官方权重高 + 等权口径弱 -> 不是“广度弱”一个信号，而是“头部权重强但参与度不足”的结构组合；必须同时写出头部支撑和脆弱性。
 - M7 基本面强 -> 集中度有盈利支撑 -> 可延缓广度恶化惩罚，但不能消除集中风险。
 - 新高股票减少 -> 动能扩散失败 -> 趋势后段特征增强。
@@ -63,7 +63,7 @@ L3 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 - 等权弱、市值权重强是“优质龙头胜出”，还是“空心上涨”。
 - 广度弱和头部权重强必须分开表述：广度回答多数成分是否参与，Top10/QQQ 权重回答少数头部对指数的推动强度。
 - 广度指标缺失时，哪些指标仍可支持判断，哪些必须降低置信度。
-- 新高新低、腾落线、McClellan 与 QQQ/QQEW 是否互相确认。
+- 新高新低、腾落线、McClellan 与 NDX/NDXE 是否互相确认。
 
 ## Cross-Layer Hooks
 

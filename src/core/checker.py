@@ -19,6 +19,8 @@ except ImportError:
 class DataIntegrity:
     """Generate a compact reliability report from collector output."""
 
+    MIN_PUBLISH_CONFIDENCE_PERCENT = 60.0
+
     def _raw_data(self, item: Dict[str, Any]) -> Dict[str, Any]:
         return item.get("raw_data") if isinstance(item.get("raw_data"), dict) else {}
 
@@ -201,7 +203,32 @@ class DataIntegrity:
         if blocking_quality_issues:
             weighted_success = max(0.0, weighted_success - len(blocking_quality_issues))
         confidence = round((weighted_success / total) * 100, 1) if total else 0.0
+
+        # Layer-level breakdown
+        layer_stats: Dict[str, Dict[str, int]] = {}
+        for item in indicators:
+            layer = str(item.get("layer", "unknown"))
+            if layer not in layer_stats:
+                layer_stats[layer] = {"total": 0, "success": 0}
+            layer_stats[layer]["total"] += 1
+            if not item.get("error") and not self._is_skipped(item) and self._has_value(item):
+                layer_stats[layer]["success"] += 1
+
         blocking_reasons = []
+        if total == 0:
+            blocking_reasons.append("no_indicators_collected: DataIntegrity received zero indicators")
+        if total >= 5 and confidence < self.MIN_PUBLISH_CONFIDENCE_PERCENT:
+            blocking_reasons.append(
+                f"low_data_integrity_confidence: confidence={confidence}% below "
+                f"{self.MIN_PUBLISH_CONFIDENCE_PERCENT:.1f}%"
+            )
+        failed_layers = [
+            f"L{layer} success=0/{stats['total']}"
+            for layer, stats in sorted(layer_stats.items())
+            if layer in {"1", "2", "3", "4", "5"} and stats["total"] >= 3 and stats["success"] == 0
+        ]
+        if failed_layers:
+            blocking_reasons.append("critical_layer_no_success: " + "；".join(failed_layers[:5]))
         if future_violations:
             examples = [f"{name}: {', '.join(values[:2])}" for name, values in list(future_violations.items())[:3]]
             blocking_reasons.append(
@@ -307,16 +334,8 @@ class DataIntegrity:
             )
         if confidence < 90:
             notes.append("数据完整性偏低，最终结论需要更保守。")
-
-        # Layer-level breakdown
-        layer_stats: Dict[str, Dict[str, int]] = {}
-        for item in indicators:
-            layer = str(item.get("layer", "unknown"))
-            if layer not in layer_stats:
-                layer_stats[layer] = {"total": 0, "success": 0}
-            layer_stats[layer]["total"] += 1
-            if not item.get("error") and not self._is_skipped(item) and self._has_value(item):
-                layer_stats[layer]["success"] += 1
+        if any(reason.startswith(("low_data_integrity_confidence", "critical_layer_no_success", "no_indicators_collected")) for reason in blocking_reasons):
+            notes.append("发布闸门阻断：数据覆盖不足，不能当作可发布结论。")
 
         # ThirdPartyChecks availability (cross-check health for L4)
         tp_total = 0

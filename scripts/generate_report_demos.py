@@ -109,7 +109,7 @@ def rich_text(value: Any) -> str:
         r"HY OAS",
         r"IG OAS",
         r"CCC-BB",
-        r"QQQ/QQEW",
+        r"NDX/NDXE",
         r"Forward PE",
         r"Trailing PE",
         r"risk_on",
@@ -511,7 +511,8 @@ INDICATOR_CHARTS = {
     "get_hy_quality_spread_bp": ("HY_QUALITY_SPREAD", "value"),
     "get_hyg_momentum": ("HYG", "value"),
     "get_vxn_vix_ratio": ("VXN_VIX_RATIO", "value"),
-    "get_qqq_qqew_ratio": ("QQQ_QQEW_RATIO", "value"),
+    "get_ndx_ndxe_ratio": ("NDX_NDXE_RATIO", "value"),
+    "get_qqq_qqew_ratio": ("NDX_NDXE_RATIO", "value"),
     "get_equity_risk_premium": ("DAMODARAN_ERP_MONTHLY", "value"),
     "get_damodaran_us_implied_erp": ("DAMODARAN_ERP_MONTHLY", "value"),
     "get_l5_deterministic_snapshot": ("QQQ_OHLCV", "close"),
@@ -563,7 +564,7 @@ def micro_annotation(function_id: str, rows: Sequence[Dict[str, Any]], field: st
         "get_hy_oas_bp",
         "get_ig_oas_bp",
         "get_hy_quality_spread_bp",
-        "get_qqq_qqew_ratio",
+        "get_ndx_ndxe_ratio",
         "get_damodaran_us_implied_erp",
     }:
         return (reading_percentile_label(reading) or (f"图内位置 {pct:.0f}%" if pct is not None else None), True)
@@ -1044,7 +1045,7 @@ def demo_chartbook(bundle: Dict[str, Any]) -> str:
         ("HY OAS", "HY_OAS", "value", "整体信用利差极低，显示风险偏好仍宽。"),
         ("CCC-BB 质量利差", "HY_QUALITY_SPREAD", "value", "信用内部质量分层仍是风险暗线。"),
         ("10Y 实际利率", "US10Y_REAL", "value", "真实折现率维持高位，是估值压力主轴。"),
-        ("QQQ/QQEW", "QQQ_QQEW_RATIO", "value", "等权补涨改善，但集中度绝对位置仍高。"),
+        ("NDX/NDXE", "NDX_NDXE_RATIO", "value", "等权补涨改善，但集中度绝对位置仍高。"),
     ]
     cards = "".join(
         f"<article class=\"box\"><h3>{esc(title)}</h3>{sparkline(chart_rows(bundle, key), field)}<p>{esc(note)}</p></article>"
@@ -1315,14 +1316,14 @@ def demo_memo_chartbook(bundle: Dict[str, Any], mode: str = "demo") -> str:
 
     ratio_stats = formal_value_stats(
         bundle,
-        chart_key="QQQ_QQEW_RATIO",
+        chart_key="NDX_NDXE_RATIO",
         field="value",
         layer="L3",
-        function_id="get_qqq_qqew_ratio",
-        value_label="QQQ/QQEW",
+        function_id="get_ndx_ndxe_ratio",
+        value_label="NDX/NDXE",
         change_kind="pct",
         percentile_tone="risk",
-        extra=[("5年分位", fmt_percentile(historical_percentile(bundle, "L3", "get_qqq_qqew_ratio", "5y")), "risk")],
+        extra=[("5年分位", fmt_percentile(historical_percentile(bundle, "L3", "get_ndx_ndxe_ratio", "5y")), "risk")],
     )
 
     cards_top = "".join(
@@ -1398,15 +1399,15 @@ def demo_memo_chartbook(bundle: Dict[str, Any], mode: str = "demo") -> str:
 
     cards_structure = proof_card(
         bundle,
-        title="QQQ / QQEW",
+        title="NDX / NDXE",
         layer="L3 内部结构",
-        key="QQQ_QQEW_RATIO",
+        key="NDX_NDXE_RATIO",
         field="value",
         takeaway="等权补涨改善了市场宽度，但集中度绝对位置仍然很高，不能把广度改善误读成结构风险消失。",
         stats=ratio_stats,
-        refs=["L3.get_qqq_qqew_ratio", "L3.get_qqq_top10_concentration"],
+        refs=["L3.get_ndx_ndxe_ratio", "L3.get_qqq_top10_concentration"],
         tone="structure",
-        spark_annotation=f"10年分位 {fmt_percentile(historical_percentile(bundle, 'L3', 'get_qqq_qqew_ratio'))}",
+        spark_annotation=f"10年分位 {fmt_percentile(historical_percentile(bundle, 'L3', 'get_ndx_ndxe_ratio'))}",
     )
 
     layers = "".join(layer_detail(bundle, layer) for layer in LAYERS)

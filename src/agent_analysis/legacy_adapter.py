@@ -49,6 +49,7 @@ FUNCTION_ALIASES = {
     "get_cnn_fear_greed_index": ["cnn_fear_greed", "cnn fear greed", "fear greed"],
     "get_advance_decline_line": ["advance_decline_line", "advance decline line", "ad line"],
     "get_percent_above_ma": ["percent_above_ma", "stocks above ma", "above ma"],
+    "get_ndx_ndxe_ratio": ["ndx ndxe ratio", "ndx/ndxe", "qqq qqew ratio", "qqq_qqew_ratio"],
     "get_qqq_qqew_ratio": ["qqq qqew ratio", "qqq_qqew_ratio"],
     "get_m7_fundamentals": ["m7 fundamentals", "m7"],
     "get_new_highs_lows": ["new highs lows", "new highs", "new lows"],
@@ -204,6 +205,8 @@ def _compact_value(value: Any, *, max_items: int = 4) -> str:
 def _find_first_number(data: Any, keywords: Iterable[str] = ()) -> Optional[float]:
     lowered_keywords = tuple(keyword.lower() for keyword in keywords)
     if isinstance(data, (int, float)) and not isinstance(data, bool):
+        if lowered_keywords:
+            return None
         return float(data)
     if isinstance(data, dict):
         if lowered_keywords:
@@ -280,6 +283,8 @@ def _extract_percentile(indicator: Dict[str, Any], fact: Optional[Dict[str, Any]
         return None
     if 0 <= percentile <= 1:
         return percentile * 100
+    if percentile < 0 or percentile > 100:
+        return None
     return percentile
 
 

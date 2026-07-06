@@ -125,6 +125,50 @@ def test_cached_yf_download_prefers_recent_persistent_cache_before_network(tmp_p
     assert result.iloc[0]["Close"] == 101.0
 
 
+def test_cached_yf_download_refreshes_unattributed_priority_cache_with_twelve_data(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(tools_common.path_config, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(tools_common, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_common, "CACHE_AVAILABLE", False)
+    monkeypatch.setattr(tools_common, "get_twelve_data_api_key", lambda: "test-key")
+
+    cached = pd.DataFrame({"Close": [101.0]})
+    cache_key = ":".join(["yf.download", "QQQ", "2026-01-01", "2026-01-03", "1d", "raw"])
+    tools_common._write_yf_frame_cache(cache_key, cached)
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "status": "ok",
+                "values": [
+                    {
+                        "datetime": "2026-01-02",
+                        "open": "200",
+                        "high": "203",
+                        "low": "199",
+                        "close": "202",
+                        "volume": "1234",
+                    }
+                ],
+            }
+
+    class _YF:
+        @staticmethod
+        def download(*args, **kwargs):
+            raise AssertionError("Twelve Data should refresh unattributed priority cache first")
+
+    monkeypatch.setattr(tools_common.requests, "get", lambda *args, **kwargs: _Response())
+    monkeypatch.setattr(tools_common, "yf", _YF)
+
+    result = tools_common.cached_yf_download("QQQ", start="2026-01-01", end="2026-01-03")
+
+    assert not result.empty
+    assert float(result.iloc[0]["Close"]) == 202.0
+    assert result.attrs["source_name"] == "Twelve Data"
+
+
 def test_cached_yf_download_prefers_twelve_data_for_priority_etf(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(tools_common.path_config, "cache_dir", str(tmp_path))
     monkeypatch.setattr(tools_common, "YF_AVAILABLE", True)
@@ -168,8 +212,46 @@ def test_cached_yf_download_prefers_twelve_data_for_priority_etf(tmp_path: Path,
 
     assert not result.empty
     assert float(result.iloc[0]["Close"]) == 101.0
+    assert result.attrs["source_name"] == "Twelve Data"
+    assert result.attrs["market_data_source"] == "twelve_data_priority"
     assert requests_seen
     assert requests_seen[0][1]["symbol"] == "QQQ"
+
+
+def test_cached_yf_download_records_twelve_data_fallback_before_yfinance(tmp_path: Path, monkeypatch):
+    tools_common.reset_yfinance_runtime_diagnostics()
+    monkeypatch.setattr(tools_common.path_config, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(tools_common, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_common, "CACHE_AVAILABLE", False)
+    monkeypatch.setattr(tools_common, "get_twelve_data_api_key", lambda: "test-key")
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "error", "message": "temporary provider issue"}
+
+    def _fake_get(*args, **kwargs):
+        return _Response()
+
+    class _YF:
+        @staticmethod
+        def download(*args, **kwargs):
+            index = pd.to_datetime(["2026-01-02"])
+            return pd.DataFrame({"Close": [101.0]}, index=index)
+
+    monkeypatch.setattr(tools_common.requests, "get", _fake_get)
+    monkeypatch.setattr(tools_common, "yf", _YF)
+
+    result = tools_common.cached_yf_download("QQQ", start="2026-01-01", end="2026-01-03")
+
+    assert not result.empty
+    assert result.attrs["source_name"] == "yfinance"
+    diag = tools_common.get_yfinance_runtime_diagnostics()["yfinance"]
+    assert diag["by_status"]["fallback_scheduled"] == 1
+    assert diag["by_status"]["provider_success"] == 1
+    assert diag["events"][0]["source"] == "twelve_data_priority"
 
 
 def test_cached_yf_download_does_not_use_twelve_data_for_xly_xlp(tmp_path: Path, monkeypatch):
@@ -194,6 +276,7 @@ def test_cached_yf_download_does_not_use_twelve_data_for_xly_xlp(tmp_path: Path,
 
     assert not result.empty
     assert float(result.iloc[0]["Close"]) == 101.0
+    assert result.attrs["source_name"] == "yfinance"
 
 
 def test_cached_yf_download_clamps_unfinished_us_daily_end(tmp_path: Path, monkeypatch):

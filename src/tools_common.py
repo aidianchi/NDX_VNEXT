@@ -109,7 +109,7 @@ YF_FRAME_CACHE_PREFER_MAX_AGE_SECONDS = 60 * 60 * 12
 # 退避周期偏长，是为了让 Yahoo 限流（429）窗口有机会自动恢复。
 # 2026-05 多次 run 显示：2 秒间隔的重试都落在 Yahoo cooldown 窗口内，反复撞墙。
 YF_DOWNLOAD_RETRY_DELAYS_SECONDS = (10, 60)
-TWELVE_DATA_PRIORITY_TICKERS = {"QQQ", "HYG", "QQEW"}
+TWELVE_DATA_PRIORITY_TICKERS = {"QQQ", "HYG"}
 YF_RUNTIME_EVENT_LIMIT = 200
 
 _YF_RUNTIME_EVENTS: List[Dict[str, Any]] = []
@@ -345,6 +345,28 @@ def _yf_frame_cache_usable(frame: pd.DataFrame, requested_tickers: Optional[List
     return set(requested).issubset(available)
 
 
+def _tag_yf_frame_source(
+    frame: pd.DataFrame,
+    *,
+    source_name: str,
+    source_code: str,
+    cache_layer: Optional[str] = None,
+    preserve_existing: bool = False,
+) -> pd.DataFrame:
+    if not isinstance(frame, pd.DataFrame):
+        return frame
+    tagged = frame.copy()
+    if preserve_existing:
+        tagged.attrs.setdefault("source_name", source_name)
+        tagged.attrs.setdefault("market_data_source", source_code)
+    else:
+        tagged.attrs["source_name"] = source_name
+        tagged.attrs["market_data_source"] = source_code
+    if cache_layer:
+        tagged.attrs["cache_layer"] = cache_layer
+    return tagged
+
+
 def _read_yf_frame_cache(
     cache_key: str,
     max_age_seconds: Optional[int] = YF_FRAME_CACHE_MAX_AGE_SECONDS,
@@ -367,7 +389,13 @@ def _read_yf_frame_cache(
         cached_df = pd.read_pickle(path)
         if _yf_frame_cache_usable(cached_df, requested_tickers=requested_tickers):
             logging.warning(f"Using recent yfinance frame cache for {cache_key}")
-            return cached_df.copy()
+            return _tag_yf_frame_source(
+                cached_df,
+                source_name="persistent cache",
+                source_code="persistent_cache",
+                cache_layer="persistent_cache",
+                preserve_existing=True,
+            )
         logging.warning(f"Ignoring incomplete yfinance frame cache for {cache_key}")
     except Exception as exc:
         logging.warning(f"Failed reading yfinance frame cache {path}: {exc}")
@@ -563,7 +591,11 @@ def _fetch_twelve_data_daily_frame(
         return pd.DataFrame()
     if "Adj Close" not in frame.columns:
         frame["Adj Close"] = frame["Close"]
-    return frame[["Open", "High", "Low", "Close", "Adj Close", "Volume"]]
+    return _tag_yf_frame_source(
+        frame[["Open", "High", "Low", "Close", "Adj Close", "Volume"]],
+        source_name="Twelve Data",
+        source_code="twelve_data_priority",
+    )
 
 
 def cached_yf_download(
@@ -622,16 +654,26 @@ def cached_yf_download(
             requested_tickers=requested_tickers,
         )
         if not recent.empty:
-            _record_yfinance_runtime_event({
-                "operation": "download",
-                "ticker": ticker_key,
-                "status": "cache_hit_recent",
-                "source": "persistent_cache",
-                "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
-            })
-            return recent
+            if (
+                _is_twelve_data_priority_download(tickers, interval, auto_adjust)
+                and get_twelve_data_api_key()
+                and recent.attrs.get("market_data_source") == "persistent_cache"
+            ):
+                logging.info(
+                    "Refreshing unattributed recent cache for %s before using Twelve Data priority path",
+                    ticker_key,
+                )
+            else:
+                _record_yfinance_runtime_event({
+                    "operation": "download",
+                    "ticker": ticker_key,
+                    "status": "cache_hit_recent",
+                    "source": "persistent_cache",
+                    "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                })
+                return recent
 
-        if _is_twelve_data_priority_download(tickers, interval, auto_adjust):
+        if _is_twelve_data_priority_download(tickers, interval, auto_adjust) and get_twelve_data_api_key():
             frame = _fetch_twelve_data_daily_frame(ticker_key, start=start, end=end)
             if not frame.empty:
                 logging.info("Using Twelve Data priority daily frame for %s", ticker_key)
@@ -644,6 +686,15 @@ def cached_yf_download(
                     "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
                 })
                 return frame
+            _record_yfinance_runtime_event({
+                "operation": "download",
+                "ticker": ticker_key,
+                "status": "fallback_scheduled",
+                "source": "twelve_data_priority",
+                "failure_type": "empty_response",
+                "failure_reason": "Twelve Data priority path returned empty or unusable frame",
+                "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+            })
 
         if not YF_AVAILABLE:
             stale = _read_yf_frame_cache(cache_key, requested_tickers=requested_tickers)
@@ -682,6 +733,11 @@ def cached_yf_download(
                     auto_adjust=auto_adjust,
                 )
                 if _yf_frame_cache_usable(frame, requested_tickers=requested_tickers):
+                    frame = _tag_yf_frame_source(
+                        frame,
+                        source_name="yfinance",
+                        source_code="yfinance",
+                    )
                     _write_yf_frame_cache(cache_key, frame, requested_tickers=requested_tickers)
                     _record_yfinance_runtime_event({
                         "operation": "download",
@@ -771,7 +827,13 @@ def cached_yf_download(
             "source": "memory_cache",
             "elapsed_ms": 0.0,
         })
-        return cached_value.copy()
+        return _tag_yf_frame_source(
+            cached_value,
+            source_name="memory cache",
+            source_code="memory_cache",
+            cache_layer="memory_cache",
+            preserve_existing=True,
+        )
 
     fetched = _fetch()
     if _yf_frame_cache_usable(fetched, requested_tickers=requested_tickers):

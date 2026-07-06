@@ -176,13 +176,13 @@ class ResearchConsoleGenerator:
       <article class="panel run-panel" aria-label="运行设置">
         <div class="panel-head">
           <h2>运行模式</h2>
-          <p id="modeHelp">重新收集数据，运行完整 vNext，生成 native brief 和 workbench。</p>
+          <p id="modeHelp">重新收集数据，生成纯数据报告、事件新闻报告和综合报告。</p>
         </div>
 
         <div class="mode-cards" role="radiogroup" aria-label="运行模式">
-          <label><input type="radio" name="runMode" value="full" checked><span>完整运行</span></label>
-          <label><input type="radio" name="runMode" value="collect"><span>仅收集数据</span></label>
-          <label><input type="radio" name="runMode" value="analyze"><span>用已有数据分析</span></label>
+          <label><input type="radio" name="runMode" value="pure_data"><span>纯数据报告</span></label>
+          <label><input type="radio" name="runMode" value="event_only"><span>事件新闻报告</span></label>
+          <label><input type="radio" name="runMode" value="integrated" checked><span>综合报告</span></label>
         </div>
 
         <label class="check-row"><input id="backtestMode" type="checkbox"> 是否回测</label>
@@ -191,10 +191,9 @@ class ResearchConsoleGenerator:
           <p>回测会阻止当前网页、当前 Wind 快照和当前成分股基本面冒充历史当时可见数据。</p>
         </div>
 
-        <label class="check-row"><input id="enableNews" type="checkbox"> 收集新闻材料</label>
-        <p class="boundary-note">新闻材料只作为旁证，不直接进入 L1-L5 主证据。</p>
+        <p class="boundary-note" id="modeBoundaryNote">综合报告会同时生成纯数据报告和事件新闻报告；事件材料不进入 L1-L5 主证据。</p>
 
-        <button class="run-now-button" type="button" id="runNow">开始完整运行</button>
+        <button class="run-now-button" type="button" id="runNow">开始综合报告</button>
         <button class="secondary-button hidden" type="button" id="cancelJob">取消任务</button>
         <p id="runStatus" class="run-status is-idle" role="button" tabindex="0" aria-live="polite" title="点击刷新任务状态">状态：尚未运行。</p>
       </article>
@@ -202,7 +201,7 @@ class ResearchConsoleGenerator:
       <aside class="panel side-panel" aria-label="数据和入口">
         <div class="panel-head">
           <h2>末次数据</h2>
-          <p id="dataUseNote">完整运行会重新采集；用已有数据分析时会使用这份 JSON。</p>
+          <p id="dataUseNote">综合报告和纯数据报告会重新采集；事件新闻报告会优先用这份 JSON 做市场验证。</p>
         </div>
         <dl class="data-summary">
           <div><dt>文件</dt><dd id="latestDataName">暂无可用数据</dd></div>
@@ -264,7 +263,7 @@ class ResearchConsoleGenerator:
 
         <section class="developer-section">
           <h2>开发者命令</h2>
-          <pre id="runCommandPreview">python3 src/console_run_all.py --models deepseek-v4-flash,deepseek-v4-pro --workbench-modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity --skip-legacy-report</pre>
+          <pre id="runCommandPreview">python3 src/console_run_all.py --models deepseek-v4-flash,deepseek-v4-pro --workbench-modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity --skip-legacy-report --enable-news</pre>
           <pre id="jobStatusPreview">尚无任务。</pre>
         </section>
       </div>
@@ -626,7 +625,7 @@ function currentModels() {
 
 function selectedRunMode() {
   const selected = document.querySelector('input[name="runMode"]:checked');
-  return selected ? selected.value : 'full';
+  return selected ? selected.value : 'integrated';
 }
 
 function selectedModules() {
@@ -636,23 +635,18 @@ function selectedModules() {
 
 function modeCommand(mode, models) {
   const modules = selectedModules();
-  const full = ['python3 src/console_run_all.py', `--models ${models}`, `--workbench-modules ${modules}`, '--skip-legacy-report'];
-  const collect = ['python3 src/main.py', `--models ${models}`, '--collect-only', '--skip-report', '--disable-charts'];
+  const dataReport = ['python3 src/console_run_all.py', `--models ${models}`, `--workbench-modules ${modules}`, '--skip-legacy-report'];
+  const integrated = ['python3 src/console_run_all.py', `--models ${models}`, `--workbench-modules ${modules}`, '--skip-legacy-report', '--enable-news'];
+  const eventOnly = ['python3 src/main.py', '--event-only'];
   if (document.getElementById('backtestMode').checked && backtestDate.value) {
-    full.push(`--date ${backtestDate.value}`);
-    collect.push(`--date ${backtestDate.value}`);
+    dataReport.push(`--date ${backtestDate.value}`);
+    integrated.push(`--date ${backtestDate.value}`);
+    eventOnly.push(`--date ${backtestDate.value}`);
   }
-  if (document.getElementById('enableNews').checked) {
-    full.push('--enable-news');
-    collect.push('--enable-news');
-  }
-  if (mode === 'collect') return collect.join(' ');
-  if (mode === 'analyze') {
-    if (!data.latestDataJson) return '# 没有可用数据 JSON。请先运行“仅收集数据”。';
-    full.push(`--data-json ${data.latestDataJson}`);
-    return full.join(' ');
-  }
-  return full.join(' ');
+  if (data.latestDataJson) eventOnly.push(`--data-json ${data.latestDataJson}`);
+  if (mode === 'pure_data') return dataReport.join(' ');
+  if (mode === 'event_only') return eventOnly.join(' ');
+  return integrated.join(' ');
 }
 
 function buildManualPayload() {
@@ -695,7 +689,7 @@ function shouldSendManualJson() {
 }
 
 function dataJsonWarning(mode) {
-  if (mode !== 'analyze') return '';
+  if (mode !== 'event_only' || !data.latestDataJson) return '';
   const meta = data.latestDataJsonMeta || {};
   const jsonDate = meta.data_date || '';
   const modified = meta.modified_at || '';
@@ -725,26 +719,28 @@ function buildCommand() {
   const models = currentModels();
   preview.textContent = modeCommand(mode, models);
   const labels = {
-    full: ['开始完整运行', '重新收集数据，运行完整 vNext，生成 native brief 和 workbench。'],
-    collect: ['开始收集数据', '只更新数据快照，不跑模型，不生成报告。'],
-    analyze: ['开始分析已有数据', '将使用末次数据，不会重新采集。'],
+    pure_data: ['开始纯数据报告', '重新收集正式数据，运行 L1-L5 和数据侧报告；不收集事件新闻。'],
+    event_only: ['开始事件新闻报告', '只收集新闻、公告和市场叙事；如有末次数据，会做市场邻近验证。'],
+    integrated: ['开始综合报告', '重新收集正式数据，同时生成事件新闻报告，再输出综合报告。'],
   };
   runButton.textContent = labels[mode][0];
   document.getElementById('modeHelp').textContent = labels[mode][1];
-  document.getElementById('dataUseNote').textContent = mode === 'analyze'
-    ? '将使用这份数据，不会重新采集。'
-    : '完整运行会重新采集；用已有数据分析时会使用这份 JSON。';
+  document.getElementById('dataUseNote').textContent = mode === 'event_only'
+    ? '事件新闻报告会优先用这份 JSON 做市场验证；没有数据也能生成事件报告。'
+    : '综合报告和纯数据报告会重新采集；事件新闻报告会优先用这份 JSON 做市场验证。';
+  const boundary = {
+    pure_data: '纯数据报告不收集事件新闻，继续保持 L1-L5 上下文隔离。',
+    event_only: '事件新闻报告只产出第二层材料；不能作为 L1-L5 evidence_ref。',
+    integrated: '综合报告会同时生成纯数据报告和事件新闻报告；事件材料不进入 L1-L5 主证据。',
+  };
+  document.getElementById('modeBoundaryNote').textContent = boundary[mode];
   document.getElementById('windNote').textContent = document.getElementById('windEnabled').checked
     ? '开启后会使用 Wind 获取 NDX 估值和风险溢价，可能消耗积分。'
     : '本次不会调用 Wind L4 主锚，将使用降级路径。';
-  const noData = mode === 'analyze' && !data.latestDataJson;
-  runButton.disabled = noData;
+  runButton.disabled = false;
   const warning = dataJsonWarning(mode);
-  if (noData) {
-    runStatus.textContent = '状态：没有可用数据，请先运行“仅收集数据”。';
-    runStatus.className = 'run-status is-warning';
-  } else if (warning && !activeJobId) {
-    runStatus.textContent = `注意：${warning}。已有数据分析会以该 JSON 为准，不会重新采集。`;
+  if (warning && !activeJobId) {
+    runStatus.textContent = `注意：${warning}。事件新闻报告会以该 JSON 做市场验证；新闻收集仍会重新执行。`;
     runStatus.className = 'run-status is-warning';
   } else if (!activeJobId) {
     runStatus.textContent = '状态：尚未运行。';
@@ -752,7 +748,7 @@ function buildCommand() {
   }
 }
 
-document.querySelectorAll('input[name="modelMode"], input[name="runMode"], #customModels, #backtestMode, #backtestDate, #enableNews, #windEnabled, input[name="workbenchModule"]')
+document.querySelectorAll('input[name="modelMode"], input[name="runMode"], #customModels, #backtestMode, #backtestDate, #windEnabled, input[name="workbenchModule"]')
   .forEach((node) => node.addEventListener('change', buildCommand));
 document.getElementById('backtestMode').addEventListener('change', () => {
   document.getElementById('backtestDateWrap').hidden = !document.getElementById('backtestMode').checked;
@@ -891,7 +887,10 @@ async function openLatestProductForMode(jobId) {
     const response = await fetch(`${controlOrigin}/latest-product`);
     const result = await response.json();
     const summary = result.summary || {};
-    const preferred = summary.native_brief || summary.report_path || summary.workbench;
+    const mode = selectedRunMode();
+    const preferred = mode === 'event_only'
+      ? (summary.event_mechanism_report_html || summary.event_narrative_report || summary.event_narrative_ledger || summary.native_brief || summary.report_path || summary.workbench)
+      : (summary.native_brief || summary.report_path || summary.workbench || summary.event_mechanism_report_html || summary.event_narrative_report);
     if (!preferred) return;
     openedArtifactForJob = jobId;
     const reports = [];
@@ -899,6 +898,10 @@ async function openLatestProductForMode(jobId) {
     if (summary.workbench) reports.push({ label: 'Workbench', path: summary.workbench });
     if (summary.report_path && summary.report_path !== summary.native_brief) reports.push({ label: '完整报告', path: summary.report_path });
     if (summary.pure_data_report) reports.push({ label: '纯数据研报', path: summary.pure_data_report });
+    if (summary.event_mechanism_report_html) reports.push({ label: '新闻事件研报', path: summary.event_mechanism_report_html });
+    if (summary.event_narrative_report) reports.push({ label: '事件新闻报告', path: summary.event_narrative_report });
+    if (summary.event_mechanism_report) reports.push({ label: '新闻事件研报数据', path: summary.event_mechanism_report });
+    if (summary.cross_layer_questions) reports.push({ label: '跨层问题', path: summary.cross_layer_questions });
     if (summary.event_narrative_ledger) reports.push({ label: '事件与叙事账本', path: summary.event_narrative_ledger });
     if (summary.integrated_synthesis_report) reports.push({ label: '综合总报告', path: summary.integrated_synthesis_report });
     if (summary.news_event_ledger) reports.push({ label: '旧事件底账', path: summary.news_event_ledger });

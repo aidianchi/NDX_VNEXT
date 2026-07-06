@@ -202,7 +202,7 @@ Risk Sentinel 指出：
       },
       {
         "chain_description": "趋势脆弱性增加",
-        "evidence_refs": ["L3.qqq_qqew_ratio", "L3.advance_decline_line"],
+        "evidence_refs": ["L3.ndx_ndxe_ratio", "L3.advance_decline_line"],
         "weight": 0.25
       }
     ],

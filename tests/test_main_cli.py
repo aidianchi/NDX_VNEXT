@@ -30,6 +30,14 @@ def test_main_accepts_independent_news_sidecar_flag(monkeypatch):
     assert args.enable_news is True
 
 
+def test_main_accepts_event_only_report_flag(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--event-only"])
+
+    args = parse_args()
+
+    assert args.event_only is True
+
+
 def test_main_accepts_resume_from_existing_flag(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["main.py", "--resume-from-existing"])
 

@@ -26,6 +26,15 @@ def test_control_service_allows_collect_only_command():
     assert "--collect-only" in args
 
 
+def test_control_service_allows_event_only_command():
+    args = validate_command(
+        "python3 src/main.py --event-only --date 2026-05-09 --data-json output/data/data_collected_v9_live.json"
+    )
+
+    assert args[:2] == ["python3", "src/main.py"]
+    assert "--event-only" in args
+
+
 def test_control_service_rejects_unlisted_entrypoint():
     with pytest.raises(ValueError):
         validate_command("python3 src/unknown.py")

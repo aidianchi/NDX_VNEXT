@@ -56,6 +56,8 @@ def build_pure_data_report_manifest(
             "news_event_ledger",
             "news_layer_analysis",
             "event_narrative_ledger",
+            "event_mechanism_report",
+            "cross_layer_questions",
             "browser_sidecar",
             "event_refs",
         ],
@@ -94,12 +96,16 @@ class IntegratedSynthesisReportBuilder:
         *,
         pure_data_report: Dict[str, Any],
         event_narrative_ledger: Optional[Dict[str, Any]] = None,
+        event_layer_summary: Optional[Dict[str, Any]] = None,
+        event_mechanism_report: Optional[Dict[str, Any]] = None,
         data_integrity_report: Optional[Dict[str, Any]] = None,
         output_path: Optional[str | Path] = None,
         source_paths: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         data_integrity_report = data_integrity_report or {}
         event_narrative_ledger = event_narrative_ledger or {}
+        event_layer_summary = event_layer_summary or {}
+        event_mechanism_report = event_mechanism_report or {}
         publish_gate = self._publish_gate(data_integrity_report, event_narrative_ledger)
         events = _as_list(event_narrative_ledger.get("events"))
         claims = [
@@ -114,11 +120,13 @@ class IntegratedSynthesisReportBuilder:
             "schema_version": "integrated_synthesis_report_v1",
             "generated_at_utc": _utc_now_iso(),
             "policy": {
-                "inputs": ["pure_data_report", "event_narrative_ledger"],
+                "inputs": ["pure_data_report", "event_mechanism_report", "event_layer_summary", "event_narrative_ledger"],
                 "no_backflow_rule": "This report must not feed back into L1-L5, Bridge, Thesis, Risk, Reviser, or Final.",
                 "evidence_rule": "Event claims can support explanation grades, not L1-L5 evidence_refs.",
             },
             "source_artifacts": source_paths or {},
+            "event_mechanism_report": self._compact_event_mechanism_report(event_mechanism_report),
+            "event_layer_summary": self._compact_event_summary(event_layer_summary),
             "integrated_judgments": [judgment] if judgment else [],
             "conflict_matrix": self._conflict_matrix(claims),
             "unexplained_items": self._unexplained_items(claims, publish_gate),
@@ -151,6 +159,38 @@ class IntegratedSynthesisReportBuilder:
             "reason": "Pure data report is publishable and layer-2 event ledger is available.",
             "blocking_reasons": [],
             "formal_investment_conclusion_allowed": True,
+            }
+
+    def _compact_event_summary(self, summary: Dict[str, Any]) -> Dict[str, Any]:
+        if not summary:
+            return {}
+        return {
+            "most_important_events": _as_list(summary.get("most_important_events"))[:6],
+            "most_important_claims": _as_list(summary.get("most_important_claims"))[:8],
+            "strongest_counterevidence": _as_list(summary.get("strongest_counterevidence"))[:8],
+            "financial_links_most_related_to_layer_1": _as_list(summary.get("financial_links_most_related_to_layer_1")),
+            "forbidden_for_l1_l5_statement": summary.get("forbidden_for_l1_l5_statement", ""),
+        }
+
+    def _compact_event_mechanism_report(self, report: Dict[str, Any]) -> Dict[str, Any]:
+        if not report:
+            return {}
+        delivery = report.get("delivery_to_integrated_report", {}) if isinstance(report.get("delivery_to_integrated_report"), dict) else {}
+        headline = report.get("headline_judgment", {}) if isinstance(report.get("headline_judgment"), dict) else {}
+        return {
+            "headline_judgment": {
+                "title": headline.get("title", ""),
+                "plain_text": headline.get("plain_text", ""),
+                "confidence": headline.get("confidence", ""),
+                "cannot_be_used_as_primary_evidence": bool(headline.get("cannot_be_used_as_primary_evidence", True)),
+            },
+            "mainlines": _as_list(report.get("mainlines"))[:4],
+            "cross_layer_questions": _as_list(report.get("cross_layer_questions"))[:6],
+            "delivery_to_integrated_report": {
+                "one_sentence": delivery.get("one_sentence", ""),
+                "must_preserve_risks": _as_list(delivery.get("must_preserve_risks"))[:6],
+                "watchlist": _as_list(delivery.get("watchlist"))[:8],
+            },
         }
 
     def _main_judgment(self, pure_data: Dict[str, Any], claims: List[Dict[str, Any]], publish_gate: Dict[str, Any]) -> Dict[str, Any]:
@@ -162,7 +202,7 @@ class IntegratedSynthesisReportBuilder:
             grade = "not_explained"
             confidence = "low"
         elif data_refs and event_refs:
-            claim = "纯数据判断可发布，事件账本只能作为解释线索；综合结论必须以数据侧判断为主，并保留事件待验证边界。"
+            claim = "纯数据判断可发布，新闻事件只能作为解释线索和待确认问题；综合结论必须以数据侧判断为主，并保留反证。"
             grade = "integrated_explanation"
             confidence = "medium"
         else:
@@ -252,26 +292,35 @@ def write_integrated_synthesis_report(
     *,
     pure_data_report: Optional[Dict[str, Any]] = None,
     event_narrative_ledger: Optional[Dict[str, Any]] = None,
+    event_layer_summary: Optional[Dict[str, Any]] = None,
+    event_mechanism_report: Optional[Dict[str, Any]] = None,
     data_integrity_report: Optional[Dict[str, Any]] = None,
     pure_data_report_path: Optional[str | Path] = None,
     event_narrative_ledger_path: Optional[str | Path] = None,
+    event_layer_summary_path: Optional[str | Path] = None,
+    event_mechanism_report_path: Optional[str | Path] = None,
     data_integrity_report_path: Optional[str | Path] = None,
 ) -> str:
     run_path = Path(run_dir)
     pure_path = Path(pure_data_report_path) if pure_data_report_path else run_path / "pure_data_report.json"
     event_path = Path(event_narrative_ledger_path) if event_narrative_ledger_path else run_path / "event_narrative_ledger.json"
+    summary_path = Path(event_layer_summary_path) if event_layer_summary_path else run_path / "event_layer_summary.json"
+    mechanism_path = Path(event_mechanism_report_path) if event_mechanism_report_path else run_path / "event_mechanism_report.json"
     integrity_path = Path(data_integrity_report_path) if data_integrity_report_path else run_path / "data_integrity_report.json"
     output_path = run_path / "integrated_synthesis_report.json"
     IntegratedSynthesisReportBuilder().build(
         pure_data_report=pure_data_report if pure_data_report is not None else _load_json(pure_path, {}),
         event_narrative_ledger=event_narrative_ledger if event_narrative_ledger is not None else _load_json(event_path, {}),
+        event_layer_summary=event_layer_summary if event_layer_summary is not None else _load_json(summary_path, {}),
+        event_mechanism_report=event_mechanism_report if event_mechanism_report is not None else _load_json(mechanism_path, {}),
         data_integrity_report=data_integrity_report if data_integrity_report is not None else _load_json(integrity_path, {}),
         output_path=output_path,
         source_paths={
             "pure_data_report": str(pure_path),
+            "event_mechanism_report": str(mechanism_path),
+            "event_layer_summary": str(summary_path),
             "event_narrative_ledger": str(event_path),
             "data_integrity_report": str(integrity_path),
         },
     )
     return str(output_path)
-

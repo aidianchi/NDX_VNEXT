@@ -1178,7 +1178,7 @@ def test_layer_payload_normalization_wraps_core_facts_string(tmp_path: Path):
         llm_engine=FakeLLMEngine({}),
     )
 
-    fact_text = "QQQ/QQEW比率触及历史极值，Top10权重偏高，广度确认不足。"
+    fact_text = "NDX/NDXE比率触及历史极值，Top10权重偏高，广度确认不足。"
     normalized = orchestrator._normalize_payload(
         "l3_analyst",
         {
@@ -1208,13 +1208,13 @@ def test_layer_payload_normalization_wraps_single_core_fact_dict(tmp_path: Path)
         {
             "layer": "L3",
             "confidence": "medium",
-            "core_facts": {"metric": "QQQ/QQEW", "value": "extreme", "trend": "bullish"},
+            "core_facts": {"metric": "NDX/NDXE", "value": "extreme", "trend": "bullish"},
         },
     )
 
     assert normalized["core_facts"] == [
         {
-            "metric": "QQQ/QQEW",
+            "metric": "NDX/NDXE",
             "value": "extreme",
             "trend": "rising",
             "magnitude": None,

@@ -55,8 +55,8 @@ WORKBENCH_MODULES: Dict[str, Dict[str, Any]] = {
         "title": "广度集中度",
         "question": "指数上涨是扩散，还是少数头部权重硬撑？",
         "layer_tags": ["L3", "L5"],
-        "function_ids": ["get_qqq_qqew_ratio", "get_percent_above_ma", "get_advance_decline_line", "get_new_highs_lows"],
-        "series": ["QQQ_QQEW_RATIO", "QQQ_OHLCV"],
+        "function_ids": ["get_ndx_ndxe_ratio", "get_percent_above_ma", "get_advance_decline_line", "get_new_highs_lows"],
+        "series": ["NDX_NDXE_RATIO", "QQQ_OHLCV"],
     },
     "liquidity": {
         "title": "流动性",
@@ -80,7 +80,8 @@ SUPPLEMENTAL_SERIES_META: Dict[str, Dict[str, Any]] = {
     "US10Y_REAL": {"label": "10Y Real Rate", "provider": "FRED", "frequency": "daily", "layer": "L1", "function_id": "get_10y_real_rate"},
     "US10Y_BREAKEVEN": {"label": "10Y Breakeven", "provider": "FRED", "frequency": "daily", "layer": "L1", "function_id": "get_10y_breakeven"},
     "FED_FUNDS": {"label": "Fed Funds", "provider": "FRED", "frequency": "monthly", "layer": "L1", "function_id": "get_fed_funds_rate"},
-    "QQQ_QQEW_RATIO": {"label": "QQQ/QQEW", "provider": "calculated from yfinance", "frequency": "daily", "layer": "L3", "function_id": "get_qqq_qqew_ratio"},
+    "NDX_NDXE_RATIO": {"label": "NDX/NDXE", "provider": "calculated from yfinance/Yahoo index closes", "frequency": "daily", "layer": "L3", "function_id": "get_ndx_ndxe_ratio"},
+    "QQQ_QQEW_RATIO": {"label": "QQQ/QQEW (legacy)", "provider": "legacy calculated series", "frequency": "daily", "layer": "L3", "function_id": "get_qqq_qqew_ratio"},
     "NET_LIQUIDITY": {"label": "Net Liquidity", "provider": "FRED calculated", "frequency": "daily/weekly forward-filled", "layer": "L1", "function_id": "get_net_liquidity_momentum"},
     "WALCL": {"label": "WALCL", "provider": "FRED", "frequency": "weekly", "layer": "L1", "function_id": "get_net_liquidity_momentum"},
     "TGA": {"label": "TGA", "provider": "FRED", "frequency": "daily", "layer": "L1", "function_id": "get_net_liquidity_momentum"},
@@ -609,16 +610,16 @@ def _default_supplemental_fetchers(effective_date: Optional[str] = None) -> Dict
     def yf_series(ticker: str) -> Fetcher:
         return lambda lookback_days: _fetch_yf_history(ticker, end_date=effective_date)
 
-    def qqq_qqew(_lookback_days: int) -> Any:
+    def ndx_ndxe(_lookback_days: int) -> Any:
         try:
             from tools_common import align_and_calculate_ratio
         except ImportError:
             from .tools_common import align_and_calculate_ratio
-        qqq = _fetch_yf_history("QQQ", end_date=effective_date)
-        qqew = _fetch_yf_history("QQEW", end_date=effective_date)
-        if qqq.empty or qqew.empty:
+        ndx = _fetch_yf_history("^NDX", end_date=effective_date)
+        ndxe = _fetch_yf_history("^NDXE", end_date=effective_date)
+        if ndx.empty or ndxe.empty:
             return []
-        return align_and_calculate_ratio(qqq, qqew).rename(columns={"ratio": "value"})[["date", "value"]]
+        return align_and_calculate_ratio(ndx, ndxe).rename(columns={"ratio": "value"})[["date", "value"]]
 
     def net_component(name: str) -> Fetcher:
         def _fetch(_lookback_days: int) -> Any:
@@ -662,7 +663,7 @@ def _default_supplemental_fetchers(effective_date: Optional[str] = None) -> Dict
         "US10Y_REAL": fred("DFII10"),
         "US10Y_BREAKEVEN": fred("T10YIE"),
         "FED_FUNDS": fred("FEDFUNDS"),
-        "QQQ_QQEW_RATIO": qqq_qqew,
+        "NDX_NDXE_RATIO": ndx_ndxe,
         "NET_LIQUIDITY": net_component("NET_LIQUIDITY"),
         "WALCL": net_component("WALCL"),
         "TGA": net_component("TGA"),

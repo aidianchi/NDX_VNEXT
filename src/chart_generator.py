@@ -90,7 +90,8 @@ CHART_INDICATORS = {
     "get_net_liquidity_momentum": ("NET_LIQUIDITY", "multi_component", "美元净流动性"),
     "get_vix": ("VIX", "line_with_ma", "VIX恐慌指数"),
     "get_vxn": ("VXN", "line_with_ma", "VXN纳指波动率"),
-    "get_qqq_qqew_ratio": ("QQQ_QQEW_RATIO", "line_with_ma", "QQQ/QQEW集中度比率"),
+    "get_ndx_ndxe_ratio": ("NDX_NDXE_RATIO", "line_with_ma", "NDX/NDXE集中度比率"),
+    "get_qqq_qqew_ratio": ("NDX_NDXE_RATIO", "line_with_ma", "NDX/NDXE集中度比率"),
     "get_copper_gold_ratio": ("COPPER_GOLD_RATIO", "line_with_ma", "铜金比率"),
     "get_xly_xlp_ratio": ("XLY_XLP_RATIO", "line_with_ma", "XLY/XLP风险偏好"),
     "get_10y_real_rate": ("DFII10", "line_with_ma", "10年期实际利率"),
@@ -1332,7 +1333,7 @@ def get_historical_data_from_cache(
 
 def _refresh_chart_cache(cache_key: str, cache_dir: Path, lookback_days: int) -> None:
     try:
-        if cache_key in {"QQQ_QQEW_RATIO", "XLY_XLP_RATIO", "COPPER_GOLD_RATIO"}:
+        if cache_key in {"NDX_NDXE_RATIO", "QQQ_QQEW_RATIO", "XLY_XLP_RATIO", "COPPER_GOLD_RATIO"}:
             _refresh_ratio_cache(cache_key, cache_dir, lookback_days)
             return
         if cache_key == "NET_LIQUIDITY":
@@ -1368,9 +1369,9 @@ def _update_cache_series(cache_key: str, cache_dir: Path) -> None:
 def _refresh_ratio_cache(cache_key: str, cache_dir: Path, lookback_days: int) -> None:
     end_date = pd.Timestamp.now()
     start_date = end_date - pd.Timedelta(days=lookback_days)
-    if cache_key == "QQQ_QQEW_RATIO":
-        numerator_df = _fetch_yf_history("QQQ", start_date=start_date)
-        denominator_df = _fetch_yf_history("QQEW", start_date=start_date)
+    if cache_key in {"NDX_NDXE_RATIO", "QQQ_QQEW_RATIO"}:
+        numerator_df = _fetch_yf_history("^NDX", start_date=start_date)
+        denominator_df = _fetch_yf_history("^NDXE", start_date=start_date)
     elif cache_key == "XLY_XLP_RATIO":
         numerator_df = _fetch_yf_history("XLY", start_date=start_date)
         denominator_df = _fetch_yf_history("XLP", start_date=start_date)

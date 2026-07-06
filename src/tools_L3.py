@@ -10,6 +10,7 @@ except ImportError:
     from tools_common import *
 
 from datetime import timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 # =====================================================
 # 第3层函数
@@ -228,6 +229,60 @@ INVESCO_QQQ_HOLDINGS_URL = (
 INVESCO_QQQ_HOLDINGS_PAGE = "https://www.invesco.com/qqq-etf/en/about.html#top-10-holdings"
 
 
+def _qqq_holdings_archive_dir() -> str:
+    path = os.path.join(path_config.cache_dir, "market_archive", "qqq_holdings")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _qqq_holdings_effective_date(payload: Dict[str, Any]) -> str:
+    raw = payload.get("effectiveBusinessDate") or payload.get("effectiveDate")
+    if raw:
+        try:
+            return pd.to_datetime(raw).strftime("%Y-%m-%d")
+        except Exception:
+            return str(raw)[:10]
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _write_qqq_holdings_snapshot(payload: Dict[str, Any]) -> None:
+    holdings = payload.get("holdings") if isinstance(payload, dict) else None
+    if not isinstance(holdings, list) or len(holdings) < 10:
+        return
+    effective = _qqq_holdings_effective_date(payload)
+    archive_payload = {
+        "cached_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "effective_date": effective,
+        "source_url": INVESCO_QQQ_HOLDINGS_URL,
+        "payload": payload,
+    }
+    try:
+        dated_path = os.path.join(_qqq_holdings_archive_dir(), f"{effective}.json")
+        latest_path = os.path.join(_qqq_holdings_archive_dir(), "latest.json")
+        for path in [dated_path, latest_path]:
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(archive_payload, handle, ensure_ascii=False, default=str)
+                handle.write("\n")
+    except Exception as exc:
+        logging.warning("Failed writing QQQ holdings snapshot: %s", exc)
+
+
+def _read_latest_qqq_holdings_snapshot() -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    path = os.path.join(_qqq_holdings_archive_dir(), "latest.json")
+    if not os.path.exists(path):
+        return None, None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            archive_payload = json.load(handle)
+        payload = archive_payload.get("payload")
+        holdings = payload.get("holdings") if isinstance(payload, dict) else None
+        if isinstance(holdings, list) and len(holdings) >= 10:
+            return payload, archive_payload
+    except Exception as exc:
+        logging.warning("Failed reading QQQ holdings snapshot: %s", exc)
+    return None, None
+
+
 def _fetch_invesco_qqq_holdings() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     try:
         response = requests.get(
@@ -249,6 +304,7 @@ def _fetch_invesco_qqq_holdings() -> Tuple[Optional[Dict[str, Any]], Optional[st
         data = response.json()
         if not isinstance(data, dict) or not isinstance(data.get("holdings"), list):
             return None, "Invesco holdings response missing holdings list"
+        _write_qqq_holdings_snapshot(data)
         return data, None
     except Exception as exc:
         return None, str(exc)[:160]
@@ -328,39 +384,48 @@ def _concentration_weight_change_proxy(
         return None
 
 
-def _qqq_equal_weight_performance_spread(effective_date: datetime) -> Dict[str, Any]:
+def _ndx_equal_weight_performance_spread(effective_date: datetime) -> Dict[str, Any]:
     if not YF_AVAILABLE:
         return {"availability": "unavailable", "reason": "yfinance unavailable"}
     start_date = effective_date - timedelta(days=220)
     try:
-        qqq = clean_yfinance_dataframe(
-            cached_yf_download("QQQ", start=start_date, end=effective_date + timedelta(days=1), progress=False, auto_adjust=True)
+        ndx = clean_yfinance_dataframe(
+            cached_yf_download("^NDX", start=start_date, end=effective_date + timedelta(days=1), progress=False, auto_adjust=True)
         )
-        qqew = clean_yfinance_dataframe(
-            cached_yf_download("QQEW", start=start_date, end=effective_date + timedelta(days=1), progress=False, auto_adjust=True)
+        ndxe = clean_yfinance_dataframe(
+            cached_yf_download("^NDXE", start=start_date, end=effective_date + timedelta(days=1), progress=False, auto_adjust=True)
         )
-        if qqq.empty or qqew.empty or "close" not in qqq.columns or "close" not in qqew.columns:
-            return {"availability": "unavailable", "reason": "QQQ/QQEW close series unavailable"}
-        df = pd.concat([qqq["close"].rename("qqq"), qqew["close"].rename("qqew")], axis=1).dropna()
+        if ndx.empty or ndxe.empty or "close" not in ndx.columns or "close" not in ndxe.columns:
+            return {"availability": "unavailable", "reason": "NDX/NDXE close series unavailable"}
+        df = pd.concat([ndx["close"].rename("ndx"), ndxe["close"].rename("ndxe")], axis=1).dropna()
         if len(df) < 22:
-            return {"availability": "unavailable", "reason": "insufficient common QQQ/QQEW history"}
+            return {"availability": "unavailable", "reason": "insufficient common NDX/NDXE history"}
         out: Dict[str, Any] = {"availability": "available", "source_name": "yfinance daily close", "windows": {}}
         for label, rows in [("1m", 21), ("3m", 63), ("6m", 126)]:
             if len(df) <= rows:
                 continue
             latest = df.iloc[-1]
             prior = df.iloc[-rows - 1]
-            qqq_return = float(latest["qqq"] / prior["qqq"] - 1) * 100
-            qqew_return = float(latest["qqew"] / prior["qqew"] - 1) * 100
+            ndx_return = float(latest["ndx"] / prior["ndx"] - 1) * 100
+            ndxe_return = float(latest["ndxe"] / prior["ndxe"] - 1) * 100
             out["windows"][label] = {
-                "qqq_return_pct": round(qqq_return, 2),
-                "qqew_return_pct": round(qqew_return, 2),
-                "market_cap_minus_equal_weight_pct": round(qqq_return - qqew_return, 2),
-                "ratio_change_pct": round(float((latest["qqq"] / latest["qqew"]) / (prior["qqq"] / prior["qqew"]) - 1) * 100, 2),
+                "ndx_return_pct": round(ndx_return, 2),
+                "ndxe_return_pct": round(ndxe_return, 2),
+                "market_cap_minus_equal_weight_pct": round(ndx_return - ndxe_return, 2),
+                "ratio_change_pct": round(float((latest["ndx"] / latest["ndxe"]) / (prior["ndx"] / prior["ndxe"]) - 1) * 100, 2),
             }
         return out
     except Exception as exc:
         return {"availability": "unavailable", "reason": str(exc)[:120]}
+
+
+def _qqq_equal_weight_performance_spread(effective_date: datetime) -> Dict[str, Any]:
+    """Backward-compatible alias for tests and older call sites.
+
+    The implementation uses NDX vs NDXE because QQQ is the tradable proxy while
+    the research comparison should stay anchored to the underlying index pair.
+    """
+    return _ndx_equal_weight_performance_spread(effective_date)
 
 
 def get_qqq_top10_concentration(end_date: str = None) -> Dict[str, Any]:
@@ -386,6 +451,11 @@ def get_qqq_top10_concentration(end_date: str = None) -> Dict[str, Any]:
             },
         }
     payload, error = _fetch_invesco_qqq_holdings()
+    snapshot_meta: Optional[Dict[str, Any]] = None
+    used_cached_snapshot = False
+    if payload is None:
+        payload, snapshot_meta = _read_latest_qqq_holdings_snapshot()
+        used_cached_snapshot = payload is not None
     if payload is None:
         return {
             "name": "QQQ Top10 Concentration",
@@ -447,20 +517,27 @@ def get_qqq_top10_concentration(end_date: str = None) -> Dict[str, Any]:
         "value": value,
         "unit": "percent",
         "date": effective,
-        "source_name": "Invesco QQQ official holdings API",
+        "source_name": "Invesco QQQ official holdings API" + (" (local snapshot fallback)" if used_cached_snapshot else ""),
         "source_url": INVESCO_QQQ_HOLDINGS_PAGE,
-        "source_tier": "official_provider",
+        "source_tier": "official_provider_cached" if used_cached_snapshot else "official_provider",
         "data_quality": {
-            "source_tier": "official_provider",
+            "source_tier": "official_provider_cached" if used_cached_snapshot else "official_provider",
             "data_date": effective,
             "collected_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "update_frequency": "daily/monthly as published by Invesco endpoint",
-            "formula": "Top-N concentration = sum of Invesco percentageOfTotalNetAssets; QQQ vs QQEW spread from daily close total returns.",
+            "formula": "Top-N concentration = sum of Invesco percentageOfTotalNetAssets; NDX vs NDXE spread from daily close total returns.",
             "coverage": {"holdings_reported": len(holdings), "total_holdings": total_holdings},
-            "anomalies": [] if len(top10) == 10 else ["fewer_than_10_holdings_parsed"],
-            "fallback_chain": ["official_provider/Invesco", "proxy/yfinance", "unavailable"],
+            "anomalies": (
+                (["invesco_live_unavailable_used_cached_snapshot"] if used_cached_snapshot else [])
+                + ([] if len(top10) == 10 else ["fewer_than_10_holdings_parsed"])
+            ),
+            "fallback_chain": ["official_provider/Invesco", "local_official_snapshot", "proxy/yfinance", "unavailable"],
+            "snapshot_cached_at_utc": (snapshot_meta or {}).get("cached_at_utc") if used_cached_snapshot else None,
         },
-        "notes": "官方 QQQ 持仓用于头部权重锚；QQQ/QQEW 表现差异只作为市值加权相对等权的价格代理。",
+        "notes": (
+            "官方 QQQ 持仓用于头部权重锚；NDX/NDXE 表现差异只作为市值加权相对等权 Nasdaq-100 的价格代理。"
+            + (f" 本次 Invesco live 抓取失败，使用本地官方快照兜底：{error}" if used_cached_snapshot else "")
+        ),
     }
 
 # =====================================================

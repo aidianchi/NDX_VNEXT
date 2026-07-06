@@ -4,6 +4,89 @@
 
 ---
 
+## 2026-07-01
+
+### 第二层新闻事件研报重构落地
+
+完成内容：
+
+- 将第二层正式从“事件账本 + 窗口观察”升级为“新闻事件研报 + 跨层问题交付”。
+- 新增 `event_mechanism_report.json`、`cross_layer_questions.json`、`event_mechanism_cards.json` 和 `event_mechanism_report.html`。
+- 新闻按主线组织，不再按标题列表堆叠；默认主线包括 AI/半导体盈利、宏观利率估值压力、指数结构/广度、信用/流动性，以及其他观察。
+- 每条新闻卡生成读者可读字段：标题、来源、日期、摘要、AI 分析、能支持什么、不能支持什么、还要确认什么、缺失证据和置信度。
+- 旧 `event_market_validation.json` 保留兼容，但窗口观察降级为 `background_market_observation`，不再写成市场确认新闻，也不在读者页作为验证结论展示。
+- 新增第二层独立 HTML 报告，结构对齐样张：新闻事件初步判断、事件快照、主线新闻卡、点击弹窗、事件研究卡、新闻给数据层的问题、主张台账、给综合研报的一句话。
+- 综合 vNext brief 优先读取 `event_mechanism_report.json`，事件区改为展示新闻解释、数据待确认问题、证据缺口和给综合研报的交付，不再只是旧 04 标题列表。
+- 控制台 `/latest-product` 和 event-only 模式优先打开新版新闻事件 HTML。
+- 纯数据 manifest 禁止输入新增 `event_mechanism_report` 和 `cross_layer_questions`，继续防止第二层污染 L1-L5。
+
+验证结果：
+
+- 已用新规则刷新 `output/analysis/vnext/20260701_131914` 的第二层产物、`integrated_synthesis_report.json`、`vnext_brief_20260701_1319.html` 和 `vnext_workbench_20260701_1319.html`。
+- 独立新闻事件 HTML 静态验收通过：包含“新闻事件初步判断”“可以说”“不能说”“data-detail”“AI 分析”“给综合研报的一句话”“新闻事件给数据层出的题”；不包含 `earnings_path`、`discount_rate`、`risk_premium`、`Layer 2 Event Mechanism Report`、“第二层可以说”、“新闻导致价格变化”。
+- 全量测试：`python3 -m pytest -q`：417 通过，4 个环境/依赖 warning。
+
+剩余风险：
+
+- 新闻分析仍主要基于现有标题、摘要和来源字段；缺 URL、未读全文的材料已降级，但还没有自动追原文、找反方全文或安装专项深度事件研究 workflow。
+- 综合 brief 底部嵌入的完整 vNext 数据 JSON 仍包含部分内部 evidence/ref 字段，这是全站审计数据，不属于新版新闻事件区；若未来要彻底面向非技术读者，需要单独做“隐藏审计 JSON / 懒加载审计”的前端治理。
+
+### 综合报告实跑审查与质量修复
+
+完成内容：
+
+- 对 `output/analysis/vnext/20260701_131914` 做三路审查：第一层数据质量、第二层事件研究、第三层综合报告/HTML 可读性。
+- 结论：本次 run 没有被 DataIntegrity 闸门挡住，`publish_status=publishable`，最终判断“估值偏高、宏观约束偏紧、只支持战术试探”基本合理；事件材料没有进入 L1-L5 / Bridge / Thesis / Risk / Reviser / Final 的运行 prompt。
+- 修复第二层措辞越权：媒体标题不再写成“官方事件”，标题-only claim 的 `fact_part/fact_summary` 只记录“某来源在某时发布某标题”，解释和叙事部分明确未读全文不能推出强解释。
+- 修复市场验证措辞：`partly_confirmed` 改为 `temporal_association_observed`，保留“只代表时间关联，不构成因果证明”的边界。
+- 修复事件摘要排序：标题-only 不能高置信，ETF NPORT/N-CSR 这类基金文件不会再挤占高重要性事件位。
+- 修复 legacy 导出里的“数值冒充分位”：只有字段名明确是 percentile 的值才显示为“分位”，普通价格、ADL、RSI、ATR 不再被写成历史分位。
+- Native brief 主文新增“事件与叙事层”小节，用户打开 HTML 就能看到第二层只做解释线索、不能做主证据；审计入口新增 `event_layer_summary.json`。
+- 为控制台就绪检测补回兼容标记，避免新旧 launcher 文案造成测试误判。
+
+验证结果：
+
+- 已用新规则刷新本次 run 的派生产物：`event_narrative_ledger.json`、`event_claim_ledger.json`、`event_market_validation.json`、`event_layer_summary.json`、`integrated_synthesis_report.json`、`logic_vnext.json`、`vnext_brief_20260701_1319.html`、`vnext_workbench_20260701_1319.html`。
+- 回查确认不再出现 `官方事件`、`partly_confirmed`、`736.4% 分位`、`439.0% 分位`、`106.0% 分位` 等旧问题。
+- 全量测试：`python3 -m pytest -q`：415 通过，4 个环境/依赖 warning。
+
+剩余风险：
+
+- 第一层数据证据元信息仍有大量 `source_url`、`coverage`、`vintage_date` 缺口；本轮只修了最误导读者的表达层问题，没有全面补齐数据合约。
+- 第二层仍是规则化事件研究，不是全文原文核验和反方材料检索；标题-only 材料现在会降级，但还没有自动深读全文。
+
+### 第二层事件研究 Agent 五段式流水线落地
+
+完成内容：
+
+- 将第二层从旧的“新闻/事件标题侧栏”升级为五段式事件研究流水线：采集与时间闸门、事件聚类与 claim 拆解、事件研究包、市场验证、账本/报告/综合层交付。
+- `NewsEventLedgerBuilder` 新增 `event_source_raw.jsonl`，每条材料记录来源、发布时间、信息可见时间、正文可用性、hash、采集状态和第二层边界；历史 run 中未来材料和无日期材料不会进入事件账本。
+- `EventNarrativeLedgerBuilder` 现在除 `event_narrative_ledger.json` 外，还会写出 `event_clusters.json`、`event_claim_ledger.json`、`event_research_packets/*.json`、`event_market_validation.json`、`event_layer_summary.json`、`event_adversarial_review.json` 和 `event_narrative_report.md`。
+- claim 枚举收敛为计划要求的 7 类：`official_fact`、`company_disclosure`、`data_release_claim`、`interpretation_claim`、`view_claim`、`narrative_claim`、`rumor_claim`；标题-only 材料自动低置信，社媒/未验证信号不能变成官方事实。
+- 市场验证器只输出确认程度和时间邻近观察，固定声明不构成因果证明；缺少验证数据时降级为 `insufficient_data`。
+- 第三层综合报告显式读取 `event_layer_summary.json`，同时保留 `event_narrative_ledger.json` 兼容旧入口；第二层仍禁止反向流入 L1-L5 / Bridge / Thesis / Risk / Reviser / Final data-only prompts。
+- `run_summary.json` 增加完整第二层卷宗路径，方便控制台和后续审计入口读取。
+- 顺手修复全量测试暴露的两个既有兼容缺口：恢复 `VNextReportGenerator._data_quality_box`，并为 L3 Top10 集中度补回 `_qqq_equal_weight_performance_spread` 兼容别名（内部仍使用 NDX/NDXE 底层口径）。
+
+验证结果：
+
+- 聚焦测试：`tests/test_news_event_ledger.py tests/test_news_event_data_linker.py tests/test_news_layer_analyzer.py tests/test_three_layer_artifacts.py`：15 通过。
+- 主链相关测试：`tests/test_main_cli.py tests/test_main_collect_only.py tests/test_vnext_packet_builder.py tests/test_control_service.py tests/test_research_console.py tests/test_vnext_reporter.py tests/test_prompt_guardrails.py`：64 通过。
+- 全量测试：`python3 -m pytest -q`：410 通过，4 个环境/依赖 warning。
+
+对抗式审查结论：
+
+- 未来函数：历史 `effective_date` 下未来材料和无日期材料被排除；实时模式保留但标注日期不确定。
+- 标题党：`raw_text_available=false` 的 claim 只能低置信，研究包会记录降级原因。
+- 情绪源越权：`unverified_signal` 固定降为 `rumor_claim`，不能生成 `official_fact`。
+- 事后讲故事：市场验证只写 `temporal association only; no causal proof`，不允许把新闻写成价格原因。
+- 第一层污染：新增产物只由第二层/第三层读取；纯数据 manifest 仍声明禁止 `event_refs`、news/event ledger 和 browser sidecar。
+
+剩余风险：
+
+- Wind financial docs、Yahoo/Alpha Vantage、社媒等 adapter 目前是结构预留，尚未完成真实自动接入；当前真实采集仍以官方 RSS 和 SEC EDGAR 为主。
+- 事件研究包目前是规则化研究包，不是 LLM 深度调查；重大事件的原文追踪、全文公告/filing 阅读和反方材料检索仍属于后续深度模式。
+
 ## 2026-06-30
 
 ### 三层研报架构工程接入第一版

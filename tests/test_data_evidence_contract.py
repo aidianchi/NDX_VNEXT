@@ -81,7 +81,7 @@ def test_future_date_latest_only_and_proxy_official_are_hard_blocks():
             "source_name": "Synthetic proxy",
             "data_quality": {"source_tier": "official", "methodology": "proxy estimate"},
         },
-        function_id="get_qqq_qqew_ratio",
+        function_id="get_ndx_ndxe_ratio",
         layer=3,
         effective_date="2025-04-09",
     )
@@ -92,7 +92,7 @@ def test_future_date_latest_only_and_proxy_official_are_hard_blocks():
             "indicators": [
                 _indicator("get_vix", future, layer=2),
                 _indicator("get_m7_fundamentals", latest_only, layer=3),
-                _indicator("get_qqq_qqew_ratio", proxy_official, layer=3),
+                _indicator("get_ndx_ndxe_ratio", proxy_official, layer=3),
             ],
         }
     )

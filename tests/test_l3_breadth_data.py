@@ -160,6 +160,7 @@ def test_l3_prompt_documents_breadth_priority_and_missing_data_boundary():
 
 
 def test_realtime_breadth_does_not_request_historical_constituents(monkeypatch):
+    tools_L2._NDX100_PRICE_PANEL_RUN_CACHE.clear()
     requested = {}
 
     def fake_components(end_date=None):
@@ -176,22 +177,75 @@ def test_realtime_breadth_does_not_request_historical_constituents(monkeypatch):
     assert requested["end_date"] is None
 
 
-def test_qqq_qqew_ratio_yfinance_request_includes_effective_date(monkeypatch):
+def test_ndx100_common_price_data_uses_local_archive_when_yfinance_fails(tmp_path, monkeypatch):
+    tools_L2._NDX100_PRICE_PANEL_RUN_CACHE.clear()
+    monkeypatch.setattr(tools_L2.path_config, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(tools_L2, "get_ndx100_components", lambda end_date=None: ["AAA", "BBB", "CCC"])
+    monkeypatch.setattr(tools_L2, "cached_yf_download", lambda *args, **kwargs: _price_panel())
+
+    components, first = tools_L2._get_ndx100_common_price_data(datetime(2025, 12, 31), historical_date="2025-12-31")
+    assert components == ["AAA", "BBB", "CCC"]
+    assert not first.empty
+
+    tools_L2._NDX100_PRICE_PANEL_RUN_CACHE.clear()
+
+    def empty_download(*args, **kwargs):
+        raise AssertionError("archive should avoid a second yfinance fetch")
+
+    monkeypatch.setattr(tools_L2, "cached_yf_download", empty_download)
+    components, archived = tools_L2._get_ndx100_common_price_data(datetime(2025, 12, 31), historical_date="2025-12-31")
+
+    assert components == ["AAA", "BBB", "CCC"]
+    assert not archived.empty
+    assert list(tools_L2._extract_component_close_prices(archived).columns) == ["AAA", "BBB", "CCC"]
+
+
+def test_ndx100_common_price_data_caches_failed_window_within_run(tmp_path, monkeypatch):
+    tools_L2._NDX100_PRICE_PANEL_RUN_CACHE.clear()
+    monkeypatch.setattr(tools_L2.path_config, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(tools_L2, "get_ndx100_components", lambda end_date=None: ["AAA", "BBB", "CCC"])
+    calls = {"count": 0}
+
+    def empty_download(*args, **kwargs):
+        calls["count"] += 1
+        return None
+
+    monkeypatch.setattr(tools_L2, "_download_ndx100_missing_price_archive", empty_download)
+
+    for _ in range(2):
+        _components, data = tools_L2._get_ndx100_common_price_data(datetime(2025, 12, 31), historical_date="2025-12-31")
+        assert data.empty
+
+    assert calls["count"] == 1
+
+
+def test_single_ticker_archive_download_keeps_ticker_column_name():
+    dates = pd.date_range("2025-01-01", periods=3, freq="B")
+    single = pd.DataFrame({"Close": [10.0, 11.0, 12.0]}, index=dates)
+
+    normalized = tools_L2._ensure_component_ticker_columns(single, ["MSFT"])
+    close = tools_L2._extract_component_close_prices(normalized)
+
+    assert list(close.columns) == ["MSFT"]
+
+
+def test_ndx_ndxe_ratio_yfinance_request_includes_effective_date(monkeypatch):
     calls = []
     dates = pd.date_range("2024-04-10", "2025-04-09", freq="B")
 
     def fake_download(ticker, **kwargs):
         calls.append((ticker, kwargs.get("end")))
         close = pd.Series(range(100, 100 + len(dates)), index=dates, dtype=float)
-        if ticker == "QQEW":
+        if ticker == "^NDXE":
             close = close * 0.9
         return pd.DataFrame({"Close": close}, index=dates)
 
     monkeypatch.setattr(tools_L2, "YF_AVAILABLE", True)
     monkeypatch.setattr(tools_L2, "cached_yf_download", fake_download)
 
-    result = tools_L2.get_qqq_qqew_ratio("2025-04-09")
+    result = tools_L2.get_ndx_ndxe_ratio("2025-04-09")
 
-    assert {ticker for ticker, _end in calls} == {"QQQ", "QQEW"}
+    assert {ticker for ticker, _end in calls} == {"^NDX", "^NDXE"}
     assert {pd.Timestamp(end).date().isoformat() for _ticker, end in calls} == {"2025-04-10"}
     assert result["value"]["date"] == "2025-04-09"
+    assert result["name"] == "NDX/NDXE Ratio"

@@ -1194,6 +1194,9 @@ class VNextReportGenerator:
             "news_event_data_links.json",
             "news_layer_analysis.json",
             "event_narrative_ledger.json",
+            "event_mechanism_report.json",
+            "cross_layer_questions.json",
+            "event_mechanism_cards.json",
             "integrated_synthesis_report.json",
             "run_summary.json",
         ]
@@ -1286,6 +1289,8 @@ class VNextReportGenerator:
             "news_event_data_links": _load_json(run_path / "news_event_data_links.json", {}),
             "news_layer_analysis": _load_json(run_path / "news_layer_analysis.json", {}),
             "event_narrative_ledger": _load_json(run_path / "event_narrative_ledger.json", {}),
+            "event_mechanism_report": _load_json(run_path / "event_mechanism_report.json", {}),
+            "event_layer_summary": _load_json(run_path / "event_layer_summary.json", {}),
             "integrated_synthesis_report": _load_json(run_path / "integrated_synthesis_report.json", {}),
             "chart_time_series": _load_json(run_path / "chart_time_series.json", {}),
             "layers": layers,
@@ -1415,6 +1420,34 @@ class VNextReportGenerator:
                 compact[key] = value
         return compact
 
+    def _data_quality_box(self, data_quality: Any) -> str:
+        compact = self._drawer_data_quality(data_quality)
+        if not compact:
+            return '<div class="data-quality-box empty">数据证据合约未记录。</div>'
+        date_text = (
+            f"data={compact.get('data_date', 'not_available')}; "
+            f"as_of={compact.get('as_of_date', 'not_available')}; "
+            f"effective={compact.get('effective_date', 'not_available')}; "
+            f"vintage={compact.get('vintage_date', 'not_available')}"
+        )
+        rows = [
+            ("合约版本", compact.get("contract_version")),
+            ("来源", " / ".join(str(item) for item in [compact.get("provider"), compact.get("source_name"), compact.get("source_url")] if item)),
+            ("来源等级", compact.get("source_tier")),
+            ("日期", date_text),
+            ("可用性", compact.get("availability")),
+            ("备用路径", compact.get("fallback_reason")),
+            ("授权边界", compact.get("license_note")),
+            ("覆盖率", compact.get("coverage")),
+            ("异常", compact.get("anomalies")),
+        ]
+        body = "".join(
+            f"<div class=\"data-quality-row\"><b>{_escape(label)}</b><span>{_escape(value)}</span></div>"
+            for label, value in rows
+            if value not in (None, "", [], {})
+        )
+        return f'<div class="data-quality-box">{body}</div>'
+
     def _enrich_indicator_data_quality(self, artifacts: Dict[str, Any]) -> None:
         raw_data = artifacts.get("analysis_packet", {}).get("raw_data", {})
         layers = artifacts.get("layers", {})
@@ -1539,6 +1572,7 @@ class VNextReportGenerator:
                 self._memo_chartbook_section(artifacts)
                 + self._risks_section(artifacts, "02 · 风险与反证")
                 + self._conflicts_section(artifacts, "03 · 冲突与共振")
+                + self._event_layer_summary_section(artifacts)
                 + self._brief_layers_section(artifacts)
                 + self._audit_section(
                     run_path,
@@ -2439,6 +2473,156 @@ class VNextReportGenerator:
     <p class="section-note">这里保留主论点和 evidence refs 的连接。正文先顺读，审计入口再展开。</p>
     <div class="chain-grid">{support_chains or '<p>无证据链。</p>'}</div>
   </section>
+</section>
+"""
+
+    def _event_mechanism_report_section(self, mechanism: Dict[str, Any]) -> str:
+        if not isinstance(mechanism, dict) or not mechanism:
+            return ""
+        headline = mechanism.get("headline_judgment", {}) if isinstance(mechanism.get("headline_judgment"), dict) else {}
+        delivery = mechanism.get("delivery_to_integrated_report", {}) if isinstance(mechanism.get("delivery_to_integrated_report"), dict) else {}
+        cards = {
+            str(card.get("news_id")): card
+            for card in _as_list(mechanism.get("news_cards"))
+            if isinstance(card, dict)
+        }
+        mainline_rows = ""
+        for line in _as_list(mechanism.get("mainlines"))[:4]:
+            if not isinstance(line, dict):
+                continue
+            news_rows = ""
+            for card_id in _as_list(line.get("news_card_ids"))[:4]:
+                card = cards.get(str(card_id))
+                if not card:
+                    continue
+                missing = "；".join(str(item) for item in _as_list(card.get("missing_evidence"))[:3])
+                news_rows += f"""
+        <article class="chain-card">
+          <h3>{_escape(card.get('title') or '未命名新闻')}</h3>
+          <p>{_escape(card.get('one_line_summary') or '')}</p>
+          <p><b>AI 分析：</b>{_escape(card.get('ai_analysis') or '')}</p>
+          <p><b>还要确认：</b>{_escape('；'.join(str(item) for item in _as_list(card.get('needs_data_confirmation'))[:3]) or '暂无')}</p>
+          <p><b>证据缺口：</b>{_escape(missing or '未记录')}</p>
+        </article>
+"""
+            mainline_rows += f"""
+    <article class="chain-card">
+      <h3>{_escape(line.get('title') or '新闻主线')}</h3>
+      <p>{_escape(line.get('plain_summary') or '')}</p>
+      <p><b>可以说：</b>{_escape(line.get('can_say') or '')}</p>
+      <p><b>不能说：</b>{_escape(line.get('cannot_say') or '')}</p>
+      <div class="chain-grid">{news_rows or '<p>暂无相关新闻。</p>'}</div>
+    </article>
+"""
+        question_rows = "".join(
+            f"<li><b>{_escape('新闻问数据' if item.get('direction') == 'event_to_data' else '数据问新闻')}</b><span>{_escape(item.get('question') or '')}</span></li>"
+            for item in _as_list(mechanism.get("cross_layer_questions"))[:6]
+            if isinstance(item, dict)
+        )
+        watchlist = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(delivery.get("watchlist"))[:8]) or "<li>暂无明确追踪项。</li>"
+        return f"""
+<section class="panel" id="event-layer-summary">
+  <div class="section-kicker">04 · 新闻事件研报</div>
+  <h2>{_escape(headline.get('title') or '新闻事件初步判断')}</h2>
+  <p class="section-note">{_escape(headline.get('plain_text') or '新闻事件材料不足，综合研报应以纯数据判断为主。')}</p>
+  <section class="memo-readout">
+    <div>
+      <b>给综合研报的一句话</b>
+      <p>{_escape(delivery.get('one_sentence') or '新闻事件只能作为解释线索，不能作为主证据。')}</p>
+    </div>
+    <div>
+      <b>读法</b>
+      <p>先看新闻提出什么解释，再看数据是否回答；缺 URL、未读全文、只有标题的材料必须降级。</p>
+    </div>
+  </section>
+  <div class="chain-grid">{mainline_rows or '<p>暂无新闻事件主线。</p>'}</div>
+  <div class="audit-boundaries">
+    <h3>新闻事件给数据层出的题</h3>
+    <ul>{question_rows or '<li>暂无跨层问题。</li>'}</ul>
+  </div>
+  <div class="audit-boundaries">
+    <h3>下一步追踪</h3>
+    <ul>{watchlist}</ul>
+  </div>
+</section>
+"""
+
+    def _event_layer_summary_section(self, artifacts: Dict[str, Any]) -> str:
+        mechanism = artifacts.get("event_mechanism_report", {})
+        if not isinstance(mechanism, dict) or not mechanism:
+            integrated = artifacts.get("integrated_synthesis_report", {})
+            mechanism = integrated.get("event_mechanism_report", {}) if isinstance(integrated, dict) else {}
+        rendered = self._event_mechanism_report_section(mechanism)
+        if rendered:
+            return rendered
+
+        summary = artifacts.get("event_layer_summary", {})
+        if not isinstance(summary, dict) or not summary:
+            integrated = artifacts.get("integrated_synthesis_report", {})
+            summary = integrated.get("event_layer_summary", {}) if isinstance(integrated, dict) else {}
+        if not isinstance(summary, dict) or not summary:
+            return ""
+
+        forbidden = summary.get("forbidden_for_l1_l5_statement") or "第二层事件材料不能进入 L1-L5 evidence_ref。"
+        events = _as_list(summary.get("most_important_events"))[:6]
+        claims = _as_list(summary.get("most_important_claims"))[:6]
+        counter = _as_list(summary.get("strongest_counterevidence"))[:5]
+        downgraded = _as_list(summary.get("downgraded_narratives"))[:5]
+        links = ", ".join(str(item) for item in _as_list(summary.get("financial_links_most_related_to_layer_1"))[:8])
+
+        event_rows = "".join(
+            f"""
+      <article class="chain-card">
+        <h3>{_escape(item.get('minimum_fact') or item.get('event_cluster_id') or '未命名事件')}</h3>
+        <p>{_escape('重要性：' + str(item.get('materiality') or 'unknown') + '；研究置信度：' + str(item.get('agent_confidence') or 'unknown'))}</p>
+      </article>
+"""
+            for item in events
+            if isinstance(item, dict)
+        )
+        claim_rows = "".join(
+            f"""
+      <li>
+        <b>{_escape(item.get('claim_type') or 'claim')}</b>
+        <span>{_escape(item.get('claim_text') or item.get('claim_id') or '')}</span>
+        <small>置信度：{_escape(item.get('confidence_before_market_validation') or 'unknown')}</small>
+      </li>
+"""
+            for item in claims
+            if isinstance(item, dict)
+        )
+        counter_rows = "".join(f"<li>{_escape(item)}</li>" for item in counter) or "<li>未记录反证。</li>"
+        downgraded_rows = "".join(
+            f"<li><b>{_escape(item.get('claim_id') or 'claim')}</b><span>{_escape(item.get('reason') or '')}</span></li>"
+            for item in downgraded
+            if isinstance(item, dict)
+        ) or "<li><b>无</b><span>未记录降级叙事。</span></li>"
+
+        return f"""
+<section class="panel" id="event-layer-summary">
+  <div class="section-kicker">04 · 事件与叙事层</div>
+  <h2>事件只做解释线索，不做主证据</h2>
+  <p class="section-note">{_escape(forbidden)} 下面这些事件只能提示哪些金融链路需要复核，不能替代正式数据，也不能证明新闻导致价格变化。</p>
+  <section class="memo-readout">
+    <div>
+      <b>相关链路</b>
+      <p>{_escape(links or '未记录')}</p>
+    </div>
+    <div>
+      <b>读法</b>
+      <p>先看它提示哪个问题，再回到 L1-L5 数据验证；没有数据确认就只能停留在解释候选。</p>
+    </div>
+  </section>
+  <div class="chain-grid">{event_rows or '<p>暂无事件摘要。</p>'}</div>
+  <div class="audit-boundaries">
+    <h3>主要 claim</h3>
+    <ul>{claim_rows or '<li>暂无 claim 摘要。</li>'}</ul>
+  </div>
+  <div class="audit-boundaries">
+    <h3>反证与降级</h3>
+    <ul>{counter_rows}</ul>
+    <ul>{downgraded_rows}</ul>
+  </div>
 </section>
 """
 
@@ -4299,6 +4483,10 @@ class VNextReportGenerator:
             ("Bridge 冲突共振", str(run_path / "bridge_memos")),
             ("图表时间序列", str(run_path / "chart_time_series.json")),
             ("第一层：纯数据研报", str(run_path / "pure_data_report.json")),
+            ("第二层：事件摘要", str(run_path / "event_layer_summary.json")),
+            ("第二层：新闻事件研报", str(run_path / "event_mechanism_report.json")),
+            ("第二层：新闻事件 HTML", str(run_path / "event_mechanism_report.html")),
+            ("第二层：跨层问题", str(run_path / "cross_layer_questions.json")),
             ("第二层：事件与叙事账本", str(run_path / "event_narrative_ledger.json")),
             ("第三层：综合矛盾裁决", str(run_path / "integrated_synthesis_report.json")),
             ("旧新闻侧边材料", str(run_path / "news_event_ledger.json")),

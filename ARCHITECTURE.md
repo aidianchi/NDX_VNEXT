@@ -282,7 +282,7 @@ L1-L5 必须输出：
 
 native 图表主路径必须直接消费 vNext artifacts 或 `analysis_packet.raw_data`。如果某个时间序列需要交互探索，应先进入 `chart_time_series.json`，再由 workbench 展示，避免图表与文字来自不同采集时点。
 
-截至 2026-05-06，workbench 已进入多模块阶段：`chart_time_series.json` 保存 QQQ OHLCV、VIX/VXN、信用利差、利率、Damodaran 月度 ERP、QQQ/QQEW、净流动性等序列。下一轮 workbench 的重点不是继续堆更多线，而是补齐看盘台交互：指标显隐、预设模板、主图/副图时间轴锁定与解锁、统一时间轴按钮、联动 crosshair 和统一读数面板。
+截至 2026-05-06，workbench 已进入多模块阶段：`chart_time_series.json` 保存 QQQ OHLCV、VIX/VXN、信用利差、利率、Damodaran 月度 ERP、NDX/NDXE、净流动性等序列。下一轮 workbench 的重点不是继续堆更多线，而是补齐看盘台交互：指标显隐、预设模板、主图/副图时间轴锁定与解锁、统一时间轴按钮、联动 crosshair 和统一读数面板。
 
 研究控制台是运行前配置面板，不是报告本体。它应集中处理人工/Wind 数据、模型策略、运行模式、功能开关、workbench 模块和输出入口。self-contained HTML 默认只生成命令和模板；若以后支持一键运行，必须先设计明确的本地权限边界、命令白名单、确认动作和日志。
 

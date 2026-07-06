@@ -103,6 +103,41 @@ def test_adapter_uses_data_json_metric_names_and_populates_reasoning_process():
     assert items[0]["reasoning_process"]
     assert "高利率" in items[0]["reasoning_process"]
     assert result["__LOGIC__"]["market_regime_analysis"]["identified_conflict_scenario_ID"] == "C"
+    drivers = result["__LOGIC__"]["layer_conclusions"][0]["key_drivers"]
+    assert "85.0% 分位" in " ".join(drivers)
+    assert "5.25% 分位" not in " ".join(drivers)
+
+
+def test_adapter_does_not_render_out_of_range_numbers_as_percentiles():
+    final, revised, cards = _base_contracts()
+    cards[0].core_facts = []
+    data_json = {
+        "indicators": [
+            {
+                "layer": 1,
+                "metric_name": "QQQ Price",
+                "function_id": "get_qqq_technical_indicators",
+                "raw_data": {
+                    "value": {
+                        "level": 736.4,
+                        "current_price": 736.4,
+                    }
+                },
+            }
+        ]
+    }
+
+    result = adapt_vnext_to_legacy(
+        final,
+        revised,
+        cards,
+        [],
+        {"confidence_percent": 95.0},
+        data_json=data_json,
+    )
+    drivers = result["__LOGIC__"]["layer_conclusions"][0]["key_drivers"]
+
+    assert "736.4% 分位" not in " ".join(drivers)
 
 
 def test_adapter_prefers_native_indicator_analyses_over_synthetic_fallback():

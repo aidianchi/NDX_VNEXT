@@ -99,7 +99,8 @@ TOOLS_REGISTRY = {
     "get_copper_gold_ratio": get_copper_gold_ratio,
 
     # Layer 2
-    "get_qqq_qqew_ratio": get_qqq_qqew_ratio,
+    "get_ndx_ndxe_ratio": get_ndx_ndxe_ratio,
+    "get_qqq_qqew_ratio": get_qqq_qqew_ratio,  # legacy compatibility alias
     "get_advance_decline_line": get_advance_decline_line,
     "get_percent_above_ma": get_percent_above_ma,
     "get_new_highs_lows": get_new_highs_lows,

@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 LAYER_EXAMPLE_FALLBACKS = {
     "L1": ["get_10y_real_rate", "get_net_liquidity_momentum", "get_10y2y_spread_bp"],
     "L2": ["get_hy_oas_bp", "get_cnn_fear_greed_index", "get_xly_xlp_ratio"],
-    "L3": ["get_qqq_qqew_ratio"],
+    "L3": ["get_ndx_ndxe_ratio"],
     "L4": ["get_equity_risk_premium"],
     "L5": ["get_adx_qqq"],
 }

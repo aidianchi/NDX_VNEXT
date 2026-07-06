@@ -75,7 +75,7 @@ class DataCollector:
             
             # 第三层：指数内部健康度 (Index Internal Health)
             # 核心问题：趋势是由广泛参与驱动还是由少数领导者支撑？
-            3: ["get_advance_decline_line", "get_percent_above_ma", "get_qqq_qqew_ratio", "get_qqq_top10_concentration", "get_m7_fundamentals", "get_new_highs_lows", "get_mcclellan_oscillator_nasdaq_or_nyse"],
+            3: ["get_advance_decline_line", "get_percent_above_ma", "get_ndx_ndxe_ratio", "get_qqq_top10_concentration", "get_m7_fundamentals", "get_new_highs_lows", "get_mcclellan_oscillator_nasdaq_or_nyse"],
             
             # 第四层：指数基本面估值 (Index Fundamental Valuation)
             # 核心问题：当前价格相对于其内在价值和无风险资产，是否具有吸引力？

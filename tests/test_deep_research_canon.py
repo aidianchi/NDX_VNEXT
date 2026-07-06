@@ -281,9 +281,9 @@ def test_schema_guard_warns_but_does_not_fail_weak_l3_structural_coverage(tmp_pa
             "L1": {},
             "L2": {},
             "L3": {
-                "get_qqq_qqew_ratio": {
-                    "metric_name": "QQQ/QEW Ratio",
-                    "value": {"level": 1.15},
+                "get_ndx_ndxe_ratio": {
+                    "metric_name": "NDX/NDXE Ratio",
+                    "value": {"level": 2.9},
                     "error": None,
                 }
             },
@@ -307,16 +307,16 @@ def test_schema_guard_warns_but_does_not_fail_weak_l3_structural_coverage(tmp_pa
         2,
         LayerCard(
             layer="L3",
-            core_facts=[CoreFact(metric="qqq_qew", value=1.15)],
+            core_facts=[CoreFact(metric="ndx_ndxe", value=2.9)],
             local_conclusion="L3 只看到集中度代理。",
             confidence=Confidence.LOW,
             indicator_analyses=[
                 IndicatorAnalysis(
-                    function_id="get_qqq_qqew_ratio",
-                    metric="QQQ/QEW Ratio",
+                    function_id="get_ndx_ndxe_ratio",
+                    metric="NDX/NDXE Ratio",
                     narrative="集中度偏高。",
                     reasoning_process="市值加权相对等权更强，说明头部贡献较大。",
-                    evidence_refs=["L3.get_qqq_qqew_ratio"],
+                    evidence_refs=["L3.get_ndx_ndxe_ratio"],
                 )
             ],
             layer_synthesis="L3 只能判断集中度代理，无法确认完整广度。",
@@ -341,7 +341,7 @@ def test_schema_guard_warns_but_does_not_fail_weak_l3_structural_coverage(tmp_pa
         valuation_assessment="未知。",
         timing_assessment="未知。",
         main_thesis="中性。",
-        key_support_chains=[KeySupportChain(chain_description="集中度张力", evidence_refs=["L3.get_qqq_qqew_ratio"], weight=0.4)],
+        key_support_chains=[KeySupportChain(chain_description="集中度张力", evidence_refs=["L3.get_ndx_ndxe_ratio"], weight=0.4)],
         retained_conflicts=[conflict],
         dependencies=["需要更多广度数据。"],
         overall_confidence=Confidence.LOW,

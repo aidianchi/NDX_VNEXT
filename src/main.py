@@ -72,6 +72,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--models", type=str, help="Comma-separated model priority override.")
     parser.add_argument("--collect-only", action="store_true", help="Only collect market data JSON, then exit before any LLM calls.")
     parser.add_argument("--enable-news", action="store_true", help="Write an independent official news/event sidecar artifact.")
+    parser.add_argument("--event-only", action="store_true", help="Only build the independent event/news report artifacts; do not run L1-L5 or LLM synthesis.")
     parser.add_argument("--skip-report", action="store_true", help="Stop after logic_json generation.")
     parser.add_argument(
         "--resume-from-existing",
@@ -267,6 +268,104 @@ def run_collect_only(args: argparse.Namespace) -> Dict[str, Any]:
     return summary
 
 
+def run_event_only(args: argparse.Namespace) -> Dict[str, Any]:
+    backtest_date = validate_date(args.date)
+    run_dir = build_run_dir(
+        backtest_date,
+        run_id=getattr(args, "run_id", None),
+        output_dir=getattr(args, "output_dir", None),
+        allow_existing=getattr(args, "resume_from_existing", False),
+    )
+    os.makedirs(run_dir, exist_ok=True)
+
+    news_event_ledger_path = os.path.join(run_dir, "news_event_ledger.json")
+    news_event_ledger_payload = NewsEventLedgerBuilder(effective_date=backtest_date).build(news_event_ledger_path)
+    news_event_data_links_path = ""
+    news_layer_analysis_path = ""
+    chart_time_series_path = ""
+    data_json_path = getattr(args, "data_json", None)
+    data_json: Dict[str, Any] = {}
+
+    if data_json_path:
+        data_json = load_data_json(data_json_path)
+        packet = AnalysisPacketBuilder().build(
+            data_json,
+            context={"news_event_ledger_path": news_event_ledger_path, "event_material_policy": "event_only_market_validation_not_l1_l5"},
+            output_path=os.path.join(run_dir, "analysis_packet.json"),
+        )
+        chart_time_series_path = write_chart_time_series_artifact(
+            run_dir,
+            analysis_packet=packet,
+            effective_date=backtest_date,
+        )
+        news_event_data_links_path = write_news_event_data_links(
+            run_dir,
+            event_ledger=news_event_ledger_payload,
+            analysis_packet=packet,
+            event_ledger_path=news_event_ledger_path,
+            chart_time_series_path=chart_time_series_path,
+        )
+        with open(news_event_data_links_path, "r", encoding="utf-8") as handle:
+            news_event_data_links_payload = json.load(handle)
+        news_layer_analysis_path = write_news_layer_analysis(
+            run_dir,
+            event_ledger=news_event_ledger_payload,
+            news_event_data_links=news_event_data_links_payload,
+            event_ledger_path=news_event_ledger_path,
+            news_event_data_links_path=news_event_data_links_path,
+        )
+    else:
+        news_layer_analysis_path = write_news_layer_analysis(
+            run_dir,
+            event_ledger=news_event_ledger_payload,
+            event_ledger_path=news_event_ledger_path,
+        )
+
+    event_narrative_ledger_path = write_event_narrative_ledger(
+        run_dir,
+        event_ledger=news_event_ledger_payload,
+        event_ledger_path=news_event_ledger_path,
+        news_layer_analysis_path=news_layer_analysis_path,
+        news_event_data_links_path=news_event_data_links_path or None,
+        effective_date=backtest_date,
+    )
+    summary = {
+        "mode": "event_only",
+        "run_dir": run_dir,
+        "data_json": data_json_path or "",
+        "chart_time_series": chart_time_series_path,
+        "news_event_ledger": news_event_ledger_path,
+        "news_event_data_links": news_event_data_links_path,
+        "news_layer_analysis": news_layer_analysis_path,
+        "event_narrative_ledger": event_narrative_ledger_path,
+        "event_source_raw": os.path.join(run_dir, "event_source_raw.jsonl"),
+        "event_clusters": os.path.join(run_dir, "event_clusters.json"),
+        "event_claim_ledger": os.path.join(run_dir, "event_claim_ledger.json"),
+        "event_research_packets": os.path.join(run_dir, "event_research_packets"),
+        "event_market_validation": os.path.join(run_dir, "event_market_validation.json"),
+        "event_narrative_report": os.path.join(run_dir, "event_narrative_report.md"),
+        "event_adversarial_review": os.path.join(run_dir, "event_adversarial_review.json"),
+        "event_layer_summary": os.path.join(run_dir, "event_layer_summary.json"),
+        "event_mechanism_report": os.path.join(run_dir, "event_mechanism_report.json"),
+        "event_mechanism_report_html": os.path.join(run_dir, "event_mechanism_report.html"),
+        "cross_layer_questions": os.path.join(run_dir, "cross_layer_questions.json"),
+        "event_mechanism_cards": os.path.join(run_dir, "event_mechanism_cards.json"),
+        "market_validation_basis": "existing_data_json" if data_json_path else "no_market_data_snapshot",
+        "backtest_date": backtest_date,
+        "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}) if data_json else {},
+    }
+    with open(os.path.join(run_dir, "run_summary.json"), "w", encoding="utf-8") as handle:
+        json.dump(summary, handle, ensure_ascii=False, indent=2, default=str)
+        handle.write("\n")
+    latest_summary_path = os.path.join(path_config.logs_dir, "control_service", "latest_console_run.json")
+    os.makedirs(os.path.dirname(latest_summary_path), exist_ok=True)
+    with open(latest_summary_path, "w", encoding="utf-8") as handle:
+        json.dump(summary, handle, ensure_ascii=False, indent=2, default=str)
+        handle.write("\n")
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return summary
+
+
 def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     backtest_date = validate_date(args.date)
     available_models = resolve_available_models(args.models)
@@ -324,6 +423,18 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
             "data_integrity_report": integrity_path,
             "pure_data_report": pure_data_report_path,
             "event_narrative_ledger": event_narrative_ledger_path,
+            "event_source_raw": os.path.join(run_dir, "event_source_raw.jsonl") if args.enable_news else "",
+            "event_clusters": os.path.join(run_dir, "event_clusters.json") if event_narrative_ledger_path else "",
+            "event_claim_ledger": os.path.join(run_dir, "event_claim_ledger.json") if event_narrative_ledger_path else "",
+            "event_research_packets": os.path.join(run_dir, "event_research_packets") if event_narrative_ledger_path else "",
+            "event_market_validation": os.path.join(run_dir, "event_market_validation.json") if event_narrative_ledger_path else "",
+            "event_narrative_report": os.path.join(run_dir, "event_narrative_report.md") if event_narrative_ledger_path else "",
+            "event_adversarial_review": os.path.join(run_dir, "event_adversarial_review.json") if event_narrative_ledger_path else "",
+            "event_layer_summary": os.path.join(run_dir, "event_layer_summary.json") if event_narrative_ledger_path else "",
+            "event_mechanism_report": os.path.join(run_dir, "event_mechanism_report.json") if event_narrative_ledger_path else "",
+            "event_mechanism_report_html": os.path.join(run_dir, "event_mechanism_report.html") if event_narrative_ledger_path else "",
+            "cross_layer_questions": os.path.join(run_dir, "cross_layer_questions.json") if event_narrative_ledger_path else "",
+            "event_mechanism_cards": os.path.join(run_dir, "event_mechanism_cards.json") if event_narrative_ledger_path else "",
             "integrated_synthesis_report": integrated_synthesis_report_path,
             "report_path": "",
             "chart_time_series": "",
@@ -439,6 +550,18 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "news_event_data_links": news_event_data_links_path,
         "news_layer_analysis": news_layer_analysis_path,
         "event_narrative_ledger": event_narrative_ledger_path,
+        "event_source_raw": os.path.join(run_dir, "event_source_raw.jsonl") if args.enable_news else "",
+        "event_clusters": os.path.join(run_dir, "event_clusters.json") if event_narrative_ledger_path else "",
+        "event_claim_ledger": os.path.join(run_dir, "event_claim_ledger.json") if event_narrative_ledger_path else "",
+        "event_research_packets": os.path.join(run_dir, "event_research_packets") if event_narrative_ledger_path else "",
+        "event_market_validation": os.path.join(run_dir, "event_market_validation.json") if event_narrative_ledger_path else "",
+        "event_narrative_report": os.path.join(run_dir, "event_narrative_report.md") if event_narrative_ledger_path else "",
+        "event_adversarial_review": os.path.join(run_dir, "event_adversarial_review.json") if event_narrative_ledger_path else "",
+        "event_layer_summary": os.path.join(run_dir, "event_layer_summary.json") if event_narrative_ledger_path else "",
+        "event_mechanism_report": os.path.join(run_dir, "event_mechanism_report.json") if event_narrative_ledger_path else "",
+        "event_mechanism_report_html": os.path.join(run_dir, "event_mechanism_report.html") if event_narrative_ledger_path else "",
+        "cross_layer_questions": os.path.join(run_dir, "cross_layer_questions.json") if event_narrative_ledger_path else "",
+        "event_mechanism_cards": os.path.join(run_dir, "event_mechanism_cards.json") if event_narrative_ledger_path else "",
         "pure_data_report": pure_data_report_path,
         "integrated_synthesis_report": integrated_synthesis_report_path,
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
@@ -461,6 +584,9 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
 def main() -> int:
     args = parse_args()
     setup_logging()
+    if args.event_only:
+        run_event_only(args)
+        return 0
     if args.collect_only:
         run_collect_only(args)
         return 0

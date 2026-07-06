@@ -60,6 +60,7 @@ temp/
 # --- Editor and OS files ---
 .vscode/
 .idea/
+.obsidian/
 .DS_Store
 Thumbs.db
 *.swp

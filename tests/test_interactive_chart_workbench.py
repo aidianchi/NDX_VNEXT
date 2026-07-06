@@ -134,7 +134,7 @@ def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(t
                 "price_technical": {"title": "价格技术", "series": ["QQQ_OHLCV"], "layer_tags": ["L5"]},
                 "volatility_credit": {"title": "波动信用", "series": ["VIX", "VXN", "HY_OAS", "IG_OAS"], "layer_tags": ["L2"]},
                 "rates_valuation": {"title": "利率估值", "series": ["US10Y", "DAMODARAN_ERP_MONTHLY"], "layer_tags": ["L1", "L4"]},
-                "breadth_concentration": {"title": "广度集中度", "series": ["QQQ_QQEW_RATIO"], "layer_tags": ["L3"]},
+                "breadth_concentration": {"title": "广度集中度", "series": ["NDX_NDXE_RATIO"], "layer_tags": ["L3"]},
                 "liquidity": {"title": "流动性", "series": ["NET_LIQUIDITY", "WALCL", "TGA", "RRP"], "layer_tags": ["L1"]},
             },
             "series": {
@@ -145,7 +145,7 @@ def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(t
                 "IG_OAS": {"rows": [{"time": "2026-04-01", "value": 0.8}]},
                 "US10Y": {"rows": [{"time": "2026-04-01", "value": 4.4}]},
                 "DAMODARAN_ERP_MONTHLY": {"rows": [{"time": "2026-04-01", "value": 4.2}]},
-                "QQQ_QQEW_RATIO": {"rows": [{"time": "2026-04-01", "value": 4.8}]},
+                "NDX_NDXE_RATIO": {"rows": [{"time": "2026-04-01", "value": 2.9}]},
                 "NET_LIQUIDITY": {"rows": [{"time": "2026-04-01", "value": 6100}]},
                 "WALCL": {"rows": [{"time": "2026-04-01", "value": 7600}]},
                 "TGA": {"rows": [{"time": "2026-04-01", "value": 600}]},
@@ -200,7 +200,7 @@ def test_interactive_chart_workbench_renders_research_modules_and_l5_subpanels(t
     assert 'id="summaryValueB"' in html
     assert "VIX" in html
     assert "Damodaran ERP" in html
-    assert "QQQ/QQEW" in html
+    assert "NDX/NDXE" in html
     assert "Net Liquidity" in html
 
 

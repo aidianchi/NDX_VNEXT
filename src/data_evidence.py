@@ -52,6 +52,7 @@ CORE_EVIDENCE_FUNCTIONS = {
     "get_cnn_fear_greed_index",
     "get_advance_decline_line",
     "get_percent_above_ma",
+    "get_ndx_ndxe_ratio",
     "get_qqq_qqew_ratio",
     "get_qqq_top10_concentration",
     "get_m7_fundamentals",

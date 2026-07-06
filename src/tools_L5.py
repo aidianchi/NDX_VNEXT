@@ -116,6 +116,18 @@ def _date_text(value: Any) -> Optional[str]:
     return str(value)[:10] if value is not None else None
 
 
+def _market_frame_source_name(frame: pd.DataFrame, default: str = "yfinance") -> str:
+    if not isinstance(frame, pd.DataFrame):
+        return default
+    source_name = frame.attrs.get("source_name")
+    source_code = frame.attrs.get("market_data_source")
+    if source_name:
+        return str(source_name)
+    if source_code == "twelve_data_priority":
+        return "Twelve Data"
+    return str(source_code or default)
+
+
 def _ohlcv_sha256(df: pd.DataFrame) -> str:
     cols = [col for col in ["open", "high", "low", "close", "volume"] if col in df.columns]
     material = df[cols].copy()
@@ -246,7 +258,7 @@ def get_l5_deterministic_snapshot(end_date: str = None) -> Dict[str, Any]:
     start_date = effective_date - timedelta(days=420)
     errors: List[str] = []
 
-    if YF_AVAILABLE:
+    if YF_AVAILABLE or get_twelve_data_api_key():
         try:
             raw_df = cached_yf_download(
                 "QQQ",
@@ -256,6 +268,7 @@ def get_l5_deterministic_snapshot(end_date: str = None) -> Dict[str, Any]:
                 progress=False,
                 auto_adjust=False,
             )
+            source_name = _market_frame_source_name(raw_df)
             cleaned = clean_yfinance_dataframe(raw_df)
             raw_count = len(cleaned)
             filtered = _filter_daily_frame_to_effective_date(cleaned, effective_date)
@@ -263,7 +276,7 @@ def get_l5_deterministic_snapshot(end_date: str = None) -> Dict[str, Any]:
             return _build_l5_snapshot_from_frame(
                 filtered,
                 effective_date=effective_date,
-                source_name="yfinance",
+                source_name=source_name,
                 raw_row_count=raw_count,
                 future_rows_dropped=future_rows_dropped,
             )
@@ -603,13 +616,14 @@ def get_qqq_technical_indicators(end_date: str = None) -> Dict[str, Any]:
     start_date = effective_date - timedelta(days=365)
 
     # 优先使用yfinance（1年日频数据）
-    if YF_AVAILABLE:
+    if YF_AVAILABLE or get_twelve_data_api_key():
         try:
             # 使用yfinance获取数据
-            df = cached_yf_download('QQQ', start=start_date, end=_yf_daily_end_inclusive(effective_date), interval="1d", progress=False, auto_adjust=False)
+            raw_df = cached_yf_download('QQQ', start=start_date, end=_yf_daily_end_inclusive(effective_date), interval="1d", progress=False, auto_adjust=False)
+            source_name = _market_frame_source_name(raw_df)
 
             # 清理数据
-            df = clean_yfinance_dataframe(df)
+            df = clean_yfinance_dataframe(raw_df)
             df = _filter_daily_frame_to_effective_date(df, effective_date)
 
             if df.empty or len(df) < 200:  # 至少需要200个数据点计算EMA200
@@ -625,7 +639,7 @@ def get_qqq_technical_indicators(end_date: str = None) -> Dict[str, Any]:
                 "value": indicators,
                 "unit": "mixed (price/ratio)",
                 "date": df.index[-1].strftime("%Y-%m-%d") if hasattr(df.index[-1], 'strftime') else effective_date.strftime("%Y-%m-%d"),
-                "source_name": "yfinance",
+                "source_name": source_name,
                 "notes": "V7.1：优先使用ta公式引擎；含SMA、RSI、布林带、ATR、MACD、OBV、成交量、Donchian、VWAP、MFI、CMF。"
             }
         except Exception as e:
@@ -1012,7 +1026,7 @@ def get_multi_scale_ma_position(end_date: str = None) -> Dict[str, Any]:
             'source_name': 'yfinance',
         }
     """
-    if not YF_AVAILABLE:
+    if not YF_AVAILABLE and not get_twelve_data_api_key():
         return {
             "name": "QQQ Multi-Scale MA Position",
             "value": None,
@@ -1029,8 +1043,9 @@ def get_multi_scale_ma_position(end_date: str = None) -> Dict[str, Any]:
     
     try:
         # 下载数据
-        df = cached_yf_download('QQQ', start=start_date, end=_yf_daily_end_inclusive(effective_date), interval="1d", progress=False, auto_adjust=False)
-        df = clean_yfinance_dataframe(df)
+        raw_df = cached_yf_download('QQQ', start=start_date, end=_yf_daily_end_inclusive(effective_date), interval="1d", progress=False, auto_adjust=False)
+        source_name = _market_frame_source_name(raw_df)
+        df = clean_yfinance_dataframe(raw_df)
         df = _filter_daily_frame_to_effective_date(df, effective_date)
         
         if df.empty or len(df) < 200:
@@ -1096,7 +1111,7 @@ def get_multi_scale_ma_position(end_date: str = None) -> Dict[str, Any]:
                 "cross_scale_divergence": cross_scale_divergence
             },
             "unit": "price & percentage",
-            "source_name": "yfinance",
+            "source_name": source_name,
             "notes": "4尺度MA分析：MA5(1周)/MA20(1月)/MA60(1季)/MA200(1年)。偏离度=(价格-MA)/MA*100"
         }
         

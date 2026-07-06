@@ -76,6 +76,12 @@ L4_COMPONENT_SOURCE_DISAGREEMENT_THRESHOLDS = {
     "forward_pe": 25.0,
     "price_to_book": 60.0,
 }
+WIND_PERCENTILE_WINDOW_MIN_SAMPLES = {
+    "1y": 200,
+    "2y": 450,
+    "5y": 1000,
+    "10y": 1900,
+}
 L4_COMPONENT_FIELD_SOURCE_POLICY = {
     "market_cap": "yfinance_primary_yahoo_cross_check",
     "current_price": "yfinance_primary_yahoo_cross_check",
@@ -512,9 +518,16 @@ def _wind_metric_percentile_windows(row: Dict[str, Any], metric_labels: Iterable
             normalized_key = _norm_wind_key(key)
             if not any(label and label in normalized_key for label in normalized_labels):
                 continue
-            if "序号" not in normalized_key and "rank" not in normalized_key:
+            if "序号" not in normalized_key and "排名" not in normalized_key and "rank" not in normalized_key:
                 continue
+            # Single-window Wind results often return generic rank columns such
+            # as "市盈率序号" without repeating "过去10年". Accept that only when
+            # the row exposes exactly one percentile window.
+            key_window = _wind_percentile_window_key(key)
             if window_token and not _wind_key_matches_window(key, window):
+                if len(windows) != 1 or key_window is not None:
+                    continue
+            elif window_token and key_window is None and len(windows) != 1:
                 continue
             numeric_value = _safe_float(value)
             if numeric_value is None:
@@ -530,6 +543,36 @@ def _wind_metric_percentile_windows(row: Dict[str, Any], metric_labels: Iterable
     return windows
 
 
+def _wind_window_payload_valid(window: str, payload: Dict[str, Any]) -> bool:
+    sample_count = payload.get("sample_count") if isinstance(payload, dict) else None
+    floor = WIND_PERCENTILE_WINDOW_MIN_SAMPLES.get(window)
+    if floor is None:
+        return True
+    return isinstance(sample_count, int) and sample_count >= floor
+
+
+def _filter_wind_percentile_windows(
+    windows: Dict[str, Dict[str, Any]],
+) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]]]:
+    accepted: Dict[str, Dict[str, Any]] = {}
+    rejected: List[Dict[str, Any]] = []
+    for window, payload in (windows or {}).items():
+        if window == "unspecified" or _wind_window_payload_valid(window, payload):
+            accepted[window] = payload
+        else:
+            rejected.append(
+                {
+                    "window": window,
+                    "percentile": payload.get("percentile") if isinstance(payload, dict) else None,
+                    "sample_count": payload.get("sample_count") if isinstance(payload, dict) else None,
+                    "min_sample_count": WIND_PERCENTILE_WINDOW_MIN_SAMPLES.get(window),
+                    "reason": "sample_count_too_small_for_declared_window",
+                    "source_column": payload.get("source_column") if isinstance(payload, dict) else None,
+                }
+            )
+    return accepted, rejected
+
+
 def _merge_wind_percentile_windows(base: Dict[str, Dict[str, Any]], extra: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     merged = dict(base or {})
     for window, payload in (extra or {}).items():
@@ -537,6 +580,43 @@ def _merge_wind_percentile_windows(base: Dict[str, Dict[str, Any]], extra: Dict[
             continue
         merged[window] = payload
     return merged
+
+
+def _fetch_wind_metric_percentile_windows(
+    metric_label: str,
+    windows: Iterable[str],
+) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]], Optional[str]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+    issues: List[Dict[str, Any]] = []
+    data_date: Optional[str] = None
+    for window in windows:
+        years = window[:-1] if window.endswith("y") else window
+        question = f"纳斯达克100指数最新{metric_label}在过去{years}年中的分位数"
+        payload, error = _call_wind_cli(
+            "index_data",
+            "get_index_fundamentals",
+            {"question": question},
+        )
+        if error or payload is None:
+            issues.append({"metric": metric_label, "window": window, "reason": error or "wind_empty_payload"})
+            continue
+        parsed = _parse_wind_ndx_valuation_payload(payload)
+        data_date = data_date or parsed.get("data_date")
+        source_key = {
+            "市盈率": "pe_percentile_windows",
+            "市净率": "pb_percentile_windows",
+            "市销率": "ps_percentile_windows",
+            "风险溢价": "risk_premium_percentile_windows",
+        }.get(metric_label)
+        parsed_windows = parsed.get(source_key, {}) if source_key else {}
+        window_payload = parsed_windows.get(window)
+        if not window_payload:
+            issues.append({"metric": metric_label, "window": window, "reason": "window_not_returned"})
+            continue
+        merged[window] = window_payload
+    accepted, rejected = _filter_wind_percentile_windows(merged)
+    issues.extend({"metric": metric_label, **item} for item in rejected)
+    return accepted, issues, data_date
 
 
 def _parse_wind_ndx_valuation_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -660,8 +740,7 @@ def get_ndx_wind_valuation_snapshot(end_date: str = None) -> Dict[str, Any]:
     if end_date:
         return _wind_unavailable_snapshot("backtest_skipped_current_wind_snapshot_not_point_in_time", date_str=date_str)
 
-    question = "纳斯达克100指数市盈率市净率市销率风险溢价历史分位"
-    pe_percentile_windows_question = "纳斯达克100指数最新市盈率在过去1年2年5年10年中的分位数"
+    question = "纳斯达克100指数最新市盈率市净率市销率风险溢价"
     payload, error = _call_wind_cli(
         "index_data",
         "get_index_fundamentals",
@@ -673,13 +752,23 @@ def get_ndx_wind_valuation_snapshot(end_date: str = None) -> Dict[str, Any]:
         return result
 
     parsed = _parse_wind_ndx_valuation_payload(payload)
-    windows_payload, windows_error = _call_wind_cli(
-        "index_data",
-        "get_index_fundamentals",
-        {"question": pe_percentile_windows_question},
+    percentile_issues: List[Dict[str, Any]] = []
+    pe_windows, pe_window_issues, pe_window_date = _fetch_wind_metric_percentile_windows(
+        "市盈率",
+        ("1y", "2y", "5y", "10y"),
     )
-    if windows_payload is not None and not windows_error:
-        parsed = _merge_wind_ndx_valuation_parse(parsed, _parse_wind_ndx_valuation_payload(windows_payload))
+    percentile_issues.extend(pe_window_issues)
+    risk_premium_windows, risk_window_issues, risk_window_date = _fetch_wind_metric_percentile_windows(
+        "风险溢价",
+        ("1y", "10y"),
+    )
+    percentile_issues.extend(risk_window_issues)
+    parsed["pe_percentile_windows"] = _merge_wind_percentile_windows(parsed.get("pe_percentile_windows", {}), pe_windows)
+    parsed["risk_premium_percentile_windows"] = _merge_wind_percentile_windows(
+        parsed.get("risk_premium_percentile_windows", {}),
+        risk_premium_windows,
+    )
+    parsed["data_date"] = parsed.get("data_date") or pe_window_date or risk_window_date
     value_keys = ("pe", "pb", "ps", "risk_premium", "pe_historical_percentile", "risk_premium_historical_percentile")
     if not any(parsed.get(key) is not None for key in value_keys):
         result = _wind_unavailable_snapshot("wind_payload_missing_ndx_valuation_fields", date_str=date_str)
@@ -688,24 +777,22 @@ def get_ndx_wind_valuation_snapshot(end_date: str = None) -> Dict[str, Any]:
         return result
 
     data_date = str(parsed.get("data_date") or date_str)
-    pe_windows = parsed.get("pe_percentile_windows") or {}
+    pe_windows, rejected_pe_windows = _filter_wind_percentile_windows(parsed.get("pe_percentile_windows") or {})
+    percentile_issues.extend({"metric": "市盈率", **item} for item in rejected_pe_windows)
     pe_historical_percentile = (
         pe_windows.get("10y", {}).get("percentile")
         if isinstance(pe_windows.get("10y"), dict)
         else None
     )
     pe_historical_window = "10y" if pe_historical_percentile is not None else None
-    if pe_historical_percentile is None:
-        pe_historical_percentile = parsed.get("pe_historical_percentile")
-        if pe_historical_percentile is not None:
-            pe_historical_window = next(
-                (
-                    window
-                    for window, payload in pe_windows.items()
-                    if isinstance(payload, dict) and payload.get("percentile") == pe_historical_percentile
-                ),
-                "unspecified",
-            )
+    risk_windows, rejected_risk_windows = _filter_wind_percentile_windows(parsed.get("risk_premium_percentile_windows") or {})
+    percentile_issues.extend({"metric": "风险溢价", **item} for item in rejected_risk_windows)
+    risk_premium_historical_percentile = (
+        risk_windows.get("10y", {}).get("percentile")
+        if isinstance(risk_windows.get("10y"), dict)
+        else None
+    )
+    risk_premium_historical_window = "10y" if risk_premium_historical_percentile is not None else None
     value = {
         "index_code": parsed.get("index_code"),
         "index_name": parsed.get("index_name"),
@@ -721,9 +808,20 @@ def get_ndx_wind_valuation_snapshot(end_date: str = None) -> Dict[str, Any]:
         "PBPercentileWindows": parsed.get("pb_percentile_windows") or {},
         "PSHistoricalPercentile": parsed.get("ps_historical_percentile"),
         "PSPercentileWindows": parsed.get("ps_percentile_windows") or {},
-        "RiskPremiumHistoricalPercentile": parsed.get("risk_premium_historical_percentile"),
-        "RiskPremiumPercentileWindows": parsed.get("risk_premium_percentile_windows") or {},
-        "RiskPremiumRank": parsed.get("risk_premium_rank") or {},
+        "RiskPremiumHistoricalPercentile": risk_premium_historical_percentile,
+        "RiskPremiumHistoricalPercentileWindow": risk_premium_historical_window,
+        "RiskPremiumPercentileWindows": risk_windows,
+        "RiskPremiumRank": (
+            {
+                "rank": risk_windows["10y"].get("rank"),
+                "sample_count": risk_windows["10y"].get("sample_count"),
+            }
+            if isinstance(risk_windows.get("10y"), dict)
+            and risk_windows["10y"].get("rank") is not None
+            and risk_windows["10y"].get("sample_count") is not None
+            else {}
+        ),
+        "WindPercentileIssues": percentile_issues,
         "sample_start": parsed.get("sample_start"),
         "comparison_targets": ["get_ndx_pe_and_earnings_yield", "get_damodaran_us_implied_erp", "get_equity_risk_premium"],
         "authority_boundary": (
@@ -787,18 +885,20 @@ def get_ndx_wind_valuation_snapshot(end_date: str = None) -> Dict[str, Any]:
                 "index_name": parsed.get("index_name"),
                 "sample_start": parsed.get("sample_start"),
                 "provider_question": question,
-                "pe_percentile_windows_question": pe_percentile_windows_question,
+                "pe_percentile_window_queries": ["1y", "2y", "5y", "10y"],
+                "risk_premium_percentile_window_queries": ["1y", "10y"],
                 "pe_historical_percentile_window": pe_historical_window,
+                "risk_premium_historical_percentile_window": risk_premium_historical_window,
             },
             methodology=(
                 "Wind index fundamentals natural-language query for Nasdaq 100 PE/PB/PS and NDX-specific risk premium; "
-                "a separate explicit query requests latest PE percentile across 1Y/2Y/5Y/10Y windows."
+                "separate explicit single-window queries request PE and risk-premium percentiles to avoid ambiguous multi-window NL tables."
             ),
             formula=(
                 "Provider-published index-level PE/PB/PS and risk premium; percentiles normalized to 0-100 when Wind returns 0-1 ratios. "
-                "PEHistoricalPercentile uses the 10Y window when Wind returns it; shorter windows remain in PEPercentileWindows."
+                "10Y percentile fields are accepted only when the returned sample count is consistent with the declared window."
             ),
-            anomalies=[],
+            anomalies=[item["reason"] for item in percentile_issues if item.get("reason")],
             source_disagreement={
                 "compare_against": {
                     "component_model": "get_ndx_pe_and_earnings_yield",

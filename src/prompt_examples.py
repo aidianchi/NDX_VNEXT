@@ -297,24 +297,24 @@ PROMPT_EXAMPLES: PromptExamplesRegistry = {
     # Layer 3: 指数内部健康度 (L3)
     # =================================================================
 
-    # "market_breadth_ratio" -> 重命名为 "get_qqq_qqew_ratio" (这是其对应的function_id)
-    "get_qqq_qqew_ratio": [
+    # "market_breadth_ratio" -> 重命名为 "get_ndx_ndxe_ratio" (这是其对应的function_id)
+    "get_ndx_ndxe_ratio": [
         {
-            "context": "【典范化解读】QQQ/QQEW比率最核心应用是识别'熊市背离'。分层降噪：用比值趋势(MA20)与价格趋势(MA60)双重过滤器。",
+            "context": "【典范化解读】NDX/NDXE 比率最核心应用是识别'熊市背离'。分层降噪：用比值趋势(MA20)与价格趋势(MA60)双重过滤器。",
             "input": {
-                "function_id": "get_qqq_qqew_ratio",
+                "function_id": "get_ndx_ndxe_ratio",
                 "raw_data": {
                     "value": {
-                        "level": 1.85,
+                        "level": 2.9,
                         "ratio_trend_vs_ma20": "below",
-                        "qqq_price_vs_ma60": "above",
-                        "ratio_ma20": 1.88,
-                        "qqq_ma60": 485.0
+                        "cap_weight_price_vs_ma60": "above",
+                        "ratio_ma20": 2.95,
+                        "cap_weight_ma60": 21500.0
                     }
                 }
             },
-            "reasoning": "这是一个经典的顶部警报。现象：QQQ价格在MA60上方(above)，指数趋势尚可。本质：但QQQ/QQEW比率已回落至MA20下方(below)，说明'将军'相对'士兵'的领先优势正在收窄。结论：上涨缺乏广泛群众基础，是'空心胜利'。领导力收窄的背离表明趋势内在结构脆弱，极易因少数领头羊回调而崩溃。",
-            "output_narrative": "市场广度出现经典的熊市背离：尽管QQQ价格仍在60日均线之上，但其与等权重指数(QQEW)的比率已回落至20日均线之下，典范性地表明上涨仅由少数巨头支撑，趋势的内在健康度严重恶化，根基极其脆弱。"
+            "reasoning": "这是一个经典的顶部警报。现象：NDX 价格在 MA60 上方(above)，指数趋势尚可。本质：但 NDX/NDXE 比率已回落至 MA20 下方(below)，说明'将军'相对'士兵'的领先优势正在收窄。结论：上涨缺乏广泛群众基础，是'空心胜利'。领导力收窄的背离表明趋势内在结构脆弱，极易因少数领头羊回调而崩溃。",
+            "output_narrative": "市场广度出现经典的熊市背离：尽管 NDX 价格仍在 60 日均线之上，但其与等权指数 NDXE 的比率已回落至 20 日均线之下，典范性地表明上涨仅由少数巨头支撑，趋势的内在健康度严重恶化，根基极其脆弱。"
         }
     ],
 
