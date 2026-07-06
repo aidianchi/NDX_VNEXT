@@ -178,14 +178,13 @@ def _download_ndx100_missing_price_archive(
     for offset in range(0, len(tickers), NDX100_ARCHIVE_DOWNLOAD_BATCH_SIZE):
         batch = tickers[offset : offset + NDX100_ARCHIVE_DOWNLOAD_BATCH_SIZE]
         try:
-            frame = yf.download(
+            frame = cached_yf_download(
                 batch if len(batch) > 1 else batch[0],
                 start=start_date,
                 end=end_date,
                 interval="1d",
                 progress=False,
                 auto_adjust=False,
-                threads=True,
             )
             frame = _ensure_component_ticker_columns(frame, batch)
             frame = _filter_daily_frame_to_effective_date(frame, end_date - timedelta(days=1))
@@ -197,14 +196,13 @@ def _download_ndx100_missing_price_archive(
                 continue
             for ticker in batch:
                 try:
-                    frame = yf.download(
+                    frame = cached_yf_download(
                         ticker,
                         start=start_date,
                         end=end_date,
                         interval="1d",
                         progress=False,
                         auto_adjust=False,
-                        threads=False,
                     )
                     frame = _ensure_component_ticker_columns(frame, [ticker])
                     frame = _filter_daily_frame_to_effective_date(frame, end_date - timedelta(days=1))
