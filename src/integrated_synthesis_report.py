@@ -99,6 +99,8 @@ class IntegratedSynthesisReportBuilder:
         event_layer_summary: Optional[Dict[str, Any]] = None,
         event_mechanism_report: Optional[Dict[str, Any]] = None,
         data_integrity_report: Optional[Dict[str, Any]] = None,
+        evidence_registry: Optional[Dict[str, Any]] = None,
+        final_claim_ledger: Optional[Dict[str, Any]] = None,
         output_path: Optional[str | Path] = None,
         source_paths: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
@@ -106,6 +108,8 @@ class IntegratedSynthesisReportBuilder:
         event_narrative_ledger = event_narrative_ledger or {}
         event_layer_summary = event_layer_summary or {}
         event_mechanism_report = event_mechanism_report or {}
+        evidence_registry = evidence_registry or {}
+        final_claim_ledger = final_claim_ledger or {}
         publish_gate = self._publish_gate(data_integrity_report, event_narrative_ledger)
         events = _as_list(event_narrative_ledger.get("events"))
         claims = [
@@ -120,11 +124,13 @@ class IntegratedSynthesisReportBuilder:
             "schema_version": "integrated_synthesis_report_v1",
             "generated_at_utc": _utc_now_iso(),
             "policy": {
-                "inputs": ["pure_data_report", "event_mechanism_report", "event_layer_summary", "event_narrative_ledger"],
+                "inputs": ["pure_data_report", "event_mechanism_report", "event_layer_summary", "event_narrative_ledger", "evidence_registry", "final_claim_ledger"],
                 "no_backflow_rule": "This report must not feed back into L1-L5, Bridge, Thesis, Risk, Reviser, or Final.",
                 "evidence_rule": "Event claims can support explanation grades, not L1-L5 evidence_refs.",
             },
             "source_artifacts": source_paths or {},
+            "evidence_registry_summary": self._compact_evidence_registry(evidence_registry),
+            "final_claim_ledger_summary": self._compact_claim_ledger(final_claim_ledger),
             "event_mechanism_report": self._compact_event_mechanism_report(event_mechanism_report),
             "event_layer_summary": self._compact_event_summary(event_layer_summary),
             "integrated_judgments": [judgment] if judgment else [],
@@ -170,6 +176,42 @@ class IntegratedSynthesisReportBuilder:
             "strongest_counterevidence": _as_list(summary.get("strongest_counterevidence"))[:8],
             "financial_links_most_related_to_layer_1": _as_list(summary.get("financial_links_most_related_to_layer_1")),
             "forbidden_for_l1_l5_statement": summary.get("forbidden_for_l1_l5_statement", ""),
+        }
+
+    def _compact_evidence_registry(self, registry: Dict[str, Any]) -> Dict[str, Any]:
+        passports = registry.get("passports") if isinstance(registry.get("passports"), dict) else {}
+        by_kind: Dict[str, int] = {}
+        by_tier: Dict[str, int] = {}
+        for item in passports.values():
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("evidence_kind") or "unknown")
+            tier = str(item.get("source_tier") or "unknown")
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+            by_tier[tier] = by_tier.get(tier, 0) + 1
+        return {
+            "schema_version": registry.get("schema_version", ""),
+            "passport_count": len(passports),
+            "by_kind": by_kind,
+            "by_source_tier": by_tier,
+            "downgrade_count": len(_as_list(registry.get("downgrade_summary"))),
+        }
+
+    def _compact_claim_ledger(self, ledger: Dict[str, Any]) -> Dict[str, Any]:
+        entries = _as_list(ledger.get("entries")) if isinstance(ledger, dict) else []
+        return {
+            "schema_version": ledger.get("schema_version", "") if isinstance(ledger, dict) else "",
+            "entry_count": len(entries),
+            "publish_gate": ledger.get("publish_gate", {}) if isinstance(ledger.get("publish_gate"), dict) else {},
+            "downgraded_claims": [
+                {
+                    "claim_id": entry.get("claim_id"),
+                    "authority_status": entry.get("authority_status"),
+                    "downgrade_reason": entry.get("downgrade_reason"),
+                }
+                for entry in entries
+                if isinstance(entry, dict) and entry.get("authority_status") != "verified"
+            ][:8],
         }
 
     def _compact_event_mechanism_report(self, report: Dict[str, Any]) -> Dict[str, Any]:
@@ -295,11 +337,15 @@ def write_integrated_synthesis_report(
     event_layer_summary: Optional[Dict[str, Any]] = None,
     event_mechanism_report: Optional[Dict[str, Any]] = None,
     data_integrity_report: Optional[Dict[str, Any]] = None,
+    evidence_registry: Optional[Dict[str, Any]] = None,
+    final_claim_ledger: Optional[Dict[str, Any]] = None,
     pure_data_report_path: Optional[str | Path] = None,
     event_narrative_ledger_path: Optional[str | Path] = None,
     event_layer_summary_path: Optional[str | Path] = None,
     event_mechanism_report_path: Optional[str | Path] = None,
     data_integrity_report_path: Optional[str | Path] = None,
+    evidence_registry_path: Optional[str | Path] = None,
+    final_claim_ledger_path: Optional[str | Path] = None,
 ) -> str:
     run_path = Path(run_dir)
     pure_path = Path(pure_data_report_path) if pure_data_report_path else run_path / "pure_data_report.json"
@@ -307,6 +353,8 @@ def write_integrated_synthesis_report(
     summary_path = Path(event_layer_summary_path) if event_layer_summary_path else run_path / "event_layer_summary.json"
     mechanism_path = Path(event_mechanism_report_path) if event_mechanism_report_path else run_path / "event_mechanism_report.json"
     integrity_path = Path(data_integrity_report_path) if data_integrity_report_path else run_path / "data_integrity_report.json"
+    registry_path = Path(evidence_registry_path) if evidence_registry_path else run_path / "evidence_registry.json"
+    claim_ledger_path = Path(final_claim_ledger_path) if final_claim_ledger_path else run_path / "final_claim_ledger.json"
     output_path = run_path / "integrated_synthesis_report.json"
     IntegratedSynthesisReportBuilder().build(
         pure_data_report=pure_data_report if pure_data_report is not None else _load_json(pure_path, {}),
@@ -314,6 +362,8 @@ def write_integrated_synthesis_report(
         event_layer_summary=event_layer_summary if event_layer_summary is not None else _load_json(summary_path, {}),
         event_mechanism_report=event_mechanism_report if event_mechanism_report is not None else _load_json(mechanism_path, {}),
         data_integrity_report=data_integrity_report if data_integrity_report is not None else _load_json(integrity_path, {}),
+        evidence_registry=evidence_registry if evidence_registry is not None else _load_json(registry_path, {}),
+        final_claim_ledger=final_claim_ledger if final_claim_ledger is not None else _load_json(claim_ledger_path, {}),
         output_path=output_path,
         source_paths={
             "pure_data_report": str(pure_path),
@@ -321,6 +371,8 @@ def write_integrated_synthesis_report(
             "event_layer_summary": str(summary_path),
             "event_narrative_ledger": str(event_path),
             "data_integrity_report": str(integrity_path),
+            "evidence_registry": str(registry_path),
+            "final_claim_ledger": str(claim_ledger_path),
         },
     )
     return str(output_path)

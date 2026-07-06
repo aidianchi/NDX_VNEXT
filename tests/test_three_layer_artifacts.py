@@ -204,12 +204,17 @@ def test_event_research_pipeline_writes_required_layer_two_artifacts(tmp_path: P
     assert any((run_dir / "event_research_packets").iterdir())
     mechanism = json.loads((run_dir / "event_mechanism_report.json").read_text(encoding="utf-8"))
     questions = json.loads((run_dir / "cross_layer_questions.json").read_text(encoding="utf-8"))
+    event_challenges = json.loads((run_dir / "event_challenges.json").read_text(encoding="utf-8"))
     cards = json.loads((run_dir / "event_mechanism_cards.json").read_text(encoding="utf-8"))
     html = (run_dir / "event_mechanism_report.html").read_text(encoding="utf-8")
     assert mechanism["schema_version"] == "event_mechanism_report_v1"
     assert mechanism["headline_judgment"]["title"] == "新闻事件初步判断"
     assert mechanism["headline_judgment"]["cannot_be_used_as_primary_evidence"] is True
     assert questions["schema_version"] == "cross_layer_questions_v1"
+    assert event_challenges["schema_version"] == "event_challenges_v1"
+    assert event_challenges["message_type"] == "event_challenge"
+    assert event_challenges["challenge_candidates"]
+    assert "must not become L1-L5 evidence_ref" in event_challenges["no_backflow_rule"]
     assert cards["schema_version"] == "event_mechanism_cards_v1"
     assert "新闻事件初步判断" in html
     assert "可以说" in html
@@ -528,6 +533,52 @@ def test_integrated_synthesis_report_reads_event_mechanism_report():
 
     assert payload["event_mechanism_report"]["headline_judgment"]["title"] == "新闻事件初步判断"
     assert payload["event_mechanism_report"]["delivery_to_integrated_report"]["one_sentence"] == "新闻事件暂时不支持高把握看多。"
+
+
+def test_integrated_synthesis_report_reads_evidence_registry_and_claim_ledger():
+    pure_data = {
+        "schema_version": "pure_data_report_v1",
+        "principal_contradictions": [{"evidence_refs": ["L1.get_10y_real_rate"]}],
+    }
+    event_ledger = EventNarrativeLedgerBuilder().build(
+        event_ledger=_event_ledger(),
+        effective_date="2026-05-08",
+    )
+    payload = IntegratedSynthesisReportBuilder().build(
+        pure_data_report=pure_data,
+        event_narrative_ledger=event_ledger,
+        data_integrity_report={"publish_status": "publishable"},
+        evidence_registry={
+            "schema_version": "evidence_registry_v1",
+            "passports": {
+                "L1.get_10y_real_rate": {
+                    "evidence_kind": "data",
+                    "source_tier": "official",
+                },
+                "claim:final:test": {
+                    "evidence_kind": "final_claim",
+                    "source_tier": "derived_inference",
+                },
+            },
+            "downgrade_summary": [{"evidence_id": "claim:final:test"}],
+        },
+        final_claim_ledger={
+            "schema_version": "claim_ledger_v1",
+            "entries": [
+                {
+                    "claim_id": "claim:final:test",
+                    "authority_status": "downgraded",
+                    "downgrade_reason": "missing_counter_evidence_refs",
+                }
+            ],
+            "publish_gate": {"status": "downgraded", "entry_count": 1},
+        },
+    )
+
+    assert payload["evidence_registry_summary"]["passport_count"] == 2
+    assert payload["evidence_registry_summary"]["by_kind"]["data"] == 1
+    assert payload["final_claim_ledger_summary"]["entry_count"] == 1
+    assert payload["final_claim_ledger_summary"]["downgraded_claims"][0]["claim_id"] == "claim:final:test"
 
 
 def test_pure_data_report_manifest_declares_forbidden_event_inputs(tmp_path: Path):

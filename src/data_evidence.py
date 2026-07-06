@@ -11,6 +11,7 @@ except ImportError:
 
 
 DATA_EVIDENCE_CONTRACT_VERSION = "data_evidence_v1"
+EVIDENCE_PASSPORT_CONTRACT_VERSION = "evidence_passport_v1"
 
 REQUIRED_DATA_QUALITY_FIELDS = {
     "provider",
@@ -78,6 +79,37 @@ LATEST_ONLY_FUNCTIONS = {
 
 PROXY_SOURCE_TOKENS = {"proxy", "component_model", "third_party_estimate"}
 OFFICIAL_SOURCE_TOKENS = {"official", "official_provider", "licensed_manual/wind", "licensed_provider/wind"}
+
+SOURCE_TIER_AUTHORITY_MODEL = {
+    "official": {
+        "can_support": "正式事实或一手公开数据；仍需尊重口径和 effective_date。",
+        "cannot_support": "不能自动证明跨层因果或投资动作。",
+    },
+    "licensed_provider": {
+        "can_support": "授权数据源读数，可作为正式数据证据。",
+        "cannot_support": "不能绕过授权口径、覆盖率和回测可见日期。",
+    },
+    "licensed_manual": {
+        "can_support": "人工录入授权数据，可作为正式数据证据但需保留录入来源。",
+        "cannot_support": "不能伪装成自动实时源或官方直接接口。",
+    },
+    "proxy": {
+        "can_support": "代理观察某个不可直接观测状态。",
+        "cannot_support": "不能说成官方事实或单独支撑强结论。",
+    },
+    "candidate_external_material": {
+        "can_support": "事件背景、解释线索或待验证问题。",
+        "cannot_support": "不能成为 L1-L5 evidence_ref，不能单独证明指数级结论。",
+    },
+    "derived_inference": {
+        "can_support": "记录推理、假说或最终 claim 的来源关系。",
+        "cannot_support": "不能替代底层证据。",
+    },
+    "unknown": {
+        "can_support": "只可作为审计占位。",
+        "cannot_support": "不能支撑可发布结论。",
+    },
+}
 
 
 def utc_timestamp() -> str:
@@ -196,6 +228,33 @@ def _source_tier_from_name(text: str) -> str:
     if "calculated" in lowered or "proxy" in lowered:
         return "proxy"
     return "proxy"
+
+
+def normalize_source_tier_for_evidence_passport(value: Any) -> str:
+    """Normalize legacy data_quality source_tier values to the Stage 4 authority model."""
+    text = str(value or "").lower()
+    if "licensed_provider" in text or ("wind" in text and "manual" not in text):
+        return "licensed_provider"
+    if "licensed_manual" in text or "manual" in text:
+        return "licensed_manual"
+    if "official" in text:
+        return "official"
+    if "formal_data_source" in text:
+        return "formal_data_source"
+    if "trusted_sidecar" in text:
+        return "trusted_sidecar"
+    if "candidate" in text or "external" in text or "headline" in text or "media" in text or "rumor" in text:
+        return "candidate_external_material"
+    if "proxy" in text or "third_party" in text or "estimate" in text:
+        return "proxy"
+    if "derived" in text or "hypothesis" in text or "claim" in text:
+        return "derived_inference"
+    return "unknown"
+
+
+def source_authority_model_for_tier(source_tier: Any) -> Dict[str, str]:
+    tier = normalize_source_tier_for_evidence_passport(source_tier)
+    return dict(SOURCE_TIER_AUTHORITY_MODEL.get(tier, SOURCE_TIER_AUTHORITY_MODEL["unknown"]))
 
 
 def _license_note(source_tier: str, source_name: str) -> str:

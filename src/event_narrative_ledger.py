@@ -1323,6 +1323,7 @@ class EventNarrativeLedgerBuilder:
             "generated_at_utc": _utc_now_iso(),
             "questions": mechanism_report.get("cross_layer_questions", []),
         })
+        self._write_json(run_path / "event_challenges.json", self._event_challenge_export(mechanism_report))
         self._write_json(run_path / "event_mechanism_cards.json", {
             "schema_version": "event_mechanism_cards_v1",
             "generated_at_utc": _utc_now_iso(),
@@ -1336,6 +1337,53 @@ class EventNarrativeLedgerBuilder:
 
     def _report_suffix(self, run_path: Path) -> str:
         return run_path.name.replace("-", "_").replace(":", "_") or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+
+    def _event_challenge_export(self, mechanism_report: Dict[str, Any]) -> Dict[str, Any]:
+        questions = _as_list(mechanism_report.get("cross_layer_questions"))
+        open_event_questions = [
+            question
+            for question in questions
+            if isinstance(question, dict)
+            and question.get("direction") == "event_to_data"
+            and str(question.get("status") or "open") in {"open", "insufficient_data"}
+        ]
+        rejected = [
+            {
+                "question_id": question.get("question_id"),
+                "direction": question.get("direction"),
+                "reason": "not_event_to_data_open_question",
+            }
+            for question in questions
+            if isinstance(question, dict) and question not in open_event_questions
+        ]
+        status = "generated" if open_event_questions else "rejected"
+        return {
+            "schema_version": "event_challenges_v1",
+            "generated_at_utc": _utc_now_iso(),
+            "status": status,
+            "message_type": "event_challenge",
+            "challenge_candidates": [
+                {
+                    "question_id": question.get("question_id"),
+                    "trigger": question.get("why_it_matters"),
+                    "question": question.get("question"),
+                    "allowed_context_refs": [
+                        "cross_layer_questions.json",
+                        "event_layer_summary.json",
+                        "event_mechanism_report.json",
+                    ],
+                    "forbidden_context_refs": [
+                        "layer_cards",
+                        "thesis_draft.json",
+                        "final_adjudication.json",
+                    ],
+                    "requested_checks": _as_list(question.get("requested_checks")),
+                }
+                for question in open_event_questions
+            ],
+            "rejected_candidates": rejected,
+            "no_backflow_rule": "event_challenge can feed InquiryRouter, but event material must not become L1-L5 evidence_ref.",
+        }
 
     def _event_mechanism_html(self, report: Dict[str, Any]) -> str:
         def esc(value: Any) -> str:
