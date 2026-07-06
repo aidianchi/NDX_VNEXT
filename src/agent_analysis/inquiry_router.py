@@ -35,6 +35,7 @@ DEFAULT_FORBIDDEN_CONTEXT_REFS = [
 REQUIRED_INVESTIGATION_OUTPUT_FIELDS = [
     "investigation_id",
     "originating_agent_id",
+    "is_deterministic_stub",
     "finding",
     "evidence_refs",
     "counter_evidence_refs",

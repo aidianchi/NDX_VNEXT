@@ -115,6 +115,7 @@ PROMPT_FILES = {
     "l5_analyst": "l5_analyst.md",
     "bridge": "cross_layer_bridge.md",
     "thesis": "thesis_builder.md",
+    "counter_thesis": "counter_thesis.md",
     "critic": "critic.md",
     "risk": "risk_sentinel.md",
     "reviser": "reviser.md",
@@ -124,6 +125,7 @@ PROMPT_FILES = {
 INLINE_PROMPTS = {
     "bridge": "你负责显式识别跨层支撑关系、冲突关系与关键不确定性。只返回合法 JSON。",
     "thesis": "你负责把 synthesis_packet 整合成状态、价格、赔率、动作和失效条件，并保留未解决冲突。只返回合法 JSON。",
+    "counter_thesis": "你负责在 Thesis 之前提出独立反方假说，只读取允许输入并返回合法 JSON。",
     "critic": "你负责攻击 ThesisDraft 的逻辑弱点、证据跳跃和过度谨慎导致的错过赔率风险。只返回合法 JSON。",
     "risk": "你负责保留下行风险、踏空风险、确认成本、失效条件与必须保留的风险提示。只返回合法 JSON。",
     "reviser": "你负责吸收 critique/risk/schema 反馈后修订 thesis，保留决策语义和冲突，不能自动改得更保守。只返回合法 JSON。",
@@ -435,6 +437,7 @@ class VNextOrchestrator:
             final_adjudication=final_adjudication,
             evidence_registry=evidence_registry,
             effective_date=self._effective_date(packet_model),
+            risk_report=risk_report,
         )
         final_adjudication.claim_ledger = final_claim_ledger
         evidence_registry = self._attach_claims_to_evidence_registry(evidence_registry, final_claim_ledger)
@@ -726,7 +729,8 @@ class VNextOrchestrator:
         }
 
     def _build_feedback_contract_manifest(self) -> Dict[str, Any]:
-        router = InquiryRouter(max_agent_specs=3)
+        runtime_budget = AgentBudget(max_tool_calls=1, max_minutes=1, max_source_refs=3)
+        router = InquiryRouter(max_agent_specs=3, default_budget=runtime_budget)
         return {
             "schema_version": "feedback_contract_manifest_v1",
             "purpose": "Stage 1 audit artifact; defines controlled inquiry messages, task sheets, and investigation reports.",
@@ -780,6 +784,7 @@ class VNextOrchestrator:
                 ],
             },
             "router_policy": router.policy_manifest(),
+            "runtime_budget": runtime_budget.model_dump(mode="json"),
             "no_backflow_rule": (
                 "InquiryMessage, AgentSpec, and InvestigationReport are feedback artifacts. "
                 "They may be audited or consumed by later Bridge/integrated synthesis stages, "
@@ -1006,20 +1011,20 @@ class VNextOrchestrator:
         context_notes = self._read_allowed_context_notes(spec.allowed_context_refs, spec.budget.max_source_refs)
         message_type = message.message_type
         if message_type == InquiryMessageType.EVENT_CHALLENGE:
-            finding = "事件挑战只能提出压力测试方向；本轮确定性调查未发现足以把事件升级为 L1-L5 主证据的材料。"
-            claims_challenged = ["event_material_as_primary_l1_l5_evidence"]
+            finding = "本轮未执行真实调查，仅登记事件挑战缺口；事件材料仍不能升级为 L1-L5 主证据。"
+            claims_challenged: List[str] = []
             cannot_establish = ["事件是否已经因果性改变 NDX 走势", "事件材料是否可直接成为 L1-L5 evidence_ref"]
             confidence = Confidence.LOW
         elif message_type == InquiryMessageType.OBSERVATION_INQUIRY:
-            finding = "数据异常或缺口需要在二次综合中降低置信度；本轮只确认缺口存在及其可审计来源。"
-            claims_challenged = ["complete_data_coverage"]
+            finding = "本轮未执行真实调查，仅登记数据异常或缺口；二次综合只能把它作为待核查限制。"
+            claims_challenged = []
             cannot_establish = ["缺口背后的外部原因", "历史相似样本的胜率或收益"]
             confidence = Confidence.LOW
         else:
-            finding = "Bridge 缺口已被定位为需要保留的裁决问题；现有 allowed artifacts 只能支持继续保留张力，不能自动强化主结论。"
-            claims_challenged = ["strong_single_path_adjudication"]
+            finding = "本轮未执行真实调查，仅登记 Bridge 裁决缺口；现有 allowed artifacts 不能自动强化或反驳主结论。"
+            claims_challenged = []
             cannot_establish = ["主要矛盾已经完全解决", "价格反映程度已经高置信确定"]
-            confidence = Confidence.MEDIUM if context_notes else Confidence.LOW
+            confidence = Confidence.LOW
 
         source_authority = [
             EvidenceSourceAuthority(
@@ -1035,16 +1040,18 @@ class VNextOrchestrator:
         return InvestigationReport(
             investigation_id=investigation_id,
             originating_agent_id=spec.agent_id,
+            is_deterministic_stub=True,
             finding=finding,
             evidence_refs=list(spec.allowed_context_refs[: spec.budget.max_source_refs or len(spec.allowed_context_refs)]),
             counter_evidence_refs=[],
-            claims_supported=[message.question],
+            claims_supported=[],
             claims_challenged=claims_challenged,
             cannot_establish=cannot_establish,
             confidence=confidence,
             limits=[
                 "stage_2_minimal_deterministic_investigation_only",
                 "no_external_research_performed",
+                "no_real_investigation_performed",
                 "no_backflow_to_l1_l5",
                 f"allowed_context_notes={len(context_notes)}",
             ],
@@ -1094,12 +1101,17 @@ class VNextOrchestrator:
     ) -> BridgeMemo:
         effects: List[Dict[str, Any]] = []
         for report in investigation_reports:
-            changed = bool(report.claims_challenged and "strong_single_path_adjudication" not in report.claims_challenged)
+            changed = bool(
+                not getattr(report, "is_deterministic_stub", False)
+                and report.claims_challenged
+                and "strong_single_path_adjudication" not in report.claims_challenged
+            )
             effects.append(
                 {
                     "investigation_id": report.investigation_id,
                     "originating_agent_id": report.originating_agent_id,
-                    "effect_on_judgment": "downgraded_or_kept_unresolved" if changed else "no_change_keep_unresolved",
+                    "is_deterministic_stub": bool(getattr(report, "is_deterministic_stub", False)),
+                    "effect_on_judgment": "downgraded_or_kept_unresolved" if changed else "stub_gap_recorded_no_judgment_change",
                     "finding": report.finding,
                     "confidence": _enum_value(report.confidence),
                     "evidence_refs": list(report.evidence_refs),
@@ -1172,9 +1184,9 @@ class VNextOrchestrator:
                 "accepted_messages": sorted(accepted_ids),
                 "rejected_messages": rejected_questions,
                 "investigation_report_refs": report_refs,
-                "changed_judgment_count": sum(1 for item in effects if item["effect_on_judgment"] != "no_change_keep_unresolved"),
-                "unchanged_or_unresolved_count": sum(1 for item in effects if item["effect_on_judgment"] == "no_change_keep_unresolved"),
-                "no_backflow_verified": True,
+                "changed_judgment_count": sum(1 for item in effects if item["effect_on_judgment"] == "downgraded_or_kept_unresolved"),
+                "unchanged_or_unresolved_count": sum(1 for item in effects if item["effect_on_judgment"] != "downgraded_or_kept_unresolved"),
+                "no_backflow_asserted": True,
             },
         }
         bridge_v2 = BridgeMemo.model_validate(bridge_v2_payload)
@@ -1286,13 +1298,170 @@ class VNextOrchestrator:
         bridge_v2: BridgeMemo,
         investigation_reports: List[InvestigationReport],
     ) -> CounterThesisDraft:
+        payload = self._counter_thesis_prompt_payload(
+            synthesis_packet=synthesis_packet,
+            bridge_v2=bridge_v2,
+            investigation_reports=investigation_reports,
+        )
+        allowed_refs = set(synthesis_packet.evidence_index.keys())
+        try:
+            draft = self._run_stage(
+                stage_key="counter_thesis",
+                stage_name="counter_thesis",
+                model_cls=CounterThesisDraft,
+                payload=payload,
+                validator=lambda candidate: self._validate_counter_thesis_draft(candidate, allowed_refs),
+            )
+            draft = self._normalize_counter_thesis_draft(draft, allowed_refs)
+        except Exception as exc:
+            logger.warning("counter_thesis LLM stage failed; using deterministic fallback: %s", exc)
+            draft = self._build_deterministic_counter_thesis(
+                synthesis_packet=synthesis_packet,
+                bridge_v2=bridge_v2,
+                investigation_reports=investigation_reports,
+                fallback_reason=str(exc),
+            )
+
+        audit = self._counter_thesis_prompt_input_audit(payload)
+        return draft.model_copy(
+            update={
+                "input_refs": ["synthesis_packet.json", "bridge_memos/bridge_0.json", "investigation_reports/*.json"],
+                "forbidden_context_refs": ["thesis_draft.json", "analysis_revised.json", "final_adjudication.json"],
+                "prompt_input_audit": audit,
+            }
+        )
+
+    def _counter_thesis_prompt_payload(
+        self,
+        *,
+        synthesis_packet: SynthesisPacket,
+        bridge_v2: BridgeMemo,
+        investigation_reports: List[InvestigationReport],
+    ) -> Dict[str, Any]:
+        synthesis_payload = _model_dump(synthesis_packet)
+        for key in (
+            "competing_hypotheses",
+            "hypothesis_competition_summary",
+            "adjudication_history",
+            "counter_thesis_boundary",
+        ):
+            synthesis_payload.pop(key, None)
+        bridge_v1_summaries = [
+            item
+            for item in _as_list(synthesis_payload.get("bridge_summaries"))
+            if isinstance(item, dict) and str(item.get("bridge_type") or "") != "feedback_bridge_v2"
+        ]
+        non_stub_reports = [
+            _model_dump(report)
+            for report in investigation_reports
+            if not getattr(report, "is_deterministic_stub", False)
+        ]
+        return {
+            "synthesis_packet_without_self_reference": synthesis_payload,
+            "bridge_v1_structure": bridge_v1_summaries[:1],
+            "bridge_v2_feedback_summary": _model_dump(getattr(bridge_v2, "feedback_loop_summary", {})),
+            "non_stub_investigation_reports": non_stub_reports,
+            "allowed_evidence_refs": sorted(synthesis_packet.evidence_index.keys()),
+            "forbidden_context_refs": ["thesis_draft.json", "analysis_revised.json", "final_adjudication.json"],
+            "output_contract": "CounterThesisDraft",
+        }
+
+    def _validate_counter_thesis_draft(self, draft: CounterThesisDraft, allowed_refs: set[str]) -> List[str]:
+        errors: List[str] = []
+        if not draft.hypotheses:
+            errors.append("CounterThesisDraft.hypotheses must contain at least one hypothesis.")
+        for index, hypothesis in enumerate(draft.hypotheses):
+            for field_name in ("support_evidence_refs", "counter_evidence_refs", "diagnostic_evidence_refs"):
+                refs = [str(ref) for ref in getattr(hypothesis, field_name, []) or []]
+                invalid = [ref for ref in refs if ref not in allowed_refs]
+                if invalid:
+                    errors.append(f"hypotheses[{index}].{field_name} contains refs outside evidence_index: {invalid[:5]}")
+            if not hypothesis.support_evidence_refs:
+                errors.append(f"hypotheses[{index}].support_evidence_refs must not be empty.")
+            if not hypothesis.diagnostic_evidence_refs:
+                errors.append(f"hypotheses[{index}].diagnostic_evidence_refs must not be empty.")
+            if not hypothesis.falsification_conditions:
+                errors.append(f"hypotheses[{index}].falsification_conditions must not be empty.")
+        return errors
+
+    def _normalize_counter_thesis_draft(self, draft: CounterThesisDraft, allowed_refs: set[str]) -> CounterThesisDraft:
+        hypotheses: List[CompetingHypothesis] = []
+        for hypothesis in draft.hypotheses[:2]:
+            support_refs = [ref for ref in hypothesis.support_evidence_refs if ref in allowed_refs]
+            counter_refs = [ref for ref in hypothesis.counter_evidence_refs if ref in allowed_refs]
+            diagnostic_refs = [ref for ref in hypothesis.diagnostic_evidence_refs if ref in allowed_refs]
+            text = " ".join(str(hypothesis.hypothesis_text or "").split())
+            if not text or not support_refs or not diagnostic_refs:
+                continue
+            hypotheses.append(
+                hypothesis.model_copy(
+                    update={
+                        "hypothesis_id": hypothesis.hypothesis_id or self._stable_hypothesis_id("counter", text),
+                        "hypothesis_text": text,
+                        "source": "counter_thesis",
+                        "support_evidence_refs": support_refs[:10],
+                        "counter_evidence_refs": counter_refs[:10],
+                        "diagnostic_evidence_refs": diagnostic_refs[:10],
+                        "source_refs": ["synthesis_packet.json", "bridge_memos/bridge_0.json", "investigation_reports/*.json"],
+                    }
+                )
+            )
+        return draft.model_copy(
+            update={
+                "hypotheses": hypotheses,
+                "principal_counterargument": draft.principal_counterargument or (hypotheses[0].hypothesis_text if hypotheses else ""),
+            }
+        )
+
+    def _counter_thesis_prompt_input_audit(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        forbidden_refs = {"thesis_draft.json", "analysis_revised.json", "final_adjudication.json"}
+        hits: List[str] = []
+
+        def walk(value: Any, path: str = "") -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key in {"forbidden_context_refs", "forbidden_artifacts"}:
+                        continue
+                    walk(child, f"{path}.{key}" if path else str(key))
+                return
+            if isinstance(value, list):
+                for index, child in enumerate(value):
+                    walk(child, f"{path}[{index}]")
+                return
+            text = str(value)
+            for ref in forbidden_refs:
+                if ref in text:
+                    hits.append(f"{path}:{ref}")
+
+        walk(payload)
+        prompt_files = sorted(str(path.relative_to(self.output_dir)) for path in self._prompt_audit_stage_dir("counter_thesis").glob("attempt_*.prompt.txt"))
+        return {
+            "measurement": "payload_tree_scan_excluding_forbidden_context_declarations",
+            "thesis_exists_at_generation": (self.output_dir / "thesis_draft.json").exists(),
+            "thesis_read": any("thesis_draft.json" in hit for hit in hits),
+            "allowed_inputs_only": not hits,
+            "forbidden_payload_refs": hits,
+            "prompt_audit_files": prompt_files,
+            "forbidden_context_refs": sorted(forbidden_refs),
+        }
+
+    def _build_deterministic_counter_thesis(
+        self,
+        *,
+        synthesis_packet: SynthesisPacket,
+        bridge_v2: BridgeMemo,
+        investigation_reports: List[InvestigationReport],
+        fallback_reason: str = "",
+    ) -> CounterThesisDraft:
         principal = _model_dump(getattr(bridge_v2, "principal_contradiction", None))
         if not isinstance(principal, dict):
             principal = {}
         investigation_evidence = list(dict.fromkeys(
             ref
             for report in investigation_reports
+            if not getattr(report, "is_deterministic_stub", False)
             for ref in list(report.evidence_refs)
+            if ref in synthesis_packet.evidence_index
         ))
         unresolved = list(dict.fromkeys(
             list(getattr(bridge_v2, "unresolved_questions", []) or [])
@@ -1311,7 +1480,7 @@ class VNextOrchestrator:
         counter_hypothesis = CompetingHypothesis(
             hypothesis_id=self._stable_hypothesis_id("counter", counter_text),
             hypothesis_text=counter_text,
-            source="counter_thesis",
+            source="deterministic_fallback",
             support_evidence_refs=investigation_evidence or base_refs[:3],
             counter_evidence_refs=base_refs[:6],
             diagnostic_evidence_refs=list(dict.fromkeys(investigation_evidence + base_refs))[:8],
@@ -1335,6 +1504,7 @@ class VNextOrchestrator:
                 "thesis_exists_at_generation": (self.output_dir / "thesis_draft.json").exists(),
                 "thesis_read": False,
                 "allowed_inputs_only": True,
+                "fallback_reason": fallback_reason[:500],
                 "forbidden_context_refs": ["thesis_draft.json", "analysis_revised.json", "final_adjudication.json"],
             },
         )
@@ -1402,7 +1572,8 @@ class VNextOrchestrator:
         trigger_refs = list(dict.fromkeys(
             ref
             for report in investigation_reports
-            if report.claims_challenged or report.cannot_establish
+            if not getattr(report, "is_deterministic_stub", False)
+            and (report.claims_challenged or report.counter_evidence_refs)
             for ref in list(report.evidence_refs)
         ))
         if trigger_refs or fallback_warnings:
@@ -1491,7 +1662,8 @@ class VNextOrchestrator:
             permission = item.get("permission_type") if isinstance(item, dict) else ""
             issues = data_evidence_issues(raw_payload, function_id=evidence_id.split(".", 1)[-1], backtest_date=packet_model.meta.get("backtest_date") if isinstance(packet_model.meta, dict) else None) if raw_payload else {"hard_block": [], "degraded": [], "audit_warn": []}
             downgrade_rules = [issue["code"] for issue in issues.get("hard_block", []) + issues.get("degraded", []) if isinstance(issue, dict)]
-            source_tier = self._normalize_source_tier(quality.get("source_tier") or item.get("source_tier") if isinstance(item, dict) else "")
+            item_source_tier = item.get("source_tier") if isinstance(item, dict) else ""
+            source_tier = self._normalize_source_tier(quality.get("source_tier") or item_source_tier)
             passports[evidence_id] = EvidencePassport(
                 evidence_id=evidence_id,
                 evidence_kind="data",
@@ -1517,6 +1689,9 @@ class VNextOrchestrator:
             evidence_id = f"investigation_reports/{report.investigation_id}.json"
             tiers = [self._normalize_source_tier(item.source_tier) for item in report.source_authority]
             source_tier = "formal_data_source" if "formal_data_source" in tiers else (tiers[0] if tiers else "unknown")
+            report_downgrade_rules = ["investigation_is_downstream_no_l1_l5_backflow", *list(report.limits)]
+            if getattr(report, "is_deterministic_stub", False):
+                report_downgrade_rules.append("deterministic_stub_not_real_investigation")
             passports[evidence_id] = EvidencePassport(
                 evidence_id=evidence_id,
                 evidence_kind="investigation",
@@ -1527,9 +1702,14 @@ class VNextOrchestrator:
                     "cannot_support": list(report.cannot_establish),
                     "counter_evidence_refs": list(report.counter_evidence_refs),
                 },
-                downgrade_rules=["investigation_is_downstream_no_l1_l5_backflow", *list(report.limits)],
+                downgrade_rules=report_downgrade_rules,
                 effective_date=report.effective_date,
-                verified=bool(report.finding and report.evidence_refs and report.cannot_establish),
+                verified=bool(
+                    not getattr(report, "is_deterministic_stub", False)
+                    and report.finding
+                    and report.evidence_refs
+                    and report.cannot_establish
+                ),
                 limitations=list(report.cannot_establish),
             )
 
@@ -1664,6 +1844,7 @@ class VNextOrchestrator:
         final_adjudication: FinalAdjudication,
         evidence_registry: EvidenceRegistry,
         effective_date: str,
+        risk_report: Optional[RiskBoundaryReport] = None,
     ) -> ClaimLedger:
         entries: List[ClaimLedgerEntry] = []
         common_refs = self._compact_string_refs(
@@ -1671,23 +1852,37 @@ class VNextOrchestrator:
             + list(getattr(final_adjudication, "evidence_refs", []) or [])
             + [ref for chain in getattr(thesis, "key_support_chains", []) or [] for ref in chain.evidence_refs]
         )
-        common_counter_refs = self._claim_counter_refs(synthesis_packet, thesis, final_adjudication)
-        common_falsifiers = self._claim_falsifiers(thesis, final_adjudication, synthesis_packet)
 
         def add(source_stage: str, claim_type: str, claim_text: str, evidence_refs: List[str], inference_steps: List[str], falsifiers: List[str]) -> None:
             text = " ".join(str(claim_text or "").split())
             if not text:
                 return
             claim_id = f"claim:{source_stage}:{hashlib.sha1((claim_type + '|' + text).encode('utf-8')).hexdigest()[:12]}"
+            counter_refs, counter_method = self._claim_specific_counter_refs(
+                claim_type=claim_type,
+                synthesis_packet=synthesis_packet,
+                thesis=thesis,
+                final_adjudication=final_adjudication,
+            )
+            falsification_conditions, falsifier_method = self._claim_specific_falsifiers(
+                claim_type=claim_type,
+                provided_falsifiers=falsifiers,
+                synthesis_packet=synthesis_packet,
+                thesis=thesis,
+                final_adjudication=final_adjudication,
+                risk_report=risk_report,
+            )
             entry = ClaimLedgerEntry(
                 claim_id=claim_id,
                 source_stage=source_stage,  # type: ignore[arg-type]
                 claim_text=text,
                 claim_type=claim_type,  # type: ignore[arg-type]
                 evidence_refs=self._compact_string_refs(evidence_refs or common_refs),
-                counter_evidence_refs=common_counter_refs,
+                counter_evidence_refs=counter_refs,
                 inference_steps=self._compact_strings(inference_steps),
-                falsification_conditions=self._compact_strings(falsifiers or common_falsifiers),
+                falsification_conditions=falsification_conditions,
+                counter_evidence_method=counter_method,
+                falsifier_method=falsifier_method,
             )
             entries.append(self._verify_claim_entry(entry, evidence_registry))
 
@@ -1729,6 +1924,10 @@ class VNextOrchestrator:
             reasons.append("missing_counter_evidence_refs")
         if not entry.falsification_conditions:
             reasons.append("missing_falsification_conditions")
+        if getattr(entry, "counter_evidence_method", "") == "not_claim_specific":
+            reasons.append("counter_evidence_not_claim_specific")
+        if getattr(entry, "falsifier_method", "") == "not_claim_specific":
+            reasons.append("falsification_conditions_not_claim_specific")
         if weak_refs and not any(ref for ref in entry.evidence_refs if registry.passports.get(ref) and registry.passports[ref].source_tier in {"official", "licensed_provider", "licensed_manual", "formal_data_source"}):
             reasons.append("only_weak_or_derived_evidence_refs")
         verified = not reasons
@@ -1812,6 +2011,89 @@ class VNextOrchestrator:
         for hypothesis in list(synthesis_packet.competing_hypotheses or []):
             items.extend(str(item) for item in list(getattr(hypothesis, "falsification_conditions", []) or []))
         return self._compact_strings(items)
+
+    def _claim_specific_counter_refs(
+        self,
+        *,
+        claim_type: str,
+        synthesis_packet: SynthesisPacket,
+        thesis: ThesisDraft,
+        final_adjudication: FinalAdjudication,
+    ) -> tuple[List[str], str]:
+        competing_support_refs = [
+            ref
+            for hypothesis in list(synthesis_packet.competing_hypotheses or [])
+            if str(getattr(hypothesis, "source", "")) in {"counter_thesis", "deterministic_fallback", "investigation"}
+            for ref in list(getattr(hypothesis, "support_evidence_refs", []) or [])
+        ]
+        typed_conflict_refs = [
+            ref
+            for conflict in list(synthesis_packet.high_severity_typed_conflicts or [])
+            for ref in list(getattr(conflict, "evidence_refs", []) or [])
+        ]
+        price_counter_refs = [
+            ref
+            for item in list(getattr(thesis, "price_reflection_map", []) or []) + list(getattr(final_adjudication, "price_reflection_map", []) or [])
+            for ref in list(getattr(item, "counterevidence_refs", []) or [])
+        ]
+        invalidation_related_refs = [
+            ref
+            for view in list(getattr(final_adjudication, "time_horizon_views", []) or []) + list(getattr(thesis, "time_horizon_views", []) or [])
+            for ref in list(getattr(view, "evidence_refs", []) or [])
+        ]
+
+        if claim_type == "market_state":
+            refs = self._compact_string_refs(competing_support_refs + typed_conflict_refs)
+            return refs, "opposing_hypothesis_support_plus_typed_conflicts" if refs else "not_claim_specific"
+        if claim_type == "price_reflection":
+            refs = self._compact_string_refs(price_counter_refs + competing_support_refs)
+            return refs, "price_reflection_counterevidence" if refs else "not_claim_specific"
+        if claim_type == "risk_boundary":
+            refs = self._compact_string_refs(typed_conflict_refs + price_counter_refs)
+            return refs, "risk_conflicts_and_price_counterevidence" if refs else "not_claim_specific"
+        if claim_type == "action_translation":
+            refs = self._compact_string_refs(invalidation_related_refs + competing_support_refs + price_counter_refs)
+            return refs, "action_invalidation_related_refs" if refs else "not_claim_specific"
+        refs = self._compact_string_refs(price_counter_refs + typed_conflict_refs)
+        return refs, "typed_conflicts_or_price_counterevidence" if refs else "not_claim_specific"
+
+    def _claim_specific_falsifiers(
+        self,
+        *,
+        claim_type: str,
+        provided_falsifiers: List[str],
+        synthesis_packet: SynthesisPacket,
+        thesis: ThesisDraft,
+        final_adjudication: FinalAdjudication,
+        risk_report: Optional[RiskBoundaryReport],
+    ) -> tuple[List[str], str]:
+        provided = self._compact_strings(provided_falsifiers)
+        if claim_type in {"market_state", "price_reflection"}:
+            hypothesis_falsifiers = [
+                item
+                for hypothesis in list(synthesis_packet.competing_hypotheses or [])
+                for item in list(getattr(hypothesis, "falsification_conditions", []) or [])
+            ]
+            result = self._compact_strings(provided + hypothesis_falsifiers)
+            return result, "claim_invalidation_plus_hypothesis_falsifiers" if result else "not_claim_specific"
+        if claim_type == "risk_boundary":
+            risk_items: List[str] = []
+            if risk_report is not None:
+                risk_items.extend(str(item) for item in list(getattr(risk_report, "must_preserve_risks", []) or []))
+                risk_items.extend(str(item.get("condition") or item.get("risk") or item) for item in list(getattr(risk_report, "failure_conditions", []) or []) if isinstance(item, dict))
+                risk_items.extend(str(item) for item in list(getattr(risk_report, "false_safety_risks", []) or []))
+            result = self._compact_strings(risk_items + provided)
+            return result, "risk_sentinel_failure_conditions" if result else "not_claim_specific"
+        if claim_type == "action_translation":
+            action_conditions = [
+                condition
+                for action in list(getattr(final_adjudication, "portfolio_actions", []) or []) + list(getattr(thesis, "portfolio_actions", []) or [])
+                for condition in list(getattr(action, "conditions", []) or [])
+            ]
+            result = self._compact_strings(provided + action_conditions)
+            return result, "action_conditions_and_invalidation" if result else "not_claim_specific"
+        result = self._compact_strings(provided)
+        return result, "provided_claim_falsifiers" if result else "not_claim_specific"
 
     def _compact_string_refs(self, values: List[Any], limit: int = 20) -> List[str]:
         return self._compact_strings([value for value in values if isinstance(value, str) and value], limit=limit)
@@ -1977,32 +2259,38 @@ class VNextOrchestrator:
             )
 
         for memo in bridge_memos:
+            is_feedback_bridge = str(getattr(memo, "bridge_type", "")) == "feedback_bridge_v2"
             # H3: Include both high and medium severity conflicts so Thesis is aware
             # of all meaningful cross-layer tensions, not just the highest severity ones.
-            high_conflicts.extend(
-                conflict for conflict in memo.conflicts if _severity_is_high_or_medium(conflict)
-            )
-            high_typed_conflicts.extend(
-                conflict for conflict in memo.typed_conflicts if _severity_is_high_or_medium(conflict)
-            )
-            if getattr(memo, "principal_contradiction", None) is not None:
+            if not is_feedback_bridge:
+                high_conflicts.extend(
+                    conflict for conflict in memo.conflicts if _severity_is_high_or_medium(conflict)
+                )
+                high_typed_conflicts.extend(
+                    conflict for conflict in memo.typed_conflicts if _severity_is_high_or_medium(conflict)
+                )
+            if not is_feedback_bridge and getattr(memo, "principal_contradiction", None) is not None:
                 principal_contradictions.append(memo.principal_contradiction)
             bridge_summaries.append(
                 BridgeSynthesisItem(
                     bridge_type=memo.bridge_type,
                     layers_connected=memo.layers_connected,
-                    key_claims=[claim.claim for claim in memo.cross_layer_claims],
+                    key_claims=[] if is_feedback_bridge else [claim.claim for claim in memo.cross_layer_claims],
                     key_conflicts=[
                         f"{conflict.conflict_type}: {conflict.description}"
                         for conflict in memo.conflicts
-                    ],
-                    typed_conflicts=[_model_dump(conflict) for conflict in memo.typed_conflicts],
-                    resonance_chains=[_model_dump(chain) for chain in memo.resonance_chains],
-                    transmission_paths=[_model_dump(path) for path in memo.transmission_paths],
-                    principal_contradiction=_model_dump(memo.principal_contradiction) if getattr(memo, "principal_contradiction", None) is not None else None,
-                    secondary_contradictions=[_model_dump(item) for item in memo.secondary_contradictions],
-                    price_reflection_map=[_model_dump(item) for item in memo.price_reflection_map],
-                    contradiction_transformation_signals=[_model_dump(item) for item in memo.contradiction_transformation_signals],
+                    ] if not is_feedback_bridge else [],
+                    typed_conflicts=[] if is_feedback_bridge else [_model_dump(conflict) for conflict in memo.typed_conflicts],
+                    resonance_chains=[] if is_feedback_bridge else [_model_dump(chain) for chain in memo.resonance_chains],
+                    transmission_paths=[] if is_feedback_bridge else [_model_dump(path) for path in memo.transmission_paths],
+                    principal_contradiction=(
+                        None
+                        if is_feedback_bridge
+                        else _model_dump(memo.principal_contradiction) if getattr(memo, "principal_contradiction", None) is not None else None
+                    ),
+                    secondary_contradictions=[] if is_feedback_bridge else [_model_dump(item) for item in memo.secondary_contradictions],
+                    price_reflection_map=[] if is_feedback_bridge else [_model_dump(item) for item in memo.price_reflection_map],
+                    contradiction_transformation_signals=[] if is_feedback_bridge else [_model_dump(item) for item in memo.contradiction_transformation_signals],
                     unresolved_questions=memo.unresolved_questions,
                     event_refs=list(dict.fromkeys(getattr(memo, "event_refs", []) or [])),
                     implication_for_ndx=memo.implication_for_ndx,
@@ -2098,14 +2386,19 @@ class VNextOrchestrator:
         for item in known_items:
             falsifiers.extend(item.falsifiers)
 
+        structural_bridge_memos = [
+            memo
+            for memo in bridge_memos
+            if str(getattr(memo, "bridge_type", "")) != "feedback_bridge_v2"
+        ]
         typed_conflicts = [
             conflict
-            for memo in bridge_memos
+            for memo in structural_bridge_memos
             for conflict in memo.typed_conflicts
         ]
         legacy_conflicts = [
             conflict
-            for memo in bridge_memos
+            for memo in structural_bridge_memos
             for conflict in memo.conflicts
         ]
         # F4: cross_layer_verified means "bridge has verified cross-layer logic",
@@ -2980,10 +3273,15 @@ class VNextOrchestrator:
         if not bridge_memos:
             structural_issues.append("No bridge memo generated.")
         else:
-            total_conflicts = sum(len(memo.conflicts) for memo in bridge_memos)
+            structural_bridge_memos = [
+                memo
+                for memo in bridge_memos
+                if str(getattr(memo, "bridge_type", "")) != "feedback_bridge_v2"
+            ]
+            total_conflicts = sum(len(memo.conflicts) for memo in structural_bridge_memos)
             if total_conflicts == 0:
                 consistency_issues.append("Bridge stage produced zero conflicts; this usually means tension was flattened.")
-            for memo_index, memo in enumerate(bridge_memos):
+            for memo_index, memo in enumerate(structural_bridge_memos):
                 seen_path_ids: set[str] = set()
                 for claim_index, claim in enumerate(memo.cross_layer_claims):
                     bad_refs = _bad_refs(claim.supporting_facts)

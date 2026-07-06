@@ -313,6 +313,10 @@ class InvestigationReport(BaseModel):
 
     investigation_id: str = Field(default_factory=lambda: f"inv_{uuid4().hex[:12]}", description="调查报告 ID")
     originating_agent_id: str = Field(..., description="来源 AgentSpec ID")
+    is_deterministic_stub: bool = Field(
+        False,
+        description="是否只是确定性占位调查；true 时不得被当作真实反证或裁决降级触发器",
+    )
     finding: str = Field(..., min_length=1, description="调查发现")
     evidence_refs: List[str] = Field(default_factory=list, description="支持证据")
     counter_evidence_refs: List[str] = Field(default_factory=list, description="反证")

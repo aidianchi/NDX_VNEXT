@@ -178,6 +178,7 @@ def _feedback_contract_findings(
     if investigation_reports:
         required = {
             "finding",
+            "is_deterministic_stub",
             "evidence_refs",
             "counter_evidence_refs",
             "claims_supported",

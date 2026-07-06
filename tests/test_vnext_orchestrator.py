@@ -634,10 +634,11 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
     assert investigation_paths
     investigation = json.loads(investigation_paths[0].read_text(encoding="utf-8"))
     assert "source_authority" in investigation
+    assert investigation["is_deterministic_stub"] is True
     assert investigation["limits"]
     bridge_v2 = json.loads((tmp_path / "bridge_memos" / "bridge_v2.json").read_text(encoding="utf-8"))
     assert bridge_v2["bridge_type"] == "feedback_bridge_v2"
-    assert bridge_v2["feedback_loop_summary"]["no_backflow_verified"] is True
+    assert bridge_v2["feedback_loop_summary"]["no_backflow_asserted"] is True
     assert bridge_v2["feedback_loop_summary"]["investigation_report_refs"]
     assert bridge_v2["investigation_effects"]
     counter_thesis = json.loads((tmp_path / "counter_thesis.json").read_text(encoding="utf-8"))
@@ -1733,6 +1734,151 @@ def test_thesis_string_lists_are_normalized_to_structured_views(tmp_path: Path):
     assert normalized["reader_conclusion"]["action_summary"][0]["action"] == "核心仓不砍"
 
 
+def test_stub_investigation_does_not_downgrade_competition(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    base = CompetingHypothesis(
+        hypothesis_id="hyp_base",
+        hypothesis_text="主线解释：利率压力仍是主导。",
+        support_evidence_refs=["L1.get_fed_funds_rate"],
+        counter_evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+        diagnostic_evidence_refs=["L1.get_fed_funds_rate"],
+        cannot_explain=["趋势仍强。"],
+        falsification_conditions=["利率快速下行。"],
+    )
+    counter = CompetingHypothesis(
+        hypothesis_id="hyp_counter",
+        hypothesis_text="反方解释：价格可能已部分反映压力。",
+        source="counter_thesis",
+        support_evidence_refs=["L5.get_qqq_technical_indicators"],
+        counter_evidence_refs=["L1.get_fed_funds_rate"],
+        diagnostic_evidence_refs=["L5.get_qqq_technical_indicators"],
+        cannot_explain=["不能证明估值便宜。"],
+        falsification_conditions=["趋势跌破关键均线。"],
+    )
+    stub_report = InvestigationReport(
+        originating_agent_id="agent_stub",
+        is_deterministic_stub=True,
+        finding="本轮未执行真实调查，仅登记缺口。",
+        evidence_refs=["bridge_memos/bridge_0.json"],
+        claims_challenged=["strong_single_path_adjudication"],
+        cannot_establish=["价格反映程度不清。"],
+        effective_date="2026-07-06",
+    )
+
+    records = orchestrator._build_adjudication_change_records(
+        base_hypothesis=base,
+        counter_hypotheses=[counter],
+        investigation_reports=[stub_report],
+        fallback_warnings=[],
+        effective_date="2026-07-06",
+    )
+
+    assert records == []
+
+
+def test_synthesis_packet_does_not_duplicate_bridge_v1_structure_from_bridge_v2(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    packet = _mock_packet()
+    context = orchestrator._build_context_brief(packet)
+    layer_cards = []
+    bridge_v1 = BridgeMemo(
+        bridge_type="macro_valuation",
+        layers_connected=["L1", "L4"],
+        conflicts=[
+            {
+                "conflict_type": "rates_vs_valuation",
+                "severity": "high",
+                "description": "高利率与高估值并存。",
+                "implication": "估值压缩风险仍需保留。",
+                "involved_layers": ["L1", "L4"],
+                "evidence_refs": ["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
+            }
+        ],
+        principal_contradiction={
+            "contradiction_id": "rates_vs_valuation",
+            "summary": "高利率与高估值并存。",
+            "why_principal": "它决定估值承压与趋势韧性的拉扯。",
+            "dominant_side": "利率压力。",
+            "secondary_side": "趋势韧性。",
+            "price_reflection": "partially_reflected",
+            "action_implication": "保留风险边界。",
+            "evidence_refs": ["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
+        },
+        implication_for_ndx="保留张力。",
+    )
+    bridge_v2 = BridgeMemo.model_validate(
+        {
+            **bridge_v1.model_dump(mode="json"),
+            "bridge_type": "feedback_bridge_v2",
+            "feedback_loop_summary": {"input_bridge": "bridge_memos/bridge_0.json"},
+        }
+    )
+
+    synthesis = orchestrator._build_synthesis_packet(packet, context, layer_cards, [bridge_v1, bridge_v2])
+
+    assert len(synthesis.high_severity_conflicts) == 1
+    assert len(synthesis.principal_contradictions) == 1
+    feedback_summary = next(item for item in synthesis.bridge_summaries if item.bridge_type == "feedback_bridge_v2")
+    assert feedback_summary.key_conflicts == []
+    assert feedback_summary.principal_contradiction is None
+
+
+def test_counter_thesis_uses_llm_when_available(tmp_path: Path):
+    response = {
+        "input_refs": ["synthesis_packet.json", "bridge_memos/bridge_0.json"],
+        "forbidden_context_refs": ["thesis_draft.json", "analysis_revised.json", "final_adjudication.json"],
+        "hypotheses": [
+            {
+                "hypothesis_id": "hyp_counter_llm",
+                "hypothesis_text": "反方解释：趋势证据说明市场可能已部分消化利率压力。",
+                "source": "counter_thesis",
+                "support_evidence_refs": ["L5.get_qqq_technical_indicators"],
+                "counter_evidence_refs": ["L1.get_fed_funds_rate"],
+                "diagnostic_evidence_refs": ["L5.get_qqq_technical_indicators"],
+                "cannot_explain": ["不能证明估值便宜。"],
+                "falsification_conditions": ["趋势跌破关键均线。"],
+                "confidence": "low",
+                "status": "candidate",
+                "adjudication_reason": "用趋势证据挑战单一路径。",
+            }
+        ],
+        "principal_counterargument": "趋势证据可能说明部分压力已被消化。",
+        "cannot_establish": ["不能证明主线错误。"],
+    }
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({"counter_thesis": json.dumps(response, ensure_ascii=False)}),
+    )
+    synthesis_packet = SynthesisPacket(
+        evidence_index={
+            "L1.get_fed_funds_rate": {"layer": "L1"},
+            "L5.get_qqq_technical_indicators": {"layer": "L5"},
+        },
+        bridge_summaries=[],
+    )
+    bridge_v2 = BridgeMemo(bridge_type="feedback_bridge_v2", layers_connected=["L1", "L5"], implication_for_ndx="保留张力。")
+
+    draft = orchestrator._build_counter_thesis(
+        synthesis_packet=synthesis_packet,
+        bridge_v2=bridge_v2,
+        investigation_reports=[],
+    )
+
+    assert draft.hypotheses[0].source == "counter_thesis"
+    assert draft.hypotheses[0].support_evidence_refs == ["L5.get_qqq_technical_indicators"]
+    assert draft.prompt_input_audit["allowed_inputs_only"] is True
+    assert draft.prompt_input_audit["thesis_read"] is False
+
+
 def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path: Path):
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
@@ -1758,6 +1904,14 @@ def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path:
                 "canonical_question": "估值是否昂贵？",
                 "misread_guards": ["不能证明短线买点"],
                 "permission_type": "fact",
+            },
+            "L5.get_qqq_technical_indicators": {
+                "layer": "L5",
+                "function_id": "get_qqq_technical_indicators",
+                "metric": "QQQ Technical",
+                "canonical_question": "趋势是否仍有效？",
+                "misread_guards": ["不能证明估值便宜"],
+                "permission_type": "technical",
             },
         },
         high_severity_typed_conflicts=[
@@ -1790,11 +1944,22 @@ def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path:
             CompetingHypothesis(
                 hypothesis_id="hyp_base",
                 hypothesis_text="主线解释：利率压力压制估值。",
+                source="bridge_v2",
                 support_evidence_refs=["L1.get_fed_funds_rate"],
                 counter_evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
                 diagnostic_evidence_refs=["L1.get_fed_funds_rate"],
                 cannot_explain=["趋势仍强。"],
                 falsification_conditions=["利率快速下行。"],
+            ),
+            CompetingHypothesis(
+                hypothesis_id="hyp_counter",
+                hypothesis_text="反方解释：趋势仍强说明价格可能已经部分消化利率压力。",
+                source="counter_thesis",
+                support_evidence_refs=["L5.get_qqq_technical_indicators"],
+                counter_evidence_refs=["L1.get_fed_funds_rate"],
+                diagnostic_evidence_refs=["L5.get_qqq_technical_indicators"],
+                cannot_explain=["不能证明估值便宜。"],
+                falsification_conditions=["趋势跌破关键均线。"],
             )
         ]
     )
@@ -1859,4 +2024,8 @@ def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path:
     assert all(entry.evidence_refs for entry in ledger.entries)
     assert all(entry.counter_evidence_refs for entry in ledger.entries)
     assert all(entry.falsification_conditions for entry in ledger.entries)
+    market_entry = next(entry for entry in ledger.entries if entry.claim_type == "market_state")
+    risk_entry = next(entry for entry in ledger.entries if entry.claim_type == "risk_boundary")
+    assert set(market_entry.counter_evidence_refs) != set(risk_entry.counter_evidence_refs)
+    assert market_entry.counter_evidence_method == "opposing_hypothesis_support_plus_typed_conflicts"
     assert updated_registry.passports["L1.get_fed_funds_rate"].linked_claim_ids

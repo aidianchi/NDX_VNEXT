@@ -6,6 +6,36 @@
 
 ## 2026-07-06
 
+### 阶段 0-4 审查后更正：合同关闭，行为未关闭
+
+完成内容：
+
+- 按 `docs/2026-07-06_STAGE0-4_REVIEW_AND_DIRECTION.md` 更正阶段 2/3/4 的完成语义：此前记录的“完成”只代表合同、artifact 管道和最小审计链完成，不代表调查、反方假说和 claim 台账已经具备充分行为质量。
+- `InvestigationReport` 增加 `is_deterministic_stub`；当前确定性调查如实标注“未执行真实调查，仅登记缺口”，不得作为真实反证触发竞争裁决降级。
+- Counter-Thesis 改为优先走独立 LLM 阶段；确定性构建器只作为失败兜底，并在假说来源中标记为 `deterministic_fallback`。
+- Claim 台账改为按 claim 类型匹配反证和失效条件；无法逐条对应时写入降级原因，不再用全局反证池冒充逐条反证。
+- Bridge V2 在 SynthesisPacket 中只贡献反馈摘要和未解决问题，不再把 Bridge V1 的冲突和主要矛盾重复计入 Thesis 输入。
+
+状态更正：
+
+- EPI-08 / EPI-10 / EPI-12 / EPI-13：合同与运行管道已关闭，真实行为质量未关闭。
+- HAR-05 / HAR-06 / HAR-07 / HAR-08 / HAR-09 / HAR-13：合同、边界和最小 artifact 已关闭，真实调查质量、反方认知质量和跨 run 方差仍需后续 fresh run 验收。
+- 阶段 4 的 Evidence Passport / Claim Ledger 合同已关闭；claim-specific 反证已开始落地，但仍需真实 run 检查每条 claim 的语义对应是否足够强。
+
+验证结果：
+
+- 聚焦测试：`python3 -m pytest tests/test_contracts.py tests/test_vnext_orchestrator.py tests/test_run_review.py -q`：64 通过，4 个环境/依赖 warning。
+- 全量测试：`python3 -m pytest -q`：444 通过，4 个环境/依赖 warning。
+- fresh run 尝试：`python3 src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts --run-id codex_stage1_3_validation` 在实时 L4 成分股 SEC CIK map HTTPS 握手处长时间无输出后中断；中断发生在 vNext artifacts 生成前，本轮不能作为真实产物验收。
+
+剩余风险：
+
+- Counter-Thesis 的真实质量取决于 LLM 输出和证据引用校验；本轮已接入阶段和 fallback，但尚未用两个不同真实市场状态 fresh run 验收方差。
+- 动态调查仍不是真工具调查；stub 已诚实标注，后续应在真实反方假说暴露关键分歧后再接动态调查工具。
+- 实时 fresh run 还需要处理 SEC CIK map / 外部 HTTPS 卡住时的超时或缓存兜底，否则 L4 多源成分股补全可能阻塞后续 LLM 验收。
+
+---
+
 ### vNext 阶段 3：最小竞争裁决落地
 
 完成内容：
@@ -32,7 +62,7 @@
 
 剩余风险：
 
-- 第一版 Counter-Thesis 是确定性最小构建器，不是完整 LLM 深度反方研究；它优先保证边界、版本和审计链，解释质量后续可增强。
+- 2026-07-06 审查后更正：Counter-Thesis 已改为优先走独立 LLM 阶段，确定性构建器只作为失败兜底；解释质量仍需 fresh run 验收。
 - 当前重判逻辑以调查报告挑战项和兜底痕迹为触发条件，尚未做更细的证据权重模型；阶段 4 的统一 Evidence Passport / claim 台账会继续增强证据级追踪。
 
 ---
