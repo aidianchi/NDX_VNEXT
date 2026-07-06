@@ -142,6 +142,358 @@ def _damodaran_review_finding(analysis_packet: Dict[str, Any], backtest_date: Op
     )
 
 
+def _feedback_contract_findings(
+    inquiry_router_output: Dict[str, Any],
+    investigation_reports: List[Dict[str, Any]],
+) -> List[RunReviewFinding]:
+    findings: List[RunReviewFinding] = []
+
+    if inquiry_router_output:
+        rejected = _as_list(inquiry_router_output.get("rejected_messages"))
+        missing_reasons = [
+            item.get("message_id", "unknown")
+            for item in rejected
+            if isinstance(item, dict) and not item.get("rejection_reason")
+        ]
+        if missing_reasons:
+            findings.append(
+                _finding(
+                    "feedback",
+                    "fail",
+                    "InquiryRouter 有拒绝任务但缺少拒绝原因，后续无法审计为什么没有补查。",
+                    ["inquiry_router_output.json"],
+                    recommended_rule_update="每个 rejected InquiryMessage 必须记录 rejection_reason 和 trigger。",
+                )
+            )
+        else:
+            findings.append(
+                _finding(
+                    "feedback",
+                    "pass",
+                    "InquiryRouter 输出可审计；被拒绝的任务保留了拒绝原因和触发来源。",
+                    ["inquiry_router_output.json"],
+                )
+            )
+
+    if investigation_reports:
+        required = {
+            "finding",
+            "evidence_refs",
+            "counter_evidence_refs",
+            "claims_supported",
+            "claims_challenged",
+            "cannot_establish",
+            "confidence",
+            "limits",
+            "source_authority",
+            "effective_date",
+        }
+        missing_by_report: List[str] = []
+        for report in investigation_reports:
+            if not isinstance(report, dict):
+                missing_by_report.append("unknown: not a dict")
+                continue
+            missing = sorted(field for field in required if field not in report)
+            if missing:
+                missing_by_report.append(f"{report.get('investigation_id', 'unknown')}: {', '.join(missing)}")
+        if missing_by_report:
+            findings.append(
+                _finding(
+                    "feedback",
+                    "fail",
+                    "InvestigationReport 缺少阶段 1 最小证据字段：" + "；".join(missing_by_report[:3]),
+                    ["investigation_reports/*.json"],
+                    recommended_rule_update="调查结果单必须从第一版就带证据、反证、不能证明项、来源权威和 effective_date。",
+                )
+            )
+        else:
+            findings.append(
+                _finding(
+                    "feedback",
+                    "pass",
+                    "InvestigationReport 已带最小证据、反证、限制、来源权威和 effective_date 字段。",
+                    ["investigation_reports/*.json"],
+                )
+            )
+
+    return findings
+
+
+def _hypothesis_competition_findings(
+    hypothesis_competition: Dict[str, Any],
+    adjudication_history: Dict[str, Any],
+) -> List[RunReviewFinding]:
+    findings: List[RunReviewFinding] = []
+    if not hypothesis_competition:
+        findings.append(
+            _finding(
+                "competition",
+                "fail",
+                "缺少 hypothesis_competition，正式综合前没有最小竞争假说卷宗。",
+                ["hypothesis_competition.json"],
+                recommended_rule_update="Thesis 前必须生成至少两个竞争解释，或明确记录证据不足原因。",
+            )
+        )
+        return findings
+
+    hypotheses = _as_list(hypothesis_competition.get("hypotheses"))
+    if len(hypotheses) >= 2:
+        findings.append(
+            _finding(
+                "competition",
+                "pass",
+                f"正式综合前已有 {len(hypotheses)} 个竞争假说。",
+                ["hypothesis_competition.json:hypotheses"],
+            )
+        )
+    elif hypothesis_competition.get("insufficient_evidence_reason"):
+        findings.append(
+            _finding(
+                "competition",
+                "observe",
+                "竞争假说少于两个，但已记录证据不足原因："
+                + str(hypothesis_competition.get("insufficient_evidence_reason")),
+                ["hypothesis_competition.json:insufficient_evidence_reason"],
+            )
+        )
+    else:
+        findings.append(
+            _finding(
+                "competition",
+                "fail",
+                "竞争假说少于两个，且没有说明为什么证据不足。",
+                ["hypothesis_competition.json:hypotheses"],
+                recommended_rule_update="缺少第二假说时必须显式降级，不能继续给强裁决。",
+            )
+        )
+
+    forbidden = set(str(item) for item in _as_list(hypothesis_competition.get("forbidden_context_refs")))
+    if "thesis_draft.json" in forbidden:
+        findings.append(
+            _finding(
+                "competition",
+                "pass",
+                "Counter-Thesis 独立边界可见：首次反方构建禁止读取 Thesis。",
+                ["counter_thesis.json:forbidden_context_refs", "hypothesis_competition.json:forbidden_context_refs"],
+            )
+        )
+    else:
+        findings.append(
+            _finding(
+                "competition",
+                "fail",
+                "Counter-Thesis 没有把 thesis_draft.json 列入 forbidden_context_refs，反方可能被主论点锚定。",
+                ["counter_thesis.json", "hypothesis_competition.json"],
+                recommended_rule_update="Counter-Thesis 首次生成只能读取 SynthesisPacket / Bridge V2，不能读取 Thesis。",
+            )
+        )
+
+    fallback_warnings = _as_list(hypothesis_competition.get("fallback_warnings"))
+    if fallback_warnings:
+        findings.append(
+            _finding(
+                "competition",
+                "observe",
+                "主要矛盾或价格反映存在兜底痕迹，必须降级或显式标记："
+                + "；".join(str(item) for item in fallback_warnings[:5]),
+                ["hypothesis_competition.json:fallback_warnings"],
+                recommended_rule_update="principal_contradiction / price_reflection_map 兜底生成时不能伪装成原生裁决。",
+            )
+        )
+
+    change_records = _as_list(hypothesis_competition.get("downgrade_or_split_events"))
+    if not change_records and adjudication_history:
+        change_records = _as_list(adjudication_history.get("records"))
+    if change_records:
+        actionable = [
+            item
+            for item in change_records
+            if isinstance(item, dict)
+            and str(item.get("change_type") or "") in {"downgrade", "split", "reversal", "kept_unresolved"}
+        ]
+        if actionable:
+            findings.append(
+                _finding(
+                    "competition",
+                    "pass",
+                    "强反证、调查缺口或兜底痕迹已进入非单调重判记录。",
+                    ["hypothesis_competition.json:downgrade_or_split_events", "adjudication_history.json:records"],
+                )
+            )
+        else:
+            findings.append(
+                _finding(
+                    "competition",
+                    "observe",
+                    "adjudication_history 已建立初始版本，但本轮未发生降级、分叉或改判。",
+                    ["adjudication_history.json:records"],
+                )
+            )
+    else:
+        findings.append(
+            _finding(
+                "competition",
+                "observe",
+                "未看到 adjudication_history 版本记录；新证据改变判断时可能难以复盘旧版本。",
+                ["adjudication_history.json"],
+                recommended_rule_update="竞争裁决必须保留旧判断、触发证据和改判原因。",
+            )
+        )
+
+    return findings
+
+
+def _evidence_claim_ledger_findings(
+    evidence_registry: Dict[str, Any],
+    final_claim_ledger: Dict[str, Any],
+) -> List[RunReviewFinding]:
+    findings: List[RunReviewFinding] = []
+    passports = evidence_registry.get("passports") if isinstance(evidence_registry.get("passports"), dict) else {}
+    if not evidence_registry:
+        findings.append(
+            _finding(
+                "evidence",
+                "fail",
+                "缺少 evidence_registry，数据、事件、调查、假说和最终 claim 不能用同一种 evidence id 追问。",
+                ["evidence_registry.json"],
+                recommended_rule_update="阶段 4 必须生成统一 Evidence Passport 注册表。",
+            )
+        )
+    elif not passports:
+        findings.append(
+            _finding(
+                "evidence",
+                "fail",
+                "evidence_registry 存在但 passports 为空，证据注册表没有实际证据。",
+                ["evidence_registry.json:passports"],
+            )
+        )
+    else:
+        kinds = {
+            str(item.get("evidence_kind") or "")
+            for item in passports.values()
+            if isinstance(item, dict)
+        }
+        weak_without_rules = [
+            evidence_id
+            for evidence_id, item in passports.items()
+            if isinstance(item, dict)
+            and str(item.get("source_tier") or "") in {"candidate_external_material", "proxy", "derived_inference", "unknown"}
+            and not _as_list(item.get("downgrade_rules"))
+        ]
+        if {"data", "investigation", "hypothesis"} & kinds:
+            findings.append(
+                _finding(
+                    "evidence",
+                    "pass",
+                    "EvidenceRegistry 已注册主链数据、调查或假说证据，并保留统一 source tier / downgrade 规则。",
+                    ["evidence_registry.json"],
+                )
+            )
+        else:
+            findings.append(
+                _finding(
+                    "evidence",
+                    "observe",
+                    "EvidenceRegistry 没看到 data/investigation/hypothesis 类型证据，最终追溯链可能不完整。",
+                    ["evidence_registry.json:passports"],
+                    recommended_rule_update="数据、调查和竞争假说都应进入统一 Evidence Passport。",
+                )
+            )
+        if weak_without_rules:
+            findings.append(
+                _finding(
+                    "evidence",
+                    "fail",
+                    "弱权限证据缺少 downgrade_rules，可能被误当作强证据："
+                    + ", ".join(weak_without_rules[:8]),
+                    ["evidence_registry.json:passports"],
+                    recommended_rule_update="标题新闻、社交传闻、代理指标、派生假说必须带降级规则。",
+                )
+            )
+
+    entries = _as_list(final_claim_ledger.get("entries")) if isinstance(final_claim_ledger, dict) else []
+    if not final_claim_ledger:
+        findings.append(
+            _finding(
+                "evidence",
+                "fail",
+                "缺少 final_claim_ledger，Final / Thesis 自然语言结论没有 claim-level 台账。",
+                ["final_claim_ledger.json"],
+                recommended_rule_update="Final 后必须生成 claim_id、claim_text、evidence_refs、counter_evidence_refs、inference_steps、falsification_conditions、verified。",
+            )
+        )
+        return findings
+    if not entries:
+        findings.append(
+            _finding(
+                "evidence",
+                "fail",
+                "final_claim_ledger 存在但 entries 为空，重要最终结论不可追问。",
+                ["final_claim_ledger.json:entries"],
+            )
+        )
+        return findings
+
+    required = {
+        "claim_id",
+        "claim_text",
+        "claim_type",
+        "evidence_refs",
+        "counter_evidence_refs",
+        "inference_steps",
+        "falsification_conditions",
+        "verified",
+    }
+    bad_entries = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            bad_entries.append("unknown:not_a_dict")
+            continue
+        missing = sorted(field for field in required if field not in entry)
+        thin = []
+        for field in ("evidence_refs", "counter_evidence_refs", "inference_steps", "falsification_conditions"):
+            if not _as_list(entry.get(field)):
+                thin.append(field)
+        if missing or thin:
+            bad_entries.append(f"{entry.get('claim_id', 'unknown')}: missing={','.join(missing)} thin={','.join(thin)}")
+    if bad_entries:
+        findings.append(
+            _finding(
+                "evidence",
+                "fail",
+                "final_claim_ledger 有 claim 缺少阶段 4 必填字段或关键数组为空："
+                + "；".join(bad_entries[:5]),
+                ["final_claim_ledger.json:entries"],
+                recommended_rule_update="每条重要 claim 必须可追到证据、反证、推理步骤和失效条件。",
+            )
+        )
+    else:
+        findings.append(
+            _finding(
+                "evidence",
+                "pass",
+                f"final_claim_ledger 已覆盖 {len(entries)} 条重要 Thesis/Final claim，且字段完整。",
+                ["final_claim_ledger.json:entries"],
+            )
+        )
+
+    gate = final_claim_ledger.get("publish_gate") if isinstance(final_claim_ledger.get("publish_gate"), dict) else {}
+    if gate.get("status") in {"blocked", "downgraded"}:
+        findings.append(
+            _finding(
+                "evidence",
+                "observe" if gate.get("status") == "downgraded" else "fail",
+                "Claim Ledger 发布闸门未完全通过："
+                f"status={gate.get('status')} verified={gate.get('verified_count')}/{gate.get('entry_count')}。",
+                ["final_claim_ledger.json:publish_gate"],
+                recommended_rule_update="缺反证、缺失效条件或证据权限不足时，Final 必须降级或阻断强结论。",
+            )
+        )
+
+    return findings
+
+
 def _finding(
     category: str,
     severity: str,
@@ -172,6 +524,12 @@ def build_run_review_report(
     final_adjudication: Optional[Dict[str, Any]] = None,
     data_integrity_report: Optional[Dict[str, Any]] = None,
     run_summary: Optional[Dict[str, Any]] = None,
+    inquiry_router_output: Optional[Dict[str, Any]] = None,
+    investigation_reports: Optional[List[Dict[str, Any]]] = None,
+    hypothesis_competition: Optional[Dict[str, Any]] = None,
+    adjudication_history: Optional[Dict[str, Any]] = None,
+    evidence_registry: Optional[Dict[str, Any]] = None,
+    final_claim_ledger: Optional[Dict[str, Any]] = None,
 ) -> RunReviewReport:
     analysis_packet = analysis_packet or {}
     bridges = bridges or []
@@ -182,6 +540,12 @@ def build_run_review_report(
     final_adjudication = final_adjudication or {}
     data_integrity_report = data_integrity_report or {}
     run_summary = run_summary or {}
+    inquiry_router_output = inquiry_router_output or {}
+    investigation_reports = investigation_reports or []
+    hypothesis_competition = hypothesis_competition or {}
+    adjudication_history = adjudication_history or {}
+    evidence_registry = evidence_registry or {}
+    final_claim_ledger = final_claim_ledger or {}
 
     findings: List[RunReviewFinding] = []
 
@@ -232,6 +596,9 @@ def build_run_review_report(
             )
 
     findings.append(_damodaran_review_finding(analysis_packet, meta.get("backtest_date") or run_summary.get("backtest_date")))
+    findings.extend(_feedback_contract_findings(inquiry_router_output, investigation_reports))
+    findings.extend(_hypothesis_competition_findings(hypothesis_competition, adjudication_history))
+    findings.extend(_evidence_claim_ledger_findings(evidence_registry, final_claim_ledger))
 
     if schema_guard_report:
         if schema_guard_report.get("passed") is False:
@@ -514,9 +881,15 @@ def build_run_review_report(
 def build_run_review_from_dir(run_dir: str | Path) -> RunReviewReport:
     run_path = Path(run_dir)
     bridge_dir = run_path / "bridge_memos"
+    investigation_dir = run_path / "investigation_reports"
     bridges = [
         _load_json(path, {})
         for path in sorted(bridge_dir.glob("*.json"))
+        if path.is_file()
+    ]
+    investigation_reports = [
+        _load_json(path, {})
+        for path in sorted(investigation_dir.glob("*.json"))
         if path.is_file()
     ]
     return build_run_review_report(
@@ -530,6 +903,12 @@ def build_run_review_from_dir(run_dir: str | Path) -> RunReviewReport:
         final_adjudication=_load_json(run_path / "final_adjudication.json", {}),
         data_integrity_report=_load_json(run_path / "data_integrity_report.json", {}),
         run_summary=_load_json(run_path / "run_summary.json", {}),
+        inquiry_router_output=_load_json(run_path / "inquiry_router_output.json", {}),
+        investigation_reports=investigation_reports,
+        hypothesis_competition=_load_json(run_path / "hypothesis_competition.json", {}),
+        adjudication_history=_load_json(run_path / "adjudication_history.json", {}),
+        evidence_registry=_load_json(run_path / "evidence_registry.json", {}),
+        final_claim_ledger=_load_json(run_path / "final_claim_ledger.json", {}),
     )
 
 

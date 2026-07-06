@@ -269,6 +269,91 @@ def test_schema_guard_warns_but_does_not_fail_missing_soft_canon_fields(tmp_path
     assert any("soft canon fields" in item for item in report.suggested_fixes)
 
 
+def test_schema_guard_marks_indicator_authority_overreach_review_required(tmp_path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+    packet = AnalysisPacket(
+        meta={"data_date": "2026-04-24"},
+        raw_data={
+            "L1": {},
+            "L2": {},
+            "L3": {},
+            "L4": {},
+            "L5": {"get_rsi_qqq": {"metric_name": "RSI", "value": {"level": 31.0}}},
+        },
+    )
+    l5_analysis = IndicatorAnalysis(
+        function_id="get_rsi_qqq",
+        metric="RSI",
+        narrative="RSI 超卖证明 NDX 估值便宜。",
+        reasoning_process="技术指标证明估值便宜。",
+        evidence_refs=["L5.get_rsi_qqq"],
+        permission_type=PermissionType.TECHNICAL,
+        canonical_question="短期动量过热还是过冷？",
+        misread_guards=["不能用 RSI 证明估值便宜。"],
+        cross_validation_targets=["get_qqq_technical_indicators"],
+        falsifiers=["价格继续创新高且广度同步改善。"],
+        core_vs_tactical_boundary="技术执行指标。",
+    )
+    cards = [
+        *[
+            LayerCard(
+                layer=layer,
+                core_facts=[CoreFact(metric="placeholder", value="n/a")],
+                local_conclusion=f"{layer} 输入为空。",
+                confidence=Confidence.LOW,
+                indicator_analyses=[],
+                layer_synthesis=f"{layer} 输入为空。",
+                internal_conflict_analysis="无有效指标。",
+            )
+            for layer in ["L1", "L2", "L3", "L4"]
+        ],
+        LayerCard(
+            layer="L5",
+            core_facts=[CoreFact(metric="rsi", value=31.0)],
+            local_conclusion="L5 短线超卖。",
+            confidence=Confidence.MEDIUM,
+            indicator_analyses=[l5_analysis],
+            layer_synthesis="L5 短线超卖。",
+            internal_conflict_analysis="无明显层内冲突。",
+        ),
+    ]
+    conflict = Conflict(
+        conflict_type="L5_timing_vs_L4_valuation",
+        severity=ConflictSeverity.HIGH,
+        description="技术节奏不能证明估值。",
+        implication="发布前必须降级技术越权表述。",
+        involved_layers=["L5", "L4"],
+    )
+    bridge = BridgeMemo(
+        bridge_type="technical_valuation_boundary",
+        layers_connected=["L5", "L4"],
+        conflicts=[conflict],
+        implication_for_ndx="技术信号只能做执行参考。",
+    )
+    thesis = ThesisDraft(
+        environment_assessment="未知。",
+        valuation_assessment="估值不能由 RSI 证明。",
+        timing_assessment="RSI 只说明短线节奏。",
+        main_thesis="技术超卖不构成估值结论。",
+        key_support_chains=[KeySupportChain(chain_description="RSI 仅为技术节奏", evidence_refs=["L5.get_rsi_qqq"], weight=0.3)],
+        retained_conflicts=[conflict],
+        dependencies=["需要 L4 估值证据。"],
+        overall_confidence=Confidence.MEDIUM,
+    )
+    critique = Critique(overall_assessment="需要降级越权表达。", revision_direction="保留指标权限边界。")
+    risk = RiskBoundaryReport(must_preserve_risks=["技术指标不能证明估值便宜。"])
+
+    report = orchestrator._run_schema_guard(packet, cards, [bridge], thesis, critique, risk)
+
+    assert report.passed is True
+    assert report.quality_status == "review_required"
+    assert any("Indicator authority overreach" in item for item in report.suggested_fixes)
+
+
 def test_schema_guard_warns_but_does_not_fail_weak_l3_structural_coverage(tmp_path):
     orchestrator = VNextOrchestrator(
         available_models=["fake"],

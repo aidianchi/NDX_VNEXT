@@ -81,6 +81,159 @@ def test_run_review_from_dir_reads_schema_guard_report(tmp_path):
     )
 
 
+def test_run_review_audits_rejected_inquiry_router_messages():
+    report = build_run_review_report(
+        inquiry_router_output={
+            "rejected_messages": [
+                {
+                    "message_id": "inq_missing_context",
+                    "message_type": "observation_inquiry",
+                    "status": "rejected",
+                    "rejection_reason": "missing_allowed_context_refs",
+                    "trigger": "L1 数据异常。",
+                }
+            ]
+        },
+        data_integrity_report={"publish_status": "publishable"},
+    )
+
+    assert any(
+        item.category == "feedback" and item.severity == "pass" and "拒绝原因" in item.finding
+        for item in report.attribution_findings
+    )
+
+
+def test_run_review_fails_investigation_report_missing_minimal_fields():
+    report = build_run_review_report(
+        investigation_reports=[
+            {
+                "investigation_id": "inv_bad",
+                "originating_agent_id": "agent_bad",
+                "finding": "只有结论，没有证据字段。",
+                "effective_date": "2026-07-06",
+            }
+        ],
+        data_integrity_report={"publish_status": "publishable"},
+    )
+
+    assert any(
+        item.category == "feedback" and item.severity == "fail" and "最小证据字段" in item.finding
+        for item in report.attribution_findings
+    )
+
+
+def test_run_review_audits_hypothesis_competition_and_independent_counter_thesis():
+    report = build_run_review_report(
+        data_integrity_report={"publish_status": "publishable"},
+        hypothesis_competition={
+            "schema_version": "hypothesis_competition_v1",
+            "forbidden_context_refs": ["thesis_draft.json", "final_adjudication.json"],
+            "hypotheses": [
+                {
+                    "hypothesis_id": "hyp_base",
+                    "hypothesis_text": "主线解释。",
+                    "support_evidence_refs": ["L4.valuation"],
+                    "counter_evidence_refs": ["investigation_reports/inv_gap.json"],
+                    "diagnostic_evidence_refs": ["L4.valuation"],
+                    "cannot_explain": ["价格反映不清。"],
+                    "falsification_conditions": ["估值压力解除。"],
+                },
+                {
+                    "hypothesis_id": "hyp_counter",
+                    "hypothesis_text": "反方解释。",
+                    "support_evidence_refs": ["investigation_reports/inv_gap.json"],
+                    "counter_evidence_refs": ["L4.valuation"],
+                    "diagnostic_evidence_refs": ["investigation_reports/inv_gap.json"],
+                    "cannot_explain": ["不能证明主线错误。"],
+                    "falsification_conditions": ["反证被正式数据排除。"],
+                },
+            ],
+            "downgrade_or_split_events": [
+                {
+                    "version_id": "adj_1",
+                    "change_type": "kept_unresolved",
+                    "trigger_evidence_refs": ["investigation_reports/inv_gap.json"],
+                    "reason": "强反证进入争议保留。",
+                }
+            ],
+        },
+        adjudication_history={"records": []},
+    )
+
+    assert any(
+        item.category == "competition" and item.severity == "pass" and "竞争假说" in item.finding
+        for item in report.attribution_findings
+    )
+    assert any(
+        item.category == "competition" and item.severity == "pass" and "禁止读取 Thesis" in item.finding
+        for item in report.attribution_findings
+    )
+    assert any(
+        item.category == "competition" and item.severity == "pass" and "非单调重判记录" in item.finding
+        for item in report.attribution_findings
+    )
+
+
+def test_run_review_fails_when_hypothesis_competition_missing():
+    report = build_run_review_report(data_integrity_report={"publish_status": "publishable"})
+
+    assert any(
+        item.category == "competition" and item.severity == "fail" and "缺少 hypothesis_competition" in item.finding
+        for item in report.attribution_findings
+    )
+
+
+def test_run_review_audits_stage4_evidence_registry_and_claim_ledger():
+    report = build_run_review_report(
+        data_integrity_report={"publish_status": "publishable"},
+        evidence_registry={
+            "schema_version": "evidence_registry_v1",
+            "passports": {
+                "L1.get_10y_real_rate": {
+                    "evidence_id": "L1.get_10y_real_rate",
+                    "evidence_kind": "data",
+                    "source_tier": "official",
+                    "downgrade_rules": [],
+                    "verified": True,
+                },
+                "hyp_base": {
+                    "evidence_id": "hyp_base",
+                    "evidence_kind": "hypothesis",
+                    "source_tier": "derived_inference",
+                    "downgrade_rules": ["derived_inference_cannot_replace_underlying_evidence"],
+                    "verified": False,
+                },
+            },
+        },
+        final_claim_ledger={
+            "schema_version": "claim_ledger_v1",
+            "entries": [
+                {
+                    "claim_id": "claim:final:rates",
+                    "claim_text": "真实利率仍压制估值。",
+                    "claim_type": "market_state",
+                    "evidence_refs": ["L1.get_10y_real_rate"],
+                    "counter_evidence_refs": ["hyp_base"],
+                    "inference_steps": ["真实利率影响折现率。"],
+                    "falsification_conditions": ["真实利率快速回落。"],
+                    "verified": True,
+                    "authority_status": "verified",
+                }
+            ],
+            "publish_gate": {"status": "pass", "entry_count": 1, "verified_count": 1},
+        },
+    )
+
+    assert any(
+        item.category == "evidence" and item.severity == "pass" and "EvidenceRegistry" in item.finding
+        for item in report.attribution_findings
+    )
+    assert any(
+        item.category == "evidence" and item.severity == "pass" and "final_claim_ledger" in item.finding
+        for item in report.attribution_findings
+    )
+
+
 def test_run_review_passes_when_main_chain_fields_exist():
     principal = {
         "contradiction_id": "panic_priced_vs_unconfirmed_risk",
