@@ -10,13 +10,29 @@ from typing import Any, Callable, Dict, List, Optional, Type
 
 try:
     from .contracts import (
+        AgentBudget,
         AnalysisPacket,
         AnalysisRevised,
         BridgeMemo,
+        AdjudicationChangeRecord,
+        AdjudicationHistory,
+        ClaimLedger,
+        ClaimLedgerEntry,
+        CompetingHypothesis,
         ContextBrief,
         Critique,
+        EvidencePassport,
+        EvidenceRegistry,
+        CounterThesisDraft,
+        Confidence,
+        EvidenceSourceAuthority,
         FinalAdjudication,
         GovernanceInputPacket,
+        HypothesisCompetition,
+        InquiryMessage,
+        InquiryMessageType,
+        InquiryRouterOutput,
+        InvestigationReport,
         LayerCard,
         ObjectiveFirewallSummary,
         OutcomeReviewReport,
@@ -30,19 +46,36 @@ try:
     )
     from .deep_research_canon import L3_STRUCTURAL_PRIORITY_FUNCTIONS, build_layer_canon_prompt, get_indicator_canon
     from .few_shot import build_layer_few_shot_prompt
+    from .inquiry_router import InquiryRouter
     from .llm_engine import LLMEngine
     from .packet_builder import indicator_payload_unavailable_reason
     from .run_review import build_run_review_report
     from .outcome_review import build_outcome_review_report
 except ImportError:
     from contracts import (
+        AgentBudget,
         AnalysisPacket,
         AnalysisRevised,
         BridgeMemo,
+        AdjudicationChangeRecord,
+        AdjudicationHistory,
+        ClaimLedger,
+        ClaimLedgerEntry,
+        CompetingHypothesis,
         ContextBrief,
         Critique,
+        EvidencePassport,
+        EvidenceRegistry,
+        CounterThesisDraft,
+        Confidence,
+        EvidenceSourceAuthority,
         FinalAdjudication,
         GovernanceInputPacket,
+        HypothesisCompetition,
+        InquiryMessage,
+        InquiryMessageType,
+        InquiryRouterOutput,
+        InvestigationReport,
         LayerCard,
         ObjectiveFirewallSummary,
         OutcomeReviewReport,
@@ -56,6 +89,7 @@ except ImportError:
     )
     from deep_research_canon import L3_STRUCTURAL_PRIORITY_FUNCTIONS, build_layer_canon_prompt, get_indicator_canon
     from few_shot import build_layer_few_shot_prompt
+    from inquiry_router import InquiryRouter
     from llm_engine import LLMEngine
     from packet_builder import indicator_payload_unavailable_reason
     from run_review import build_run_review_report
@@ -65,6 +99,11 @@ try:
     from ..data_availability import has_meaningful_observation_value
 except ImportError:
     from data_availability import has_meaningful_observation_value
+
+try:
+    from ..data_evidence import data_evidence_issues, normalize_source_tier_for_evidence_passport
+except ImportError:
+    from data_evidence import data_evidence_issues, normalize_source_tier_for_evidence_passport
 
 logger = logging.getLogger(__name__)
 
@@ -108,8 +147,31 @@ def _enum_value(value: Any) -> Any:
     return getattr(value, "value", value)
 
 
+def _as_list(value: Any) -> List[Any]:
+    return value if isinstance(value, list) else []
+
+
 _SEVERITY_HIGH_MEDIUM = frozenset({"high", "medium"})
 _EVIDENCE_REF_PATTERN = re.compile(r"L[1-5]\.[A-Za-z_][A-Za-z0-9_]*")
+_AUTHORITY_OVERREACH_RULES: Dict[str, List[tuple[str, str]]] = {
+    "technical": [
+        (r"(估值便宜|估值低估|undervalued|cheap valuation)", "technical_indicator_claims_valuation"),
+        (r"(技术|均线|RSI|MACD|ADX|ATR|价格|趋势|超买|超卖).{0,20}(证明|说明|表明).{0,12}(估值便宜|估值低估|基本面改善|盈利改善)", "technical_indicator_overclaims_valuation_or_fundamentals"),
+        (r"(基本面已经改善|盈利已经改善|fundamentals? (have )?improved)", "technical_indicator_claims_fundamentals"),
+        (r"(大买|强烈买入|all[- ]?in)", "technical_indicator_outputs_strong_action"),
+    ],
+    "proxy": [
+        (r"(官方事实|官方真理|official fact|official truth)", "proxy_marked_as_official_fact"),
+        (r"(代理|proxy).{0,20}(证明|proves?).{0,20}(真实|actual|official)", "proxy_overclaims_actual_or_official_state"),
+    ],
+    "composite": [
+        (r"(单一原因|唯一原因|sole cause|single cause)", "composite_overclaims_single_cause"),
+        (r"(官方事实|official fact)", "composite_marked_as_official_fact"),
+    ],
+    "structural": [
+        (r"(证明|说明|表明).{0,12}(短线买点|短线卖点|立刻买入|立刻卖出)", "structural_indicator_claims_tactical_timing"),
+    ],
+}
 
 PRICE_REFLECTION_CATEGORIES: Dict[str, Dict[str, str]] = {
     "credit": {
@@ -194,10 +256,12 @@ class VNextOrchestrator:
         self.layer_cards_dir = self.output_dir / "layer_cards"
         self.layer_context_dir = self.output_dir / "layer_context_briefs"
         self.bridge_dir = self.output_dir / "bridge_memos"
+        self.investigation_reports_dir = self.output_dir / "investigation_reports"
         self.prompt_audit_dir = self.output_dir / "prompt_audit"
         self.layer_cards_dir.mkdir(exist_ok=True)
         self.layer_context_dir.mkdir(exist_ok=True)
         self.bridge_dir.mkdir(exist_ok=True)
+        self.investigation_reports_dir.mkdir(exist_ok=True)
         self.prompt_audit_dir.mkdir(exist_ok=True)
         self.stage_diagnostics: Dict[str, Any] = {"schema_version": "vnext_llm_stage_diagnostics_v1", "stages": {}}
         self.stage_manifest_path = self.output_dir / "stage_manifest.json"
@@ -206,14 +270,49 @@ class VNextOrchestrator:
     def run(self, packet: AnalysisPacket | Dict[str, Any]) -> Dict[str, Any]:
         packet_model = packet if isinstance(packet, AnalysisPacket) else AnalysisPacket.model_validate(packet)
         self._save_json("analysis_packet.json", packet_model)
+        self._save_json("runtime_boundary_manifest.json", self._build_runtime_boundary_manifest())
+        self._save_json("feedback_contract_manifest.json", self._build_feedback_contract_manifest())
 
         context_brief = self._build_context_brief(packet_model)
         self._save_json("context_brief.json", context_brief)
 
         layer_cards = self._run_layer_cards(packet_model, context_brief)
-        bridge_memos = [self._run_bridge(packet_model, context_brief, layer_cards)]
+        bridge_v1 = self._run_bridge(packet_model, context_brief, layer_cards)
+        feedback_messages = self._build_feedback_inquiry_messages(packet_model, layer_cards, bridge_v1)
+        inquiry_router_output = self._route_feedback_inquiries(feedback_messages)
+        investigation_reports = self._run_controlled_investigations(inquiry_router_output)
+        bridge_v2 = self._build_bridge_v2(
+            packet_model=packet_model,
+            layer_cards=layer_cards,
+            bridge_v1=bridge_v1,
+            router_output=inquiry_router_output,
+            investigation_reports=investigation_reports,
+        )
+        bridge_memos = [bridge_v1, bridge_v2]
         synthesis_packet = self._build_synthesis_packet(packet_model, context_brief, layer_cards, bridge_memos)
+        hypothesis_competition = self._build_hypothesis_competition(
+            synthesis_packet=synthesis_packet,
+            bridge_v2=bridge_v2,
+            investigation_reports=investigation_reports,
+            effective_date=self._effective_date(packet_model),
+        )
+        synthesis_packet.competing_hypotheses = hypothesis_competition.hypotheses
+        synthesis_packet.hypothesis_competition_summary = self._hypothesis_competition_summary(hypothesis_competition)
+        synthesis_packet.adjudication_history = list(hypothesis_competition.downgrade_or_split_events)
+        synthesis_packet.counter_thesis_boundary = {
+            "input_refs": list(hypothesis_competition.input_refs),
+            "forbidden_context_refs": list(hypothesis_competition.forbidden_context_refs),
+            "independence_verified": "thesis_draft.json" in set(hypothesis_competition.forbidden_context_refs),
+        }
+        evidence_registry = self._build_evidence_registry(
+            packet_model=packet_model,
+            synthesis_packet=synthesis_packet,
+            investigation_reports=investigation_reports,
+            hypothesis_competition=hypothesis_competition,
+        )
+        synthesis_packet.evidence_registry_summary = self._evidence_registry_summary(evidence_registry)
         self._save_json("synthesis_packet.json", synthesis_packet)
+        self._save_json("evidence_registry.json", evidence_registry)
         thesis = self._run_thesis(synthesis_packet)
 
         gov_input_critic = self._build_governance_input_packet(
@@ -330,6 +429,17 @@ class VNextOrchestrator:
                 stage_name="final_adjudicator",
                 payload=final_payload,
             )
+        final_claim_ledger = self._build_final_claim_ledger(
+            synthesis_packet=synthesis_packet,
+            thesis=analysis_revised.revised_thesis,
+            final_adjudication=final_adjudication,
+            evidence_registry=evidence_registry,
+            effective_date=self._effective_date(packet_model),
+        )
+        final_adjudication.claim_ledger = final_claim_ledger
+        evidence_registry = self._attach_claims_to_evidence_registry(evidence_registry, final_claim_ledger)
+        self._save_json("final_claim_ledger.json", final_claim_ledger)
+        self._save_json("evidence_registry.json", evidence_registry)
         run_review_report = self._build_run_review_report(
             packet_model=packet_model,
             bridge_memos=bridge_memos,
@@ -338,6 +448,7 @@ class VNextOrchestrator:
             risk_report=risk_report,
             schema_report=schema_report,
             final_adjudication=final_adjudication,
+            hypothesis_competition=hypothesis_competition,
         )
         self._save_json("run_review_report.json", run_review_report)
         outcome_review_report = self._build_outcome_review_report(
@@ -357,12 +468,15 @@ class VNextOrchestrator:
             "layer_cards": layer_cards,
             "bridge_memos": bridge_memos,
             "synthesis_packet": synthesis_packet,
+            "hypothesis_competition": hypothesis_competition,
+            "evidence_registry": evidence_registry,
             "thesis_draft": thesis,
             "critique": critique,
             "risk_boundary_report": risk_report,
             "schema_guard_report": schema_report,
             "analysis_revised": analysis_revised,
             "final_adjudication": final_adjudication,
+            "final_claim_ledger": final_claim_ledger,
             "run_review_report": run_review_report,
             "outcome_review_report": outcome_review_report,
             "post_run_reflection_library": reflection_library,
@@ -379,6 +493,7 @@ class VNextOrchestrator:
         risk_report: RiskBoundaryReport,
         schema_report: SchemaGuardReport,
         final_adjudication: FinalAdjudication,
+        hypothesis_competition: Optional[HypothesisCompetition] = None,
     ) -> RunReviewReport:
         data_integrity = {}
         data_integrity_path = self.output_dir / "data_integrity_report.json"
@@ -387,6 +502,19 @@ class VNextOrchestrator:
                 data_integrity = json.loads(data_integrity_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 data_integrity = {}
+        inquiry_router_output = {}
+        inquiry_router_path = self.output_dir / "inquiry_router_output.json"
+        if inquiry_router_path.exists():
+            try:
+                inquiry_router_output = json.loads(inquiry_router_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                inquiry_router_output = {}
+        investigation_reports = []
+        for report_path in sorted(self.investigation_reports_dir.glob("*.json")):
+            try:
+                investigation_reports.append(json.loads(report_path.read_text(encoding="utf-8")))
+            except json.JSONDecodeError:
+                continue
         return build_run_review_report(
             run_dir=str(self.output_dir),
             analysis_packet=_model_dump(packet_model),
@@ -397,6 +525,12 @@ class VNextOrchestrator:
             schema_guard_report=_model_dump(schema_report),
             final_adjudication=_model_dump(final_adjudication),
             data_integrity_report=data_integrity,
+            inquiry_router_output=inquiry_router_output,
+            investigation_reports=investigation_reports,
+            hypothesis_competition=_model_dump(hypothesis_competition) if hypothesis_competition is not None else self._load_local_json(self.output_dir / "hypothesis_competition.json", {}),
+            adjudication_history=self._load_local_json(self.output_dir / "adjudication_history.json", {}),
+            evidence_registry=self._load_local_json(self.output_dir / "evidence_registry.json", {}),
+            final_claim_ledger=self._load_local_json(self.output_dir / "final_claim_ledger.json", {}),
         )
 
     def _build_outcome_review_report(
@@ -463,15 +597,8 @@ class VNextOrchestrator:
     def _run_layer_cards(self, packet: AnalysisPacket, context_brief: ContextBrief) -> List[LayerCard]:
         cards: List[LayerCard] = []
         for layer in ["L1", "L2", "L3", "L4", "L5"]:
-            layer_context_brief = self._build_layer_context_brief(packet, context_brief, layer)
-            self._save_json(self.layer_context_dir / f"{layer}.json", layer_context_brief)
-            layer_payload = {
-                "context_brief": _model_dump(layer_context_brief),
-                "layer": layer,
-                "layer_facts": _model_dump(packet.facts_by_layer.get(layer)),
-                "layer_raw_data": packet.raw_data.get(layer, {}),
-                "manual_overrides": self._build_layer_manual_overrides(packet, layer),
-            }
+            layer_payload = self._build_layer_stage_payload(packet, context_brief, layer)
+            self._save_json(self.layer_context_dir / f"{layer}.json", layer_payload["context_brief"])
             checkpoint = self._load_stage_checkpoint(
                 self.layer_cards_dir / f"{layer}.json",
                 LayerCard,
@@ -504,6 +631,1208 @@ class VNextOrchestrator:
                 payload=layer_payload,
             )
         return cards
+
+    def _build_layer_stage_payload(
+        self,
+        packet: AnalysisPacket,
+        context_brief: ContextBrief,
+        layer: str,
+    ) -> Dict[str, Any]:
+        layer = layer.upper()
+        layer_context_brief = self._build_layer_context_brief(packet, context_brief, layer)
+        return {
+            "context_brief": _model_dump(layer_context_brief),
+            "layer": layer,
+            "layer_facts": _model_dump(packet.facts_by_layer.get(layer)),
+            "layer_raw_data": packet.raw_data.get(layer, {}),
+            "manual_overrides": self._build_layer_manual_overrides(packet, layer),
+            "runtime_boundary_policy_id": "layer_runtime_input_policy_v1",
+        }
+
+    def _build_layer_input_policy(self, layer: str) -> Dict[str, Any]:
+        layer = layer.upper()
+        return {
+            "schema_version": "layer_runtime_input_policy_v1",
+            "layer": layer,
+            "allowed_runtime_inputs": [
+                f"context_brief.layer_highlights.{layer}",
+                f"facts_by_layer.{layer}",
+                f"raw_data.{layer}",
+                f"manual_overrides.metrics filtered to raw_data.{layer} function_id values",
+                "ObjectCanon and same-layer IndicatorCanon as static rules only",
+            ],
+            "forbidden_runtime_inputs": [
+                "facts_by_layer.other_layers",
+                "raw_data.other_layers",
+                "candidate_cross_layer_links",
+                "context_brief.apparent_cross_layer_signals",
+                "event_refs",
+                "news_layer_analysis",
+                "event_narrative_ledger",
+                "event_mechanism_report",
+                "integrated_synthesis_report",
+                "bridge_memos",
+                "synthesis_packet",
+                "thesis_draft",
+                "critique",
+                "risk_boundary_report",
+                "analysis_revised",
+                "final_adjudication",
+                "investigation_reports",
+                "post_run_reflection_library",
+            ],
+            "no_backflow_rule": (
+                "InvestigationReport, integrated reports, Bridge, Thesis, Risk, Reviser, "
+                "and Final artifacts must not rewrite or be injected into L1-L5 layer cards."
+            ),
+            "event_evidence_rule": (
+                "Events, news, browser output, and sidecars are event/background material only "
+                "unless upgraded by a formal data-source path; they must not become L1-L5 evidence_ref."
+            ),
+        }
+
+    def _build_runtime_boundary_manifest(self) -> Dict[str, Any]:
+        return {
+            "schema_version": "runtime_boundary_manifest_v1",
+            "purpose": "Stage 0 audit artifact; not injected into L1-L5 prompts.",
+            "fixed_chain": [
+                "L1-L5 layer analysts",
+                "Bridge",
+                "SynthesisPacket",
+                "Thesis",
+                "Critic",
+                "Risk",
+                "SchemaGuard",
+                "Reviser",
+                "Final",
+            ],
+            "layer_input_policies": {
+                layer: self._build_layer_input_policy(layer)
+                for layer in ["L1", "L2", "L3", "L4", "L5"]
+            },
+            "no_backflow_rule": (
+                "Integrated reports, event reports, future InvestigationReport artifacts, "
+                "Bridge, Thesis, Risk, Reviser, Final, and post-run reflection artifacts "
+                "must not rewrite or be injected into L1-L5 layer cards."
+            ),
+            "evidence_boundary": (
+                "event_refs, news, browser output, sidecars, and future investigation outputs "
+                "are not L1-L5 evidence_ref unless promoted through a formal data-source path."
+            ),
+            "prompt_noise_boundary": (
+                "This manifest is stored as an artifact for audit; L1-L5 prompts receive only "
+                "their layer-local context, facts, raw data, and filtered manual overrides."
+            ),
+        }
+
+    def _build_feedback_contract_manifest(self) -> Dict[str, Any]:
+        router = InquiryRouter(max_agent_specs=3)
+        return {
+            "schema_version": "feedback_contract_manifest_v1",
+            "purpose": "Stage 1 audit artifact; defines controlled inquiry messages, task sheets, and investigation reports.",
+            "message_contract": {
+                "contract": "InquiryMessage",
+                "message_types": [
+                    "observation_inquiry",
+                    "event_challenge",
+                    "adjudication_gap",
+                    "evidence_upgrade_request",
+                ],
+                "required_fields": [
+                    "message_id",
+                    "message_type",
+                    "sender_stage",
+                    "target_stage",
+                    "trigger",
+                    "question",
+                    "allowed_context_refs",
+                    "forbidden_context_refs",
+                    "effective_date",
+                ],
+            },
+            "agent_spec_contract": {
+                "contract": "AgentSpec",
+                "required_fields": [
+                    "agent_id",
+                    "originating_message_id",
+                    "research_question",
+                    "allowed_context_refs",
+                    "forbidden_context_refs",
+                    "allowed_tools",
+                    "budget",
+                    "stop_conditions",
+                    "success_criteria",
+                    "required_output",
+                ],
+                "budget_visible": True,
+                "stop_conditions_required": True,
+            },
+            "investigation_report_contract": {
+                "contract": "InvestigationReport",
+                "required_fields": router.policy_manifest()["required_investigation_output_fields"],
+                "minimal_evidence_fields": [
+                    "evidence_refs",
+                    "counter_evidence_refs",
+                    "claims_supported",
+                    "claims_challenged",
+                    "cannot_establish",
+                    "source_authority",
+                ],
+            },
+            "router_policy": router.policy_manifest(),
+            "no_backflow_rule": (
+                "InquiryMessage, AgentSpec, and InvestigationReport are feedback artifacts. "
+                "They may be audited or consumed by later Bridge/integrated synthesis stages, "
+                "but must not rewrite or be injected into L1-L5 layer cards."
+            ),
+        }
+
+    def _build_initial_inquiry_router_output(self) -> Dict[str, Any]:
+        return InquiryRouter(max_agent_specs=3).route([]).model_dump(mode="json")
+
+    def _effective_date(self, packet: AnalysisPacket) -> str:
+        meta = packet.meta if isinstance(packet.meta, dict) else {}
+        return str(meta.get("data_date") or meta.get("backtest_date") or meta.get("timestamp_utc") or _utc_now().date().isoformat())
+
+    def _stable_inquiry_id(self, message_type: InquiryMessageType, parts: List[Any]) -> str:
+        seed = "|".join(str(part or "") for part in [message_type.value] + parts)
+        return f"inq_{hashlib.sha1(seed.encode('utf-8')).hexdigest()[:12]}"
+
+    def _feedback_forbidden_refs(self) -> List[str]:
+        return [
+            "layer_cards.other_layers_runtime_data",
+            "thesis_draft.json",
+            "critique.json",
+            "risk_boundary_report.json",
+            "analysis_revised.json",
+            "final_adjudication.json",
+            "post_run_reflection_library.json",
+        ]
+
+    def _build_feedback_inquiry_messages(
+        self,
+        packet: AnalysisPacket,
+        layer_cards: List[LayerCard],
+        bridge_v1: BridgeMemo,
+    ) -> List[InquiryMessage]:
+        effective_date = self._effective_date(packet)
+        forbidden_refs = self._feedback_forbidden_refs()
+        messages: List[InquiryMessage] = []
+
+        for question in list(dict.fromkeys(getattr(bridge_v1, "unresolved_questions", []) or []))[:2]:
+            messages.append(
+                InquiryMessage(
+                    message_id=self._stable_inquiry_id(InquiryMessageType.ADJUDICATION_GAP, ["bridge_unresolved", question]),
+                    message_type=InquiryMessageType.ADJUDICATION_GAP,
+                    sender_stage="bridge",
+                    target_stage="inquiry_router",
+                    trigger="Bridge V1 unresolved_questions 暴露仍需二次核查的问题。",
+                    question=str(question),
+                    allowed_context_refs=["bridge_memos/bridge_0.json", "synthesis_packet.pending"],
+                    forbidden_context_refs=forbidden_refs,
+                    effective_date=effective_date,
+                )
+            )
+
+        principal = getattr(bridge_v1, "principal_contradiction", None)
+        principal_dict = _model_dump(principal) if principal is not None else {}
+        principal_needs_review = (
+            not principal_dict
+            or not principal_dict.get("evidence_refs")
+            or str(principal_dict.get("price_reflection") or "").lower() in {"", "unclear", "unknown"}
+            or "principal_contradiction_derived_by_code" in (getattr(bridge_v1, "normalization_notes", []) or [])
+        )
+        if principal_needs_review:
+            messages.append(
+                InquiryMessage(
+                    message_id=self._stable_inquiry_id(InquiryMessageType.ADJUDICATION_GAP, ["principal_gap", principal_dict.get("contradiction_id")]),
+                    message_type=InquiryMessageType.ADJUDICATION_GAP,
+                    sender_stage="bridge",
+                    target_stage="inquiry_router",
+                    trigger="Bridge V1 的主要矛盾、证据或价格反映仍有缺口。",
+                    question="主要矛盾是否有足够证据支撑？价格反映判断是否需要保留为未解决？",
+                    allowed_context_refs=["bridge_memos/bridge_0.json"],
+                    forbidden_context_refs=forbidden_refs,
+                    effective_date=effective_date,
+                )
+            )
+
+        messages.extend(self._build_event_challenge_messages(effective_date, forbidden_refs))
+        messages.extend(self._build_observation_inquiry_messages(packet, layer_cards, effective_date, forbidden_refs))
+
+        deduped: List[InquiryMessage] = []
+        seen = set()
+        for message in messages:
+            if message.message_id in seen:
+                continue
+            seen.add(message.message_id)
+            deduped.append(message)
+        self._save_json(
+            "inquiry_messages.json",
+            {"schema_version": "inquiry_messages_v1", "messages": [_model_dump(message) for message in deduped]},
+        )
+        return deduped
+
+    def _build_event_challenge_messages(
+        self,
+        effective_date: str,
+        forbidden_refs: List[str],
+    ) -> List[InquiryMessage]:
+        questions_path = self.output_dir / "cross_layer_questions.json"
+        summary_path = self.output_dir / "event_layer_summary.json"
+        questions_payload = self._load_local_json(questions_path, {})
+        raw_questions = _as_list(questions_payload.get("questions")) if isinstance(questions_payload, dict) else []
+        messages: List[InquiryMessage] = []
+        for question in raw_questions:
+            if not isinstance(question, dict):
+                continue
+            if question.get("direction") != "event_to_data":
+                continue
+            if str(question.get("status") or "open") not in {"open", "insufficient_data"}:
+                continue
+            question_text = str(question.get("question") or "").strip()
+            if not question_text:
+                continue
+            messages.append(
+                InquiryMessage(
+                    message_id=self._stable_inquiry_id(InquiryMessageType.EVENT_CHALLENGE, [question.get("question_id"), question_text]),
+                    message_type=InquiryMessageType.EVENT_CHALLENGE,
+                    sender_stage="L2",
+                    target_stage="integrated_synthesis",
+                    trigger=str(question.get("why_it_matters") or "L2 事件账本提出需要数据层压力测试的开放问题。"),
+                    question=question_text,
+                    allowed_context_refs=[
+                        "cross_layer_questions.json",
+                        "event_layer_summary.json",
+                        "event_mechanism_report.json",
+                        "bridge_memos/bridge_0.json",
+                    ],
+                    forbidden_context_refs=forbidden_refs,
+                    effective_date=effective_date,
+                )
+            )
+        if messages or not summary_path.exists():
+            return messages[:2]
+
+        rejection = {
+            "schema_version": "event_challenge_rejections_v1",
+            "generated_at": _utc_now().isoformat(),
+            "status": "rejected",
+            "reason": "event_layer_present_but_no_open_event_to_data_questions",
+            "trigger": "L2 事件层存在，但没有可转成 event_challenge 的开放问题。",
+            "source_refs": ["event_layer_summary.json", "cross_layer_questions.json"],
+        }
+        self._save_json("event_challenge_rejections.json", rejection)
+        return []
+
+    def _build_observation_inquiry_messages(
+        self,
+        packet: AnalysisPacket,
+        layer_cards: List[LayerCard],
+        effective_date: str,
+        forbidden_refs: List[str],
+    ) -> List[InquiryMessage]:
+        messages: List[InquiryMessage] = []
+        for card in layer_cards:
+            layer_label = str(_enum_value(card.layer))
+            quality = getattr(card, "quality_self_check", None)
+            missing = list(getattr(quality, "missing_or_weak_indicators", []) or []) if quality else []
+            flags = list(getattr(card, "risk_flags", []) or [])
+            combined = [str(item) for item in missing + flags if str(item).strip()]
+            anomaly_text = next(
+                (
+                    item
+                    for item in combined
+                    if any(token in item.lower() for token in ["missing", "weak", "缺", "不足", "data", "异常", "breadth", "广度"])
+                ),
+                "",
+            )
+            if not anomaly_text:
+                continue
+            messages.append(
+                InquiryMessage(
+                    message_id=self._stable_inquiry_id(InquiryMessageType.OBSERVATION_INQUIRY, [layer_label, anomaly_text]),
+                    message_type=InquiryMessageType.OBSERVATION_INQUIRY,
+                    sender_stage=layer_label,
+                    target_stage="L2",
+                    trigger=f"{layer_label} 发现数据缺口或异常：{anomaly_text}",
+                    question=f"{layer_label} 的数据缺口或异常是否有可见语境、历史相似背景或反证需要保留？",
+                    allowed_context_refs=[f"layer_cards/{layer_label}.json", "bridge_memos/bridge_0.json"],
+                    forbidden_context_refs=forbidden_refs,
+                    effective_date=effective_date,
+                )
+            )
+            break
+        return messages[:1]
+
+    def _route_feedback_inquiries(self, messages: List[InquiryMessage]) -> InquiryRouterOutput:
+        router = InquiryRouter(
+            max_agent_specs=3,
+            default_budget=AgentBudget(max_tool_calls=1, max_minutes=1, max_source_refs=3),
+        )
+        router_output = router.route(messages)
+        self._save_json("inquiry_router_output.json", router_output)
+        self._save_json(
+            "feedback_loop_manifest.json",
+            {
+                "schema_version": "feedback_loop_manifest_v1",
+                "generated_at": _utc_now().isoformat(),
+                "phase": "stage_2_minimal_feedback_loop",
+                "max_agent_specs": 3,
+                "message_count": len(messages),
+                "accepted_agent_specs": len(router_output.agent_specs),
+                "rejected_messages": len(router_output.rejected_messages),
+                "budget_enforced": all(spec.budget.max_tool_calls <= 1 for spec in router_output.agent_specs),
+                "no_backflow_rule": "InvestigationReport and Bridge V2 are downstream artifacts; they must not rewrite L1-L5 layer cards.",
+            },
+        )
+        return router_output
+
+    def _run_controlled_investigations(self, router_output: InquiryRouterOutput) -> List[InvestigationReport]:
+        message_by_id = {message.message_id: message for message in router_output.input_messages}
+        reports: List[InvestigationReport] = []
+        for spec in router_output.agent_specs:
+            message = message_by_id.get(spec.originating_message_id)
+            if message is None:
+                continue
+            report = self._build_investigation_report(spec, message)
+            reports.append(report)
+            report_path = self.investigation_reports_dir / f"{report.investigation_id}.json"
+            self._save_json(report_path, report)
+        return reports
+
+    def _build_investigation_report(self, spec: Any, message: InquiryMessage) -> InvestigationReport:
+        investigation_id = f"inv_{hashlib.sha1(spec.agent_id.encode('utf-8')).hexdigest()[:12]}"
+        context_notes = self._read_allowed_context_notes(spec.allowed_context_refs, spec.budget.max_source_refs)
+        message_type = message.message_type
+        if message_type == InquiryMessageType.EVENT_CHALLENGE:
+            finding = "事件挑战只能提出压力测试方向；本轮确定性调查未发现足以把事件升级为 L1-L5 主证据的材料。"
+            claims_challenged = ["event_material_as_primary_l1_l5_evidence"]
+            cannot_establish = ["事件是否已经因果性改变 NDX 走势", "事件材料是否可直接成为 L1-L5 evidence_ref"]
+            confidence = Confidence.LOW
+        elif message_type == InquiryMessageType.OBSERVATION_INQUIRY:
+            finding = "数据异常或缺口需要在二次综合中降低置信度；本轮只确认缺口存在及其可审计来源。"
+            claims_challenged = ["complete_data_coverage"]
+            cannot_establish = ["缺口背后的外部原因", "历史相似样本的胜率或收益"]
+            confidence = Confidence.LOW
+        else:
+            finding = "Bridge 缺口已被定位为需要保留的裁决问题；现有 allowed artifacts 只能支持继续保留张力，不能自动强化主结论。"
+            claims_challenged = ["strong_single_path_adjudication"]
+            cannot_establish = ["主要矛盾已经完全解决", "价格反映程度已经高置信确定"]
+            confidence = Confidence.MEDIUM if context_notes else Confidence.LOW
+
+        source_authority = [
+            EvidenceSourceAuthority(
+                evidence_ref=ref,
+                source_ref=ref,
+                source_tier=self._source_tier_for_allowed_ref(ref),
+                authority_note="受控调查只读取 AgentSpec.allowed_context_refs；该引用不自动升级为 L1-L5 evidence_ref。",
+                supports=[message.question],
+                limitations=["不能回写 L1-L5 layer card", "不能替代正式数据源升级流程"],
+            )
+            for ref in spec.allowed_context_refs[: spec.budget.max_source_refs or len(spec.allowed_context_refs)]
+        ]
+        return InvestigationReport(
+            investigation_id=investigation_id,
+            originating_agent_id=spec.agent_id,
+            finding=finding,
+            evidence_refs=list(spec.allowed_context_refs[: spec.budget.max_source_refs or len(spec.allowed_context_refs)]),
+            counter_evidence_refs=[],
+            claims_supported=[message.question],
+            claims_challenged=claims_challenged,
+            cannot_establish=cannot_establish,
+            confidence=confidence,
+            limits=[
+                "stage_2_minimal_deterministic_investigation_only",
+                "no_external_research_performed",
+                "no_backflow_to_l1_l5",
+                f"allowed_context_notes={len(context_notes)}",
+            ],
+            source_authority=source_authority,
+            effective_date=message.effective_date,
+        )
+
+    def _read_allowed_context_notes(self, refs: List[str], max_refs: int) -> List[str]:
+        notes: List[str] = []
+        for ref in refs[: max_refs or len(refs)]:
+            path = (self.output_dir / ref).resolve()
+            try:
+                path.relative_to(self.output_dir)
+            except ValueError:
+                notes.append(f"{ref}: rejected_outside_run_dir")
+                continue
+            if not path.exists() or not path.is_file():
+                notes.append(f"{ref}: artifact_not_found_or_symbolic_ref")
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                notes.append(f"{ref}: unreadable_json")
+                continue
+            if isinstance(payload, dict):
+                keys = ", ".join(sorted(str(key) for key in list(payload.keys())[:8]))
+                notes.append(f"{ref}: keys={keys}")
+            else:
+                notes.append(f"{ref}: {type(payload).__name__}")
+        return notes
+
+    def _source_tier_for_allowed_ref(self, ref: str) -> str:
+        if ref.startswith("event_") or ref.startswith("cross_layer_questions"):
+            return "candidate_external_material"
+        if ref.startswith("layer_cards/") or ref.startswith("bridge_memos/") or ref == "synthesis_packet.pending":
+            return "formal_data_source"
+        return "unknown"
+
+    def _build_bridge_v2(
+        self,
+        *,
+        packet_model: AnalysisPacket,
+        layer_cards: List[LayerCard],
+        bridge_v1: BridgeMemo,
+        router_output: InquiryRouterOutput,
+        investigation_reports: List[InvestigationReport],
+    ) -> BridgeMemo:
+        effects: List[Dict[str, Any]] = []
+        for report in investigation_reports:
+            changed = bool(report.claims_challenged and "strong_single_path_adjudication" not in report.claims_challenged)
+            effects.append(
+                {
+                    "investigation_id": report.investigation_id,
+                    "originating_agent_id": report.originating_agent_id,
+                    "effect_on_judgment": "downgraded_or_kept_unresolved" if changed else "no_change_keep_unresolved",
+                    "finding": report.finding,
+                    "confidence": _enum_value(report.confidence),
+                    "evidence_refs": list(report.evidence_refs),
+                    "cannot_establish": list(report.cannot_establish),
+                }
+            )
+
+        accepted_ids = {spec.originating_message_id for spec in router_output.agent_specs}
+        rejected_questions = [
+            {
+                "message_id": decision.message_id,
+                "message_type": _enum_value(decision.message_type),
+                "rejection_reason": decision.rejection_reason,
+                "trigger": decision.trigger,
+            }
+            for decision in router_output.rejected_messages
+        ]
+        report_refs = [f"investigation_reports/{report.investigation_id}.json" for report in investigation_reports]
+        old_principal = _model_dump(getattr(bridge_v1, "principal_contradiction", None))
+        if not isinstance(old_principal, dict):
+            old_principal = {}
+        unresolved_questions = list(dict.fromkeys(
+            list(getattr(bridge_v1, "unresolved_questions", []) or [])
+            + [
+                item
+                for report in investigation_reports
+                for item in list(report.cannot_establish)
+            ]
+        ))
+        if old_principal:
+            old_principal.setdefault("unresolved_questions", [])
+            old_principal["unresolved_questions"] = list(dict.fromkeys(
+                list(old_principal.get("unresolved_questions") or []) + unresolved_questions[:4]
+            ))
+        layers_connected = list(getattr(bridge_v1, "layers_connected", []) or [])
+        if len(layers_connected) < 2:
+            layers_connected = [card.layer for card in layer_cards[:2]]
+
+        bridge_v2_payload = {
+            "bridge_type": "feedback_bridge_v2",
+            "layers_connected": layers_connected[:5],
+            "cross_layer_claims": [],
+            "conflicts": [_model_dump(item) for item in getattr(bridge_v1, "conflicts", []) or []],
+            "typed_conflicts": [_model_dump(item) for item in getattr(bridge_v1, "typed_conflicts", []) or []],
+            "resonance_chains": [_model_dump(item) for item in getattr(bridge_v1, "resonance_chains", []) or []],
+            "transmission_paths": [_model_dump(item) for item in getattr(bridge_v1, "transmission_paths", []) or []],
+            "principal_contradiction": old_principal or None,
+            "secondary_contradictions": [_model_dump(item) for item in getattr(bridge_v1, "secondary_contradictions", []) or []],
+            "price_reflection_map": [_model_dump(item) for item in getattr(bridge_v1, "price_reflection_map", []) or []],
+            "contradiction_transformation_signals": [_model_dump(item) for item in getattr(bridge_v1, "contradiction_transformation_signals", []) or []],
+            "unresolved_questions": unresolved_questions[:12],
+            "implication_for_ndx": (
+                "Bridge V2 已读取受控 InvestigationReport。"
+                "若调查未能建立新证据，二次综合必须保留原有张力并降低强裁决倾向。"
+            ),
+            "key_uncertainties": list(dict.fromkeys(
+                list(getattr(bridge_v1, "key_uncertainties", []) or [])
+                + [item for report in investigation_reports for item in list(report.cannot_establish)]
+            ))[:12],
+            "event_refs": list(dict.fromkeys(getattr(bridge_v1, "event_refs", []) or [])),
+            "normalization_notes": list(dict.fromkeys(
+                list(getattr(bridge_v1, "normalization_notes", []) or [])
+                + ["bridge_v2_deterministic_feedback_loop"]
+            )),
+            "investigation_effects": effects,
+            "feedback_loop_summary": {
+                "schema_version": "bridge_v2_feedback_summary_v1",
+                "input_bridge": "bridge_memos/bridge_0.json",
+                "input_messages": len(router_output.input_messages),
+                "accepted_messages": sorted(accepted_ids),
+                "rejected_messages": rejected_questions,
+                "investigation_report_refs": report_refs,
+                "changed_judgment_count": sum(1 for item in effects if item["effect_on_judgment"] != "no_change_keep_unresolved"),
+                "unchanged_or_unresolved_count": sum(1 for item in effects if item["effect_on_judgment"] == "no_change_keep_unresolved"),
+                "no_backflow_verified": True,
+            },
+        }
+        bridge_v2 = BridgeMemo.model_validate(bridge_v2_payload)
+        self._save_json(self.bridge_dir / "bridge_v2.json", bridge_v2)
+        return bridge_v2
+
+    def _build_hypothesis_competition(
+        self,
+        *,
+        synthesis_packet: SynthesisPacket,
+        bridge_v2: BridgeMemo,
+        investigation_reports: List[InvestigationReport],
+        effective_date: str,
+    ) -> HypothesisCompetition:
+        counter_thesis = self._build_counter_thesis(
+            synthesis_packet=synthesis_packet,
+            bridge_v2=bridge_v2,
+            investigation_reports=investigation_reports,
+        )
+        base_hypothesis = self._build_base_hypothesis_from_bridge(
+            bridge_v2=bridge_v2,
+            investigation_reports=investigation_reports,
+        )
+        hypotheses = [base_hypothesis] + list(counter_thesis.hypotheses)
+        hypotheses = self._dedupe_hypotheses(hypotheses)
+
+        fallback_warnings = self._competition_fallback_warnings(bridge_v2)
+        downgrade_records = self._build_adjudication_change_records(
+            base_hypothesis=base_hypothesis,
+            counter_hypotheses=counter_thesis.hypotheses,
+            investigation_reports=investigation_reports,
+            fallback_warnings=fallback_warnings,
+            effective_date=effective_date,
+        )
+        leading_id = "" if downgrade_records else base_hypothesis.hypothesis_id
+        retained_disputes = list(dict.fromkeys(
+            list(getattr(bridge_v2, "unresolved_questions", []) or [])
+            + [item for report in investigation_reports for item in list(report.cannot_establish)]
+            + [record.reason for record in downgrade_records if record.reason]
+        ))[:12]
+        if leading_id:
+            hypotheses = [
+                hypothesis.model_copy(update={"status": "leading", "adjudication_reason": "当前证据未触发改判，暂列主导解释。"})
+                if hypothesis.hypothesis_id == leading_id else hypothesis
+                for hypothesis in hypotheses
+            ]
+        elif hypotheses:
+            hypotheses = [
+                hypothesis.model_copy(update={"status": "kept_unresolved", "adjudication_reason": "存在调查反证、证据缺口或兜底痕迹，不能形成单一路径裁决。"})
+                for hypothesis in hypotheses
+            ]
+
+        competition = HypothesisCompetition(
+            input_refs=["synthesis_packet.json", "bridge_memos/bridge_v2.json", "investigation_reports/*.json"],
+            forbidden_context_refs=["thesis_draft.json", "analysis_revised.json", "final_adjudication.json"],
+            hypotheses=hypotheses,
+            leading_hypothesis_id=leading_id,
+            retained_disputes=retained_disputes,
+            downgrade_or_split_events=downgrade_records,
+            insufficient_evidence_reason="" if len(hypotheses) >= 2 else "少于两个可竞争解释；只能保留证据不足状态。",
+            fallback_warnings=fallback_warnings,
+            principal_contradiction_quality=self._principal_contradiction_quality(bridge_v2),
+            price_reflection_quality=self._price_reflection_quality(bridge_v2),
+            adjudication_notes=[
+                "Counter-Thesis 首次生成发生在 Thesis 之前，且禁止读取 thesis_draft.json。",
+                "InvestigationReport 只影响假说状态、争议保留和重判记录，不回写 L1-L5。",
+                "principal_contradiction / price_reflection 如有兜底痕迹，必须在裁决中降级或显式标记。",
+            ],
+        )
+        history = AdjudicationHistory(
+            effective_date=effective_date,
+            records=downgrade_records
+            or [
+                AdjudicationChangeRecord(
+                    version_id="adj_initial_v1",
+                    previous_hypothesis_id="",
+                    new_hypothesis_id=leading_id,
+                    trigger_evidence_refs=[],
+                    change_type="initial",
+                    old_status="none",
+                    new_status="leading" if leading_id else "insufficient_evidence",
+                    reason="建立阶段 3 初始竞争裁决记录。",
+                    effective_date=effective_date,
+                )
+            ],
+            current_hypothesis_ids=[hypothesis.hypothesis_id for hypothesis in hypotheses],
+        )
+        self._save_json("counter_thesis.json", counter_thesis)
+        self._save_json("hypothesis_competition.json", competition)
+        self._save_json("adjudication_history.json", history)
+        self._save_json(
+            "competition_adjudication_manifest.json",
+            {
+                "schema_version": "competition_adjudication_manifest_v1",
+                "phase": "stage_3_minimal_competition",
+                "counter_thesis_independent": "thesis_draft.json" in set(counter_thesis.forbidden_context_refs),
+                "hypothesis_count": len(hypotheses),
+                "leading_hypothesis_id": leading_id,
+                "downgrade_or_split_count": len(downgrade_records),
+                "no_backflow_rule": "Competition artifacts may be read by Thesis and governance stages, but must not rewrite L1-L5 layer cards.",
+            },
+        )
+        return competition
+
+    def _build_counter_thesis(
+        self,
+        *,
+        synthesis_packet: SynthesisPacket,
+        bridge_v2: BridgeMemo,
+        investigation_reports: List[InvestigationReport],
+    ) -> CounterThesisDraft:
+        principal = _model_dump(getattr(bridge_v2, "principal_contradiction", None))
+        if not isinstance(principal, dict):
+            principal = {}
+        investigation_evidence = list(dict.fromkeys(
+            ref
+            for report in investigation_reports
+            for ref in list(report.evidence_refs)
+        ))
+        unresolved = list(dict.fromkeys(
+            list(getattr(bridge_v2, "unresolved_questions", []) or [])
+            + [item for report in investigation_reports for item in list(report.cannot_establish)]
+        ))
+        base_refs = list(dict.fromkeys(
+            list(principal.get("evidence_refs") or [])
+            + [ref for conflict in synthesis_packet.high_severity_typed_conflicts for ref in list(conflict.evidence_refs)]
+        ))
+        counter_text = (
+            "反方解释：现有证据更像是未解决张力和证据缺口，"
+            "不足以支持把补查结果吸收到单一主线。"
+        )
+        if unresolved:
+            counter_text += f" 关键缺口：{unresolved[0]}"
+        counter_hypothesis = CompetingHypothesis(
+            hypothesis_id=self._stable_hypothesis_id("counter", counter_text),
+            hypothesis_text=counter_text,
+            source="counter_thesis",
+            support_evidence_refs=investigation_evidence or base_refs[:3],
+            counter_evidence_refs=base_refs[:6],
+            diagnostic_evidence_refs=list(dict.fromkeys(investigation_evidence + base_refs))[:8],
+            cannot_explain=["如果后续正式数据源补齐并确认主要矛盾已解决，反方只能保留为历史争议。"],
+            falsification_conditions=list(dict.fromkeys(
+                [item for report in investigation_reports for item in list(report.cannot_establish)]
+                + ["Bridge V2 原生给出充分 price_reflection_map 且关键反证被正式证据排除。"]
+            ))[:8],
+            confidence=Confidence.LOW if not investigation_evidence else Confidence.MEDIUM,
+            status="candidate",
+            adjudication_reason="反方只读取 SynthesisPacket / Bridge V2 / InvestigationReport，用于挑战单一路径吸收。",
+            source_refs=["synthesis_packet.json", "bridge_memos/bridge_v2.json", "investigation_reports/*.json"],
+        )
+        return CounterThesisDraft(
+            input_refs=["synthesis_packet.json", "bridge_memos/bridge_v2.json", "investigation_reports/*.json"],
+            forbidden_context_refs=["thesis_draft.json", "analysis_revised.json", "final_adjudication.json"],
+            hypotheses=[counter_hypothesis],
+            principal_counterargument=counter_text,
+            cannot_establish=unresolved[:10] or ["反方不能证明主线错误，只能证明证据不足或争议仍需保留。"],
+            prompt_input_audit={
+                "thesis_exists_at_generation": (self.output_dir / "thesis_draft.json").exists(),
+                "thesis_read": False,
+                "allowed_inputs_only": True,
+                "forbidden_context_refs": ["thesis_draft.json", "analysis_revised.json", "final_adjudication.json"],
+            },
+        )
+
+    def _build_base_hypothesis_from_bridge(
+        self,
+        *,
+        bridge_v2: BridgeMemo,
+        investigation_reports: List[InvestigationReport],
+    ) -> CompetingHypothesis:
+        principal = _model_dump(getattr(bridge_v2, "principal_contradiction", None))
+        if not isinstance(principal, dict):
+            principal = {}
+        support_refs = list(dict.fromkeys(principal.get("evidence_refs") or []))
+        typed_refs = [
+            ref
+            for conflict in getattr(bridge_v2, "typed_conflicts", []) or []
+            for ref in list(getattr(conflict, "evidence_refs", []) or [])
+        ]
+        if not support_refs:
+            support_refs = list(dict.fromkeys(typed_refs))[:8]
+        counter_refs = list(dict.fromkeys(
+            ref
+            for report in investigation_reports
+            if report.claims_challenged
+            for ref in list(report.evidence_refs)
+        ))
+        transformation_signals = _as_list(principal.get("transformation_signals"))
+        falsifiers = []
+        for item in transformation_signals:
+            signal = item.get("signal") if isinstance(item, dict) else item
+            if str(signal or "").strip():
+                falsifiers.append(str(signal))
+        for conflict in getattr(bridge_v2, "typed_conflicts", []) or []:
+            falsifiers.extend(str(item) for item in list(getattr(conflict, "falsifiers", []) or []))
+        text = principal.get("summary") or "主线解释：Bridge V2 的主要矛盾仍是当前综合判断的基础。"
+        return CompetingHypothesis(
+            hypothesis_id=self._stable_hypothesis_id("base", text),
+            hypothesis_text="主线解释：" + str(text).removeprefix("主线解释："),
+            source="bridge_v2",
+            support_evidence_refs=support_refs[:10],
+            counter_evidence_refs=counter_refs[:8],
+            diagnostic_evidence_refs=list(dict.fromkeys(support_refs + typed_refs + counter_refs))[:10],
+            cannot_explain=list(dict.fromkeys(
+                list(getattr(bridge_v2, "unresolved_questions", []) or [])
+                + [item for report in investigation_reports for item in list(report.cannot_establish)]
+            ))[:10],
+            falsification_conditions=list(dict.fromkeys(falsifiers))[:10] or ["关键价格反映或主要矛盾证据被正式证据反驳。"],
+            confidence=Confidence.MEDIUM if support_refs else Confidence.LOW,
+            status="candidate",
+            adjudication_reason="来自 Bridge V2 的主要矛盾候选，等待与反方假说比较。",
+            source_refs=["bridge_memos/bridge_v2.json"],
+        )
+
+    def _build_adjudication_change_records(
+        self,
+        *,
+        base_hypothesis: CompetingHypothesis,
+        counter_hypotheses: List[CompetingHypothesis],
+        investigation_reports: List[InvestigationReport],
+        fallback_warnings: List[str],
+        effective_date: str,
+    ) -> List[AdjudicationChangeRecord]:
+        records: List[AdjudicationChangeRecord] = []
+        trigger_refs = list(dict.fromkeys(
+            ref
+            for report in investigation_reports
+            if report.claims_challenged or report.cannot_establish
+            for ref in list(report.evidence_refs)
+        ))
+        if trigger_refs or fallback_warnings:
+            records.append(
+                AdjudicationChangeRecord(
+                    version_id="adj_stage3_downgrade_v1",
+                    previous_hypothesis_id=base_hypothesis.hypothesis_id,
+                    new_hypothesis_id=counter_hypotheses[0].hypothesis_id if counter_hypotheses else "",
+                    trigger_evidence_refs=trigger_refs,
+                    change_type="kept_unresolved" if trigger_refs else "downgrade",
+                    old_status="candidate",
+                    new_status="kept_unresolved",
+                    reason=(
+                        "受控调查挑战了强单一路径裁决，或 principal_contradiction / price_reflection 存在兜底痕迹；"
+                        "本轮保留旧主线但降级为争议状态。"
+                    ),
+                    effective_date=effective_date,
+                )
+            )
+        return records
+
+    def _hypothesis_competition_summary(self, competition: HypothesisCompetition) -> Dict[str, Any]:
+        return {
+            "schema_version": competition.schema_version,
+            "hypothesis_count": len(competition.hypotheses),
+            "leading_hypothesis_id": competition.leading_hypothesis_id,
+            "retained_disputes": list(competition.retained_disputes),
+            "downgrade_or_split_count": len(competition.downgrade_or_split_events),
+            "fallback_warnings": list(competition.fallback_warnings),
+            "principal_contradiction_quality": competition.principal_contradiction_quality,
+            "price_reflection_quality": competition.price_reflection_quality,
+        }
+
+    def _dedupe_hypotheses(self, hypotheses: List[CompetingHypothesis]) -> List[CompetingHypothesis]:
+        deduped: List[CompetingHypothesis] = []
+        seen = set()
+        for hypothesis in hypotheses:
+            if hypothesis.hypothesis_id in seen:
+                continue
+            seen.add(hypothesis.hypothesis_id)
+            deduped.append(hypothesis)
+        return deduped
+
+    def _stable_hypothesis_id(self, prefix: str, text: str) -> str:
+        return f"hyp_{prefix}_{hashlib.sha1(str(text).encode('utf-8')).hexdigest()[:10]}"
+
+    def _competition_fallback_warnings(self, bridge: BridgeMemo) -> List[str]:
+        notes = list(getattr(bridge, "normalization_notes", []) or [])
+        warnings = []
+        for note in notes:
+            note_text = str(note)
+            if "principal_contradiction" in note_text or "price_reflection" in note_text:
+                warnings.append(note_text)
+        if getattr(bridge, "principal_contradiction", None) is None:
+            warnings.append("principal_contradiction_missing")
+        if not list(getattr(bridge, "price_reflection_map", []) or []):
+            warnings.append("price_reflection_map_missing")
+        return list(dict.fromkeys(warnings))
+
+    def _principal_contradiction_quality(self, bridge: BridgeMemo) -> str:
+        if getattr(bridge, "principal_contradiction", None) is None:
+            return "missing"
+        notes = " ".join(str(item) for item in getattr(bridge, "normalization_notes", []) or [])
+        return "fallback" if "principal_contradiction" in notes else "native"
+
+    def _price_reflection_quality(self, bridge: BridgeMemo) -> str:
+        if not list(getattr(bridge, "price_reflection_map", []) or []):
+            return "missing"
+        notes = " ".join(str(item) for item in getattr(bridge, "normalization_notes", []) or [])
+        return "fallback" if "price_reflection" in notes else "native"
+
+    def _build_evidence_registry(
+        self,
+        *,
+        packet_model: AnalysisPacket,
+        synthesis_packet: SynthesisPacket,
+        investigation_reports: List[InvestigationReport],
+        hypothesis_competition: HypothesisCompetition,
+    ) -> EvidenceRegistry:
+        effective_date = self._effective_date(packet_model)
+        passports: Dict[str, EvidencePassport] = {}
+
+        for evidence_id, item in synthesis_packet.evidence_index.items():
+            raw_payload = self._raw_payload_for_evidence_ref(packet_model, evidence_id)
+            quality = raw_payload.get("data_quality") if isinstance(raw_payload.get("data_quality"), dict) else {}
+            permission = item.get("permission_type") if isinstance(item, dict) else ""
+            issues = data_evidence_issues(raw_payload, function_id=evidence_id.split(".", 1)[-1], backtest_date=packet_model.meta.get("backtest_date") if isinstance(packet_model.meta, dict) else None) if raw_payload else {"hard_block": [], "degraded": [], "audit_warn": []}
+            downgrade_rules = [issue["code"] for issue in issues.get("hard_block", []) + issues.get("degraded", []) if isinstance(issue, dict)]
+            source_tier = self._normalize_source_tier(quality.get("source_tier") or item.get("source_tier") if isinstance(item, dict) else "")
+            passports[evidence_id] = EvidencePassport(
+                evidence_id=evidence_id,
+                evidence_kind="data",
+                source_ref=str(quality.get("source_name") or quality.get("provider") or evidence_id),
+                source_tier=source_tier,
+                permission_type=permission or None,
+                authority_model={
+                    "can_support": item.get("canonical_question") if isinstance(item, dict) else "",
+                    "cannot_support": list(item.get("misread_guards") or []) if isinstance(item, dict) else [],
+                    "requires_confirmation": list(item.get("cross_validation_targets") or []) if isinstance(item, dict) else [],
+                },
+                downgrade_rules=downgrade_rules,
+                data_quality=quality,
+                effective_date=str(quality.get("effective_date") or effective_date),
+                verified=source_tier not in {"unknown"} and not issues.get("hard_block"),
+                limitations=list(item.get("misread_guards") or []) if isinstance(item, dict) else [],
+            )
+
+        for event_passport in self._event_passports(effective_date):
+            passports[event_passport.evidence_id] = event_passport
+
+        for report in investigation_reports:
+            evidence_id = f"investigation_reports/{report.investigation_id}.json"
+            tiers = [self._normalize_source_tier(item.source_tier) for item in report.source_authority]
+            source_tier = "formal_data_source" if "formal_data_source" in tiers else (tiers[0] if tiers else "unknown")
+            passports[evidence_id] = EvidencePassport(
+                evidence_id=evidence_id,
+                evidence_kind="investigation",
+                source_ref=report.originating_agent_id,
+                source_tier=source_tier,
+                authority_model={
+                    "can_support": list(report.claims_supported),
+                    "cannot_support": list(report.cannot_establish),
+                    "counter_evidence_refs": list(report.counter_evidence_refs),
+                },
+                downgrade_rules=["investigation_is_downstream_no_l1_l5_backflow", *list(report.limits)],
+                effective_date=report.effective_date,
+                verified=bool(report.finding and report.evidence_refs and report.cannot_establish),
+                limitations=list(report.cannot_establish),
+            )
+
+        for hypothesis in hypothesis_competition.hypotheses:
+            passports[hypothesis.hypothesis_id] = EvidencePassport(
+                evidence_id=hypothesis.hypothesis_id,
+                evidence_kind="hypothesis",
+                source_ref="hypothesis_competition.json",
+                source_tier="derived_inference",
+                authority_model={
+                    "support_evidence_refs": list(hypothesis.support_evidence_refs),
+                    "counter_evidence_refs": list(hypothesis.counter_evidence_refs),
+                    "diagnostic_evidence_refs": list(hypothesis.diagnostic_evidence_refs),
+                    "cannot_explain": list(hypothesis.cannot_explain),
+                },
+                downgrade_rules=["derived_inference_cannot_replace_underlying_evidence"],
+                effective_date=effective_date,
+                verified=bool(hypothesis.support_evidence_refs and hypothesis.counter_evidence_refs and hypothesis.falsification_conditions),
+                limitations=list(hypothesis.cannot_explain),
+            )
+
+        downgrade_summary = [
+            {
+                "evidence_id": passport.evidence_id,
+                "reason": list(passport.downgrade_rules),
+                "source_tier": passport.source_tier,
+            }
+            for passport in passports.values()
+            if passport.downgrade_rules or not passport.verified
+        ][:80]
+        return EvidenceRegistry(
+            effective_date=effective_date,
+            passports=passports,
+            source_tier_policy=self._source_tier_policy(),
+            downgrade_summary=downgrade_summary,
+        )
+
+    def _raw_payload_for_evidence_ref(self, packet: AnalysisPacket, evidence_ref: str) -> Dict[str, Any]:
+        if "." not in evidence_ref:
+            return {}
+        layer, function_id = evidence_ref.split(".", 1)
+        layer_data = packet.raw_data.get(layer, {}) if isinstance(packet.raw_data, dict) else {}
+        payload = layer_data.get(function_id) if isinstance(layer_data, dict) else {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _normalize_source_tier(self, value: Any) -> str:
+        return normalize_source_tier_for_evidence_passport(value)
+
+    def _event_passports(self, effective_date: str) -> List[EvidencePassport]:
+        payload = self._load_local_json(self.output_dir / "event_narrative_ledger.json", {})
+        claims = [
+            claim
+            for event in _as_list(payload.get("events")) if isinstance(event, dict)
+            for claim in _as_list(event.get("claims")) if isinstance(claim, dict)
+        ]
+        passports: List[EvidencePassport] = []
+        for claim in claims:
+            claim_id = str(claim.get("claim_id") or "").strip()
+            if not claim_id:
+                continue
+            claim_type = str(claim.get("claim_type") or "")
+            verified = claim_type in {"official_fact", "company_disclosure", "data_release_claim"} and bool(claim.get("source_url") or claim.get("source_name"))
+            source_tier = "candidate_external_material"
+            if claim_type in {"official_fact", "company_disclosure", "data_release_claim"}:
+                source_tier = "official"
+            passports.append(
+                EvidencePassport(
+                    evidence_id=claim_id,
+                    evidence_kind="event",
+                    source_ref=str(claim.get("source_url") or claim.get("source_name") or claim.get("source_event_id") or claim_id),
+                    source_tier=source_tier,
+                    authority_model={
+                        "claim_type": claim_type,
+                        "can_support": claim.get("what_it_can_support", ""),
+                        "cannot_support": claim.get("what_it_cannot_support", ""),
+                        "needs_data_confirmation": claim.get("needs_data_confirmation", True),
+                    },
+                    downgrade_rules=self._event_downgrade_rules(claim),
+                    effective_date=effective_date,
+                    verified=verified and not claim.get("needs_data_confirmation"),
+                    limitations=_as_list(claim.get("counterevidence_or_limits")) + [str(claim.get("what_it_cannot_support") or "")],
+                )
+            )
+        return passports
+
+    def _event_downgrade_rules(self, claim: Dict[str, Any]) -> List[str]:
+        rules = ["event_material_cannot_be_l1_l5_primary_evidence"]
+        if claim.get("needs_data_confirmation"):
+            rules.append("event_claim_requires_data_confirmation")
+        if not claim.get("source_url"):
+            rules.append("event_claim_missing_source_url")
+        if claim.get("raw_text_available") is False:
+            rules.append("event_claim_title_only_or_unread_full_text")
+        if str(claim.get("claim_type") or "") in {"narrative_claim", "rumor_claim", "interpretation_claim", "view_claim"}:
+            rules.append("non_official_event_claim_cannot_support_strong_market_conclusion")
+        return list(dict.fromkeys(rules))
+
+    def _source_tier_policy(self) -> Dict[str, Any]:
+        return {
+            "schema_version": "source_tier_policy_v1",
+            "can_support_strong_data_claim": ["official", "licensed_provider", "licensed_manual", "formal_data_source"],
+            "must_not_support_strong_data_claim": ["candidate_external_material", "proxy", "derived_inference", "unknown"],
+            "downgrade_rules": [
+                "headline/news/social/event materials stay candidate until upgraded through a formal data-source path.",
+                "proxy indicators cannot be described as official fact.",
+                "technical indicators cannot prove valuation cheapness or fundamental improvement.",
+                "derived hypotheses and final claims cannot replace their underlying evidence_refs.",
+                "missing counter evidence or falsification conditions downgrades final claims.",
+            ],
+        }
+
+    def _evidence_registry_summary(self, registry: EvidenceRegistry) -> Dict[str, Any]:
+        by_kind: Dict[str, int] = {}
+        by_tier: Dict[str, int] = {}
+        for passport in registry.passports.values():
+            by_kind[passport.evidence_kind] = by_kind.get(passport.evidence_kind, 0) + 1
+            by_tier[passport.source_tier] = by_tier.get(passport.source_tier, 0) + 1
+        return {
+            "schema_version": registry.schema_version,
+            "passport_count": len(registry.passports),
+            "by_kind": by_kind,
+            "by_source_tier": by_tier,
+            "downgrade_count": len(registry.downgrade_summary),
+            "source_tier_policy_ref": "evidence_registry.json:source_tier_policy",
+        }
+
+    def _build_final_claim_ledger(
+        self,
+        *,
+        synthesis_packet: SynthesisPacket,
+        thesis: ThesisDraft,
+        final_adjudication: FinalAdjudication,
+        evidence_registry: EvidenceRegistry,
+        effective_date: str,
+    ) -> ClaimLedger:
+        entries: List[ClaimLedgerEntry] = []
+        common_refs = self._compact_string_refs(
+            [ref for chain in getattr(final_adjudication, "key_support_chains", []) or [] for ref in chain.evidence_refs]
+            + list(getattr(final_adjudication, "evidence_refs", []) or [])
+            + [ref for chain in getattr(thesis, "key_support_chains", []) or [] for ref in chain.evidence_refs]
+        )
+        common_counter_refs = self._claim_counter_refs(synthesis_packet, thesis, final_adjudication)
+        common_falsifiers = self._claim_falsifiers(thesis, final_adjudication, synthesis_packet)
+
+        def add(source_stage: str, claim_type: str, claim_text: str, evidence_refs: List[str], inference_steps: List[str], falsifiers: List[str]) -> None:
+            text = " ".join(str(claim_text or "").split())
+            if not text:
+                return
+            claim_id = f"claim:{source_stage}:{hashlib.sha1((claim_type + '|' + text).encode('utf-8')).hexdigest()[:12]}"
+            entry = ClaimLedgerEntry(
+                claim_id=claim_id,
+                source_stage=source_stage,  # type: ignore[arg-type]
+                claim_text=text,
+                claim_type=claim_type,  # type: ignore[arg-type]
+                evidence_refs=self._compact_string_refs(evidence_refs or common_refs),
+                counter_evidence_refs=common_counter_refs,
+                inference_steps=self._compact_strings(inference_steps),
+                falsification_conditions=self._compact_strings(falsifiers or common_falsifiers),
+            )
+            entries.append(self._verify_claim_entry(entry, evidence_registry))
+
+        add(
+            "thesis",
+            "market_state",
+            thesis.main_thesis,
+            common_refs,
+            [thesis.environment_assessment, thesis.valuation_assessment, thesis.timing_assessment],
+            list(getattr(thesis, "invalidation_conditions", []) or []),
+        )
+        add("thesis", "price_reflection", getattr(thesis, "priced_narrative", ""), common_refs, [getattr(thesis, "payoff_assessment", "")], list(getattr(thesis, "invalidation_conditions", []) or []))
+        add("final", "market_state", final_adjudication.final_stance, common_refs, [final_adjudication.adjudicator_notes], list(final_adjudication.invalidation_conditions or []))
+        add("final", "market_state", getattr(final_adjudication.reader_final, "one_liner", ""), list(getattr(final_adjudication.reader_final, "evidence_refs", []) or []) + common_refs, list(getattr(final_adjudication.reader_final, "three_reasons", []) or []), list(getattr(final_adjudication.reader_final, "invalidation_summary", []) or []))
+        add("final", "risk_boundary", "；".join(str(item) for item in list(final_adjudication.must_preserve_risks or [])[:6]), common_refs, ["Final 必须保留 Risk Sentinel 和主要矛盾中的风险边界。"], list(final_adjudication.invalidation_conditions or []))
+        add("final", "action_translation", "；".join(str(getattr(action, "action", "")) for action in list(getattr(final_adjudication, "portfolio_actions", []) or [])[:4]), common_refs, [str(getattr(action, "rationale", "")) for action in list(getattr(final_adjudication, "portfolio_actions", []) or [])[:4]], list(final_adjudication.invalidation_conditions or []))
+
+        publish_gate = self._claim_ledger_publish_gate(entries)
+        return ClaimLedger(
+            effective_date=effective_date,
+            entries=entries,
+            publish_gate=publish_gate,
+        )
+
+    def _verify_claim_entry(self, entry: ClaimLedgerEntry, registry: EvidenceRegistry) -> ClaimLedgerEntry:
+        missing_refs = [ref for ref in entry.evidence_refs if ref not in registry.passports]
+        weak_refs = [
+            ref
+            for ref in entry.evidence_refs
+            if ref in registry.passports
+            and registry.passports[ref].source_tier in {"candidate_external_material", "proxy", "derived_inference", "unknown"}
+        ]
+        reasons = []
+        if not entry.evidence_refs:
+            reasons.append("missing_evidence_refs")
+        if missing_refs:
+            reasons.append("evidence_refs_not_in_registry:" + ",".join(missing_refs[:5]))
+        if not entry.counter_evidence_refs:
+            reasons.append("missing_counter_evidence_refs")
+        if not entry.falsification_conditions:
+            reasons.append("missing_falsification_conditions")
+        if weak_refs and not any(ref for ref in entry.evidence_refs if registry.passports.get(ref) and registry.passports[ref].source_tier in {"official", "licensed_provider", "licensed_manual", "formal_data_source"}):
+            reasons.append("only_weak_or_derived_evidence_refs")
+        verified = not reasons
+        return entry.model_copy(
+            update={
+                "verified": verified,
+                "authority_status": "verified" if verified else ("blocked" if "missing_evidence_refs" in reasons or any(reason.startswith("evidence_refs_not_in_registry") for reason in reasons) else "downgraded"),
+                "downgrade_reason": "；".join(reasons),
+            }
+        )
+
+    def _claim_ledger_publish_gate(self, entries: List[ClaimLedgerEntry]) -> Dict[str, Any]:
+        blocked = [entry.claim_id for entry in entries if entry.authority_status == "blocked"]
+        downgraded = [entry.claim_id for entry in entries if entry.authority_status == "downgraded"]
+        status = "pass" if entries and not blocked and not downgraded else ("blocked" if blocked else "downgraded")
+        return {
+            "status": status,
+            "entry_count": len(entries),
+            "verified_count": sum(1 for entry in entries if entry.verified),
+            "blocked_claim_ids": blocked,
+            "downgraded_claim_ids": downgraded,
+            "rule": "重要 final/thesis claim 必须同时有 evidence_refs、counter_evidence_refs、inference_steps、falsification_conditions，且证据权限不能越权。",
+        }
+
+    def _attach_claims_to_evidence_registry(self, registry: EvidenceRegistry, ledger: ClaimLedger) -> EvidenceRegistry:
+        passports = dict(registry.passports)
+        for entry in ledger.entries:
+            passports[entry.claim_id] = EvidencePassport(
+                evidence_id=entry.claim_id,
+                evidence_kind="final_claim",
+                source_ref=f"final_claim_ledger.json:{entry.claim_id}",
+                source_tier="derived_inference",
+                authority_model={
+                    "claim_type": entry.claim_type,
+                    "evidence_refs": list(entry.evidence_refs),
+                    "counter_evidence_refs": list(entry.counter_evidence_refs),
+                },
+                downgrade_rules=[entry.downgrade_reason] if entry.downgrade_reason else ["derived_final_claim_requires_underlying_evidence"],
+                effective_date=ledger.effective_date,
+                verified=entry.verified,
+                limitations=["Final claim is not primary evidence; inspect underlying evidence_refs."],
+            )
+            for ref in entry.evidence_refs + entry.counter_evidence_refs:
+                passport = passports.get(ref)
+                if passport is None:
+                    continue
+                linked = list(passport.linked_claim_ids)
+                if entry.claim_id not in linked:
+                    linked.append(entry.claim_id)
+                passports[ref] = passport.model_copy(update={"linked_claim_ids": linked})
+        return registry.model_copy(update={"passports": passports, "downgrade_summary": self._registry_downgrade_summary(passports)})
+
+    def _registry_downgrade_summary(self, passports: Dict[str, EvidencePassport]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "evidence_id": passport.evidence_id,
+                "reason": list(passport.downgrade_rules),
+                "source_tier": passport.source_tier,
+            }
+            for passport in passports.values()
+            if passport.downgrade_rules or not passport.verified
+        ][:120]
+
+    def _claim_counter_refs(self, synthesis_packet: SynthesisPacket, thesis: ThesisDraft, final_adjudication: FinalAdjudication) -> List[str]:
+        refs: List[str] = []
+        for conflict in list(synthesis_packet.high_severity_typed_conflicts or []):
+            refs.extend(list(getattr(conflict, "evidence_refs", []) or []))
+        for hypothesis in list(synthesis_packet.competing_hypotheses or []):
+            refs.extend(list(getattr(hypothesis, "counter_evidence_refs", []) or []))
+        for item in list(getattr(thesis, "price_reflection_map", []) or []) + list(getattr(final_adjudication, "price_reflection_map", []) or []):
+            refs.extend(list(getattr(item, "counterevidence_refs", []) or []))
+        return self._compact_string_refs(refs)
+
+    def _claim_falsifiers(self, thesis: ThesisDraft, final_adjudication: FinalAdjudication, synthesis_packet: SynthesisPacket) -> List[str]:
+        items: List[str] = []
+        items.extend(str(item) for item in list(getattr(thesis, "invalidation_conditions", []) or []))
+        items.extend(str(item) for item in list(getattr(final_adjudication, "invalidation_conditions", []) or []))
+        reader = getattr(final_adjudication, "reader_final", None)
+        if reader is not None:
+            items.extend(str(item) for item in list(getattr(reader, "invalidation_summary", []) or []))
+        for hypothesis in list(synthesis_packet.competing_hypotheses or []):
+            items.extend(str(item) for item in list(getattr(hypothesis, "falsification_conditions", []) or []))
+        return self._compact_strings(items)
+
+    def _compact_string_refs(self, values: List[Any], limit: int = 20) -> List[str]:
+        return self._compact_strings([value for value in values if isinstance(value, str) and value], limit=limit)
+
+    def _compact_strings(self, values: List[Any], limit: int = 20) -> List[str]:
+        items: List[str] = []
+        for value in values:
+            text = " ".join(str(value or "").split())
+            if text and text not in items:
+                items.append(text)
+            if len(items) >= limit:
+                break
+        return items
+
+    def _load_local_json(self, path: Path, default: Any) -> Any:
+        if not path.exists():
+            return default
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return default
 
     def _run_bridge(
         self,
@@ -702,6 +2031,9 @@ class VNextOrchestrator:
                 "Thesis 只能整合 synthesis_packet，不得重新分析原始指标。",
                 "必须保留 high_severity_conflicts，不能为了叙事流畅而抹平张力。",
                 "必须显式消费 principal_contradictions / Bridge principal_contradiction：先判断当前主要矛盾，再判断价格是否已经反映风险，最后才给动作。",
+                "必须显式消费 competing_hypotheses / hypothesis_competition_summary：正式综合前至少比较主线解释和反方解释；若证据不足，必须降级或保留争议。",
+                "必须尊重 evidence_registry_summary：数据、事件、调查、假说和最终 claim 使用同一种 evidence id；弱权限证据不能越权支撑强结论。",
+                "Thesis / Final 的重要自然语言结论会进入 final_claim_ledger；缺证据、缺反证、缺失效条件或证据权限不足时必须降级。",
                 "所有 key_support_chains 的 evidence_refs 必须来自 evidence_index 或 bridge_summaries。",
                 "event_refs 与 evidence_refs 分离：事件只能写成解释/触发/观察背景，不能用来证明估值、广度、利率或趋势结论。",
             ],
@@ -755,6 +2087,14 @@ class VNextOrchestrator:
         )
         if known_items and not authority_clear:
             warnings.append("Some known indicators are missing permission or falsifier fields.")
+        authority_overreach = self._find_indicator_authority_overreach(known_items)
+        if authority_overreach:
+            authority_clear = False
+            for issue in authority_overreach:
+                warnings.append(
+                    "Indicator authority overreach: "
+                    f"{issue['function_id']} ({issue['permission_type']}) -> {issue['rule_id']}"
+                )
         for item in known_items:
             falsifiers.extend(item.falsifiers)
 
@@ -797,6 +2137,41 @@ class VNextOrchestrator:
             unresolved_tensions=unresolved_tensions,
             warnings=warnings,
         )
+
+    def _find_indicator_authority_overreach(self, items: List[Any]) -> List[Dict[str, str]]:
+        issues: List[Dict[str, str]] = []
+        for item in items:
+            permission_type = str(_enum_value(getattr(item, "permission_type", "")) or "").strip().lower()
+            rules = _AUTHORITY_OVERREACH_RULES.get(permission_type, [])
+            if not rules:
+                continue
+            text = self._indicator_authority_text(item)
+            for pattern, rule_id in rules:
+                if re.search(pattern, text, flags=re.IGNORECASE):
+                    issues.append(
+                        {
+                            "function_id": str(getattr(item, "function_id", "unknown")),
+                            "permission_type": permission_type,
+                            "rule_id": rule_id,
+                        }
+                    )
+                    break
+        return issues
+
+    def _indicator_authority_text(self, item: Any) -> str:
+        fields = [
+            getattr(item, "current_reading", ""),
+            getattr(item, "normalized_state", ""),
+            getattr(item, "narrative", ""),
+            getattr(item, "reasoning_process", ""),
+        ]
+        for list_field in ("first_principles_chain", "cross_layer_implications", "risk_flags"):
+            value = getattr(item, list_field, [])
+            if isinstance(value, list):
+                fields.extend(str(part) for part in value)
+            else:
+                fields.append(str(value))
+        return "\n".join(str(field) for field in fields if field)
 
     def _build_governance_input_packet(
         self,
@@ -965,6 +2340,7 @@ class VNextOrchestrator:
             false_safety_risks=false_safety_risks,
             key_evidence_refs=key_evidence_refs,
             key_event_refs=key_event_refs,
+            evidence_registry_summary=dict(getattr(synthesis_packet, "evidence_registry_summary", {}) or {}),
             known_data_gaps=list(dict.fromkeys(known_data_gaps)),  # 去重
             unresolved_questions=list(dict.fromkeys(unresolved_questions)),  # 去重
             synthesis_guidance=list(synthesis_packet.synthesis_guidance) if synthesis_packet.synthesis_guidance else [],
@@ -1489,6 +2865,7 @@ class VNextOrchestrator:
         suggested_fixes: List[str] = []
         soft_canon_warnings: List[str] = []
         l3_structural_warnings: List[str] = []
+        semantic_warnings: List[str] = []
         valid_evidence_refs = {
             f"{layer}.{function_id}"
             for layer, metrics in packet.raw_data.items()
@@ -1593,6 +2970,12 @@ class VNextOrchestrator:
                         f"{layer_label}.{item.function_id} missing soft canon fields: "
                         + ", ".join(missing_soft_fields)
                     )
+            authority_overreach = self._find_indicator_authority_overreach(card.indicator_analyses)
+            for issue in authority_overreach:
+                semantic_warnings.append(
+                    "Indicator authority overreach: "
+                    f"{layer_label}.{issue['function_id']} ({issue['permission_type']}) -> {issue['rule_id']}"
+                )
 
         if not bridge_memos:
             structural_issues.append("No bridge memo generated.")
@@ -1689,15 +3072,21 @@ class VNextOrchestrator:
                 "L3 structural priority should be treated cautiously, not as a hard blocker: "
                 + "; ".join(l3_structural_warnings)
             )
+        if semantic_warnings:
+            suggested_fixes.append(
+                "Review indicator authority before publishing: "
+                + "; ".join(semantic_warnings[:8])
+            )
 
         passed = not structural_issues and not consistency_issues and not missing_fields
+        quality_status = "review_required" if semantic_warnings or not passed else "passed"
         return SchemaGuardReport(
             passed=passed,
             structural_issues=structural_issues,
             consistency_issues=consistency_issues,
             missing_fields=missing_fields,
             suggested_fixes=suggested_fixes,
-            quality_status="passed" if passed else "review_required",
+            quality_status=quality_status,
         )
 
     def _analysis_required_function_ids(self, packet: AnalysisPacket, layer: str) -> List[str]:
@@ -1761,7 +3150,7 @@ class VNextOrchestrator:
         if stage_key == "bridge":
             return self._strip_empty_event_prompt_fields(payload)
         if stage_key == "thesis":
-            return self._strip_empty_event_prompt_fields(payload)
+            return self._strip_empty_event_prompt_fields(self._slim_object_run_gate_for_prompt(payload))
         if not (stage_key.startswith("l") and stage_key.endswith("_analyst")):
             return payload
         sanitized = dict(payload)
@@ -1773,6 +3162,33 @@ class VNextOrchestrator:
         if layer.upper() == "L4":
             raw_data = self._summarize_l4_raw_data_for_prompt(raw_data)
         sanitized["layer_raw_data"] = raw_data
+        sanitized.pop("runtime_boundary_policy_id", None)
+        return sanitized
+
+    def _slim_object_run_gate_for_prompt(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep full object gate in artifacts, but send only the decision-relevant kernel to prompts."""
+        sanitized = dict(payload)
+        synthesis = sanitized.get("synthesis_packet")
+        if not isinstance(synthesis, dict):
+            return sanitized
+        packet_meta = synthesis.get("packet_meta")
+        if not isinstance(packet_meta, dict):
+            return sanitized
+        object_gate = packet_meta.get("object_run_gate")
+        if not isinstance(object_gate, dict):
+            return sanitized
+        slim_meta = dict(packet_meta)
+        slim_meta["object_run_gate"] = {
+            "schema_version": object_gate.get("schema_version", "object_run_gate_v1"),
+            "primary_object": object_gate.get("primary_object", "NDX"),
+            "tradable_proxy": object_gate.get("tradable_proxy", "QQQ"),
+            "equal_weight_references": object_gate.get("equal_weight_references", []),
+            "date_boundary": object_gate.get("date_boundary"),
+            "prompt_note": "Full object boundary is stored in analysis_packet meta; use this only as object scope.",
+        }
+        slim_synthesis = dict(synthesis)
+        slim_synthesis["packet_meta"] = slim_meta
+        sanitized["synthesis_packet"] = slim_synthesis
         return sanitized
 
     def _strip_empty_event_prompt_fields(self, payload: Any) -> Any:
@@ -2194,8 +3610,12 @@ class VNextOrchestrator:
             return layer_match.group(1).lower()
         if relpath.startswith("bridge_memos/"):
             return "bridge"
+        if relpath.startswith("investigation_reports/"):
+            return "investigation"
         return {
             "synthesis_packet.json": "synthesis",
+            "feedback_contract_manifest.json": "feedback_contract",
+            "inquiry_router_output.json": "inquiry_router",
             "thesis_draft.json": "thesis",
             "critique.json": "critic",
             "risk_boundary_report.json": "risk",

@@ -278,6 +278,34 @@ def _compact_value(value: Any, *, max_items: int = 3) -> Any:
     return str(value)[:200]
 
 
+def _build_object_run_gate(data_date: str, data_json: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "schema_version": "object_run_gate_v1",
+        "primary_object": "NDX",
+        "tradable_proxy": "QQQ",
+        "equal_weight_references": ["NDXE", "QEW"],
+        "object_scope": (
+            "NDX is the Nasdaq-100 index; QQQ is a tradable proxy; "
+            "NDXE/QEW are equal-weight references for breadth and concentration checks."
+        ),
+        "date_boundary": data_date,
+        "methodology_boundary": (
+            "Treat Nasdaq-100 as a rules-based modified market-cap weighted index. "
+            "Methodology, quarterly rebalancing, annual reconstitution, and the "
+            "2026-05-01 methodology update are object-level boundaries."
+        ),
+        "data_boundary": (
+            "Use the collector snapshot for this run and preserve backtest_data_boundaries "
+            "or strict_backtest_invariants when present."
+        ),
+        "evidence_boundary": (
+            "Object definition is static context and cannot be used as an L1-L5 evidence_ref "
+            "for market, valuation, breadth, or trend claims."
+        ),
+        "backtest_date": data_json.get("backtest_date"),
+    }
+
+
 class AnalysisPacketBuilder:
     """Build an L1-L5 aligned analysis packet from collector output."""
 
@@ -414,6 +442,7 @@ class AnalysisPacketBuilder:
             "schema_version": "1.0",
             "generated_at": _utc_now().isoformat(),
             "data_date": data_date,
+            "object_run_gate": _build_object_run_gate(data_date, data_json),
             "collector_timestamp_utc": data_json.get("timestamp_utc"),
             "backtest_date": backtest_date,
             "indicator_total": total_indicators,
@@ -442,6 +471,10 @@ class AnalysisPacketBuilder:
         context = {
             "source_timestamp_utc": data_json.get("timestamp_utc"),
             "backtest_date": data_json.get("backtest_date"),
+            "object_run_gate": _build_object_run_gate(
+                data_json.get("backtest_date") or str(data_json.get("timestamp_utc") or "")[:10],
+                data_json,
+            ),
             "backtest_data_boundaries": data_json.get("backtest_data_boundaries", []),
             "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),
             "data_evidence_contract_summary": {

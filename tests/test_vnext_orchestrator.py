@@ -7,7 +7,24 @@ from pydantic import BaseModel, Field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from agent_analysis.contracts import BridgeMemo, Critique, RiskBoundaryReport, ThesisDraft
+from agent_analysis.contracts import (
+    ApprovalStatus,
+    BridgeMemo,
+    ClaimLedger,
+    CompetingHypothesis,
+    Confidence,
+    Critique,
+    EvidenceRegistry,
+    FinalAdjudication,
+    HypothesisCompetition,
+    InvestigationReport,
+    KeySupportChain,
+    ReaderFinal,
+    RiskBoundaryReport,
+    SynthesisPacket,
+    ThesisDraft,
+    TypedConflict,
+)
 from agent_analysis.orchestrator import VNextOrchestrator
 from agent_analysis.packet_builder import AnalysisPacketBuilder
 
@@ -105,6 +122,127 @@ def _mock_packet():
             },
         },
     )
+
+
+def test_layer_stage_payload_enforces_stage0_runtime_boundaries(tmp_path: Path):
+    event_ledger = {
+        "events": [
+            {
+                "event_id": "event:fomc",
+                "source_name": "Federal Reserve",
+                "source_tier": "official_macro",
+                "event_type": "policy_or_financial_conditions",
+                "title": "FOMC statement",
+                "published_at": "2026-04-24T18:00:00Z",
+                "layers": ["L1", "L4"],
+                "confidence": "high",
+            }
+        ]
+    }
+    data_json = {
+        "timestamp_utc": "2026-04-24T00:00:00Z",
+        "indicators": [
+            {
+                "layer": 1,
+                "metric_name": "Fed Funds Rate",
+                "function_id": "get_fed_funds_rate",
+                "raw_data": {"name": "Fed Funds Rate", "value": {"level": 5.25}},
+            },
+            {
+                "layer": 4,
+                "metric_name": "NDX Valuation",
+                "function_id": "get_ndx_pe_and_earnings_yield",
+                "raw_data": {"name": "NDX Valuation", "value": {"PE_TTM": 32.5}},
+            },
+        ],
+    }
+    packet = AnalysisPacketBuilder().build(
+        data_json,
+        manual_overrides={
+            "active": True,
+            "date": "2026-04-24",
+            "metrics": {
+                "get_fed_funds_rate": {"value": {"level": 5.1}},
+                "get_ndx_pe_and_earnings_yield": {"value": {"PE_TTM": 31.0}},
+            },
+        },
+        event_ledger=event_ledger,
+        allow_event_refs=True,
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    context_brief = orchestrator._build_context_brief(packet)
+
+    payload = orchestrator._build_layer_stage_payload(packet, context_brief, "L1")
+
+    assert set(payload) == {
+        "context_brief",
+        "layer",
+        "layer_facts",
+        "layer_raw_data",
+        "manual_overrides",
+        "runtime_boundary_policy_id",
+    }
+    assert payload["layer"] == "L1"
+    assert list(payload["context_brief"]["layer_highlights"].keys()) == ["L1"]
+    assert payload["context_brief"]["apparent_cross_layer_signals"] == []
+    assert "get_fed_funds_rate" in payload["layer_raw_data"]
+    assert "get_ndx_pe_and_earnings_yield" not in payload["layer_raw_data"]
+    assert set(payload["manual_overrides"]["metrics"].keys()) == {"get_fed_funds_rate"}
+    assert "event_refs" not in payload
+    assert "candidate_cross_layer_links" not in payload
+    assert "get_ndx_pe_and_earnings_yield" not in json.dumps(payload, ensure_ascii=False)
+    assert payload["runtime_boundary_policy_id"] == "layer_runtime_input_policy_v1"
+    assert "forbidden_runtime_inputs" not in json.dumps(payload, ensure_ascii=False)
+
+    policy = orchestrator._build_layer_input_policy("L1")
+    assert policy["schema_version"] == "layer_runtime_input_policy_v1"
+    assert "candidate_cross_layer_links" in policy["forbidden_runtime_inputs"]
+    assert "event_refs" in policy["forbidden_runtime_inputs"]
+    assert "bridge_memos" in policy["forbidden_runtime_inputs"]
+    assert "final_adjudication" in policy["forbidden_runtime_inputs"]
+    assert "investigation_reports" in policy["forbidden_runtime_inputs"]
+    assert "must not rewrite or be injected into L1-L5" in policy["no_backflow_rule"]
+    assert "must not become L1-L5 evidence_ref" in policy["event_evidence_rule"]
+    sanitized = orchestrator._sanitize_prompt_payload("l1_analyst", payload)
+    assert "runtime_boundary_policy_id" not in sanitized
+
+
+def test_thesis_prompt_receives_slim_object_run_gate(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    payload = {
+        "synthesis_packet": {
+            "packet_meta": {
+                "data_date": "2026-04-24",
+                "object_run_gate": {
+                    "schema_version": "object_run_gate_v1",
+                    "primary_object": "NDX",
+                    "tradable_proxy": "QQQ",
+                    "equal_weight_references": ["NDXE", "QEW"],
+                    "date_boundary": "2026-04-24",
+                    "methodology_boundary": "LONG_METHOD_BOUNDARY_SENTINEL",
+                    "data_boundary": "LONG_DATA_BOUNDARY_SENTINEL",
+                    "evidence_boundary": "LONG_EVIDENCE_BOUNDARY_SENTINEL",
+                },
+            }
+        }
+    }
+
+    sanitized = orchestrator._sanitize_prompt_payload("thesis", payload)
+    object_gate = sanitized["synthesis_packet"]["packet_meta"]["object_run_gate"]
+
+    assert object_gate["primary_object"] == "NDX"
+    assert object_gate["tradable_proxy"] == "QQQ"
+    assert "prompt_note" in object_gate
+    assert "methodology_boundary" not in object_gate
+    assert "LONG_METHOD_BOUNDARY_SENTINEL" not in json.dumps(sanitized, ensure_ascii=False)
 
 
 def _indicator_analysis(function_id: str, metric: str, reading: str, narrative: str):
@@ -438,14 +576,85 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
         output_dir=str(tmp_path),
         llm_engine=FakeLLMEngine(responses),
     )
+    (tmp_path / "cross_layer_questions.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "cross_layer_questions_v1",
+                "questions": [
+                    {
+                        "question_id": "question:event_to_data:rates",
+                        "direction": "event_to_data",
+                        "question": "利率事件压力是否已被实际利率、VXN 或信用利差确认？",
+                        "why_it_matters": "新闻事件只能提出线索，需要数据层确认。",
+                        "requested_checks": ["实际利率", "VXN", "信用利差"],
+                        "status": "open",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "event_layer_summary.json").write_text(
+        json.dumps({"schema_version": "event_layer_summary_v1", "most_important_events": [{"event_cluster_id": "event_cluster:rates"}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
     result = orchestrator.run(_mock_packet())
 
     assert result["final_adjudication"].final_stance == "中性偏谨慎"
     assert result["schema_guard_report"].passed is True
+    assert len(result["bridge_memos"]) == 2
     assert "L1.get_fed_funds_rate" in result["synthesis_packet"].evidence_index
     assert (tmp_path / "final_adjudication.json").exists()
     assert (tmp_path / "run_review_report.json").exists()
+    assert (tmp_path / "bridge_memos" / "bridge_v2.json").exists()
+    assert (tmp_path / "counter_thesis.json").exists()
+    assert (tmp_path / "hypothesis_competition.json").exists()
+    assert (tmp_path / "adjudication_history.json").exists()
+    boundary_manifest = json.loads((tmp_path / "runtime_boundary_manifest.json").read_text(encoding="utf-8"))
+    assert boundary_manifest["schema_version"] == "runtime_boundary_manifest_v1"
+    assert "investigation_reports" in boundary_manifest["layer_input_policies"]["L1"]["forbidden_runtime_inputs"]
+    assert "not injected into L1-L5 prompts" in boundary_manifest["purpose"]
+    feedback_manifest = json.loads((tmp_path / "feedback_contract_manifest.json").read_text(encoding="utf-8"))
+    assert feedback_manifest["schema_version"] == "feedback_contract_manifest_v1"
+    assert feedback_manifest["message_contract"]["message_types"] == [
+        "observation_inquiry",
+        "event_challenge",
+        "adjudication_gap",
+        "evidence_upgrade_request",
+    ]
+    assert "source_authority" in feedback_manifest["investigation_report_contract"]["minimal_evidence_fields"]
+    router_output = json.loads((tmp_path / "inquiry_router_output.json").read_text(encoding="utf-8"))
+    assert router_output["schema_version"] == "inquiry_router_output_v1"
+    assert len(router_output["agent_specs"]) <= 3
+    message_types = {item["message_type"] for item in router_output["input_messages"]}
+    assert {"adjudication_gap", "event_challenge", "observation_inquiry"}.issubset(message_types)
+    assert all(spec["budget"]["max_tool_calls"] <= 1 for spec in router_output["agent_specs"])
+    investigation_paths = sorted((tmp_path / "investigation_reports").glob("*.json"))
+    assert investigation_paths
+    investigation = json.loads(investigation_paths[0].read_text(encoding="utf-8"))
+    assert "source_authority" in investigation
+    assert investigation["limits"]
+    bridge_v2 = json.loads((tmp_path / "bridge_memos" / "bridge_v2.json").read_text(encoding="utf-8"))
+    assert bridge_v2["bridge_type"] == "feedback_bridge_v2"
+    assert bridge_v2["feedback_loop_summary"]["no_backflow_verified"] is True
+    assert bridge_v2["feedback_loop_summary"]["investigation_report_refs"]
+    assert bridge_v2["investigation_effects"]
+    counter_thesis = json.loads((tmp_path / "counter_thesis.json").read_text(encoding="utf-8"))
+    assert "thesis_draft.json" in counter_thesis["forbidden_context_refs"]
+    assert counter_thesis["prompt_input_audit"]["thesis_read"] is False
+    assert counter_thesis["prompt_input_audit"]["thesis_exists_at_generation"] is False
+    competition = json.loads((tmp_path / "hypothesis_competition.json").read_text(encoding="utf-8"))
+    assert competition["schema_version"] == "hypothesis_competition_v1"
+    assert len(competition["hypotheses"]) >= 2
+    assert "thesis_draft.json" in competition["forbidden_context_refs"]
+    assert competition["downgrade_or_split_events"]
+    synthesis_packet = json.loads((tmp_path / "synthesis_packet.json").read_text(encoding="utf-8"))
+    assert synthesis_packet["hypothesis_competition_summary"]["hypothesis_count"] >= 2
+    assert len(synthesis_packet["competing_hypotheses"]) >= 2
     review = json.loads((tmp_path / "run_review_report.json").read_text(encoding="utf-8"))
+    assert any(item["category"] == "feedback" for item in review["attribution_findings"])
+    assert any(item["category"] == "competition" for item in review["attribution_findings"])
     assert any(item["category"] == "bridge" for item in review["attribution_findings"])
     assert (tmp_path / "synthesis_packet.json").exists()
     assert (tmp_path / "layer_cards" / "L1.json").exists()
@@ -1522,3 +1731,132 @@ def test_thesis_string_lists_are_normalized_to_structured_views(tmp_path: Path):
     assert normalized["portfolio_actions"][1]["action"] == "战术仓分批"
     assert normalized["reader_conclusion"]["time_horizon_summary"][0]["view"] == "短期别追涨"
     assert normalized["reader_conclusion"]["action_summary"][0]["action"] == "核心仓不砍"
+
+
+def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    packet = _mock_packet()
+    synthesis_packet = SynthesisPacket(
+        packet_meta=packet.meta,
+        evidence_index={
+            "L1.get_fed_funds_rate": {
+                "layer": "L1",
+                "function_id": "get_fed_funds_rate",
+                "metric": "Fed Funds Rate",
+                "canonical_question": "利率是否形成估值压力？",
+                "misread_guards": ["不能证明估值便宜"],
+                "permission_type": "fact",
+            },
+            "L4.get_ndx_pe_and_earnings_yield": {
+                "layer": "L4",
+                "function_id": "get_ndx_pe_and_earnings_yield",
+                "metric": "NDX Valuation",
+                "canonical_question": "估值是否昂贵？",
+                "misread_guards": ["不能证明短线买点"],
+                "permission_type": "fact",
+            },
+        },
+        high_severity_typed_conflicts=[
+            TypedConflict(
+                conflict_id="rates_vs_valuation",
+                conflict_type="rates_vs_valuation",
+                severity="high",
+                description="利率压力与高估值冲突。",
+                implication="强结论必须保留风险边界。",
+                involved_layers=["L1", "L4"],
+                evidence_refs=["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
+                falsifiers=["利率快速下行且盈利上修。"],
+            )
+        ],
+    )
+    investigation = InvestigationReport(
+        originating_agent_id="agent_gap",
+        finding="价格反映程度仍不能高置信确认。",
+        evidence_refs=["L1.get_fed_funds_rate"],
+        counter_evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+        claims_supported=["保留估值和利率张力"],
+        claims_challenged=["强单一路径裁决"],
+        cannot_establish=["不能证明压力已经完全反映"],
+        confidence=Confidence.MEDIUM,
+        limits=["no_backflow_to_l1_l5"],
+        effective_date="2026-04-24",
+    )
+    competition = HypothesisCompetition(
+        hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_base",
+                hypothesis_text="主线解释：利率压力压制估值。",
+                support_evidence_refs=["L1.get_fed_funds_rate"],
+                counter_evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+                diagnostic_evidence_refs=["L1.get_fed_funds_rate"],
+                cannot_explain=["趋势仍强。"],
+                falsification_conditions=["利率快速下行。"],
+            )
+        ]
+    )
+
+    registry = orchestrator._build_evidence_registry(
+        packet_model=packet,
+        synthesis_packet=synthesis_packet,
+        investigation_reports=[investigation],
+        hypothesis_competition=competition,
+    )
+    synthesis_packet.competing_hypotheses = competition.hypotheses
+    thesis = ThesisDraft(
+        environment_assessment="利率仍有压力。",
+        valuation_assessment="估值不便宜。",
+        timing_assessment="趋势仍需观察。",
+        main_thesis="NDX 仍处在利率压力与高估值拉扯中。",
+        key_support_chains=[
+            KeySupportChain(
+                chain_description="利率压力约束估值。",
+                evidence_refs=["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
+                weight=0.7,
+            )
+        ],
+        priced_narrative="市场可能部分反映利率压力，但仍不清楚。",
+        payoff_assessment="赔率需要降级看待。",
+        invalidation_conditions=["利率快速下行且盈利上修。"],
+        overall_confidence=Confidence.MEDIUM,
+    )
+    final = FinalAdjudication(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="中性偏谨慎，保留利率与估值张力。",
+        confidence=Confidence.MEDIUM,
+        key_support_chains=thesis.key_support_chains,
+        must_preserve_risks=["估值压力仍未解除。"],
+        blocking_issues=[],
+        evidence_refs=["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
+        adjudicator_notes="Final 保留主要反证和失效条件。",
+        reader_final=ReaderFinal(
+            one_liner="NDX 不是无条件看多，仍要看利率和盈利是否配合。",
+            three_reasons=["利率仍有压力", "估值不便宜", "反证未消失"],
+            invalidation_summary=["利率快速下行且盈利上修。"],
+            evidence_refs=["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
+        ),
+        invalidation_conditions=["利率快速下行且盈利上修。"],
+    )
+
+    ledger = orchestrator._build_final_claim_ledger(
+        synthesis_packet=synthesis_packet,
+        thesis=thesis,
+        final_adjudication=final,
+        evidence_registry=registry,
+        effective_date="2026-04-24",
+    )
+    updated_registry = orchestrator._attach_claims_to_evidence_registry(registry, ledger)
+
+    assert isinstance(registry, EvidenceRegistry)
+    assert "L1.get_fed_funds_rate" in registry.passports
+    assert "investigation_reports/" + investigation.investigation_id + ".json" in registry.passports
+    assert "hyp_base" in registry.passports
+    assert isinstance(ledger, ClaimLedger)
+    assert ledger.entries
+    assert all(entry.evidence_refs for entry in ledger.entries)
+    assert all(entry.counter_evidence_refs for entry in ledger.entries)
+    assert all(entry.falsification_conditions for entry in ledger.entries)
+    assert updated_registry.passports["L1.get_fed_funds_rate"].linked_claim_ids

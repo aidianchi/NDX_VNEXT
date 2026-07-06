@@ -92,6 +92,12 @@ def test_packet_builder_groups_data_and_generates_candidate_links():
     packet = builder.build(_mock_data_json(), manual_overrides={"active": False, "metrics": {}})
 
     assert packet.meta["indicator_total"] == 9
+    assert packet.meta["object_run_gate"]["primary_object"] == "NDX"
+    assert packet.meta["object_run_gate"]["tradable_proxy"] == "QQQ"
+    assert packet.meta["object_run_gate"]["date_boundary"] == "2026-04-24"
+    assert "NDXE" in packet.meta["object_run_gate"]["equal_weight_references"]
+    assert "evidence_ref" in packet.meta["object_run_gate"]["evidence_boundary"]
+    assert packet.context["object_run_gate"]["methodology_boundary"] == packet.meta["object_run_gate"]["methodology_boundary"]
     assert packet.facts_by_layer["L1"].state == "restrictive"
     assert packet.facts_by_layer["L4"].state == "expensive"
     assert packet.facts_by_layer["L5"].state == "strong_uptrend"

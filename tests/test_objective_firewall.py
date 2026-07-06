@@ -102,6 +102,84 @@ def test_synthesis_packet_includes_objective_firewall_summary(tmp_path: Path):
     assert any("real_rate_vs_valuation" in item for item in firewall.unresolved_tensions)
 
 
+def test_objective_firewall_flags_indicator_authority_overreach(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+    packet = AnalysisPacket(
+        meta={"data_date": "2026-04-24"},
+        raw_data={
+            "L1": {"get_10y_breakeven": {"value": {"level": 2.4}}},
+            "L2": {"get_vix": {"value": {"level": 18.0}}},
+            "L3": {"get_ndx_ndxe_ratio": {"value": {"level": 2.9}}},
+            "L4": {"get_ndx_pe_and_earnings_yield": {"value": {"PE_TTM": 32.5}}},
+            "L5": {"get_rsi_qqq": {"value": {"level": 31.0}}},
+        },
+    )
+    context = ContextBrief(data_summary="data", task_description="task")
+    layer_cards = [
+        LayerCard(
+            layer="L1",
+            core_facts=[CoreFact(metric="breakeven", value=2.4)],
+            local_conclusion="L1 proxy overreach.",
+            confidence=Confidence.MEDIUM,
+            indicator_analyses=[
+                IndicatorAnalysis(
+                    function_id="get_10y_breakeven",
+                    metric="10Y Breakeven",
+                    narrative="盈亏平衡通胀是官方事实，证明真实通胀状态已经确定。",
+                    reasoning_process="把代理指标当成官方事实。",
+                    evidence_refs=["L1.get_10y_breakeven"],
+                    permission_type="proxy",
+                    canonical_question="市场大致在定价什么通胀补偿？",
+                    misread_guards=["不能当 CPI 官方事实。"],
+                    cross_validation_targets=["get_10y_real_rate"],
+                    falsifiers=["油价和美元不支持通胀补偿上行。"],
+                    core_vs_tactical_boundary="代理型背景指标。",
+                )
+            ],
+        ),
+        _empty_layer_card("L2"),
+        _empty_layer_card("L3"),
+        _empty_layer_card("L4"),
+        LayerCard(
+            layer="L5",
+            core_facts=[CoreFact(metric="rsi", value=31.0)],
+            local_conclusion="L5 technical overreach.",
+            confidence=Confidence.MEDIUM,
+            indicator_analyses=[
+                IndicatorAnalysis(
+                    function_id="get_rsi_qqq",
+                    metric="RSI",
+                    narrative="RSI 超卖证明 NDX 估值便宜，可以大买。",
+                    reasoning_process="技术指标证明估值便宜。",
+                    evidence_refs=["L5.get_rsi_qqq"],
+                    permission_type="technical",
+                    canonical_question="短期动量过热还是过冷？",
+                    misread_guards=["不能用 RSI 证明估值便宜。"],
+                    cross_validation_targets=["get_qqq_technical_indicators"],
+                    falsifiers=["价格继续创新高且广度同步改善。"],
+                    core_vs_tactical_boundary="技术执行指标。",
+                )
+            ],
+        ),
+    ]
+    bridge = BridgeMemo(
+        bridge_type="authority_check",
+        layers_connected=["L1", "L5"],
+        implication_for_ndx="authority check",
+    )
+
+    synthesis = orchestrator._build_synthesis_packet(packet, context, layer_cards, [bridge])
+    firewall = synthesis.objective_firewall_summary
+
+    assert firewall.authority_clear is False
+    assert any("get_10y_breakeven" in warning and "proxy_marked_as_official_fact" in warning for warning in firewall.warnings)
+    assert any("get_rsi_qqq" in warning and "technical_indicator_claims_valuation" in warning for warning in firewall.warnings)
+
+
 def test_object_clear_false_when_insufficient_layers(tmp_path: Path):
     """F3: object_clear must be False when raw_data has fewer than 3 layers."""
     orchestrator = VNextOrchestrator(
