@@ -32,10 +32,13 @@ except ImportError:
 
 from io import BytesIO, StringIO
 import json
+import queue
 import re
 import subprocess
+import threading
+import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 from zipfile import ZipFile
 from xml.etree import ElementTree as ET
 
@@ -132,6 +135,13 @@ SEC_L4_METRIC_ALIASES = {
     "liabilities": ["Liabilities"],
 }
 SEC_HEADERS = {"User-Agent": "ndx-vnext/1.0 research contact@example.com"}
+SEC_REQUEST_TIMEOUT = (4, 6)
+SEC_CIK_MAP_WAIT_SECONDS = 6
+SEC_COMPANY_FACTS_WAIT_SECONDS = 6
+SEC_OFFICIAL_CHECK_TOTAL_BUDGET_SECONDS = 20
+YFINANCE_INFO_WAIT_SECONDS = 6
+YAHOO_QUOTE_SUMMARY_WAIT_SECONDS = 6
+L4_COMPONENT_LIVE_SOURCE_TOTAL_BUDGET_SECONDS = 60
 
 
 def _utc_timestamp() -> str:
@@ -1615,10 +1625,50 @@ def _component_row_from_yfinance(ticker: str, info: Dict[str, Any]) -> Dict[str,
     }
 
 
+def _run_l4_best_effort(
+    label: str,
+    *,
+    wait_seconds: int,
+    fn: Callable[[], Any],
+) -> Tuple[Optional[Any], Optional[str]]:
+    result_queue: "queue.Queue[Tuple[Optional[Any], Optional[str]]]" = queue.Queue(maxsize=1)
+
+    def worker() -> None:
+        try:
+            result_queue.put((fn(), None))
+        except Exception as exc:
+            result_queue.put((None, str(exc)[:160]))
+
+    thread = threading.Thread(target=worker, daemon=True, name=f"l4-best-effort-{label}")
+    thread.start()
+    try:
+        return result_queue.get(timeout=wait_seconds)
+    except queue.Empty:
+        return None, f"{label}_timeout_after_{wait_seconds}s"
+
+
+def _fetch_yfinance_info_best_effort(ticker: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    info, error = _run_l4_best_effort(
+        "yfinance_info",
+        wait_seconds=YFINANCE_INFO_WAIT_SECONDS,
+        fn=lambda: get_yf_ticker_info_with_retry(ticker, attempts=2, pause_seconds=0.5),
+    )
+    if isinstance(info, dict):
+        return info, None
+    return {}, error or "empty_info"
+
+
 def _fetch_yahoo_quote_summary_direct(symbol: str) -> Tuple[Dict[str, Any], Optional[str]]:
     """Direct Yahoo quoteSummary fetch; used as a parallel check, not a blind replacement."""
     try:
-        session = _get_yahoo_quote_summary_session()
+        session_obj, session_error = _run_l4_best_effort(
+            "yahoo_quote_summary_session",
+            wait_seconds=YAHOO_QUOTE_SUMMARY_WAIT_SECONDS,
+            fn=_get_yahoo_quote_summary_session,
+        )
+        if session_error or session_obj is None:
+            return {}, session_error or "missing_session"
+        session = session_obj
         modules = [
             "financialData",
             "defaultKeyStatistics",
@@ -1626,12 +1676,18 @@ def _fetch_yahoo_quote_summary_direct(symbol: str) -> Tuple[Dict[str, Any], Opti
             "earningsTrend",
             "recommendationTrend",
         ]
-        response = session.get(
-            f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}",
-            params={"modules": ",".join(modules), "crumb": getattr(session, "_crumb", "")},
-            timeout=15,
-            proxies=get_requests_proxies(),
+        response, request_error = _run_l4_best_effort(
+            "yahoo_quote_summary",
+            wait_seconds=YAHOO_QUOTE_SUMMARY_WAIT_SECONDS,
+            fn=lambda: session.get(
+                f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}",
+                params={"modules": ",".join(modules), "crumb": getattr(session, "_crumb", "")},
+                timeout=(4, 6),
+                proxies=get_requests_proxies(),
+            ),
         )
+        if request_error or response is None:
+            return {}, request_error or "missing_response"
         response.raise_for_status()
         result = response.json().get("quoteSummary", {}).get("result", [{}])
         return (result[0] if result else {}), None
@@ -1820,28 +1876,106 @@ def _merge_component_source_rows(
     return merged
 
 
+def _sec_request_get_best_effort(
+    url: str,
+    *,
+    wait_seconds: int,
+) -> Tuple[Optional[Any], Optional[str]]:
+    result_queue: "queue.Queue[Tuple[Optional[Any], Optional[str]]]" = queue.Queue(maxsize=1)
+
+    def worker() -> None:
+        try:
+            response = requests.get(
+                url,
+                headers=SEC_HEADERS,
+                timeout=SEC_REQUEST_TIMEOUT,
+                proxies=get_requests_proxies(),
+            )
+            result_queue.put((response, None))
+        except Exception as exc:
+            result_queue.put((None, str(exc)[:160]))
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    try:
+        return result_queue.get(timeout=wait_seconds)
+    except queue.Empty:
+        return None, f"sec_request_timeout_after_{wait_seconds}s"
+
+
+def _sec_cik_map_cache_path() -> Path:
+    cache_dir = Path(path_config.cache_dir) / "sec"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / "company_tickers_map.json"
+
+
+def _parse_sec_cik_mapping(payload: Any) -> Dict[str, str]:
+    if not isinstance(payload, dict):
+        return {}
+    mapping: Dict[str, str] = {}
+    for key, item in payload.items():
+        if isinstance(item, dict):
+            ticker = item.get("ticker") or key
+            cik_value = item.get("cik_str") or item.get("cik")
+        else:
+            ticker = key
+            cik_value = item
+        if ticker and cik_value is not None:
+            mapping[str(ticker).upper()] = str(cik_value).zfill(10)
+    return mapping
+
+
+def _load_sec_cik_map_cache() -> Optional[Dict[str, str]]:
+    path = _sec_cik_map_cache_path()
+    if not path.exists():
+        return None
+    try:
+        mapping = _parse_sec_cik_mapping(json.loads(path.read_text(encoding="utf-8")))
+    except Exception:
+        return None
+    return mapping or None
+
+
+def _write_sec_cik_map_cache(mapping: Dict[str, str]) -> None:
+    if not mapping:
+        return
+    try:
+        _sec_cik_map_cache_path().write_text(
+            json.dumps(mapping, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        return
+
+
 def _sec_cik_map() -> Dict[str, str]:
     cache_key = "_l4_sec_cik_map"
     cached = getattr(_sec_cik_map, cache_key, None)
     if isinstance(cached, dict):
         return cached
+    cached_mapping = _load_sec_cik_map_cache()
+    if isinstance(cached_mapping, dict):
+        setattr(_sec_cik_map, cache_key, cached_mapping)
+        setattr(_sec_cik_map, "_l4_sec_cik_map_error", "")
+        return cached_mapping
     try:
-        response = requests.get(
+        response, request_error = _sec_request_get_best_effort(
             "https://www.sec.gov/files/company_tickers.json",
-            headers=SEC_HEADERS,
-            timeout=15,
-            proxies=get_requests_proxies(),
+            wait_seconds=SEC_CIK_MAP_WAIT_SECONDS,
         )
+        if request_error or response is None:
+            setattr(_sec_cik_map, "_l4_sec_cik_map_error", request_error or "missing_response")
+            setattr(_sec_cik_map, cache_key, {})
+            return {}
         response.raise_for_status()
-        payload = response.json()
-        mapping = {
-            str(item.get("ticker")).upper(): str(item.get("cik_str")).zfill(10)
-            for item in payload.values()
-            if isinstance(item, dict) and item.get("ticker") and item.get("cik_str") is not None
-        }
+        mapping = _parse_sec_cik_mapping(response.json())
         setattr(_sec_cik_map, cache_key, mapping)
+        setattr(_sec_cik_map, "_l4_sec_cik_map_error", "")
+        _write_sec_cik_map_cache(mapping)
         return mapping
-    except Exception:
+    except Exception as exc:
+        setattr(_sec_cik_map, "_l4_sec_cik_map_error", str(exc)[:160])
+        setattr(_sec_cik_map, cache_key, {})
         return {}
 
 
@@ -1865,14 +1999,15 @@ def _latest_sec_fact_before(units: Dict[str, Any], *, end_date: Optional[str]) -
 def _fetch_sec_xbrl_summary(ticker: str, *, end_date: Optional[str] = None) -> Tuple[Dict[str, Any], Optional[str]]:
     cik = _sec_cik_map().get(ticker.upper())
     if not cik:
-        return {}, "missing_cik"
+        cik_error = getattr(_sec_cik_map, "_l4_sec_cik_map_error", "")
+        return {}, cik_error or "missing_cik"
     try:
-        response = requests.get(
+        response, request_error = _sec_request_get_best_effort(
             f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
-            headers=SEC_HEADERS,
-            timeout=15,
-            proxies=get_requests_proxies(),
+            wait_seconds=SEC_COMPANY_FACTS_WAIT_SECONDS,
         )
+        if request_error or response is None:
+            return {}, request_error or "missing_response"
         response.raise_for_status()
         facts = response.json().get("facts", {}).get("us-gaap", {})
         summary: Dict[str, Any] = {"cik": cik, "facts": {}}
@@ -2043,7 +2178,9 @@ def _enrich_component_rows_with_official_checks(
     if "eastmoney" not in enriched.columns:
         enriched["eastmoney"] = None
     audit_tickers = _select_audit_tickers(enriched)
+    sec_started_at = time.monotonic()
     sec_available = 0
+    sec_skipped = 0
     eastmoney_available = 0
     sec_errors: Dict[str, str] = {}
     eastmoney_errors: Dict[str, str] = {}
@@ -2053,12 +2190,16 @@ def _enrich_component_rows_with_official_checks(
         if row_idx.empty:
             continue
         idx = row_idx[0]
-        sec_summary, sec_error = _fetch_sec_xbrl_summary(ticker, end_date=end_date)
-        if sec_summary:
-            sec_available += 1
-            enriched.at[idx, "sec_xbrl"] = dict(sec_summary)
-        elif sec_error:
-            sec_errors[ticker] = sec_error
+        if time.monotonic() - sec_started_at >= SEC_OFFICIAL_CHECK_TOTAL_BUDGET_SECONDS:
+            sec_skipped += 1
+            sec_errors[ticker] = "sec_official_check_total_budget_exhausted"
+        else:
+            sec_summary, sec_error = _fetch_sec_xbrl_summary(ticker, end_date=end_date)
+            if sec_summary:
+                sec_available += 1
+                enriched.at[idx, "sec_xbrl"] = dict(sec_summary)
+            elif sec_error:
+                sec_errors[ticker] = sec_error
 
         if include_current_web_checks:
             eastmoney_summary, eastmoney_error = _fetch_eastmoney_gmain_indicator(f"{ticker}.O")
@@ -2072,10 +2213,13 @@ def _enrich_component_rows_with_official_checks(
         "sec_xbrl": {
             "checked": len(audit_tickers),
             "available": sec_available,
+            "skipped": sec_skipped,
             "scope": "M7 plus top market-cap NDX constituents",
-            "role": "official_disclosed_financial_facts_primary",
+            "role": "official_cross_check_for_component_model",
             "allowed_claims": "official disclosed facts only; not a standalone valuation-cheapness signal",
             "errors": dict(list(sec_errors.items())[:10]),
+            "total_budget_seconds": SEC_OFFICIAL_CHECK_TOTAL_BUDGET_SECONDS,
+            "degraded": bool(sec_errors),
             "historical_filter": "filed_date <= effective_date" if end_date else "latest filed facts",
         },
         "eastmoney": {
@@ -2143,9 +2287,10 @@ def get_ndx_component_fundamentals_snapshot(end_date: str = None) -> Tuple[pd.Da
     source_disagreements: List[Dict[str, Any]] = []
     source_switches: List[Dict[str, Any]] = []
     source_counts = {
-        "yfinance": {"attempted": 0, "available": 0},
-        "yahoo_quote_summary": {"attempted": 0, "available": 0},
+        "yfinance": {"attempted": 0, "available": 0, "skipped": 0},
+        "yahoo_quote_summary": {"attempted": 0, "available": 0, "skipped": 0},
     }
+    live_source_started_at = time.monotonic()
 
     print(f"开始获取 {len(ndx100_components)} 支NDX100成分股多源L4快照...")
     for i, original_ticker in enumerate(ndx100_components):
@@ -2158,32 +2303,43 @@ def get_ndx_component_fundamentals_snapshot(end_date: str = None) -> Tuple[pd.Da
         yahoo_row: Dict[str, Any] = {}
 
         if not end_date and YF_AVAILABLE:
-            source_counts["yfinance"]["attempted"] += 1
-            try:
-                info = get_yf_ticker_info_with_retry(ticker, attempts=2, pause_seconds=0.5)
+            if time.monotonic() - live_source_started_at >= L4_COMPONENT_LIVE_SOURCE_TOTAL_BUDGET_SECONDS:
+                source_counts["yfinance"]["skipped"] += 1
+                source_errors["yfinance"] = "l4_component_live_source_total_budget_exhausted"
+            else:
+                source_counts["yfinance"]["attempted"] += 1
+                info, info_error = _fetch_yfinance_info_best_effort(ticker)
                 if (not info or not info.get("marketCap")) and ticker in TICKER_REPLACEMENTS and TICKER_REPLACEMENTS[ticker]:
-                    ticker = TICKER_REPLACEMENTS[ticker]
-                    info = get_yf_ticker_info_with_retry(ticker, attempts=2, pause_seconds=0.5)
+                    replacement_ticker = TICKER_REPLACEMENTS[ticker]
+                    replacement_info, replacement_error = _fetch_yfinance_info_best_effort(replacement_ticker)
+                    if replacement_info:
+                        ticker = replacement_ticker
+                        info = replacement_info
+                        info_error = None
+                    elif replacement_error:
+                        info_error = replacement_error
                 if info:
                     yfinance_row = _component_row_from_yfinance(ticker, info)
                     if yfinance_row.get("market_cap"):
                         source_counts["yfinance"]["available"] += 1
                 else:
-                    source_errors["yfinance"] = "empty_info"
-            except Exception as exc:
-                source_errors["yfinance"] = str(exc)[:160]
+                    source_errors["yfinance"] = info_error or "empty_info"
         elif end_date:
             source_errors["yfinance"] = "backtest_skipped_latest_only_source"
 
         if not end_date:
-            source_counts["yahoo_quote_summary"]["attempted"] += 1
-            yahoo_payload, yahoo_error = _fetch_yahoo_quote_summary_direct(ticker)
-            if yahoo_payload:
-                yahoo_row = _component_row_from_yahoo_quote_summary(ticker, yahoo_payload)
-                if yahoo_row.get("market_cap"):
-                    source_counts["yahoo_quote_summary"]["available"] += 1
-            elif yahoo_error:
-                source_errors["yahoo_quote_summary"] = yahoo_error
+            if time.monotonic() - live_source_started_at >= L4_COMPONENT_LIVE_SOURCE_TOTAL_BUDGET_SECONDS:
+                source_counts["yahoo_quote_summary"]["skipped"] += 1
+                source_errors["yahoo_quote_summary"] = "l4_component_live_source_total_budget_exhausted"
+            else:
+                source_counts["yahoo_quote_summary"]["attempted"] += 1
+                yahoo_payload, yahoo_error = _fetch_yahoo_quote_summary_direct(ticker)
+                if yahoo_payload:
+                    yahoo_row = _component_row_from_yahoo_quote_summary(ticker, yahoo_payload)
+                    if yahoo_row.get("market_cap"):
+                        source_counts["yahoo_quote_summary"]["available"] += 1
+                elif yahoo_error:
+                    source_errors["yahoo_quote_summary"] = yahoo_error
         else:
             source_errors["yahoo_quote_summary"] = "backtest_skipped_latest_only_source"
 
@@ -2244,6 +2400,7 @@ def get_ndx_component_fundamentals_snapshot(end_date: str = None) -> Tuple[pd.Da
         "primary_source": "field_policy",
         "primary_source_by_field": dict(L4_COMPONENT_FIELD_SOURCE_POLICY),
         "candidate_sources": ["yahoo_quote_summary", "sec_xbrl", "eastmoney"],
+        "live_source_total_budget_seconds": L4_COMPONENT_LIVE_SOURCE_TOTAL_BUDGET_SECONDS,
         "component_conflict_gate": component_conflict_gate,
         "sec_official_facts": sec_official_facts,
         "data_date": effective_date.strftime("%Y-%m-%d"),
@@ -3816,13 +3973,22 @@ def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:
         treasury_data = {"value": None}
     else:
         treasury_data = get_10y_treasury(end_date=date_str)
-    treasury_yield = treasury_data.get("value", {}).get("level")
+    treasury_value = treasury_data.get("value") if isinstance(treasury_data, dict) else None
+    treasury_yield = treasury_value.get("level") if isinstance(treasury_value, dict) else None
     if treasury_yield is None:
+        treasury_reason = (
+            treasury_data.get("unavailable_reason")
+            or treasury_data.get("error")
+            or treasury_data.get("notes")
+            if isinstance(treasury_data, dict)
+            else None
+        )
         return {
             "name": "NDX Simple Yield Gap",
             "value": None,
             "source_tier": SOURCE_TIER_UNAVAILABLE,
-            "notes": "无法获取10年期美债收益率（无风险利率）"
+            "notes": "无法获取10年期美债收益率（无风险利率）",
+            "unavailable_reason": treasury_reason or "missing_10y_treasury_level",
         }
 
     gap = round(yield_to_use - treasury_yield, 2)

@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 import pandas as pd
 
@@ -354,6 +355,29 @@ def test_realtime_equity_risk_premium_keeps_valuation_in_realtime_mode(monkeypat
     assert result["value"]["level"] == -0.6
 
 
+def test_equity_risk_premium_handles_missing_treasury_value(monkeypatch):
+    monkeypatch.setattr(
+        tools_L4,
+        "get_ndx_pe_and_earnings_yield",
+        lambda end_date=None: {
+            "value": {"EarningsYield": 3.0},
+            "source_tier": tools_L4.SOURCE_TIER_COMPONENT_MODEL,
+            "data_quality": {"coverage": {}, "anomalies": [], "source_disagreement": {}},
+        },
+    )
+    monkeypatch.setattr(
+        tools_L4,
+        "get_10y_treasury",
+        lambda end_date=None: {"value": None, "unavailable_reason": "fred_missing"},
+    )
+
+    result = tools_L4.get_equity_risk_premium()
+
+    assert result["value"] is None
+    assert result["source_tier"] == tools_L4.SOURCE_TIER_UNAVAILABLE
+    assert result["unavailable_reason"] == "fred_missing"
+
+
 def test_simple_yield_gap_uses_earnings_yield_when_fcf_lacks_core_authority(monkeypatch):
     def fake_valuation(end_date=None):
         return {
@@ -516,3 +540,85 @@ def test_sec_xbrl_summary_filters_by_filed_date(monkeypatch):
     assert summary["facts"]["revenue"]["source_accession"] == "0000000001-25-000001"
     assert summary["diluted_eps"] == 1.2
     assert summary["facts"]["net_income"]["availability"] == "unavailable"
+
+
+def test_sec_cik_map_uses_disk_cache_without_network(tmp_path, monkeypatch):
+    cache_dir = tmp_path / "cache"
+    sec_dir = cache_dir / "sec"
+    sec_dir.mkdir(parents=True)
+    (sec_dir / "company_tickers_map.json").write_text(
+        json.dumps({"AAA": "0000000001"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tools_L4.path_config, "cache_dir", str(cache_dir))
+    monkeypatch.delattr(tools_L4._sec_cik_map, "_l4_sec_cik_map", raising=False)
+    monkeypatch.delattr(tools_L4._sec_cik_map, "_l4_sec_cik_map_error", raising=False)
+
+    def fail_network(*args, **kwargs):
+        raise AssertionError("SEC network should not be used when CIK cache exists")
+
+    monkeypatch.setattr(tools_L4.requests, "get", fail_network)
+
+    assert tools_L4._sec_cik_map() == {"AAA": "0000000001"}
+
+
+def test_official_sec_checks_degrade_without_blocking_main_component_rows(monkeypatch):
+    df = pd.DataFrame(
+        [
+            {"ticker": "AAA", "market_cap": 100.0},
+            {"ticker": "BBB", "market_cap": 90.0},
+        ]
+    )
+    monotonic_values = iter([0.0, 25.0, 26.0, 27.0])
+    monkeypatch.setattr(tools_L4.time, "monotonic", lambda: next(monotonic_values))
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("SEC fetch should be skipped after total budget is exhausted")
+
+    monkeypatch.setattr(tools_L4, "_fetch_sec_xbrl_summary", fail_if_called)
+
+    enriched, stats = tools_L4._enrich_component_rows_with_official_checks(
+        df,
+        end_date="2026-07-06",
+        include_current_web_checks=False,
+    )
+
+    assert list(enriched["ticker"]) == ["AAA", "BBB"]
+    assert stats["sec_xbrl"]["available"] == 0
+    assert stats["sec_xbrl"]["skipped"] >= 1
+    assert stats["sec_xbrl"]["degraded"] is True
+    assert "sec_official_check_total_budget_exhausted" in stats["sec_xbrl"]["errors"].values()
+
+
+def test_component_snapshot_live_sources_skip_after_total_budget(monkeypatch):
+    monotonic_values = iter([0.0, 61.0, 62.0])
+    monkeypatch.setattr(tools_L4.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(tools_L4.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tools_L4, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_L4, "get_ndx100_components", lambda end_date=None: ["AAA"])
+    monkeypatch.setattr(
+        tools_L4,
+        "_fetch_yfinance_info_best_effort",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("yfinance should be skipped")),
+    )
+    monkeypatch.setattr(
+        tools_L4,
+        "_fetch_yahoo_quote_summary_direct",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Yahoo should be skipped")),
+    )
+    monkeypatch.setattr(
+        tools_L4,
+        "_enrich_component_rows_with_official_checks",
+        lambda df, end_date=None, include_current_web_checks=True: (
+            df,
+            {"sec_xbrl": {"checked": 0, "available": 0}, "eastmoney": {"checked": 0, "available": 0}},
+        ),
+    )
+    tools_L4.reset_l4_component_snapshot_cache()
+
+    df, stats = tools_L4.get_ndx_component_fundamentals_snapshot()
+
+    assert df.empty
+    assert stats["source_counts"]["yfinance"]["skipped"] == 1
+    assert stats["source_counts"]["yahoo_quote_summary"]["skipped"] == 1
+    assert stats["live_source_total_budget_seconds"] == tools_L4.L4_COMPONENT_LIVE_SOURCE_TOTAL_BUDGET_SECONDS
