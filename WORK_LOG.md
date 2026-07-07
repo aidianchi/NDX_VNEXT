@@ -6,6 +6,13 @@
 
 ## 2026-07-07
 
+### 独立审核确认：4b2163e 批次验收通过，施工阶段收尾，进入冻结使用期
+
+- 复核 `4b2163e`（claim 级结果记分 + 谓词求值 + 阶段模型路由 + Final/Reviser 证据源头校验）：实现与指引文档规格一致；谓词缺变量保守判 insufficient_evidence 且判定轨迹全程落在 `status_evidence`；模型路由只在 available_models 内生效并写入阶段诊断；`_validate_stage_evidence_refs` 在生成时打回越界引用，与 claim 台账的事后比例降级形成两层防线。
+- 独立验证：`python -m pytest -q` 461 通过；用 `fable_counter_thesis_fix_validation_2` 的真实 claim 台账离线烟测打分器——6 条 claim 因未来窗口不存在全部如实 `not_scorable` 并写明 `future_price_windows_missing_or_incomplete`，方向识别与 source_tier 提取正常。
+- 已知 v1 简化（打分器自身已如实标注）：verdict 基于价格后续走势代理 + 文本方向启发式（`direction_method=claim_text_fallback`），不是逐条失效条件的字面求值；state_ledger 已在 payload 中预留为后续升级路径。
+- 状态判定：路线图阶段 0-5、修正一/二、治理后续项全部落地并合入 main。按停机准则，架构冻结一个季度；剩余为使用期事项：① 一次历史回测 fresh run 验收打分器真实判定；② 用户确认决策档案阈值；③ 日常 `--official` run 攒台账 ≥5 条解锁展示层。
+
 ### P0/P1/P2 收口：claim 级结果记分、谓词化条件状态、阶段模型路由与证据源头校验
 
 完成内容：
