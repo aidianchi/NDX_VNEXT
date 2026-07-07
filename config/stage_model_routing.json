@@ -1,0 +1,13 @@
+{
+  "schema_version": "stage_model_routing_v1",
+  "notes": [
+    "Only models present in the run's available_models list are used.",
+    "Cognitive adjudication stages prefer pro-grade models first, then fall back to the remaining user-provided model chain."
+  ],
+  "stage_preferences": {
+    "counter_thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
+    "thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
+    "reviser": ["deepseek-v4-pro", "deepseek-v4-flash"],
+    "final": ["deepseek-v4-pro", "deepseek-v4-flash"]
+  }
+}

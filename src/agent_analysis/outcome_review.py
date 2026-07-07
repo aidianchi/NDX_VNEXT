@@ -5,7 +5,7 @@ import json
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from .contracts import OutcomeReviewReport, OutcomeWindowPerformance, RunReviewFinding
@@ -19,6 +19,12 @@ OUTCOME_WINDOWS = [
     ("+3m", 63),
     ("+6m", 126),
     ("+12m", 252),
+]
+
+CLAIM_OUTCOME_WINDOWS = [
+    ("T+20", 20),
+    ("T+60", 60),
+    ("T+120", 120),
 ]
 
 PROMPT_ARTIFACTS = [
@@ -145,6 +151,53 @@ def _window_performance(rows: List[Dict[str, Any]], backtest_date: str) -> List[
     return outputs
 
 
+def _performance_for_days(rows: List[Dict[str, Any]], backtest_date: str, windows: List[Tuple[str, int]]) -> List[Dict[str, Any]]:
+    if not rows:
+        return [
+            {"window": label, "target_trading_days": days, "data_status": "missing"}
+            for label, days in windows
+        ]
+    start_idx = next((index for index, row in enumerate(rows) if row["date"] >= backtest_date), None)
+    if start_idx is None:
+        return [
+            {"window": label, "target_trading_days": days, "data_status": "missing"}
+            for label, days in windows
+        ]
+    start = rows[start_idx]
+    start_close = float(start["close"])
+    outputs: List[Dict[str, Any]] = []
+    for label, days in windows:
+        end_idx = start_idx + days
+        if end_idx >= len(rows):
+            outputs.append(
+                {
+                    "window": label,
+                    "target_trading_days": days,
+                    "start_date": start["date"],
+                    "start_close": round(start_close, 4),
+                    "data_status": "incomplete",
+                }
+            )
+            continue
+        end = rows[end_idx]
+        segment = rows[start_idx : end_idx + 1]
+        min_close = min(float(row["close"]) for row in segment)
+        outputs.append(
+            {
+                "window": label,
+                "target_trading_days": days,
+                "start_date": start["date"],
+                "end_date": end["date"],
+                "start_close": round(start_close, 4),
+                "end_close": round(float(end["close"]), 4),
+                "return_pct": round((float(end["close"]) / start_close - 1.0) * 100.0, 2),
+                "max_drawdown_pct": round((min_close / start_close - 1.0) * 100.0, 2),
+                "data_status": "available",
+            }
+        )
+    return outputs
+
+
 def _market_outcome_label(windows: List[OutcomeWindowPerformance]) -> str:
     returns = {item.window: item.return_pct for item in windows if item.return_pct is not None}
     drawdowns = [item.max_drawdown_pct for item in windows if item.max_drawdown_pct is not None]
@@ -163,6 +216,154 @@ def _has_cautious_language(text: str) -> bool:
 def _has_aggressive_language(text: str) -> bool:
     lowered = text.lower()
     return any(token in lowered for token in ("进攻", "满仓", "高赔率", "加大", "aggressive", "risk-on"))
+
+
+def _claim_direction(entry: Dict[str, Any]) -> Tuple[str, str]:
+    text = str(entry.get("claim_text") or "")
+    claim_type = str(entry.get("claim_type") or "")
+    lowered = text.lower()
+    bearish_tokens = (
+        "谨慎", "防守", "等待", "风险", "压力", "恶化", "破坏", "偏贵", "不便宜",
+        "下行", "卖出", "减仓", "cautious", "defensive", "sell", "risk-off",
+    )
+    bullish_tokens = (
+        "进攻", "买入", "加仓", "低估", "便宜", "安全垫", "企稳", "转强",
+        "趋势未破坏", "高赔率", "buy", "aggressive", "risk-on",
+    )
+    if any(token in lowered for token in ("sell", "risk-off")) or any(token in text for token in ("卖出", "减仓", "风险触发", "趋势破坏", "信用恶化")):
+        return "bearish_or_risk", "claim_text_fallback"
+    if any(token in lowered for token in ("buy", "risk-on", "aggressive")) or any(token in text for token in bullish_tokens):
+        return "bullish_or_constructive", "claim_text_fallback"
+    if claim_type in {"risk_boundary"} or any(token in text for token in bearish_tokens):
+        return "bearish_or_risk", "claim_text_fallback"
+    return "not_directional", "not_directional"
+
+
+def _source_tiers_for_claim(entry: Dict[str, Any], evidence_registry: Dict[str, Any]) -> List[str]:
+    passports = evidence_registry.get("passports") if isinstance(evidence_registry.get("passports"), dict) else {}
+    tiers: List[str] = []
+    for ref in entry.get("evidence_refs") or []:
+        passport = passports.get(ref)
+        if isinstance(passport, dict):
+            tier = str(passport.get("source_tier") or "unknown")
+            if tier not in tiers:
+                tiers.append(tier)
+    return tiers or ["unknown"]
+
+
+def _score_claim_against_windows(
+    entry: Dict[str, Any],
+    claim_windows: List[Dict[str, Any]],
+    evidence_registry: Dict[str, Any],
+) -> Dict[str, Any]:
+    direction, direction_method = _claim_direction(entry)
+    available = [item for item in claim_windows if item.get("data_status") == "available"]
+    score = {
+        "claim_id": str(entry.get("claim_id") or ""),
+        "claim_type": str(entry.get("claim_type") or "other"),
+        "source_stage": str(entry.get("source_stage") or ""),
+        "source_tiers": _source_tiers_for_claim(entry, evidence_registry),
+        "verdict": "not_scorable",
+        "direction": direction,
+        "direction_method": direction_method,
+        "scoring_evidence": {
+            "windows": claim_windows,
+            "thresholds": {
+                "constructive_consistent": "T+60 or T+120 return >= 5% and max drawdown above -12%",
+                "constructive_falsifier": "T+20 return <= -8%, T+60/T+120 return <= -10%, or max drawdown <= -12%",
+                "risk_consistent": "any T+20/T+60/T+120 return <= -5% or max drawdown <= -8%",
+                "risk_falsifier": "T+60 or T+120 return >= 10% and max drawdown above -8%",
+            },
+            "reason": "",
+        },
+    }
+    if not available:
+        score["scoring_evidence"]["reason"] = "future_price_windows_missing_or_incomplete"
+        return score
+    if direction == "not_directional":
+        score["scoring_evidence"]["reason"] = "claim_has_no_directional_or_risk_stance"
+        return score
+
+    returns_by_window = {item["window"]: item.get("return_pct") for item in available}
+    drawdowns = [item.get("max_drawdown_pct") for item in available if item.get("max_drawdown_pct") is not None]
+    t20_return = returns_by_window.get("T+20")
+    medium_returns = [
+        value
+        for key, value in returns_by_window.items()
+        if key in {"T+60", "T+120"} and value is not None
+    ]
+    worst_drawdown = min(drawdowns) if drawdowns else None
+
+    if direction == "bullish_or_constructive":
+        falsified = (
+            (t20_return is not None and t20_return <= -8)
+            or any(value <= -10 for value in medium_returns)
+            or (worst_drawdown is not None and worst_drawdown <= -12)
+        )
+        consistent = (
+            any(value >= 5 for value in medium_returns)
+            and (worst_drawdown is None or worst_drawdown > -12)
+        )
+    else:
+        consistent = (
+            any(value <= -5 for value in returns_by_window.values() if value is not None)
+            or (worst_drawdown is not None and worst_drawdown <= -8)
+        )
+        falsified = (
+            any(value >= 10 for value in medium_returns)
+            and (worst_drawdown is None or worst_drawdown > -8)
+        )
+
+    if falsified:
+        score["verdict"] = "falsifier_triggered"
+        score["scoring_evidence"]["reason"] = "price_follow_through_moved_against_claim_stance"
+    elif consistent:
+        score["verdict"] = "consistent"
+        score["scoring_evidence"]["reason"] = "price_follow_through_consistent_with_claim_stance"
+    else:
+        score["verdict"] = "not_scorable"
+        score["scoring_evidence"]["reason"] = "price_path_mixed_or_below_scoring_threshold"
+    return score
+
+
+def build_claim_outcome_scores(
+    *,
+    final_claim_ledger: Dict[str, Any],
+    price_rows: List[Dict[str, Any]],
+    backtest_date: str,
+    evidence_registry: Optional[Dict[str, Any]] = None,
+    state_ledger_entries: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    entries = final_claim_ledger.get("entries") if isinstance(final_claim_ledger.get("entries"), list) else []
+    claim_windows = _performance_for_days(price_rows, backtest_date, CLAIM_OUTCOME_WINDOWS)
+    evidence_registry = evidence_registry or {}
+    scores = [
+        _score_claim_against_windows(entry, claim_windows, evidence_registry)
+        for entry in entries
+        if isinstance(entry, dict)
+    ]
+    summary: Dict[str, Any] = {"by_claim_type": {}, "by_source_tier": {}}
+    for score in scores:
+        claim_type = score["claim_type"]
+        bucket = summary["by_claim_type"].setdefault(claim_type, {"total": 0, "consistent": 0, "falsifier_triggered": 0, "not_scorable": 0})
+        bucket["total"] += 1
+        bucket[score["verdict"]] += 1
+        for tier in score.get("source_tiers", ["unknown"]):
+            tier_bucket = summary["by_source_tier"].setdefault(tier, {"total": 0, "consistent": 0, "falsifier_triggered": 0, "not_scorable": 0})
+            tier_bucket["total"] += 1
+            tier_bucket[score["verdict"]] += 1
+    return {
+        "schema_version": "claim_outcome_scores_v1",
+        "backtest_date": backtest_date,
+        "windows": [dict(item) for item in claim_windows],
+        "scores": scores,
+        "summary": summary,
+        "state_ledger": {
+            "entry_count": len(state_ledger_entries or []),
+            "used_for": "future extension for predicate/state-variable falsifiers; price windows are used when no future state ledger match is available",
+        },
+        "no_backflow_rule": "Claim outcome scores are post-Final review artifacts and must not feed L1-L5, Bridge, Thesis, Risk, Reviser, or Final prompts.",
+    }
 
 
 def _leakage_checks(run_path: Path) -> List[str]:
@@ -188,12 +389,21 @@ def build_outcome_review_report(
     run_dir: str = "",
     backtest_date: Optional[str] = None,
     final_adjudication: Optional[Dict[str, Any]] = None,
+    final_claim_ledger: Optional[Dict[str, Any]] = None,
+    evidence_registry: Optional[Dict[str, Any]] = None,
+    state_ledger_entries: Optional[List[Dict[str, Any]]] = None,
     price_rows: Optional[List[Dict[str, Any]]] = None,
     source: str = "",
     tradable_proxy: str = "QQQ",
 ) -> OutcomeReviewReport:
     run_path = Path(run_dir) if run_dir else Path()
     final_adjudication = final_adjudication or {}
+    if final_claim_ledger is None and run_dir:
+        final_claim_ledger = _load_json(run_path / "final_claim_ledger.json", {})
+    final_claim_ledger = final_claim_ledger or {}
+    if evidence_registry is None and run_dir:
+        evidence_registry = _load_json(run_path / "evidence_registry.json", {})
+    evidence_registry = evidence_registry or {}
     if not backtest_date and run_dir:
         packet = _load_json(run_path / "analysis_packet.json", {})
         meta = packet.get("meta", {}) if isinstance(packet.get("meta"), dict) else {}
@@ -209,6 +419,13 @@ def build_outcome_review_report(
         source = source or "provided_price_rows"
 
     windows = _window_performance(price_rows, backtest_date)
+    claim_scores_payload = build_claim_outcome_scores(
+        final_claim_ledger=final_claim_ledger,
+        price_rows=price_rows,
+        backtest_date=backtest_date,
+        evidence_registry=evidence_registry,
+        state_ledger_entries=state_ledger_entries,
+    )
     label = _market_outcome_label(windows)
     final_text = " ".join(
         str(part)
@@ -272,6 +489,9 @@ def build_outcome_review_report(
         aggression_review=aggression_review,
         attribution_findings=findings,
         learning_updates=list(dict.fromkeys(learning_updates)),
+        claim_outcome_scores=claim_scores_payload.get("scores", []),
+        claim_outcome_score_summary=claim_scores_payload.get("summary", {}),
+        claim_outcome_score_ref="claim_outcome_scores.json" if final_claim_ledger.get("entries") else "",
         prompt_leakage_checks=_leakage_checks(run_path) if run_dir else [],
     )
 
@@ -284,6 +504,8 @@ def build_outcome_review_from_dir(run_dir: str | Path) -> OutcomeReviewReport:
         run_dir=str(run_path),
         backtest_date=meta.get("backtest_date") or meta.get("data_date"),
         final_adjudication=_load_json(run_path / "final_adjudication.json", {}),
+        final_claim_ledger=_load_json(run_path / "final_claim_ledger.json", {}),
+        evidence_registry=_load_json(run_path / "evidence_registry.json", {}),
     )
 
 
@@ -292,6 +514,18 @@ def write_outcome_review_report(run_dir: str | Path, output_path: str | Path | N
     target = Path(output_path) if output_path else Path(run_dir) / "outcome_review_report.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    run_path = Path(run_dir)
+    claim_scores = {
+        "schema_version": "claim_outcome_scores_v1",
+        "backtest_date": report.backtest_date,
+        "scores": report.claim_outcome_scores,
+        "summary": report.claim_outcome_score_summary,
+        "no_backflow_rule": "Claim outcome scores are post-Final review artifacts and must not feed L1-L5, Bridge, Thesis, Risk, Reviser, or Final prompts.",
+    }
+    (run_path / "claim_outcome_scores.json").write_text(
+        json.dumps(claim_scores, ensure_ascii=False, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
     return target
 
 

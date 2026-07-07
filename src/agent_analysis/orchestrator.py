@@ -113,6 +113,11 @@ try:
 except ImportError:
     from data_evidence import data_evidence_issues, normalize_source_tier_for_evidence_passport
 
+try:
+    from ..state_ledger import extract_state_variables
+except ImportError:
+    from state_ledger import extract_state_variables
+
 logger = logging.getLogger(__name__)
 
 PROMPT_FILES = {
@@ -276,6 +281,7 @@ class VNextOrchestrator:
         self.stage_diagnostics: Dict[str, Any] = {"schema_version": "vnext_llm_stage_diagnostics_v1", "stages": {}}
         self.stage_manifest_path = self.output_dir / "stage_manifest.json"
         self.stage_manifest = self._load_stage_manifest()
+        self.stage_model_routing = self._load_stage_model_routing()
 
     def run(self, packet: AnalysisPacket | Dict[str, Any]) -> Dict[str, Any]:
         packet_model = packet if isinstance(packet, AnalysisPacket) else AnalysisPacket.model_validate(packet)
@@ -402,6 +408,11 @@ class VNextOrchestrator:
             model_cls=AnalysisRevised,
             payload={"governance_input": _model_dump(gov_input_reviser)},
             filename="analysis_revised.json",
+            validator=lambda candidate: self._validate_stage_evidence_refs(
+                candidate,
+                set(synthesis_packet.evidence_index.keys()),
+                "reviser",
+            ),
         )
 
         gov_input_final = self._build_governance_input_packet(
@@ -429,6 +440,11 @@ class VNextOrchestrator:
                 stage_name="final_adjudicator",
                 model_cls=FinalAdjudication,
                 payload=final_payload,
+                validator=lambda candidate: self._validate_stage_evidence_refs(
+                    candidate,
+                    set(synthesis_packet.evidence_index.keys()),
+                    "final",
+                ),
             )
             token_report = self.llm_engine.get_token_report() if hasattr(self.llm_engine, "get_token_report") else {}
             final_adjudication.token_usage = token_report
@@ -457,6 +473,7 @@ class VNextOrchestrator:
             decision_profile=user_decision_profile,
             final_adjudication=final_adjudication,
             effective_date=self._effective_date(packet_model),
+            state_variables=extract_state_variables(_model_dump(packet_model))[0],
         )
         self._save_json("user_decision_profile.json", user_decision_profile)
         self._save_json("golden_pit_checklist.json", golden_pit_checklist)
@@ -825,6 +842,34 @@ class VNextOrchestrator:
     def _effective_date(self, packet: AnalysisPacket) -> str:
         meta = packet.meta if isinstance(packet.meta, dict) else {}
         return str(meta.get("data_date") or meta.get("backtest_date") or meta.get("timestamp_utc") or _utc_now().date().isoformat())
+
+    def _load_stage_model_routing(self) -> Dict[str, Any]:
+        path = Path(__file__).resolve().parents[2] / "config" / "stage_model_routing.json"
+        if path.exists():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    return payload
+            except Exception as exc:
+                logger.warning("Failed to load stage model routing from %s: %s", path, exc)
+        return {
+            "schema_version": "stage_model_routing_v1_default",
+            "stage_preferences": {
+                "counter_thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
+                "thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
+                "reviser": ["deepseek-v4-pro", "deepseek-v4-flash"],
+                "final": ["deepseek-v4-pro", "deepseek-v4-flash"],
+            },
+        }
+
+    def _preferred_models_for_stage(self, stage_key: str) -> List[str]:
+        preferences = self.stage_model_routing.get("stage_preferences", {})
+        raw = preferences.get(stage_key, []) if isinstance(preferences, dict) else []
+        ordered: List[str] = []
+        for model_key in raw:
+            if model_key in self.available_models and model_key not in ordered:
+                ordered.append(model_key)
+        return ordered
 
     def _stable_inquiry_id(self, message_type: InquiryMessageType, parts: List[Any]) -> str:
         seed = "|".join(str(part or "") for part in [message_type.value] + parts)
@@ -2193,6 +2238,7 @@ class VNextOrchestrator:
         decision_profile: UserDecisionProfile,
         final_adjudication: FinalAdjudication,
         effective_date: str,
+        state_variables: Optional[Dict[str, Any]] = None,
     ) -> GoldenPitChecklist:
         selected = [
             entry
@@ -2210,6 +2256,8 @@ class VNextOrchestrator:
                 evidence_refs=list(entry.evidence_refs),
                 current_status=status,
                 falsification_conditions=list(entry.falsification_conditions),
+                status_method="claim_authority_status",
+                status_evidence={"authority_status": entry.authority_status, "verified": entry.verified},
             )
             entries.append(item.model_copy(update={"changed_since_last_run": self._deferred_cross_run_change(item)}))
 
@@ -2218,7 +2266,7 @@ class VNextOrchestrator:
             matched = [entry for entry in selected if entry.claim_type in set(condition.required_claim_types)]
             evidence_refs = self._compact_string_refs([ref for entry in matched for ref in entry.evidence_refs], limit=24)
             falsifiers = self._compact_strings([item for entry in matched for item in entry.falsification_conditions], limit=12)
-            status = self._profile_condition_status(condition, matched)
+            status, status_method, status_evidence = self._profile_condition_status(condition, matched, state_variables or {})
             item = GoldenPitChecklistItem(
                 condition_id=condition.condition_id,
                 condition=f"{condition.label}：{condition.discipline}",
@@ -2227,6 +2275,8 @@ class VNextOrchestrator:
                 evidence_refs=evidence_refs,
                 current_status=status,  # type: ignore[arg-type]
                 falsification_conditions=falsifiers,
+                status_method=status_method,
+                status_evidence=status_evidence,
             )
             entries.append(item.model_copy(update={"changed_since_last_run": self._deferred_cross_run_change(item)}))
 
@@ -2248,17 +2298,34 @@ class VNextOrchestrator:
             return "insufficient_evidence"
         return "not_met"
 
-    def _profile_condition_status(self, condition: UserDecisionCondition, matched: List[ClaimLedgerEntry]) -> str:
+    def _profile_condition_status(
+        self,
+        condition: UserDecisionCondition,
+        matched: List[ClaimLedgerEntry],
+        state_variables: Dict[str, Any],
+    ) -> tuple[str, str, Dict[str, Any]]:
+        metric_predicates = getattr(condition, "metric_predicates", {}) or {}
+        if isinstance(metric_predicates, dict) and metric_predicates:
+            status, details = self._evaluate_metric_predicates(metric_predicates, state_variables)
+            return status, "metric_predicates", details
+
+        fallback_evidence = {
+            "reason": "condition_has_no_metric_predicates",
+            "matched_claim_ids": [entry.claim_id for entry in matched],
+        }
         if not matched:
-            return "insufficient_evidence"
+            return "insufficient_evidence", "claim_text_fallback", fallback_evidence
         if any(entry.authority_status == "blocked" for entry in matched):
-            return "insufficient_evidence"
+            fallback_evidence["blocked_claim_ids"] = [entry.claim_id for entry in matched if entry.authority_status == "blocked"]
+            return "insufficient_evidence", "claim_text_fallback", fallback_evidence
         required_types = set(condition.required_claim_types)
         present_types = {entry.claim_type for entry in matched}
         if required_types and not required_types.issubset(present_types):
-            return "insufficient_evidence"
+            fallback_evidence["missing_claim_types"] = sorted(required_types - present_types)
+            return "insufficient_evidence", "claim_text_fallback", fallback_evidence
         if any(not entry.verified for entry in matched):
-            return "not_met"
+            fallback_evidence["unverified_claim_ids"] = [entry.claim_id for entry in matched if not entry.verified]
+            return "not_met", "claim_text_fallback", fallback_evidence
 
         by_type: Dict[str, List[ClaimLedgerEntry]] = {}
         for entry in matched:
@@ -2272,10 +2339,86 @@ class VNextOrchestrator:
                 checks.append(any(self._claim_text_supports_buy("timing", entry.claim_text) for entry in by_type.get("timing", [])))
             if "risk_boundary" in required_types:
                 checks.append(any(self._claim_text_supports_buy("risk_boundary", entry.claim_text) for entry in by_type.get("risk_boundary", [])))
-            return "met" if checks and all(checks) else "not_met"
+            fallback_evidence["claim_text_checks"] = checks
+            return ("met" if checks and all(checks) else "not_met"), "claim_text_fallback", fallback_evidence
         if condition.side == "sell":
-            return "met" if any(self._claim_text_supports_sell(entry.claim_type, entry.claim_text) for entry in matched) else "not_met"
-        return "met" if all(entry.verified for entry in matched) else "not_met"
+            checks = [self._claim_text_supports_sell(entry.claim_type, entry.claim_text) for entry in matched]
+            fallback_evidence["claim_text_checks"] = checks
+            return ("met" if any(checks) else "not_met"), "claim_text_fallback", fallback_evidence
+        return ("met" if all(entry.verified for entry in matched) else "not_met"), "claim_text_fallback", fallback_evidence
+
+    def _evaluate_metric_predicates(self, expression: Dict[str, Any], state_variables: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
+        logic = str(expression.get("logic") or "all_of")
+        raw_predicates = expression.get("predicates") if isinstance(expression.get("predicates"), list) else []
+        results = []
+        missing = False
+        for predicate in raw_predicates:
+            if not isinstance(predicate, dict):
+                results.append({"status": "invalid_predicate", "predicate": predicate})
+                missing = True
+                continue
+            variable = str(predicate.get("var") or "")
+            op = str(predicate.get("op") or "")
+            expected = predicate.get("value")
+            actual = state_variables.get(variable)
+            if actual is None:
+                results.append(
+                    {
+                        "var": variable,
+                        "op": op,
+                        "expected": expected,
+                        "actual": None,
+                        "met": None,
+                        "status": "missing_variable",
+                        "threshold_status": predicate.get("threshold_status", ""),
+                    }
+                )
+                missing = True
+                continue
+            met = self._evaluate_single_metric_predicate(actual, op, expected)
+            results.append(
+                {
+                    "var": variable,
+                    "op": op,
+                    "expected": expected,
+                    "actual": actual,
+                    "met": met,
+                    "status": "evaluated",
+                    "threshold_status": predicate.get("threshold_status", ""),
+                }
+            )
+        evaluated = [item for item in results if item.get("met") is not None]
+        if not raw_predicates or missing or len(evaluated) != len(raw_predicates):
+            status = "insufficient_evidence"
+        elif logic == "any_of":
+            status = "met" if any(bool(item.get("met")) for item in evaluated) else "not_met"
+        else:
+            status = "met" if all(bool(item.get("met")) for item in evaluated) else "not_met"
+        return status, {
+            "logic": logic,
+            "predicate_count": len(raw_predicates),
+            "results": results,
+            "state_variable_source": "state_ledger.extract_state_variables",
+        }
+
+    def _evaluate_single_metric_predicate(self, actual: Any, op: str, expected: Any) -> bool:
+        if op in {"==", "!="}:
+            result = str(actual) == str(expected)
+            return result if op == "==" else not result
+        try:
+            actual_number = float(actual)
+            expected_number = float(expected)
+        except (TypeError, ValueError):
+            return False
+        if op == "<":
+            return actual_number < expected_number
+        if op == "<=":
+            return actual_number <= expected_number
+        if op == ">":
+            return actual_number > expected_number
+        if op == ">=":
+            return actual_number >= expected_number
+        return False
 
     def _claim_text_supports_buy(self, claim_type: str, text: str) -> bool:
         raw = str(text or "")
@@ -2953,6 +3096,7 @@ class VNextOrchestrator:
         validator: Optional[Callable[[Any], List[str]]] = None,
     ) -> Any:
         prompt = self._compose_prompt(stage_key, model_cls, payload)
+        preferred_models = self._preferred_models_for_stage(stage_key)
         last_error = ""
         stage_record: Dict[str, Any] = {
             "stage_key": stage_key,
@@ -2961,6 +3105,11 @@ class VNextOrchestrator:
             "errors": [],
             "prompt_chars": len(prompt),
             "status": "running",
+            "model_routing": {
+                "schema_version": self.stage_model_routing.get("schema_version", ""),
+                "preferred_models": preferred_models,
+                "fallback_chain": [model for model in self.available_models if model not in preferred_models],
+            },
             "prompt_audit": {
                 "stage_dir": self._prompt_audit_relpath(stage_name),
                 "attempts": [],
@@ -2988,7 +3137,14 @@ class VNextOrchestrator:
             stage_record["prompt_audit"]["attempts"].append(attempt_record)
             stage_record["prompt_audit"]["latest_prompt_file"] = attempt_record["prompt_file"]
             self._save_stage_diagnostics()
-            raw = self.llm_engine.call_with_fallback(active_prompt, stage_name=stage_name)
+            try:
+                raw = self.llm_engine.call_with_fallback(
+                    active_prompt,
+                    stage_name=stage_name,
+                    preferred_models=preferred_models or None,
+                )
+            except TypeError:
+                raw = self.llm_engine.call_with_fallback(active_prompt, stage_name=stage_name)
             self._save_prompt_audit_text(stage_name, f"attempt_{attempt}.response.raw.txt", str(raw or ""))
             attempt_record["raw_response_file"] = self._prompt_audit_relpath(
                 stage_name,
@@ -3261,6 +3417,40 @@ class VNextOrchestrator:
         path = self.output_dir / "llm_stage_diagnostics.json"
         path.write_text(json.dumps(self.stage_diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
         self._record_stage_artifact(path)
+
+    def _validate_stage_evidence_refs(self, candidate: Any, allowed_refs: set[str], stage_key: str) -> List[str]:
+        payload = _model_dump(candidate)
+        refs_by_path: List[tuple[str, str]] = []
+
+        def walk(value: Any, path: str = "") -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    next_path = f"{path}.{key}" if path else str(key)
+                    if key in {"evidence_refs", "counterevidence_refs", "counter_evidence_refs"}:
+                        for ref in self._coerce_string_list(child):
+                            refs_by_path.append((next_path, ref))
+                    else:
+                        walk(child, next_path)
+                return
+            if isinstance(value, list):
+                for index, child in enumerate(value):
+                    walk(child, f"{path}[{index}]")
+
+        walk(payload)
+        invalid = [
+            (path, ref)
+            for path, ref in refs_by_path
+            if ref and ref not in allowed_refs
+        ]
+        if not invalid:
+            return []
+        examples = "; ".join(f"{path} -> {ref}" for path, ref in invalid[:8])
+        return [
+            (
+                f"evidence_ref_source_validation failed for {stage_key}: "
+                f"refs must come from synthesis_packet.evidence_index. Invalid refs: {examples}"
+            )
+        ]
 
     def _validate_layer_card_v2(
         self,
@@ -3982,7 +4172,16 @@ class VNextOrchestrator:
             )
         return manifest
 
-    def _run_and_save(self, *, stage_key: str, stage_name: str, model_cls: type, payload: dict, filename: str) -> Any:
+    def _run_and_save(
+        self,
+        *,
+        stage_key: str,
+        stage_name: str,
+        model_cls: type,
+        payload: dict,
+        filename: str,
+        validator: Optional[Callable[[Any], List[str]]] = None,
+    ) -> Any:
         checkpoint = self._load_stage_checkpoint(
             filename,
             model_cls,
@@ -3992,7 +4191,13 @@ class VNextOrchestrator:
         )
         if checkpoint is not None:
             return checkpoint
-        result = self._run_stage(stage_key=stage_key, stage_name=stage_name, model_cls=model_cls, payload=payload)
+        result = self._run_stage(
+            stage_key=stage_key,
+            stage_name=stage_name,
+            model_cls=model_cls,
+            payload=payload,
+            validator=validator,
+        )
         self._save_json(filename, result)
         path = Path(filename)
         if not path.is_absolute():

@@ -275,6 +275,10 @@ class UserDecisionCondition(BaseModel):
         default_factory=list,
         description="该纪律需要哪些 final_claim_ledger claim 类型确认",
     )
+    metric_predicates: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="基于 state_ledger 稳定状态变量的确定性谓词；缺失时才允许回退到 claim 文本启发式。",
+    )
 
 
 class UserDecisionProfile(BaseModel):
@@ -316,6 +320,8 @@ class GoldenPitChecklistItem(BaseModel):
         description="当前是否满足该条件",
     )
     falsification_conditions: List[str] = Field(default_factory=list, description="会让该条件失效的证据")
+    status_method: str = Field("", description="状态判定方法，如 metric_predicates 或 claim_text_fallback")
+    status_evidence: Dict[str, Any] = Field(default_factory=dict, description="状态判定所用变量、谓词或 fallback 说明")
     changed_since_last_run: Dict[str, Any] = Field(default_factory=dict, description="跨 run 变化预留字段；当前可标记为暂缓启用")
 
 
@@ -1882,6 +1888,9 @@ class OutcomeReviewReport(BaseModel):
     aggression_review: str = Field("", description="后续下跌时，原判断是否过度冒进")
     attribution_findings: List[RunReviewFinding] = Field(default_factory=list, description="Outcome 角度归因")
     learning_updates: List[str] = Field(default_factory=list, description="可沉淀的学习点")
+    claim_outcome_scores: List[Dict[str, Any]] = Field(default_factory=list, description="逐条 final claim 的 T+20/60/120 复盘打分")
+    claim_outcome_score_summary: Dict[str, Any] = Field(default_factory=dict, description="claim outcome scores 按 claim_type/source_tier 的汇总")
+    claim_outcome_score_ref: str = Field("", description="独立 claim_outcome_scores.json 产物路径")
     prompt_leakage_checks: List[str] = Field(default_factory=list, description="确认后验未入当日 prompt 的检查")
 
 

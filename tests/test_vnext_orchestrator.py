@@ -66,6 +66,22 @@ class MiniStageModel(BaseModel):
     value: str
 
 
+class RefStageModel(BaseModel):
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class RoutingFakeLLMEngine(FakeLLMEngine):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.preferred_models_by_call = []
+        self.successful_model = None
+
+    def call_with_fallback(self, prompt, stage_name="", preferred_models=None):
+        self.preferred_models_by_call.append(list(preferred_models or []))
+        self.successful_model = (preferred_models or ["fake"])[0]
+        return self.responses[stage_name]
+
+
 class ParseRetryFakeLLMEngine:
     def __init__(self):
         self.calls = 0
@@ -1472,6 +1488,63 @@ def test_run_stage_records_parse_retry_diagnostics(tmp_path: Path):
     assert diagnostics["stages"]["mini_stage"]["prompt_audit"]["latest_prompt_file"] == "prompt_audit/mini_stage/attempt_2.prompt.txt"
 
 
+def test_run_stage_uses_stage_model_routing_for_cognitive_stages(tmp_path: Path):
+    engine = RoutingFakeLLMEngine({"thesis": '{"value": "ok"}'})
+    orchestrator = VNextOrchestrator(
+        available_models=["deepseek-v4-flash", "deepseek-v4-pro"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="thesis",
+        stage_name="thesis",
+        model_cls=MiniStageModel,
+        payload={"example": "payload"},
+    )
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+
+    assert result.value == "ok"
+    assert engine.preferred_models_by_call[0][0] == "deepseek-v4-pro"
+    assert diagnostics["stages"]["thesis"]["model_routing"]["preferred_models"][0] == "deepseek-v4-pro"
+    assert diagnostics["stages"]["thesis"]["model"] == "deepseek-v4-pro"
+
+
+def test_reviser_final_evidence_refs_outside_index_trigger_retry(tmp_path: Path):
+    engine = SequencedFakeLLMEngine(
+        {
+            "final_adjudicator": [
+                '{"evidence_refs": ["L9.fake_ref"]}',
+                '{"evidence_refs": ["L1.get_fed_funds_rate"]}',
+            ]
+        }
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="final",
+        stage_name="final_adjudicator",
+        model_cls=RefStageModel,
+        payload={"example": "payload"},
+        validator=lambda candidate: orchestrator._validate_stage_evidence_refs(
+            candidate,
+            {"L1.get_fed_funds_rate"},
+            "final",
+        ),
+    )
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+
+    assert result.evidence_refs == ["L1.get_fed_funds_rate"]
+    assert engine.calls["final_adjudicator"] == 2
+    assert diagnostics["stages"]["final_adjudicator"]["errors"][0]["kind"] == "contract_validation_error"
+    assert "evidence_ref_source_validation failed" in diagnostics["stages"]["final_adjudicator"]["errors"][0]["message"]
+
+
 class FakeModelWithGeneratedAt(BaseModel):
     value: str
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -2149,3 +2222,76 @@ def test_stage5_golden_pit_checklist_defers_cross_run_diff_even_if_previous_exis
     assert buy_item.changed_since_last_run["status"] == "deferred_until_run_quality_stable"
     assert "暂缓" in buy_item.changed_since_last_run["summary"]
     assert "must not feed back" in checklist.no_backflow_rule
+
+
+def test_stage5_profile_conditions_use_metric_predicates_before_claim_text_fallback(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    ledger = ClaimLedger(
+        effective_date="2026-07-07",
+        entries=[
+            ClaimLedgerEntry(
+                claim_id="claim:thesis:valuation",
+                source_stage="thesis",
+                claim_text="估值安全垫仍不足。",
+                claim_type="valuation",
+                evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+                counter_evidence_refs=["L1.get_10y_real_rate"],
+                inference_steps=["估值仍偏高。"],
+                falsification_conditions=["估值分位明显回落。"],
+                verified=True,
+                authority_status="verified",
+            )
+        ],
+    )
+    final = FinalAdjudication(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="中性偏谨慎。",
+        confidence=Confidence.MEDIUM,
+        key_support_chains=[],
+        must_preserve_risks=[],
+        blocking_issues=[],
+        adjudicator_notes="保留条件式结论。",
+    )
+    profile = UserDecisionProfile(
+        buy_disciplines=[
+            UserDecisionCondition(
+                condition_id="buy_metric_value_zone",
+                side="buy",
+                label="估值买入区",
+                discipline="按台账变量判断。",
+                required_claim_types=["valuation"],
+                metric_predicates={
+                    "logic": "all_of",
+                    "predicates": [{"var": "valuation.forward_pe", "op": "<=", "value": 20}],
+                },
+            )
+        ],
+        sell_disciplines=[
+            UserDecisionCondition(
+                condition_id="sell_text_fallback",
+                side="sell",
+                label="旧兜底",
+                discipline="没有谓词时才读 claim 文本。",
+                required_claim_types=["valuation"],
+            )
+        ],
+    )
+
+    checklist = orchestrator._build_golden_pit_checklist(
+        final_claim_ledger=ledger,
+        decision_profile=profile,
+        final_adjudication=final,
+        effective_date="2026-07-07",
+        state_variables={"valuation.forward_pe": 18.5},
+    )
+
+    metric_item = next(item for item in checklist.entries if item.condition_id == "buy_metric_value_zone")
+    fallback_item = next(item for item in checklist.entries if item.condition_id == "sell_text_fallback")
+    assert metric_item.current_status == "met"
+    assert metric_item.status_method == "metric_predicates"
+    assert metric_item.status_evidence["results"][0]["actual"] == 18.5
+    assert fallback_item.status_method == "claim_text_fallback"

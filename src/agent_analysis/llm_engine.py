@@ -264,9 +264,21 @@ class LLMEngine:
             )
         return content, usage
 
-    def call_with_fallback(self, prompt: str, stage_name: str = "") -> Optional[str]:
+    def call_with_fallback(
+        self,
+        prompt: str,
+        stage_name: str = "",
+        preferred_models: Optional[List[str]] = None,
+    ) -> Optional[str]:
         models_to_try = []
-        if self.successful_model and self.successful_model in self.available_models:
+        if preferred_models:
+            for model_key in preferred_models:
+                if model_key in self.available_models and model_key not in models_to_try:
+                    models_to_try.append(model_key)
+            if models_to_try:
+                readable = ", ".join(MODEL_CONFIGS.get(model, {}).get("name", model) for model in models_to_try)
+                logger.info("  -> [%s] 使用阶段模型偏好: %s", stage_name, readable)
+        elif self.successful_model and self.successful_model in self.available_models:
             models_to_try.append(self.successful_model)
             logger.info(f"  -> [{stage_name}] 优先使用之前成功的模型: {MODEL_CONFIGS[self.successful_model]['name']}")
 

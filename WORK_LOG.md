@@ -6,6 +6,34 @@
 
 ## 2026-07-07
 
+### P0/P1/P2 收口：claim 级结果记分、谓词化条件状态、阶段模型路由与证据源头校验
+
+完成内容：
+
+- P0 claim 级结果记分：`outcome_review.py` 现在读取 `final_claim_ledger.json` 与 `evidence_registry.json`，对每条 final claim 生成 T+20 / T+60 / T+120 窗口复盘，输出 `verdict = consistent | falsifier_triggered | not_scorable`、`scoring_evidence`、`claim_type` 和 `source_tiers`；`outcome_review_report.json` 内嵌摘要，独立 `claim_outcome_scores.json` 可落盘。
+- 新增 `scripts/aggregate_claim_outcome_scores.py`：跨 run 扫描 `claim_outcome_scores.json`，按 `claim_type` 和 `source_tier` 汇总一致、触发反证和不可评分数量；该产物明确只属于 post-Final 学习材料，不得回流 L1-L5。
+- P1 谓词求值器：`GoldenPitChecklist` 的 profile 条件优先读取 `config/user_decision_profile.json` 中的 `metric_predicates`，用 `state_ledger.extract_state_variables` 同一套稳定状态变量判定 `met / not_met / insufficient_evidence`；旧 `_claim_text_supports_buy/sell` 仅在没有谓词时作为 fallback，并写入 `status_method=claim_text_fallback`。
+- P2 per-stage 模型路由：新增 `config/stage_model_routing.json`，`counter_thesis / thesis / reviser / final` 默认优先 `deepseek-v4-pro`，失败后降级到用户传入的剩余模型链；`llm_stage_diagnostics.json` 记录每阶段 `preferred_models` 与 fallback chain。
+- P2 Final/Reviser evidence_refs 源头校验：`reviser` 和 `final` 生成时递归检查 `evidence_refs / counterevidence_refs / counter_evidence_refs`，引用不在 `synthesis_packet.evidence_index` 内会触发 `_run_stage` 重试，并在 stage diagnostics 留下 `contract_validation_error`。
+
+对抗式审查结论：
+
+- 后验隔离：`claim_outcome_scores.json` 只由 Outcome Review / 聚合脚本生成，发生在 Final 与 Claim Ledger 之后；产物带 no-backflow 声明，未进入 L1-L5、Bridge、Thesis、Risk、Reviser、Final prompt。
+- 条件判定边界：有 `metric_predicates` 时不再让 claim 文本替状态变量发言；变量缺失时记 `insufficient_evidence`，不会用其它指标冒充 Wind 估值分位或缺失变量。
+- 模型路由边界：阶段偏好只改变调用顺序，不改变 prompt 内容和 L1-L5 上下文隔离；没有可用 pro 模型时自动回到用户提供的模型链。
+- 证据引用边界：Final/Reviser 的越界引用在生成阶段打回，不再只靠后续 claim 台账降级；但 checkpoint 恢复旧 artifact 时仍按现有 stage manifest 逻辑加载，后续如需可加恢复时复验。
+
+验证结果：
+
+- 聚焦测试：`python3 -m pytest tests/test_outcome_review.py tests/test_vnext_orchestrator.py::test_stage5_golden_pit_checklist_defers_cross_run_diff_even_if_previous_exists tests/test_vnext_orchestrator.py::test_stage5_profile_conditions_use_metric_predicates_before_claim_text_fallback tests/test_vnext_orchestrator.py::test_run_stage_uses_stage_model_routing_for_cognitive_stages tests/test_vnext_orchestrator.py::test_reviser_final_evidence_refs_outside_index_trigger_retry -q`：8 通过。
+- 全量测试：`python3 -m pytest -q`：461 通过，4 个环境/依赖 warning。
+
+剩余风险：
+
+- claim outcome 的方向识别仍是透明的文本 fallback，适合先建立学习闭环，但不能解释复杂非方向性 claim；此类 claim 会输出 `not_scorable` 和原因，不编造胜率。
+- 当前 claim 评分主要用 QQQ 后验价格路径；未来若积累足够 official state ledger，可把估值/广度/信用类 claim 的状态变量失效条件纳入更细评分。
+- 用户决策档案里的阈值仍是草案，正式启用前仍需用户确认。
+
 ### 跨 run 对比定案 + 状态台账记录层上线 + 个人决策档案草案
 
 完成内容：
