@@ -23,10 +23,19 @@
 - 用 `codex_external_timeout_validation` run 中两份被拒绝的原始 LLM 返回回放合约：修复后均通过校验（意味着当时两次尝试本可成功）。
 - 启动 `fable_counter_thesis_fix_validation` 验证 run（复用 2026-07-07 数据快照），验证 LLM 反方端到端落地。
 
+第二轮（同日）：验证 run `fable_counter_thesis_fix_validation` 复盘与追加修复：
+
+- 该 run 确认竞争裁决行为正常（主导假说成立、stub 豁免生效、Run Review 零 fail），但 Counter-Thesis 再次以两个**新的**形状变体失败退回 fallback：attempt 1 用 `falsifiers`（正是本库 TypedConflict 等合同的正式字段名，模型从 payload 学来，必然复发）和 `explains_poorly`；attempt 2 把 `principal_counterargument` 写成 `{"summary": ...}` dict。两次的内容质量都很高（失效条件具体到"净流动性 4 周动量 < -50B""铜金比跌破 MA50"级别的可观察阈值）。
+- Final 阶段幻觉出 `L5.get_ta_indicators`（真名 `get_qqq_technical_indicators`），经共享 refs 池把全部 6 条 claim 拉黑为 blocked——闸门第二次喊狼来了。
+- 追加修复：合约层吸收 `falsifiers`/`explains_poorly` 别名与 dict 反方论点；`_verify_claim_entry` 改为比例原则——无法核验的引用点名降级（`unverifiable_evidence_refs:`），仅当没有任何可核验引用时才阻断。
+- 回放验证：两份新失败返回经修复后合约 + 编排器验证器均通过；至此两次真实 run 的全部 4 次 LLM 尝试在修复后都会成功。
+- `python -m pytest -q`：449 通过。启动第三次验证 run `fable_counter_thesis_fix_validation_2` 做最终收口。
+
 剩余风险：
 
-- 字段别名吸收只覆盖已观测的两个变体；后续若出现新变体应继续在合约层吸收并补测试，而不是放宽 validator 语义。
-- 步骤 2 的"不同市场状态下反方假说有真实差异"验收仍需第二个不同状态的 run（如历史回测日）确认。
+- 字段别名吸收只覆盖已观测变体；后续新变体应继续在合约层吸收并补测试，而不是放宽 validator 语义。更根治的方向是给 counter_thesis 等认知阶段做按阶段模型路由（当前引擎"上次成功者优先"，反方阶段常落在最弱的 flash 上），已列为 codex 后续项。
+- Final/Reviser 阶段目前不校验 evidence_refs 是否在 evidence_index 内，幻觉引用在源头就该被打回（像 counter_thesis validator 那样），已列为 codex 后续项。
+- 步骤 2 的"不同市场状态下反方假说有真实差异"验收仍需一个历史回测日 run 确认。
 
 ---
 
