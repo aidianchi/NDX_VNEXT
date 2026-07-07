@@ -1304,6 +1304,7 @@ class VNextOrchestrator:
             investigation_reports=investigation_reports,
         )
         allowed_refs = set(synthesis_packet.evidence_index.keys())
+        fallback_reason = ""
         try:
             draft = self._run_stage(
                 stage_key="counter_thesis",
@@ -1315,14 +1316,17 @@ class VNextOrchestrator:
             draft = self._normalize_counter_thesis_draft(draft, allowed_refs)
         except Exception as exc:
             logger.warning("counter_thesis LLM stage failed; using deterministic fallback: %s", exc)
+            fallback_reason = str(exc)
             draft = self._build_deterministic_counter_thesis(
                 synthesis_packet=synthesis_packet,
                 bridge_v2=bridge_v2,
                 investigation_reports=investigation_reports,
-                fallback_reason=str(exc),
+                fallback_reason=fallback_reason,
             )
 
         audit = self._counter_thesis_prompt_input_audit(payload)
+        if fallback_reason:
+            audit["fallback_reason"] = fallback_reason[:500]
         return draft.model_copy(
             update={
                 "input_refs": ["synthesis_packet.json", "bridge_memos/bridge_0.json", "investigation_reports/*.json"],
@@ -1858,6 +1862,15 @@ class VNextOrchestrator:
             if not text:
                 return
             claim_id = f"claim:{source_stage}:{hashlib.sha1((claim_type + '|' + text).encode('utf-8')).hexdigest()[:12]}"
+            raw_refs = self._compact_string_refs(evidence_refs or common_refs)
+            # LLM 有时把 "known_data_gaps" 一类说明性 token 混进 evidence refs；
+            # 只保留形如 L#.func 或注册表内的真实引用，其余记录为被剔除 token，不让它冒充缺失证据去阻断发布。
+            entry_refs = [
+                ref
+                for ref in raw_refs
+                if ref in evidence_registry.passports or _EVIDENCE_REF_PATTERN.fullmatch(ref)
+            ]
+            dropped_tokens = [ref for ref in raw_refs if ref not in entry_refs]
             counter_refs, counter_method = self._claim_specific_counter_refs(
                 claim_type=claim_type,
                 synthesis_packet=synthesis_packet,
@@ -1877,12 +1890,13 @@ class VNextOrchestrator:
                 source_stage=source_stage,  # type: ignore[arg-type]
                 claim_text=text,
                 claim_type=claim_type,  # type: ignore[arg-type]
-                evidence_refs=self._compact_string_refs(evidence_refs or common_refs),
+                evidence_refs=entry_refs,
                 counter_evidence_refs=counter_refs,
                 inference_steps=self._compact_strings(inference_steps),
                 falsification_conditions=falsification_conditions,
                 counter_evidence_method=counter_method,
                 falsifier_method=falsifier_method,
+                dropped_non_evidence_tokens=dropped_tokens,
             )
             entries.append(self._verify_claim_entry(entry, evidence_registry))
 

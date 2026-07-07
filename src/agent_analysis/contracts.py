@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import uuid4
 
 try:
-    from pydantic import BaseModel, Field, field_validator
+    from pydantic import BaseModel, Field, field_validator, model_validator
 except ImportError:
     # 降级方案：如果没有 pydantic，使用 dataclass
     from dataclasses import dataclass, field
@@ -786,6 +786,14 @@ class PriceReflectionAssessment(BaseModel):
     missing_evidence: List[str] = Field(default_factory=list, description="仍缺少的证据")
 
 
+def _coerce_llm_string_to_list(value: Any) -> Any:
+    """LLM 常把单条列表字段写成裸字符串；这里只做形状纠正，不改变语义。"""
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    return value
+
+
 class CompetingHypothesis(BaseModel):
     """
     最小竞争假说。
@@ -795,7 +803,7 @@ class CompetingHypothesis(BaseModel):
     """
     model_config = {"extra": "allow"}
 
-    hypothesis_id: str = Field(..., description="稳定假说 ID")
+    hypothesis_id: str = Field(default_factory=lambda: f"hyp_{uuid4().hex[:12]}", description="稳定假说 ID")
     hypothesis_text: str = Field(..., min_length=1, description="假说文本")
     source: Literal["bridge_v2", "counter_thesis", "investigation", "deterministic_fallback"] = Field(
         "deterministic_fallback",
@@ -814,6 +822,34 @@ class CompetingHypothesis(BaseModel):
     adjudication_reason: str = Field("", description="为什么是当前状态")
     source_refs: List[str] = Field(default_factory=list, description="来源 artifact 或字段引用")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _tolerate_llm_field_variants(cls, data: Any) -> Any:
+        """吸收已观测到的 LLM 字段变体，避免高质量反方内容因字段名被整体丢弃。"""
+        if not isinstance(data, dict):
+            return data
+        aliases = {
+            "what_it_cannot_explain": "cannot_explain",
+            "failure_conditions": "falsification_conditions",
+        }
+        for alias, canonical in aliases.items():
+            if alias in data and not data.get(canonical):
+                data[canonical] = data.pop(alias)
+        return data
+
+    @field_validator(
+        "support_evidence_refs",
+        "counter_evidence_refs",
+        "diagnostic_evidence_refs",
+        "cannot_explain",
+        "falsification_conditions",
+        "source_refs",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_single_string_fields(cls, value: Any) -> Any:
+        return _coerce_llm_string_to_list(value)
+
 
 class CounterThesisDraft(BaseModel):
     """第一次反方构建产物；不得读取 Thesis。"""
@@ -831,6 +867,11 @@ class CounterThesisDraft(BaseModel):
     principal_counterargument: str = Field("", description="最强反方论点")
     cannot_establish: List[str] = Field(default_factory=list, description="反方仍不能证明的事项")
     prompt_input_audit: Dict[str, Any] = Field(default_factory=dict, description="输入审计")
+
+    @field_validator("input_refs", "forbidden_context_refs", "cannot_establish", mode="before")
+    @classmethod
+    def _coerce_single_string_fields(cls, value: Any) -> Any:
+        return _coerce_llm_string_to_list(value)
 
 
 class AdjudicationChangeRecord(BaseModel):

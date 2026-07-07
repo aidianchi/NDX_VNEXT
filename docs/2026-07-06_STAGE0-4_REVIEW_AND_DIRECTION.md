@@ -91,9 +91,17 @@
 
 验收：任选两条不同类型的 claim，其 counter_evidence_refs 集合不同且能讲出为什么是这几条。
 
-### 第 4 步：阶段 5 读者出口（此时才做）
+### 第 4 步：阶段 5 读者出口（此时才做）【修正一：按"决策稀疏"现实定调】
 
-按路线图三类分栏 + 四层阅读。补充一个路线图没有的关键件：
+按路线图三类分栏 + 四层阅读，但主视图定调修正：使用者的真实决策频率是每年 2-5 次，不是每天一次。读者出口的 30 秒版不应是"今日观点"，而应回答三件事：**当前状态是什么、上次 run 以来什么变了、距离你的买入/卖出条件还差哪几项证据**。
+
+为此新增一个产物 `golden_pit_checklist.json`（黄金坑清单，claim 台账的直接应用）：
+
+- 来源：从 `final_claim_ledger.json` 筛 `claim_type in {valuation, timing, risk_boundary}` 的条目 + UserDecisionProfile 的买入/卖出纪律条件。
+- 每条：`condition / evidence_refs / current_status(met | not_met | insufficient_evidence) / falsification_conditions / changed_since_last_run`。
+- `changed_since_last_run` 通过读取上一个 run 的同名产物做 diff——这是第一个跨 run 产物，只属于读者出口层，同样不得回流 L1-L5。
+
+补充一个路线图没有的关键件：
 
 **UserDecisionProfile（个人决策翻译档案）**。用户的真实买卖纪律（价值买入-趋势卖出、NDX 为复利基地、小额定投等待黄金坑）目前不在架构里。正确落点：
 
@@ -102,7 +110,22 @@
 - 个人决策翻译只输出条件式规则（"若你的纪律是 X，当前状态映射为 Y，触发改判的条件是 Z"），不输出指令。
 - "黄金坑清单"是 claim ledger 的天然应用：把"价值买入条件成立"定义为一组可追问的 claim（估值分位 + 广度/集中度状态 + 风险溢价 + 失效条件），每次 run 逐条给出证据状态。这比任何 UI 都更接近用户的真实目的。
 
-### 第 5 步之后（明确推迟）
+### 第 5 步：claim 级结果记分【修正二：把学习回路接上】
+
+系统现有 `outcome_review.py` 只做单 run 的"措辞谨慎/激进 vs 之后 QQQ 窗口涨跌"语言级对照。一台判断机器只有在判断被逐条、跨期打分时才会变好。阶段 4 的 claim 台账正是升级它的底座：
+
+1. 扩展 `outcome_review.py`：输入改为 `final_claim_ledger.json`（不再只拼接 Final 文本）；对每条 claim 在 T+20/60/120 交易日窗口输出 `verdict(consistent | falsifier_triggered | not_scorable)` 和 `scoring_evidence`；落盘 `claim_outcome_scores.json`。
+2. 跨 run 纵向台账（可先放 `scripts/`）：按 `claim_type` 和证据 `source_tier` 聚合一致率，回答"哪类判断、哪类证据真正有诊断力"。
+3. 边界：打分器在裁决之后运行，读取打分时点的市场数据是合法的；但打分产物禁止进入后续 run 的 L1-L5 输入。
+4. 验收：任选一个历史回测 run（如 `20250409`）能产出逐条打分，`not_scorable` 必须写明原因。
+
+没有这一步，系统可以永远流程完美、判断平庸。
+
+### 停机准则
+
+诚实化 + 阶段 5（读者出口）验收通过后，**架构冻结一个季度**：每月跑一次、大回撤时加跑，期间唯一新增记录是使用日志（run 日期、是否改变了使用者决策、事后对错）。下一轮施工选题由使用日志决定，不由审美决定。冻结期正好用于补 L3 广度数据源（判断质量的最大数据瓶颈）。
+
+### 第 6 步之后（明确推迟）
 
 - 真动态调查（真工具、真预算执行、真停止条件）：等真反方假说暴露出"最关键分歧"之后再做，否则调查没有靶子。这与路线图 8.1 的互喂逻辑一致。
 - 统一 evidence id 空间的第二半、L3 广度数据补强（NEXT_STEPS P1，仍是最大数据短板）。
@@ -119,3 +142,24 @@
 - 实证抽样：31 个历史 run 的 bridge_0.json（unresolved_questions 全部非空）；P1-1 优先级 bug 已最小复现。
 - 未做：真实 fresh run（本次是静态审查 + 历史产物抽样）；第 1 步完成后应立即跑一次 fresh run 验证竞争裁决行为变化。
 - 本文不是重新审计 30 条 EPI/HAR，只修正其"关闭"状态的语义：合同层关闭属实，行为层未关闭。
+
+---
+
+## 7. 2026-07-07 审核记录：codex 第 0-3 步验收 + 后续修复
+
+### 验收结论
+
+codex 的第 0-3 步实施**总体合格**：提交按逻辑拆分（合同/管道/审计/台账/tools_L2 各自成 commit）；P0-1..4、P1-1..5 全部落实；WORK_LOG 和路线图 11A 的"合同关闭/行为未关闭"更正到位；全量测试 448 通过。计划外的 `4e14316`（L4 外部检查超时/缓存/预算）经审查合规：跳过项如实记入 `skipped`/`degraded`，SEC 角色从 primary 诚实降级为 `official_cross_check_for_component_model`，未弱化数据闸门。
+
+fresh run `codex_external_timeout_validation` 行为验证：stub 调查不再触发降级，竞争裁决出现主导假说（恒定 kept_unresolved 已消除），principal_contradiction / price_reflection 均为 native，claim 台账不同类型 claim 的反证已不同，Run Review 零 fail。
+
+### 该 run 暴露的两个新问题（已于 2026-07-07 修复）
+
+1. **Counter-Thesis LLM 两次尝试均死于 schema 摩擦并退回确定性 fallback**：attempt 1 漏 `hypothesis_id`；attempt 2 把 `cannot_establish` 写成字符串、用了 `what_it_cannot_explain`/`failure_conditions` 变体字段名。attempt 2 的内容质量其实很高（挑战"净流动性转负=折现率上行"的等价假设），被管道整体丢弃属于收割损失。修复：`CompetingHypothesis.hypothesis_id` 加默认工厂；两个合同加字符串→列表 coercion 和已观测字段别名吸收（`contracts.py`）；`fallback_reason` 不再被审计覆写丢失（`orchestrator.py::_build_counter_thesis`）。用两份真实失败返回回放验证：修复后均通过校验。
+2. **claim 闸门被垃圾 token 全线误伤**：Final 的一条支撑链混入说明性 token `known_data_gaps`，导致全部 6 条 claim 被 `evidence_refs_not_in_registry` 标记 blocked——闸门在喊狼来了。修复：台账构建时只保留形如 `L#.func` 或注册表内的真实引用，剔除项记入 `dropped_non_evidence_tokens`（可审计，不冒充缺失证据）；真实引用缺失仍照常阻断，闸门未被弱化。
+
+### 修复后状态
+
+- 全量测试 449 通过；两份真实失败 LLM 返回通过合约回放。
+- 步骤 2 的最终验收（LLM 反方在真实 run 中成功产出有区分力假说）以修复后的验证 run `fable_counter_thesis_fix_validation` 为准。
+- 修正一（黄金坑清单 + 决策稀疏定调）、修正二（claim 级结果记分）、停机准则已写入第 4 节。

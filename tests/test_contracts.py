@@ -448,3 +448,44 @@ def test_decision_semantics_fields_roundtrip():
     restored_final = FinalAdjudication.model_validate(final.model_dump())
     assert restored_final.reader_final.one_liner == "读者结论。"
     assert restored_final.principal_contradiction.contradiction_id == "panic_priced_vs_unconfirmed_risk"
+
+
+def test_counter_thesis_draft_tolerates_observed_llm_field_variants():
+    # 形状取自 2026-07-07 真实 run 中两次被 schema 拒绝的 LLM 返回。
+    attempt_1_like = {
+        "hypotheses": [
+            {
+                "source": "counter_thesis",
+                "hypothesis_text": "反方：盈利韧性足以消化估值压力。",
+                "support_evidence_refs": ["L4.get_ndx_forward_earnings_quality"],
+                "counter_evidence_refs": ["L1.get_net_liquidity_momentum"],
+                "diagnostic_evidence_refs": ["L1.get_copper_gold_ratio"],
+                "cannot_explain": ["无法解释广度走弱。"],
+                "falsification_conditions": ["盈利预期下修。"],
+            }
+        ],
+    }
+    draft = CounterThesisDraft.model_validate(attempt_1_like)
+    assert draft.hypotheses[0].hypothesis_id.startswith("hyp_")
+
+    attempt_2_like = {
+        "cannot_establish": "反方无法建立：利率已确认下行。",
+        "hypotheses": [
+            {
+                "hypothesis_id": "counter_hypothesis_1",
+                "hypothesis_text": "反方：净流动性转负不等于折现率上行。",
+                "support_evidence_refs": "L4.get_ndx_pe_and_earnings_yield",
+                "counter_evidence_refs": ["L1.get_net_liquidity_momentum"],
+                "diagnostic_evidence_refs": ["L2.get_hyg_momentum"],
+                "what_it_cannot_explain": "无法解释拥挤度上升。",
+                "failure_conditions": "利率数据确认折现率显著上行。",
+                "source": "counter_thesis",
+            }
+        ],
+    }
+    draft2 = CounterThesisDraft.model_validate(attempt_2_like)
+    assert draft2.cannot_establish == ["反方无法建立：利率已确认下行。"]
+    hypothesis = draft2.hypotheses[0]
+    assert hypothesis.support_evidence_refs == ["L4.get_ndx_pe_and_earnings_yield"]
+    assert hypothesis.cannot_explain == ["无法解释拥挤度上升。"]
+    assert hypothesis.falsification_conditions == ["利率数据确认折现率显著上行。"]

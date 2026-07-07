@@ -1979,7 +1979,7 @@ def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path:
         key_support_chains=[
             KeySupportChain(
                 chain_description="利率压力约束估值。",
-                evidence_refs=["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
+                evidence_refs=["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield", "known_data_gaps"],
                 weight=0.7,
             )
         ],
@@ -2029,3 +2029,10 @@ def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path:
     assert set(market_entry.counter_evidence_refs) != set(risk_entry.counter_evidence_refs)
     assert market_entry.counter_evidence_method == "opposing_hypothesis_support_plus_typed_conflicts"
     assert updated_registry.passports["L1.get_fed_funds_rate"].linked_claim_ids
+    # LLM 混入的说明性 token（如 known_data_gaps）应被剔除并记录，而不是冒充缺失证据去阻断发布。
+    assert all("known_data_gaps" not in entry.evidence_refs for entry in ledger.entries)
+    assert any(
+        "known_data_gaps" in list(getattr(entry, "dropped_non_evidence_tokens", []) or [])
+        for entry in ledger.entries
+    )
+    assert all("evidence_refs_not_in_registry" not in (entry.downgrade_reason or "") for entry in ledger.entries)

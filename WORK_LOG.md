@@ -4,6 +4,32 @@
 
 ---
 
+## 2026-07-07
+
+### 第 0-3 步验收审核 + Counter-Thesis schema 摩擦与 claim 闸门误伤修复
+
+完成内容：
+
+- 审核 codex 第 0-3 步全部提交（`fe2f154`..`a46b5a0`）与计划外 L4 超时提交 `4e14316`：验收合格，L4 改动未弱化数据闸门（跳过项记入 `skipped`/`degraded`，SEC 角色诚实降级为 cross-check）。
+- 用 fresh run `codex_external_timeout_validation` 做行为验证：stub 不再触发降级、竞争裁决出现主导假说、principal/price reflection 均 native、claim 反证已按类型区分、Run Review 零 fail。
+- 修复该 run 暴露的两个新问题：
+  1. Counter-Thesis LLM 两次尝试均死于 schema 摩擦（漏 `hypothesis_id`；`cannot_establish` 写成字符串；`what_it_cannot_explain`/`failure_conditions` 字段变体），高质量反方内容被整体丢弃。`contracts.py` 为 `CompetingHypothesis.hypothesis_id` 加默认工厂，加字符串→列表 coercion 与已观测字段别名吸收；`orchestrator.py` 保留 `fallback_reason` 不被审计覆写。
+  2. Final 支撑链混入说明性 token `known_data_gaps`，导致全部 claim 被 `evidence_refs_not_in_registry` 误标 blocked。台账构建改为只保留 `L#.func` 形式或注册表内的真实引用，剔除项记入 `dropped_non_evidence_tokens`；真实引用缺失仍照常阻断。
+- `docs/2026-07-06_STAGE0-4_REVIEW_AND_DIRECTION.md` 写入修正一（黄金坑清单 + 决策稀疏定调）、修正二（claim 级结果记分）、停机准则和 2026-07-07 审核记录。
+
+验证结果：
+
+- `python -m pytest -q`：449 通过。
+- 用 `codex_external_timeout_validation` run 中两份被拒绝的原始 LLM 返回回放合约：修复后均通过校验（意味着当时两次尝试本可成功）。
+- 启动 `fable_counter_thesis_fix_validation` 验证 run（复用 2026-07-07 数据快照），验证 LLM 反方端到端落地。
+
+剩余风险：
+
+- 字段别名吸收只覆盖已观测的两个变体；后续若出现新变体应继续在合约层吸收并补测试，而不是放宽 validator 语义。
+- 步骤 2 的"不同市场状态下反方假说有真实差异"验收仍需第二个不同状态的 run（如历史回测日）确认。
+
+---
+
 ## 2026-07-06
 
 ### 阶段 0-4 审查后更正：合同关闭，行为未关闭
