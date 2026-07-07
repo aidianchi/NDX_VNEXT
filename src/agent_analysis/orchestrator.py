@@ -27,6 +27,8 @@ try:
         Confidence,
         EvidenceSourceAuthority,
         FinalAdjudication,
+        GoldenPitChecklist,
+        GoldenPitChecklistItem,
         GovernanceInputPacket,
         HypothesisCompetition,
         InquiryMessage,
@@ -43,6 +45,8 @@ try:
         RunReviewReport,
         SchemaGuardReport,
         ThesisDraft,
+        UserDecisionCondition,
+        UserDecisionProfile,
     )
     from .deep_research_canon import L3_STRUCTURAL_PRIORITY_FUNCTIONS, build_layer_canon_prompt, get_indicator_canon
     from .few_shot import build_layer_few_shot_prompt
@@ -70,6 +74,8 @@ except ImportError:
         Confidence,
         EvidenceSourceAuthority,
         FinalAdjudication,
+        GoldenPitChecklist,
+        GoldenPitChecklistItem,
         GovernanceInputPacket,
         HypothesisCompetition,
         InquiryMessage,
@@ -86,6 +92,8 @@ except ImportError:
         RunReviewReport,
         SchemaGuardReport,
         ThesisDraft,
+        UserDecisionCondition,
+        UserDecisionProfile,
     )
     from deep_research_canon import L3_STRUCTURAL_PRIORITY_FUNCTIONS, build_layer_canon_prompt, get_indicator_canon
     from few_shot import build_layer_few_shot_prompt
@@ -443,6 +451,15 @@ class VNextOrchestrator:
         evidence_registry = self._attach_claims_to_evidence_registry(evidence_registry, final_claim_ledger)
         self._save_json("final_claim_ledger.json", final_claim_ledger)
         self._save_json("evidence_registry.json", evidence_registry)
+        user_decision_profile = self._load_user_decision_profile()
+        golden_pit_checklist = self._build_golden_pit_checklist(
+            final_claim_ledger=final_claim_ledger,
+            decision_profile=user_decision_profile,
+            final_adjudication=final_adjudication,
+            effective_date=self._effective_date(packet_model),
+        )
+        self._save_json("user_decision_profile.json", user_decision_profile)
+        self._save_json("golden_pit_checklist.json", golden_pit_checklist)
         run_review_report = self._build_run_review_report(
             packet_model=packet_model,
             bridge_memos=bridge_memos,
@@ -480,6 +497,8 @@ class VNextOrchestrator:
             "analysis_revised": analysis_revised,
             "final_adjudication": final_adjudication,
             "final_claim_ledger": final_claim_ledger,
+            "user_decision_profile": user_decision_profile,
+            "golden_pit_checklist": golden_pit_checklist,
             "run_review_report": run_review_report,
             "outcome_review_report": outcome_review_report,
             "post_run_reflection_library": reflection_library,
@@ -534,6 +553,7 @@ class VNextOrchestrator:
             adjudication_history=self._load_local_json(self.output_dir / "adjudication_history.json", {}),
             evidence_registry=self._load_local_json(self.output_dir / "evidence_registry.json", {}),
             final_claim_ledger=self._load_local_json(self.output_dir / "final_claim_ledger.json", {}),
+            golden_pit_checklist=self._load_local_json(self.output_dir / "golden_pit_checklist.json", {}),
         )
 
     def _build_outcome_review_report(
@@ -708,6 +728,7 @@ class VNextOrchestrator:
                 "SchemaGuard",
                 "Reviser",
                 "Final",
+                "ReaderExit(UserDecisionProfile + GoldenPitChecklist)",
             ],
             "layer_input_policies": {
                 layer: self._build_layer_input_policy(layer)
@@ -715,8 +736,14 @@ class VNextOrchestrator:
             },
             "no_backflow_rule": (
                 "Integrated reports, event reports, future InvestigationReport artifacts, "
-                "Bridge, Thesis, Risk, Reviser, Final, and post-run reflection artifacts "
+                "Bridge, Thesis, Risk, Reviser, Final, UserDecisionProfile, GoldenPitChecklist, "
+                "and post-run reflection artifacts "
                 "must not rewrite or be injected into L1-L5 layer cards."
+            ),
+            "reader_exit_boundary": (
+                "UserDecisionProfile and golden_pit_checklist.json are reader-exit translation artifacts only. "
+                "They are generated after Final/ClaimLedger and must not enter L1-L5, Bridge, Thesis, Critic, "
+                "Risk, Reviser, Final, or hypothesis competition prompts."
             ),
             "evidence_boundary": (
                 "event_refs, news, browser output, sidecars, and future investigation outputs "
@@ -1908,6 +1935,8 @@ class VNextOrchestrator:
             [thesis.environment_assessment, thesis.valuation_assessment, thesis.timing_assessment],
             list(getattr(thesis, "invalidation_conditions", []) or []),
         )
+        add("thesis", "valuation", thesis.valuation_assessment, common_refs, [thesis.valuation_assessment], list(getattr(thesis, "invalidation_conditions", []) or []))
+        add("thesis", "timing", thesis.timing_assessment, common_refs, [thesis.timing_assessment], list(getattr(thesis, "invalidation_conditions", []) or []))
         add("thesis", "price_reflection", getattr(thesis, "priced_narrative", ""), common_refs, [getattr(thesis, "payoff_assessment", "")], list(getattr(thesis, "invalidation_conditions", []) or []))
         add("final", "market_state", final_adjudication.final_stance, common_refs, [final_adjudication.adjudicator_notes], list(final_adjudication.invalidation_conditions or []))
         add("final", "market_state", getattr(final_adjudication.reader_final, "one_liner", ""), list(getattr(final_adjudication.reader_final, "evidence_refs", []) or []) + common_refs, list(getattr(final_adjudication.reader_final, "three_reasons", []) or []), list(getattr(final_adjudication.reader_final, "invalidation_summary", []) or []))
@@ -2071,6 +2100,12 @@ class VNextOrchestrator:
         if claim_type == "risk_boundary":
             refs = self._compact_string_refs(typed_conflict_refs + price_counter_refs)
             return refs, "risk_conflicts_and_price_counterevidence" if refs else "not_claim_specific"
+        if claim_type == "valuation":
+            refs = self._compact_string_refs(typed_conflict_refs + price_counter_refs + competing_support_refs)
+            return refs, "valuation_conflicts_and_opposing_support" if refs else "not_claim_specific"
+        if claim_type == "timing":
+            refs = self._compact_string_refs(invalidation_related_refs + competing_support_refs)
+            return refs, "timing_invalidation_and_opposing_support" if refs else "not_claim_specific"
         if claim_type == "action_translation":
             refs = self._compact_string_refs(invalidation_related_refs + competing_support_refs + price_counter_refs)
             return refs, "action_invalidation_related_refs" if refs else "not_claim_specific"
@@ -2112,8 +2147,165 @@ class VNextOrchestrator:
             ]
             result = self._compact_strings(provided + action_conditions)
             return result, "action_conditions_and_invalidation" if result else "not_claim_specific"
+        if claim_type in {"valuation", "timing"}:
+            hypothesis_falsifiers = [
+                item
+                for hypothesis in list(synthesis_packet.competing_hypotheses or [])
+                for item in list(getattr(hypothesis, "falsification_conditions", []) or [])
+            ]
+            result = self._compact_strings(provided + hypothesis_falsifiers)
+            return result, f"{claim_type}_claim_invalidation_plus_hypothesis_falsifiers" if result else "not_claim_specific"
         result = self._compact_strings(provided)
         return result, "provided_claim_falsifiers" if result else "not_claim_specific"
+
+    def _load_user_decision_profile(self) -> UserDecisionProfile:
+        path = Path(__file__).resolve().parents[2] / "config" / "user_decision_profile.json"
+        if path.exists():
+            try:
+                return UserDecisionProfile.model_validate(json.loads(path.read_text(encoding="utf-8")))
+            except Exception as exc:
+                logger.warning("Failed to load user decision profile from %s: %s", path, exc)
+        return UserDecisionProfile(
+            buy_disciplines=[
+                UserDecisionCondition(
+                    condition_id="buy_value_discount_confirmed",
+                    side="buy",
+                    label="价值买入纪律",
+                    discipline="只有当估值安全垫、风险边界和必要的时机证据同时可追问时，才把黄金坑视为候选。",
+                    required_claim_types=["valuation", "risk_boundary", "timing"],
+                )
+            ],
+            sell_disciplines=[
+                UserDecisionCondition(
+                    condition_id="sell_trend_or_risk_breaks",
+                    side="sell",
+                    label="趋势卖出纪律",
+                    discipline="若趋势证据转弱或风险边界被触发，优先保护长期复利基地，不用估值叙事硬扛。",
+                    required_claim_types=["timing", "risk_boundary"],
+                )
+            ],
+        )
+
+    def _build_golden_pit_checklist(
+        self,
+        *,
+        final_claim_ledger: ClaimLedger,
+        decision_profile: UserDecisionProfile,
+        final_adjudication: FinalAdjudication,
+        effective_date: str,
+    ) -> GoldenPitChecklist:
+        selected = [
+            entry
+            for entry in list(final_claim_ledger.entries or [])
+            if entry.claim_type in {"valuation", "timing", "risk_boundary"}
+        ]
+        entries: List[GoldenPitChecklistItem] = []
+        for entry in selected:
+            status = self._checklist_status_from_claim(entry)
+            item = GoldenPitChecklistItem(
+                condition_id=f"claim:{entry.claim_id}",
+                condition=entry.claim_text,
+                discipline_side="claim",
+                source_claim_ids=[entry.claim_id],
+                evidence_refs=list(entry.evidence_refs),
+                current_status=status,
+                falsification_conditions=list(entry.falsification_conditions),
+            )
+            entries.append(item.model_copy(update={"changed_since_last_run": self._deferred_cross_run_change(item)}))
+
+        profile_conditions = list(decision_profile.buy_disciplines or []) + list(decision_profile.sell_disciplines or [])
+        for condition in profile_conditions:
+            matched = [entry for entry in selected if entry.claim_type in set(condition.required_claim_types)]
+            evidence_refs = self._compact_string_refs([ref for entry in matched for ref in entry.evidence_refs], limit=24)
+            falsifiers = self._compact_strings([item for entry in matched for item in entry.falsification_conditions], limit=12)
+            status = self._profile_condition_status(condition, matched)
+            item = GoldenPitChecklistItem(
+                condition_id=condition.condition_id,
+                condition=f"{condition.label}：{condition.discipline}",
+                discipline_side=condition.side,
+                source_claim_ids=[entry.claim_id for entry in matched],
+                evidence_refs=evidence_refs,
+                current_status=status,  # type: ignore[arg-type]
+                falsification_conditions=falsifiers,
+            )
+            entries.append(item.model_copy(update={"changed_since_last_run": self._deferred_cross_run_change(item)}))
+
+        changed_summary = [
+            "跨 run 变化对比暂缓启用：需等待 claim schema、数据源覆盖和 Run Review 通过历史稳定后再前置。"
+        ]
+        return GoldenPitChecklist(
+            effective_date=effective_date,
+            previous_checklist_ref="",
+            current_state=getattr(final_adjudication, "state_diagnosis", "") or getattr(final_adjudication.reader_final, "one_liner", "") or final_adjudication.final_stance,
+            changed_since_last_run_summary=changed_summary,
+            entries=entries,
+        )
+
+    def _checklist_status_from_claim(self, entry: ClaimLedgerEntry) -> str:
+        if entry.verified:
+            return "met"
+        if entry.authority_status == "blocked":
+            return "insufficient_evidence"
+        return "not_met"
+
+    def _profile_condition_status(self, condition: UserDecisionCondition, matched: List[ClaimLedgerEntry]) -> str:
+        if not matched:
+            return "insufficient_evidence"
+        if any(entry.authority_status == "blocked" for entry in matched):
+            return "insufficient_evidence"
+        required_types = set(condition.required_claim_types)
+        present_types = {entry.claim_type for entry in matched}
+        if required_types and not required_types.issubset(present_types):
+            return "insufficient_evidence"
+        if any(not entry.verified for entry in matched):
+            return "not_met"
+
+        by_type: Dict[str, List[ClaimLedgerEntry]] = {}
+        for entry in matched:
+            by_type.setdefault(str(entry.claim_type), []).append(entry)
+
+        if condition.side == "buy":
+            checks = []
+            if "valuation" in required_types:
+                checks.append(any(self._claim_text_supports_buy("valuation", entry.claim_text) for entry in by_type.get("valuation", [])))
+            if "timing" in required_types:
+                checks.append(any(self._claim_text_supports_buy("timing", entry.claim_text) for entry in by_type.get("timing", [])))
+            if "risk_boundary" in required_types:
+                checks.append(any(self._claim_text_supports_buy("risk_boundary", entry.claim_text) for entry in by_type.get("risk_boundary", [])))
+            return "met" if checks and all(checks) else "not_met"
+        if condition.side == "sell":
+            return "met" if any(self._claim_text_supports_sell(entry.claim_type, entry.claim_text) for entry in matched) else "not_met"
+        return "met" if all(entry.verified for entry in matched) else "not_met"
+
+    def _claim_text_supports_buy(self, claim_type: str, text: str) -> bool:
+        raw = str(text or "")
+        negative = re.search(r"不足|不便宜|偏贵|昂贵|未到|不支持|压力|恶化|破坏|脆弱|风险仍|风险边界仍需保留", raw)
+        if negative:
+            return False
+        if claim_type == "valuation":
+            return bool(re.search(r"便宜|低估|折价|安全垫|回落|改善|赔率改善|风险溢价改善", raw))
+        if claim_type == "timing":
+            return bool(re.search(r"趋势未破坏|趋势确认|企稳|转强|时机改善", raw))
+        if claim_type == "risk_boundary":
+            return bool(re.search(r"风险可承受|风险缓和|未触发|边界安全|压力缓和", raw))
+        return False
+
+    def _claim_text_supports_sell(self, claim_type: str, text: str) -> bool:
+        raw = str(text or "")
+        if claim_type == "timing":
+            return bool(re.search(r"趋势破坏|跌破|转弱|失守|下行确认", raw))
+        if claim_type == "risk_boundary":
+            return bool(re.search(r"风险触发|边界突破|风险恶化|压力升级|信用恶化|流动性冲击", raw))
+        return False
+
+    def _deferred_cross_run_change(self, item: GoldenPitChecklistItem) -> Dict[str, Any]:
+        return {
+            "changed": False,
+            "status": "deferred_until_run_quality_stable",
+            "previous_status": "",
+            "current_status": item.current_status,
+            "summary": "跨 run 变化对比暂缓；当前只展示本轮状态与条件证据差距。",
+        }
 
     def _compact_string_refs(self, values: List[Any], limit: int = 20) -> List[str]:
         return self._compact_strings([value for value in values if isinstance(value, str) and value], limit=limit)

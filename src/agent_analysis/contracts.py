@@ -263,6 +263,85 @@ class ClaimLedger(BaseModel):
     )
 
 
+class UserDecisionCondition(BaseModel):
+    """One condition from the reader's personal decision discipline."""
+    model_config = {"extra": "allow"}
+
+    condition_id: str = Field(..., description="稳定条件 ID")
+    side: Literal["buy", "sell", "hold", "risk"] = Field(..., description="买入、卖出、持有或风险纪律")
+    label: str = Field(..., min_length=1, description="读者可见条件名称")
+    discipline: str = Field(..., min_length=1, description="纪律描述")
+    required_claim_types: List[Literal["valuation", "timing", "risk_boundary"]] = Field(
+        default_factory=list,
+        description="该纪律需要哪些 final_claim_ledger claim 类型确认",
+    )
+
+
+class UserDecisionProfile(BaseModel):
+    """
+    阶段 5：个人决策翻译档案。
+
+    该档案只允许读者出口消费，不能进入 L1-L5、Bridge、Thesis、Critic、Risk、
+    Reviser、Final 的分析 prompt。
+    """
+    model_config = {"extra": "allow"}
+
+    schema_version: str = Field("user_decision_profile_v1", description="schema 版本")
+    profile_id: str = Field("default_value_buy_trend_sell", description="档案 ID")
+    version: str = Field("v1", description="档案版本")
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    holding_status: str = Field("unknown", description="当前持仓状态；未知时不得假装知道")
+    objective: str = Field("NDX as long-term compounding base", description="长期目标")
+    risk_tolerance: str = Field("unknown", description="风险承受能力；未知时只能条件式翻译")
+    decision_frequency: str = Field("2-5 decisions per year", description="真实决策频率")
+    buy_disciplines: List[UserDecisionCondition] = Field(default_factory=list, description="买入纪律")
+    sell_disciplines: List[UserDecisionCondition] = Field(default_factory=list, description="卖出纪律")
+    no_backflow_rule: str = Field(
+        "UserDecisionProfile is reader-exit translation material only; it must not be injected into L1-L5, Bridge, Thesis, Critic, Risk, Reviser, Final, or hypothesis competition prompts.",
+        description="个人决策档案不得反向污染上游分析",
+    )
+
+
+class GoldenPitChecklistItem(BaseModel):
+    """阶段 5 黄金坑清单条目。"""
+    model_config = {"extra": "allow"}
+
+    condition_id: str = Field(..., description="稳定条件 ID")
+    condition: str = Field(..., min_length=1, description="要检查的买入/卖出/风险条件")
+    discipline_side: Literal["buy", "sell", "hold", "risk", "claim"] = Field("claim", description="条件归属")
+    source_claim_ids: List[str] = Field(default_factory=list, description="来自 final_claim_ledger 的 claim IDs")
+    evidence_refs: List[str] = Field(default_factory=list, description="支撑该条件判断的证据 refs")
+    current_status: Literal["met", "not_met", "insufficient_evidence"] = Field(
+        "insufficient_evidence",
+        description="当前是否满足该条件",
+    )
+    falsification_conditions: List[str] = Field(default_factory=list, description="会让该条件失效的证据")
+    changed_since_last_run: Dict[str, Any] = Field(default_factory=dict, description="跨 run 变化预留字段；当前可标记为暂缓启用")
+
+
+class GoldenPitChecklist(BaseModel):
+    """
+    阶段 5：黄金坑清单。
+
+    这是读者出口层的跨 run 产物，只能读取 final_claim_ledger 与 UserDecisionProfile；
+    不得回流 L1-L5 或任何上游推理阶段。
+    """
+    model_config = {"extra": "allow"}
+
+    schema_version: str = Field("golden_pit_checklist_v1", description="schema 版本")
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    effective_date: str = Field("", description="本清单适用日期")
+    decision_profile_ref: str = Field("user_decision_profile.json", description="所用个人决策档案")
+    previous_checklist_ref: str = Field("", description="上一 run 的 golden_pit_checklist.json；当前跨 run 对比暂缓时为空")
+    current_state: str = Field("", description="30 秒读者出口：当前状态是什么")
+    changed_since_last_run_summary: List[str] = Field(default_factory=list, description="跨 run 变化预留摘要；当前暂缓启用时写明原因")
+    entries: List[GoldenPitChecklistItem] = Field(default_factory=list, description="条件清单")
+    no_backflow_rule: str = Field(
+        "GoldenPitChecklist is generated after Final/ClaimLedger for reader-exit use only; it must not feed back into L1-L5, Bridge, Thesis, Critic, Risk, Reviser, Final, or hypothesis competition.",
+        description="黄金坑清单不得反向污染主链",
+    )
+
+
 class InquiryMessage(BaseModel):
     """
     受控追问消息。

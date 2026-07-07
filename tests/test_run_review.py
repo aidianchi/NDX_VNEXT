@@ -234,6 +234,31 @@ def test_run_review_audits_stage4_evidence_registry_and_claim_ledger():
     )
 
 
+def test_run_review_passes_stage5_golden_pit_checklist_when_complete():
+    report = build_run_review_report(
+        data_integrity_report={"publish_status": "publishable"},
+        golden_pit_checklist={
+            "schema_version": "golden_pit_checklist_v1",
+            "no_backflow_rule": "GoldenPitChecklist must not feed back into L1-L5 or upstream prompts.",
+            "entries": [
+                {
+                    "condition_id": "buy_value_discount_confirmed",
+                    "condition": "价值买入纪律",
+                    "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+                    "current_status": "not_met",
+                    "falsification_conditions": ["估值安全垫明显改善。"],
+                    "changed_since_last_run": {"changed": False},
+                }
+            ],
+        },
+    )
+
+    assert any(
+        item.category == "expression" and item.severity == "pass" and "golden_pit_checklist" in item.finding
+        for item in report.attribution_findings
+    )
+
+
 def test_run_review_passes_when_main_chain_fields_exist():
     principal = {
         "contradiction_id": "panic_priced_vs_unconfirmed_risk",

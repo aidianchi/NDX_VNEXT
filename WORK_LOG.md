@@ -6,6 +6,35 @@
 
 ## 2026-07-07
 
+### 完成第 4 步：阶段 5 读者出口（决策稀疏版）+ 对抗式审查
+
+完成内容：
+
+- 新增阶段 5 合同：`UserDecisionProfile` / `UserDecisionCondition` 与 `GoldenPitChecklist` / `GoldenPitChecklistItem`。个人决策档案只描述持仓状态、目标、风险承受、买入纪律和卖出纪律；黄金坑清单只在 Final / Claim Ledger 之后生成。
+- 编排器在 `final_claim_ledger.json` 之后落盘 `user_decision_profile.json` 与 `golden_pit_checklist.json`。清单来源限定为 `final_claim_ledger` 中 `valuation` / `timing` / `risk_boundary` claim + 个人买卖纪律；`changed_since_last_run` 当前只保留预留字段并标记 `deferred_until_run_quality_stable`，暂不读取上一 run 做 diff。
+- Claim 台账补出 `valuation` 与 `timing` 类型条目，供黄金坑清单读取；个人纪律聚合采用保守语义，不能把“估值 claim 证据完整”误判成“买入条件满足”。例如“估值安全垫仍不足”即使 verified，也只会让买入纪律显示 `not_met`。
+- Runtime Boundary Manifest 增加 reader-exit 边界；Prompt Inspector 增加硬检查：`user_decision_profile` / `golden_pit_checklist` / 个人决策档案 / 黄金坑清单 一旦进入任意分析 prompt，标记违规。
+- Native brief 首屏改为阶段 5A 定调：30 秒版回答“当前状态、距离买入/卖出纪律还差哪些证据”；“上次 run 以来变化”暂缓前置，报告内明确四层阅读入口：30 秒裁决、5 分钟简报、深度研究、审计重放。
+- Run Review 增加阶段 5 读者出口检查：缺 `golden_pit_checklist` 记 observe；字段不完整记 fail；完整且声明 no-backflow 记 pass。
+
+对抗式审查结论：
+
+- 上游污染检查：个人档案和黄金坑清单只在 Final / Claim Ledger 之后生成；Prompt Inspector 对所有 LLM 分析阶段加拦截，未发现现有 prompt 注入路径。
+- 伪确定性检查：黄金坑清单不输出交易指令，只输出 `met / not_met / insufficient_evidence` 和失效条件；买入纪律聚合对负面估值文本保守判 `not_met`。
+- 跨 run 边界检查：真实上一 run diff 已退回，`changed_since_last_run` 只写暂缓状态；未来启用时仍不得进入 L1-L5、Bridge、Thesis、Critic、Risk、Reviser、Final 或竞争裁决。
+
+验证结果：
+
+- 聚焦测试：`python3 -m pytest tests/test_contracts.py tests/test_vnext_orchestrator.py::test_stage4_evidence_registry_and_final_claim_ledger_are_auditable tests/test_vnext_orchestrator.py::test_stage5_golden_pit_checklist_defers_cross_run_diff_even_if_previous_exists tests/test_vnext_reporter.py::test_vnext_reporter_generates_native_ui tests/test_vnext_reporter.py::test_prompt_inspector_flags_user_decision_profile_in_analysis_prompt tests/test_run_review.py::test_run_review_passes_stage5_golden_pit_checklist_when_complete -q`：27 通过。
+- 全量测试：`python3 -m pytest -q`：453 通过，4 个环境/依赖 warning。
+
+剩余风险：
+
+- 默认 `UserDecisionProfile` 是保守占位；正式使用前应在 `config/user_decision_profile.json` 写入真实持仓状态、风险承受和纪律参数。
+- 黄金坑清单的条件满足判断仍依赖 claim 文本语义和保守关键词；后续如果 Final claim 语言风格变化，需要继续补测试，避免把“证据完整”当成“条件满足”。
+- 跨 run 变化对比已主动暂缓；等 claim schema、数据源覆盖、Run Review 通过历史和多轮 run 行为稳定后再启用。
+- 第 5 步 claim 级结果记分尚未开始；阶段 5 读者出口已可用，但学习闭环仍需后续 `claim_outcome_scores.json`。
+
 ### 第 0-3 步验收审核 + Counter-Thesis schema 摩擦与 claim 闸门误伤修复
 
 完成内容：
@@ -30,6 +59,14 @@
 - 追加修复：合约层吸收 `falsifiers`/`explains_poorly` 别名与 dict 反方论点；`_verify_claim_entry` 改为比例原则——无法核验的引用点名降级（`unverifiable_evidence_refs:`），仅当没有任何可核验引用时才阻断。
 - 回放验证：两份新失败返回经修复后合约 + 编排器验证器均通过；至此两次真实 run 的全部 4 次 LLM 尝试在修复后都会成功。
 - `python -m pytest -q`：449 通过。启动第三次验证 run `fable_counter_thesis_fix_validation_2` 做最终收口。
+
+第三轮（同日）：验证 run `fable_counter_thesis_fix_validation_2` 最终验收通过：
+
+- counter_thesis LLM 阶段 1 次尝试即成功（仍是 flash 模型，证明别名吸收是关键瓶颈）。产出两个真反方假说：其一挑战估值压力（Trailing PE 高分位是低基数效应，Forward PE 分位 58.3% 说明压力已部分吸收），其二挑战趋势弱化判断（头部向等权的健康轮动 vs 趋势反转）；支持/反证 refs 不重叠且语义合理，失效条件具体到"HY OAS 扩大至 500bp 以上""NDX/NDXE 跌破 2.85"级别的可观察阈值。
+- 竞争裁决：主线 leading、两个反方 candidate、9 条保留争议、无虚假降级——输出不再是常量。
+- claim 台账：publish gate `pass`，6/6 verified，无幻觉引用误伤。
+- Run Review 零 fail；`prompt_input_audit.thesis_read=false` 实测成立。
+- 阶段 3（Counter-Thesis 真 LLM 化）的行为验收在本 run 内达成；跨市场状态方差验收（历史回测日 run）仍留待后续。
 
 剩余风险：
 

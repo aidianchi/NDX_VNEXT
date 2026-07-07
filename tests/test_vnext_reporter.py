@@ -641,6 +641,9 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert 'class="layer-tab"' not in html
     assert "showLayer" not in html
     assert "有保留通过" in html
+    assert "30秒裁决" in html
+    assert "个人决策翻译" in html
+    assert "暂无黄金坑清单条目" in html
     assert "toggleLayerCard" in html
     assert "layer-card" in html
     assert "layer-card__head" in html
@@ -665,6 +668,7 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     audit_payload = json.loads(audit_index.read_text(encoding="utf-8"))
     assert audit_payload["kind"] == "vnext_brief_audit_index"
     assert any(item["relative_path"] == "analysis_packet.json" for item in audit_payload["artifact_files"])
+    assert any(item["relative_path"] == "golden_pit_checklist.json" for item in audit_payload["artifact_files"])
 
     atlas_path = reporter.run(run_dir, template="atlas")
     atlas_html = Path(atlas_path).read_text(encoding="utf-8")
@@ -742,6 +746,18 @@ def test_prompt_inspector_empty_cross_layer_signals_are_clean(tmp_path: Path):
     payload = PromptInspectorGenerator(reports_dir=str(tmp_path / "reports"))._load_payload(run_dir)
 
     assert payload["stages"][0]["boundary"]["status"] == "干净"
+
+
+def test_prompt_inspector_flags_user_decision_profile_in_analysis_prompt(tmp_path: Path):
+    inspector = PromptInspectorGenerator(reports_dir=str(tmp_path / "reports"))
+
+    result = inspector._scan_boundary(
+        "thesis",
+        '## User Message\n{"user_decision_profile":{"objective":"wait for golden pit"}}',
+    )
+
+    assert result["status"] == "违规"
+    assert any("个人决策档案" in item["rule"] for item in result["findings"])
 
 
 def test_l4_valuation_visual_uses_third_party_pb_when_component_pb_diverges(tmp_path: Path):

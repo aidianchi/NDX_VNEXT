@@ -11,11 +11,13 @@ from agent_analysis.contracts import (
     ApprovalStatus,
     BridgeMemo,
     ClaimLedger,
+    ClaimLedgerEntry,
     CompetingHypothesis,
     Confidence,
     Critique,
     EvidenceRegistry,
     FinalAdjudication,
+    GoldenPitChecklist,
     HypothesisCompetition,
     InvestigationReport,
     KeySupportChain,
@@ -614,6 +616,7 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
     boundary_manifest = json.loads((tmp_path / "runtime_boundary_manifest.json").read_text(encoding="utf-8"))
     assert boundary_manifest["schema_version"] == "runtime_boundary_manifest_v1"
     assert "investigation_reports" in boundary_manifest["layer_input_policies"]["L1"]["forbidden_runtime_inputs"]
+    assert "UserDecisionProfile" in boundary_manifest["reader_exit_boundary"]
     assert "not injected into L1-L5 prompts" in boundary_manifest["purpose"]
     feedback_manifest = json.loads((tmp_path / "feedback_contract_manifest.json").read_text(encoding="utf-8"))
     assert feedback_manifest["schema_version"] == "feedback_contract_manifest_v1"
@@ -2039,3 +2042,96 @@ def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path:
     # 存在其他可核验引用时点名降级，不整条阻断。
     assert all(entry.authority_status != "blocked" for entry in ledger.entries)
     assert any("unverifiable_evidence_refs:L5.get_ta_indicators" in (entry.downgrade_reason or "") for entry in ledger.entries)
+    assert any(entry.claim_type == "valuation" for entry in ledger.entries)
+    assert any(entry.claim_type == "timing" for entry in ledger.entries)
+
+
+def test_stage5_golden_pit_checklist_defers_cross_run_diff_even_if_previous_exists(tmp_path: Path):
+    previous_dir = tmp_path / "20260706_000000"
+    current_dir = tmp_path / "20260707_000000"
+    previous_dir.mkdir()
+    previous_payload = {
+        "entries": [
+            {
+                "condition_id": "buy_value_discount_confirmed",
+                "condition": "价值买入纪律",
+                "current_status": "met",
+            }
+        ]
+    }
+    (previous_dir / "golden_pit_checklist.json").write_text(json.dumps(previous_payload), encoding="utf-8")
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(current_dir),
+        llm_engine=FakeLLMEngine({}),
+    )
+    ledger = ClaimLedger(
+        effective_date="2026-07-07",
+        entries=[
+            ClaimLedgerEntry(
+                claim_id="claim:thesis:valuation",
+                source_stage="thesis",
+                claim_text="估值安全垫仍不足。",
+                claim_type="valuation",
+                evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+                counter_evidence_refs=["L1.get_10y_real_rate"],
+                inference_steps=["估值仍需要利率和盈利确认。"],
+                falsification_conditions=["估值分位明显回落。"],
+                verified=True,
+                authority_status="verified",
+            ),
+            ClaimLedgerEntry(
+                claim_id="claim:thesis:timing",
+                source_stage="thesis",
+                claim_text="趋势尚未破坏。",
+                claim_type="timing",
+                evidence_refs=["L5.get_qqq_technical_indicators"],
+                counter_evidence_refs=["L3.get_ndx_ndxe_ratio"],
+                inference_steps=["价格趋势仍在。"],
+                falsification_conditions=["趋势跌破关键均线。"],
+                verified=True,
+                authority_status="verified",
+            ),
+            ClaimLedgerEntry(
+                claim_id="claim:final:risk",
+                source_stage="final",
+                claim_text="风险边界仍需保留。",
+                claim_type="risk_boundary",
+                evidence_refs=["L1.get_10y_real_rate"],
+                counter_evidence_refs=["L5.get_qqq_technical_indicators"],
+                inference_steps=["高利率约束估值容错。"],
+                falsification_conditions=["真实利率快速回落。"],
+                verified=True,
+                authority_status="verified",
+            ),
+        ],
+    )
+    final = FinalAdjudication(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="中性偏谨慎。",
+        confidence=Confidence.MEDIUM,
+        key_support_chains=[],
+        must_preserve_risks=["风险边界仍需保留。"],
+        blocking_issues=[],
+        adjudicator_notes="保留条件式结论。",
+        state_diagnosis="估值未到黄金坑，趋势未坏。",
+    )
+    profile = orchestrator._load_user_decision_profile()
+
+    checklist = orchestrator._build_golden_pit_checklist(
+        final_claim_ledger=ledger,
+        decision_profile=profile,
+        final_adjudication=final,
+        effective_date="2026-07-07",
+    )
+
+    assert isinstance(checklist, GoldenPitChecklist)
+    assert checklist.previous_checklist_ref == ""
+    assert "暂缓" in checklist.changed_since_last_run_summary[0]
+    assert any(item.condition_id == "buy_value_discount_confirmed" for item in checklist.entries)
+    buy_item = next(item for item in checklist.entries if item.condition_id == "buy_value_discount_confirmed")
+    assert buy_item.current_status == "not_met"
+    assert buy_item.changed_since_last_run["changed"] is False
+    assert buy_item.changed_since_last_run["status"] == "deferred_until_run_quality_stable"
+    assert "暂缓" in buy_item.changed_since_last_run["summary"]
+    assert "must not feed back" in checklist.no_backflow_rule

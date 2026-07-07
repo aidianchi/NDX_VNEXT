@@ -1185,6 +1185,8 @@ class VNextReportGenerator:
             "schema_guard_report.json",
             "run_review_report.json",
             "outcome_review_report.json",
+            "user_decision_profile.json",
+            "golden_pit_checklist.json",
             "data_integrity_report.json",
             "context_brief.json",
             "chart_time_series.json",
@@ -1280,6 +1282,8 @@ class VNextReportGenerator:
             "schema_guard_report": _load_json(run_path / "schema_guard_report.json", {}),
             "run_review_report": _load_json(run_path / "run_review_report.json", {}),
             "outcome_review_report": _load_json(run_path / "outcome_review_report.json", {}),
+            "user_decision_profile": _load_json(run_path / "user_decision_profile.json", {}),
+            "golden_pit_checklist": _load_json(run_path / "golden_pit_checklist.json", {}),
             "data_integrity_report": _load_json(run_path / "data_integrity_report.json", {}),
             "context_brief": _load_json(run_path / "context_brief.json", {}),
             "layer_context_briefs": layer_contexts,
@@ -1569,9 +1573,10 @@ class VNextReportGenerator:
         }
         if template == "brief":
             return (
-                self._memo_chartbook_section(artifacts)
-                + self._risks_section(artifacts, "02 · 风险与反证")
-                + self._conflicts_section(artifacts, "03 · 冲突与共振")
+                self._reader_exit_section(artifacts)
+                + self._memo_chartbook_section(artifacts)
+                + self._risks_section(artifacts, "03 · 风险与反证")
+                + self._conflicts_section(artifacts, "04 · 冲突与共振")
                 + self._event_layer_summary_section(artifacts)
                 + self._brief_layers_section(artifacts)
                 + self._audit_section(
@@ -1653,17 +1658,14 @@ class VNextReportGenerator:
         hero_title = reader.get("one_liner") or final.get("final_stance", "N/A")
         hero_note = self._reader_note(final)
         if template == "brief":
-            actions = _as_list(final.get("portfolio_actions"))
-            action_rows = "".join(
-                f"<li><b>{_escape(_display_label(item.get('bucket')))}</b><span>{_escape(item.get('action') or item.get('rationale') or '')}</span></li>"
-                for item in actions[:3]
-                if isinstance(item, dict)
-            ) or f"<li><b>动作</b><span>{_escape(final.get('payoff_assessment') or '等待动作层结论。')}</span></li>"
+            checklist = artifacts.get("golden_pit_checklist", {}) if isinstance(artifacts.get("golden_pit_checklist"), dict) else {}
+            checklist_summary = self._golden_pit_summary(checklist)
             invalidations = _as_list(final.get("invalidation_conditions"))
             primary_break = invalidations[0] if invalidations else "暂无结构化优先反证。"
             confidence_label = _label(confidence, "confidence")
-            confidence_note = "看四件事：证据是否够用，数据是否可靠，关键矛盾是否还压着结论，反证是否足以改判断。"
             data_date = meta.get("data_date") or analysis_meta.get("data_date") or backtest_date
+            current_state = checklist.get("current_state") if isinstance(checklist, dict) else ""
+            current_state = current_state or final.get("state_diagnosis") or hero_note
             return f"""
 <header class="hero brief-hero" id="top">
   <div class="eyebrow">NDX 投资判断书</div>
@@ -1674,16 +1676,16 @@ class VNextReportGenerator:
     </div>
     <aside class="brief-action-card" aria-label="动作和反证">
       <div>
-        <b>仓位动作</b>
-        <ul>{action_rows}</ul>
+        <b>当前状态</b>
+        <p>{_escape(_sentence(current_state, 110))}</p>
       </div>
       <div>
-        <b>最需要盯住的反证</b>
-        <p>{_escape(primary_break)}</p>
+        <b>距离纪律条件</b>
+        <p>{_escape(checklist_summary['distance'])}</p>
       </div>
       <div>
         <b>可信度：{_escape(confidence_label)}</b>
-        <p>{_escape(confidence_note)}</p>
+        <p>{_escape(primary_break)}</p>
       </div>
     </aside>
   </div>
@@ -1728,7 +1730,8 @@ class VNextReportGenerator:
         if template == "brief":
             return """
 <nav class="nav" aria-label="章节导航">
-  <a href="#decision">主判断</a>
+  <a href="#decision">30秒裁决</a>
+  <a href="#five-minute-brief">5分钟简报</a>
   <a href="#risks">风险与反证</a>
   <a href="#conflicts">冲突与共振</a>
   <a href="#layers">L1-L5 底稿</a>
@@ -1747,6 +1750,113 @@ class VNextReportGenerator:
   <a href="#governance">治理</a>
   <a href="#audit">审计</a>
 </nav>
+"""
+
+    def _golden_pit_summary(self, checklist: Dict[str, Any]) -> Dict[str, str]:
+        entries = _as_list(checklist.get("entries")) if isinstance(checklist, dict) else []
+        if not entries:
+            return {
+                "change": "跨 run 对比暂缓启用。",
+                "distance": "尚未形成可审计的买入/卖出条件差距。",
+            }
+        changes = _as_list(checklist.get("changed_since_last_run_summary"))
+        change = str(changes[0]) if changes else "本轮未记录显著状态变化。"
+        not_ready = [
+            item
+            for item in entries
+            if isinstance(item, dict) and item.get("current_status") in {"not_met", "insufficient_evidence"}
+        ]
+        met_count = sum(1 for item in entries if isinstance(item, dict) and item.get("current_status") == "met")
+        if not_ready:
+            first = not_ready[0]
+            status = "证据不足" if first.get("current_status") == "insufficient_evidence" else "未满足"
+            distance = f"{len(not_ready)} 项仍未满足或证据不足；优先看：{status} - {_sentence(first.get('condition'), 72)}"
+        else:
+            distance = f"{met_count} 项条件均已满足；仍需复核反证和发布闸门。"
+        return {"change": _sentence(change, 110), "distance": _sentence(distance, 120)}
+
+    def _reader_exit_section(self, artifacts: Dict[str, Any]) -> str:
+        final = artifacts.get("final_adjudication", {}) or {}
+        checklist = artifacts.get("golden_pit_checklist", {}) if isinstance(artifacts.get("golden_pit_checklist"), dict) else {}
+        profile = artifacts.get("user_decision_profile", {}) if isinstance(artifacts.get("user_decision_profile"), dict) else {}
+        reader = self._reader_final(final)
+        state = checklist.get("current_state") or final.get("state_diagnosis") or reader.get("one_liner") or final.get("final_stance") or "未记录"
+        changes = _as_list(checklist.get("changed_since_last_run_summary"))
+        change_rows = "".join(f"<li>{_escape(item)}</li>" for item in changes[:4]) or "<li>跨 run 对比暂缓启用。</li>"
+        entries = _as_list(checklist.get("entries"))
+        status_label = {"met": "已满足", "not_met": "未满足", "insufficient_evidence": "证据不足"}
+        item_rows = ""
+        for item in entries[:8]:
+            if not isinstance(item, dict):
+                continue
+            refs = self._ref_chips(item.get("evidence_refs", [])[:4] if isinstance(item.get("evidence_refs"), list) else [])
+            falsifiers = "；".join(str(value) for value in _as_list(item.get("falsification_conditions"))[:2])
+            item_rows += f"""
+      <article class="chain-card">
+        <h3>{_escape(status_label.get(str(item.get('current_status')), str(item.get('current_status') or '未记录')))} · {_escape(_sentence(item.get('condition'), 96))}</h3>
+        <p><b>反证/失效：</b>{_escape(falsifiers or '未记录')}</p>
+        <div class="ref-row">{refs}</div>
+      </article>
+"""
+        profile_note = (
+            f"决策频率：{profile.get('decision_frequency') or '未记录'}；"
+            f"目标：{profile.get('objective') or '未记录'}；"
+            f"持仓状态：{profile.get('holding_status') or '未知'}。"
+        )
+        action_note = "；".join(
+            " ".join(
+                part
+                for part in [
+                    _display_label(item.get("bucket")),
+                    str(item.get("action") or item.get("rationale") or ""),
+                ]
+                if part
+            )
+            for item in _as_list(final.get("portfolio_actions"))[:3]
+            if isinstance(item, dict) and (item.get("action") or item.get("rationale"))
+        )
+        if action_note:
+            profile_note = f"{profile_note} Final 条件式动作翻译：{action_note}。"
+        return f"""
+<section class="panel decision-panel" id="decision">
+  <div class="section-kicker">01 · 读者出口</div>
+  <h2>30 秒先看三件事</h2>
+  <p class="section-note">这里不是每日交易提示。它把最终 claim 台账翻译成：当前状态是什么、距离你的买入/卖出纪律还差哪几项证据。跨 run 变化对比暂缓启用。</p>
+  <div class="governance-grid">
+    <article>
+      <h3>市场判断</h3>
+      <p>{_escape(_sentence(state, 180))}</p>
+    </article>
+    <article>
+      <h3>风险边界</h3>
+      <ul>{''.join(f'<li>{_escape(item)}</li>' for item in _as_list(final.get('invalidation_conditions'))[:4]) or '<li>暂无结构化失效条件。</li>'}</ul>
+    </article>
+    <article>
+      <h3>个人决策翻译</h3>
+      <p>{_escape(profile_note)}</p>
+      <small>个人档案只在读者出口使用，不进入上游分析 prompt。</small>
+    </article>
+  </div>
+  <section class="memo-readout">
+    <div>
+      <b>当前状态</b>
+      <p>{_escape(_sentence(state, 120))}</p>
+    </div>
+    <div>
+      <b>跨 run 对比</b>
+      <ul>{change_rows}</ul>
+    </div>
+    <div>
+      <b>条件差距</b>
+      <p>{_escape(self._golden_pit_summary(checklist)['distance'])}</p>
+    </div>
+    <div>
+      <b>阅读深度</b>
+      <p>30 秒裁决 -> 5 分钟简报 -> 深度研究 -> 审计重放。</p>
+    </div>
+  </section>
+  <div class="chain-grid">{item_rows or '<p>暂无黄金坑清单条目。</p>'}</div>
+</section>
 """
 
     def _decision_section(self, artifacts: Dict[str, Any]) -> str:
@@ -2406,8 +2516,8 @@ class VNextReportGenerator:
         )
         proof_card_count = sum(1 for card in [cards_top, cards_rates, cards_structure, cards_valuation, *credit_cards] if card)
         return f"""
-<section class="panel memo-chartbook" id="decision">
-  <div class="section-kicker">01 · 主判断与核心图册</div>
+<section class="panel memo-chartbook" id="five-minute-brief">
+  <div class="section-kicker">02 · 主判断与 5 分钟核心图册</div>
   <h2>核心证据图</h2>
   <p class="section-note">每张图只回答一个判断问题。本次展示 {_escape(proof_card_count)} 张有有效时间序列支撑的核心图；没有证据的图不补位，新增关键证据会自然进入这里或进入补充证据。</p>
   <section class="memo-readout">

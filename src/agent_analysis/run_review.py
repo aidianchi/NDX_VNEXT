@@ -495,6 +495,51 @@ def _evidence_claim_ledger_findings(
     return findings
 
 
+def _reader_exit_findings(golden_pit_checklist: Dict[str, Any]) -> List[RunReviewFinding]:
+    if not golden_pit_checklist:
+        return [
+            _finding(
+                "expression",
+                "observe",
+                "缺少 golden_pit_checklist，阶段 5 读者出口还不能回答“距买入/卖出条件还差什么证据”。",
+                ["golden_pit_checklist.json"],
+                recommended_rule_update="Final/ClaimLedger 后应生成只供读者出口消费的 golden_pit_checklist.json。",
+            )
+        ]
+    entries = _as_list(golden_pit_checklist.get("entries"))
+    required = {"condition", "evidence_refs", "current_status", "falsification_conditions", "changed_since_last_run"}
+    bad_entries = []
+    for item in entries:
+        if not isinstance(item, dict):
+            bad_entries.append("not_a_dict")
+            continue
+        missing = sorted(field for field in required if field not in item)
+        if missing:
+            bad_entries.append(f"{item.get('condition_id', 'unknown')}: missing={','.join(missing)}")
+    no_backflow = str(golden_pit_checklist.get("no_backflow_rule") or "")
+    if not entries or bad_entries:
+        return [
+            _finding(
+                "expression",
+                "fail",
+                "golden_pit_checklist 字段不完整，读者出口无法审计条件差距："
+                + "；".join(bad_entries[:5]),
+                ["golden_pit_checklist.json:entries"],
+                recommended_rule_update="每条黄金坑条件必须包含 condition/evidence_refs/current_status/falsification_conditions/changed_since_last_run。",
+            )
+        ]
+    severity = "pass" if "must not feed back" in no_backflow or "不得" in no_backflow else "observe"
+    return [
+        _finding(
+            "expression",
+            severity,
+            f"golden_pit_checklist 已覆盖 {len(entries)} 条读者条件，并声明只属于读者出口层。",
+            ["golden_pit_checklist.json"],
+            recommended_rule_update="" if severity == "pass" else "golden_pit_checklist 必须显式声明不得回流 L1-L5/Bridge/Thesis/Final。",
+        )
+    ]
+
+
 def _finding(
     category: str,
     severity: str,
@@ -531,6 +576,7 @@ def build_run_review_report(
     adjudication_history: Optional[Dict[str, Any]] = None,
     evidence_registry: Optional[Dict[str, Any]] = None,
     final_claim_ledger: Optional[Dict[str, Any]] = None,
+    golden_pit_checklist: Optional[Dict[str, Any]] = None,
 ) -> RunReviewReport:
     analysis_packet = analysis_packet or {}
     bridges = bridges or []
@@ -547,6 +593,7 @@ def build_run_review_report(
     adjudication_history = adjudication_history or {}
     evidence_registry = evidence_registry or {}
     final_claim_ledger = final_claim_ledger or {}
+    golden_pit_checklist = golden_pit_checklist or {}
 
     findings: List[RunReviewFinding] = []
 
@@ -600,6 +647,7 @@ def build_run_review_report(
     findings.extend(_feedback_contract_findings(inquiry_router_output, investigation_reports))
     findings.extend(_hypothesis_competition_findings(hypothesis_competition, adjudication_history))
     findings.extend(_evidence_claim_ledger_findings(evidence_registry, final_claim_ledger))
+    findings.extend(_reader_exit_findings(golden_pit_checklist))
 
     if schema_guard_report:
         if schema_guard_report.get("passed") is False:
@@ -910,6 +958,7 @@ def build_run_review_from_dir(run_dir: str | Path) -> RunReviewReport:
         adjudication_history=_load_json(run_path / "adjudication_history.json", {}),
         evidence_registry=_load_json(run_path / "evidence_registry.json", {}),
         final_claim_ledger=_load_json(run_path / "final_claim_ledger.json", {}),
+        golden_pit_checklist=_load_json(run_path / "golden_pit_checklist.json", {}),
     )
 
 

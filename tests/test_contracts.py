@@ -27,6 +27,8 @@ from agent_analysis.contracts import (
     EvidencePassport,
     EvidenceRegistry,
     EvidenceSourceAuthority,
+    GoldenPitChecklist,
+    GoldenPitChecklistItem,
     HypothesisCompetition,
     InquiryMessage,
     InquiryMessageType,
@@ -35,6 +37,8 @@ from agent_analysis.contracts import (
     PrincipalContradiction,
     ReaderFinal,
     SecondaryContradiction,
+    UserDecisionCondition,
+    UserDecisionProfile,
 )
 
 
@@ -170,6 +174,47 @@ def test_evidence_passport_and_claim_ledger_stage4_contracts_roundtrip():
     assert restored_registry.passports["L1.get_10y_real_rate"].source_tier == "official"
     assert restored_ledger.entries[0].claim_id == "claim:final:rates"
     assert restored_ledger.entries[0].verified is True
+
+
+def test_stage5_user_decision_profile_and_golden_pit_checklist_roundtrip():
+    profile = UserDecisionProfile(
+        holding_status="core_position",
+        objective="NDX 作为长期复利基地。",
+        risk_tolerance="只允许条件式翻译。",
+        buy_disciplines=[
+            UserDecisionCondition(
+                condition_id="buy_value",
+                side="buy",
+                label="价值买入",
+                discipline="估值、时机、风险边界都必须可追问。",
+                required_claim_types=["valuation", "timing", "risk_boundary"],
+            )
+        ],
+    )
+    checklist = GoldenPitChecklist(
+        effective_date="2026-07-07",
+        current_state="估值仍偏贵，趋势未坏。",
+        changed_since_last_run_summary=["估值条件仍未满足。"],
+        entries=[
+            GoldenPitChecklistItem(
+                condition_id="buy_value",
+                condition="价值买入纪律",
+                discipline_side="buy",
+                source_claim_ids=["claim:thesis:valuation"],
+                evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+                current_status="not_met",
+                falsification_conditions=["估值安全垫明显改善。"],
+                changed_since_last_run={"changed": False},
+            )
+        ],
+    )
+
+    restored_profile = UserDecisionProfile.model_validate(profile.model_dump(mode="json"))
+    restored_checklist = GoldenPitChecklist.model_validate(checklist.model_dump(mode="json"))
+
+    assert restored_profile.buy_disciplines[0].required_claim_types == ["valuation", "timing", "risk_boundary"]
+    assert restored_checklist.entries[0].current_status == "not_met"
+    assert "must not feed back" in restored_checklist.no_backflow_rule
 
 
 def test_competing_hypothesis_contract_requires_auditable_adjudication_fields():

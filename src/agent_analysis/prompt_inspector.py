@@ -229,6 +229,13 @@ class PromptInspectorGenerator:
                 ("Final 当前判断提前出现", r"final_adjudication\.json|\"final_adjudication\""),
                 ("未标注新闻候选", r"browser_sidecar"),
             ]
+        if stage in {"L1", "L2", "L3", "L4", "L5", "bridge", "thesis", "critic", "risk", "reviser", "final_adjudicator", "counter_thesis"}:
+            checks.append(
+                (
+                    "个人决策档案或黄金坑清单进入分析 prompt",
+                    r"user_decision_profile|UserDecisionProfile|golden_pit_checklist|GoldenPitChecklist|个人决策档案|黄金坑清单",
+                )
+            )
         findings = []
         payload = attempt_payload.get("payload") if isinstance(attempt_payload, dict) else None
         context_brief = payload.get("context_brief") if isinstance(payload, dict) else None
