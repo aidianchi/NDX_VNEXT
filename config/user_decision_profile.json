@@ -1,0 +1,74 @@
+{
+  "schema_version": "user_decision_profile_v1",
+  "profile_id": "aidianchi_value_buy_trend_sell",
+  "version": "v1_draft",
+  "threshold_status": "draft_needs_user_confirmation",
+  "holding_status": "small_position_dca_waiting_for_golden_pit",
+  "objective": "NDX 是长期复利基地；目标是优异的长线盈利，不追求短线波段。",
+  "risk_tolerance": "draft_unconfirmed：假设为长期资金、可承受阶段性深回撤，正式确认前个人决策翻译只能是条件式。",
+  "decision_frequency": "2-5 decisions per year",
+  "notes": [
+    "本档案只被读者出口层（个人决策翻译 / 黄金坑清单 / 状态台账）消费，绝不进入 L1-L5、Bridge、Thesis、Critic、Risk、Reviser、Final 或竞争裁决的任何 prompt。",
+    "metric_predicates 是纪律的确定性谓词形式，供状态台账与未来的谓词化状态判定使用；当前阈值全部是草案，需要用户逐条确认或修改。",
+    "谓词变量名对应 state_ledger.py 的 STATE_VARIABLE_SPECS 稳定键；Wind 估值分位接通前，涉及 wind_pe_percentile 的谓词记为 insufficient_evidence，不得用其他指标冒充。"
+  ],
+  "buy_disciplines": [
+    {
+      "condition_id": "buy_valuation_entry_zone",
+      "side": "buy",
+      "label": "估值进入买入区",
+      "discipline": "只有当指数级估值进入历史偏低区间（而不是从极贵回到普通贵）时，价值买入才开始成为候选；技术反弹不能替代估值安全垫。",
+      "required_claim_types": ["valuation", "risk_boundary"],
+      "metric_predicates": {
+        "logic": "all_of",
+        "predicates": [
+          {"var": "valuation.forward_pe", "op": "<=", "value": 20, "threshold_status": "draft"},
+          {"var": "valuation.wind_pe_percentile", "op": "<=", "value": 0.35, "threshold_status": "draft_pending_wind_source"}
+        ]
+      }
+    },
+    {
+      "condition_id": "buy_golden_pit_drawdown",
+      "side": "buy",
+      "label": "黄金坑回撤确认",
+      "discipline": "真正的黄金坑同时具备显著回撤和恐慌情绪；只有回撤没有恐慌可能只是慢熊上半场，只有恐慌没有回撤则还没到出手区。",
+      "required_claim_types": ["valuation", "timing", "risk_boundary"],
+      "metric_predicates": {
+        "logic": "all_of",
+        "predicates": [
+          {"var": "trend.drawdown_from_donchian_upper_pct", "op": ">=", "value": 15, "threshold_status": "draft"},
+          {"var": "risk_appetite.vix_percentile_10y", "op": ">=", "value": 0.7, "threshold_status": "draft"}
+        ]
+      }
+    }
+  ],
+  "sell_disciplines": [
+    {
+      "condition_id": "sell_trend_break_confirmed",
+      "side": "sell",
+      "label": "趋势破坏确认",
+      "discipline": "趋势卖出保护复利基地：短期均线体系跌破长期均线且广度同步转弱时减仓，不用估值叙事硬扛趋势破坏。",
+      "required_claim_types": ["timing", "risk_boundary"],
+      "metric_predicates": {
+        "logic": "all_of",
+        "predicates": [
+          {"var": "trend.short_vs_long_divergence_pct", "op": "<=", "value": 0, "threshold_status": "draft"},
+          {"var": "breadth.adv_decline_trend", "op": "==", "value": "falling", "threshold_status": "draft"}
+        ]
+      }
+    },
+    {
+      "condition_id": "sell_risk_boundary_triggered",
+      "side": "sell",
+      "label": "风险边界触发",
+      "discipline": "信用市场恶化是比价格更早的系统性风险信号；信用确认恶化时优先降风险，不等价格证明。",
+      "required_claim_types": ["risk_boundary"],
+      "metric_predicates": {
+        "logic": "all_of",
+        "predicates": [
+          {"var": "credit.hyg_percentile_1y", "op": "<=", "value": 5, "threshold_status": "draft"}
+        ]
+      }
+    }
+  ]
+}

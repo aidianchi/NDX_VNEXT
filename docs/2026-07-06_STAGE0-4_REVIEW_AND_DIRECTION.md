@@ -99,7 +99,16 @@
 
 - 来源：从 `final_claim_ledger.json` 筛 `claim_type in {valuation, timing, risk_boundary}` 的条目 + UserDecisionProfile 的买入/卖出纪律条件。
 - 每条：`condition / evidence_refs / current_status(met | not_met | insufficient_evidence) / falsification_conditions / changed_since_last_run`。
-- `changed_since_last_run` 通过读取上一个 run 的同名产物做 diff——这是第一个跨 run 产物，只属于读者出口层，同样不得回流 L1-L5。
+
+**跨 run 对比定案（2026-07-07，取代早先"读上一 run 同名产物做 diff"的说法）**：对比轴不是"上一份报告"，而是"上一个市场状态"。理由：报告 diff 混入市场变化、系统代码变化、LLM 措辞随机三种来源，调试期后两者占大头；且 claim_id 是内容哈希，措辞一变即"新 claim"，diff 纯噪音。定案设计：
+
+1. **状态台账**（`src/state_ledger.py` → `output/state_ledger/state_ledger.jsonl`，append-only，已实现记录层）：每次 run 追加一行——`data_date / run_id / git_sha / schema_versions / official / state_variables / profile_condition_statuses / gates`。
+2. **只收两类稳定键**：(a) 确定性市场状态变量（估值 PE、净流动性、VIX 分位、HYG 分位、广度、NDX/NDXE 分位、趋势与唐奇安回撤等，直接取自 raw_data 数字，不经 LLM）；(b) profile 纪律条件状态（ID 来自 config，天然稳定）。**永久排除** `claim:<hash>` 回声条目；LLM 派生项只做背景且带 `llm_derived` 标记，不得参与报警。
+3. **入账与正式标记**：所有 run 都入账（append-only、同 run_id 去重），`--official` 标记正式日度 run；展示层只比 official 条目。调试 run 无 official 标记，天然不污染基线。
+4. **对比语义**：diff 目标 = 台账中 data_date 更早的最近一条 official 记录；呈现 Δ1d 与 Δ5d 两列。`git_sha` 不同 → 加横幅"系统版本已变化，LLM 派生项不可比，确定性变量仍可比"；data_date 相同、sha 不同 → 呈现为回归检查而非市场变化。
+5. **报警白名单**（只有这些能进 30 秒版）：profile 条件状态翻转、失效条件触发、publish gate 变化、DataIntegrity 状态变化。措辞变化永不报警——日报多数日子的正确输出就是一行"与上一交易日无实质状态变化"。
+6. **展示层启用闸门**：① profile 条件状态判定从关键词正则升级为 metric 谓词（谓词已写入 `config/user_decision_profile.json`，阈值待用户确认）；② 台账 ≥5 条 official 记录；③ 期间状态变量相关代码无未回归的变更。记录层不受闸门限制，已先行。
+7. **与修正二汇合**：claim 级结果记分的 T+N 窗口打分器读同一本台账取历史状态，不另建跨 run 基础设施。
 
 补充一个路线图没有的关键件：
 

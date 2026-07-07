@@ -20,6 +20,7 @@ try:
     from .news_event_data_linker import write_news_event_data_links
     from .news_event_ledger import NewsEventLedgerBuilder
     from .news_layer_analyzer import write_news_layer_analysis
+    from .state_ledger import append_state_ledger_entry
 except ImportError:
     from agent_analysis import adapt_vnext_to_legacy
     from agent_analysis.orchestrator import VNextOrchestrator
@@ -33,6 +34,7 @@ except ImportError:
     from news_event_data_linker import write_news_event_data_links
     from news_event_ledger import NewsEventLedgerBuilder
     from news_layer_analyzer import write_news_layer_analysis
+    from state_ledger import append_state_ledger_entry
 
 
 DEFAULT_MODEL_PRIORITY = [
@@ -72,6 +74,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--models", type=str, help="Comma-separated model priority override.")
     parser.add_argument("--collect-only", action="store_true", help="Only collect market data JSON, then exit before any LLM calls.")
     parser.add_argument("--enable-news", action="store_true", help="Write an independent official news/event sidecar artifact.")
+    parser.add_argument("--official", action="store_true", help="Mark this run as an official daily entry in the cross-run state ledger.")
     parser.add_argument("--event-only", action="store_true", help="Only build the independent event/news report artifacts; do not run L1-L5 or LLM synthesis.")
     parser.add_argument("--skip-report", action="store_true", help="Stop after logic_json generation.")
     parser.add_argument(
@@ -541,10 +544,17 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     if schema_summary and not schema_summary.get("passed", True):
         publish_quality_status = "review_required"
 
+    state_ledger_result: Dict[str, Any] = {}
+    try:
+        state_ledger_result = append_state_ledger_entry(run_dir, official=getattr(args, "official", False))
+    except Exception as exc:
+        state_ledger_result = {"status": "failed", "error": str(exc)[:200]}
+
     summary = {
         "run_dir": run_dir,
         "logic_json": logic_path,
         "report_path": report_path,
+        "state_ledger": state_ledger_result,
         "chart_time_series": chart_time_series_path,
         "news_event_ledger": news_event_ledger_path,
         "news_event_data_links": news_event_data_links_path,

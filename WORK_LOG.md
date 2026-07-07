@@ -6,6 +6,29 @@
 
 ## 2026-07-07
 
+### 跨 run 对比定案 + 状态台账记录层上线 + 个人决策档案草案
+
+完成内容：
+
+- 跨 run 对比设计定案并写入 `docs/2026-07-06_STAGE0-4_REVIEW_AND_DIRECTION.md` 修正一：对比轴从"上一份报告"改为"上一个市场状态"；只比确定性状态变量和稳定条件 ID，`claim:<hash>` 回声条目与 LLM 派生项永不参与报警；`git_sha` 不同带系统版本横幅；报警白名单只含条件翻转/失效条件触发/闸门变化；展示层等三闸门（谓词化、≥5 条 official 记录、代码稳定），记录层先行。
+- 新增 `src/state_ledger.py`：从 run 目录提取约 20 个确定性状态变量（估值 PE、净流动性、VIX/HYG 分位、广度、NDX/NDXE 分位、趋势与唐奇安回撤等）+ profile 条件状态 + 发布闸门，附 `git_sha` 与 schema 版本，append-only 写入 `output/state_ledger/state_ledger.jsonl`，同 run_id 去重；缺失变量如实记入 `missing_variables`（Wind 离线时不冒充）。
+- `src/main.py` 接入：新增 `--official` 参数标记正式日度 run；run_pipeline 结束时自动追加台账（失败不阻断 run），结果写入 `run_summary.state_ledger`。
+- 新增 `config/user_decision_profile.json` 草案：价值买入-趋势卖出纪律写成 metric 谓词（估值买入区、黄金坑回撤+恐慌确认、趋势破坏、信用恶化），全部阈值标注 `draft_needs_user_confirmation`；该文件会被编排器自动加载替换内置占位档案。
+- 修复 codex 第 4 步测试的隔离缺陷：`test_stage5_golden_pit_checklist_defers_cross_run_diff_even_if_previous_exists` 原本调用 `_load_user_decision_profile()` 隐式依赖仓库 config 全局状态，改为显式构造档案。
+- `NEXT_STEPS.md` 新增 P1（状态台账展示层三闸门）与 P2（认知阶段模型路由 + Final 引用源头校验）。
+
+验证结果：
+
+- `python -m pytest -q`：456 通过（含新增 `tests/test_state_ledger.py` 3 条）。
+- 用真实 run `fable_counter_thesis_fix_validation_2` 干跑台账：19 个非空确定性变量、Wind 两项如实记缺、闸门状态正确、重复追加被拒。
+- `config/user_decision_profile.json` 通过 `UserDecisionProfile.model_validate` 加载校验。
+
+剩余风险：
+
+- 决策档案阈值全部是草案（Forward PE ≤ 20、回撤 ≥ 15% + VIX 分位 ≥ 70% 等），需用户逐条确认；Wind 估值分位谓词在 Wind 源接通前记 insufficient_evidence。
+- 台账的唐奇安回撤是"距通道上轨"口径，不等于距 52 周高点的标准回撤；启用展示层前应确认口径或补 52 周高点变量。
+- 谓词化状态判定（展示层闸门 ①）尚未实现，黄金坑清单当前仍是关键词启发式判定。
+
 ### 完成第 4 步：阶段 5 读者出口（决策稀疏版）+ 对抗式审查
 
 完成内容：

@@ -26,6 +26,8 @@ from agent_analysis.contracts import (
     SynthesisPacket,
     ThesisDraft,
     TypedConflict,
+    UserDecisionCondition,
+    UserDecisionProfile,
 )
 from agent_analysis.orchestrator import VNextOrchestrator
 from agent_analysis.packet_builder import AnalysisPacketBuilder
@@ -2116,7 +2118,19 @@ def test_stage5_golden_pit_checklist_defers_cross_run_diff_even_if_previous_exis
         adjudicator_notes="保留条件式结论。",
         state_diagnosis="估值未到黄金坑，趋势未坏。",
     )
-    profile = orchestrator._load_user_decision_profile()
+    # 显式构造档案：测试不得依赖仓库 config/user_decision_profile.json 的全局状态。
+    profile = UserDecisionProfile(
+        buy_disciplines=[
+            UserDecisionCondition(
+                condition_id="buy_value_discount_confirmed",
+                side="buy",
+                label="价值买入纪律",
+                discipline="估值安全垫、风险边界和时机证据同时可追问时，黄金坑才是候选。",
+                required_claim_types=["valuation", "risk_boundary", "timing"],
+            )
+        ],
+        sell_disciplines=[],
+    )
 
     checklist = orchestrator._build_golden_pit_checklist(
         final_claim_ledger=ledger,
