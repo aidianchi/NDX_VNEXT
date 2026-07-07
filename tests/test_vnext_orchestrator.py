@@ -1995,7 +1995,7 @@ def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path:
         key_support_chains=thesis.key_support_chains,
         must_preserve_risks=["估值压力仍未解除。"],
         blocking_issues=[],
-        evidence_refs=["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
+        evidence_refs=["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield", "L5.get_ta_indicators"],
         adjudicator_notes="Final 保留主要反证和失效条件。",
         reader_final=ReaderFinal(
             one_liner="NDX 不是无条件看多，仍要看利率和盈利是否配合。",
@@ -2035,4 +2035,7 @@ def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path:
         "known_data_gaps" in list(getattr(entry, "dropped_non_evidence_tokens", []) or [])
         for entry in ledger.entries
     )
-    assert all("evidence_refs_not_in_registry" not in (entry.downgrade_reason or "") for entry in ledger.entries)
+    # 幻觉引用名（形如真实 ref 但不在注册表，如 L5.get_ta_indicators）按比例原则处理：
+    # 存在其他可核验引用时点名降级，不整条阻断。
+    assert all(entry.authority_status != "blocked" for entry in ledger.entries)
+    assert any("unverifiable_evidence_refs:L5.get_ta_indicators" in (entry.downgrade_reason or "") for entry in ledger.entries)

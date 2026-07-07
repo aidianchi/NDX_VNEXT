@@ -1923,17 +1923,23 @@ class VNextOrchestrator:
 
     def _verify_claim_entry(self, entry: ClaimLedgerEntry, registry: EvidenceRegistry) -> ClaimLedgerEntry:
         missing_refs = [ref for ref in entry.evidence_refs if ref not in registry.passports]
+        registered_refs = [ref for ref in entry.evidence_refs if ref in registry.passports]
         weak_refs = [
             ref
-            for ref in entry.evidence_refs
-            if ref in registry.passports
-            and registry.passports[ref].source_tier in {"candidate_external_material", "proxy", "derived_inference", "unknown"}
+            for ref in registered_refs
+            if registry.passports[ref].source_tier in {"candidate_external_material", "proxy", "derived_inference", "unknown"}
         ]
         reasons = []
+        block = False
         if not entry.evidence_refs:
             reasons.append("missing_evidence_refs")
+            block = True
         if missing_refs:
-            reasons.append("evidence_refs_not_in_registry:" + ",".join(missing_refs[:5]))
+            # 比例原则：个别引用无法核验（多为模型笔误/幻觉引用名）时点名降级；
+            # 只有当没有任何可核验引用时，才等同于证据缺失而阻断。
+            reasons.append("unverifiable_evidence_refs:" + ",".join(missing_refs[:5]))
+            if not registered_refs:
+                block = True
         if not entry.counter_evidence_refs:
             reasons.append("missing_counter_evidence_refs")
         if not entry.falsification_conditions:
@@ -1942,13 +1948,13 @@ class VNextOrchestrator:
             reasons.append("counter_evidence_not_claim_specific")
         if getattr(entry, "falsifier_method", "") == "not_claim_specific":
             reasons.append("falsification_conditions_not_claim_specific")
-        if weak_refs and not any(ref for ref in entry.evidence_refs if registry.passports.get(ref) and registry.passports[ref].source_tier in {"official", "licensed_provider", "licensed_manual", "formal_data_source"}):
+        if weak_refs and not any(registry.passports[ref].source_tier in {"official", "licensed_provider", "licensed_manual", "formal_data_source"} for ref in registered_refs):
             reasons.append("only_weak_or_derived_evidence_refs")
         verified = not reasons
         return entry.model_copy(
             update={
                 "verified": verified,
-                "authority_status": "verified" if verified else ("blocked" if "missing_evidence_refs" in reasons or any(reason.startswith("evidence_refs_not_in_registry") for reason in reasons) else "downgraded"),
+                "authority_status": "verified" if verified else ("blocked" if block else "downgraded"),
                 "downgrade_reason": "；".join(reasons),
             }
         )

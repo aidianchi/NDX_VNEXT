@@ -489,3 +489,23 @@ def test_counter_thesis_draft_tolerates_observed_llm_field_variants():
     assert hypothesis.support_evidence_refs == ["L4.get_ndx_pe_and_earnings_yield"]
     assert hypothesis.cannot_explain == ["无法解释拥挤度上升。"]
     assert hypothesis.falsification_conditions == ["利率数据确认折现率显著上行。"]
+
+    # 形状取自 2026-07-07 第二次验证 run 的两次失败：falsifiers/explains_poorly 别名与 dict 反方论点。
+    attempt_3_like = {
+        "principal_counterargument": {"summary": "主线解释高估了折现率压力。"},
+        "hypotheses": [
+            {
+                "hypothesis_text": "反方：盈利兑现路径仍然成立。",
+                "support_evidence_refs": ["L4.get_ndx_forward_earnings_quality"],
+                "counter_evidence_refs": ["L1.get_net_liquidity_momentum"],
+                "diagnostic_evidence_refs": ["L4.get_ndx_forward_earnings_quality"],
+                "explains_poorly": ["无法解释广度背离。"],
+                "falsifiers": ["财报季盈利增速显著低于前瞻预期。"],
+            }
+        ],
+    }
+    draft3 = CounterThesisDraft.model_validate(attempt_3_like)
+    assert draft3.principal_counterargument == "主线解释高估了折现率压力。"
+    hypothesis3 = draft3.hypotheses[0]
+    assert hypothesis3.cannot_explain == ["无法解释广度背离。"]
+    assert hypothesis3.falsification_conditions == ["财报季盈利增速显著低于前瞻预期。"]

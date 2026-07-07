@@ -830,7 +830,9 @@ class CompetingHypothesis(BaseModel):
             return data
         aliases = {
             "what_it_cannot_explain": "cannot_explain",
+            "explains_poorly": "cannot_explain",
             "failure_conditions": "falsification_conditions",
+            "falsifiers": "falsification_conditions",
         }
         for alias, canonical in aliases.items():
             if alias in data and not data.get(canonical):
@@ -872,6 +874,18 @@ class CounterThesisDraft(BaseModel):
     @classmethod
     def _coerce_single_string_fields(cls, value: Any) -> Any:
         return _coerce_llm_string_to_list(value)
+
+    @field_validator("principal_counterargument", mode="before")
+    @classmethod
+    def _coerce_dict_counterargument(cls, value: Any) -> Any:
+        """LLM 偶尔把最强反方论点写成 {'summary': ...} 结构；取其文本，不丢内容。"""
+        if isinstance(value, dict):
+            summary = value.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                return summary
+            parts = [part for part in value.values() if isinstance(part, str) and part.strip()]
+            return " ".join(parts)
+        return value
 
 
 class AdjudicationChangeRecord(BaseModel):
