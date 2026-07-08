@@ -82,6 +82,37 @@ def test_vnext_reporter_news_section_shows_event_data_links():
     assert "不是因果证明，也不是 evidence_ref" in html
 
 
+def test_reader_exit_plain_chain_cards_do_not_use_index_grid():
+    reporter = VNextReportGenerator()
+
+    html = reporter._reader_exit_section(
+        {
+            "final_adjudication": {
+                "final_stance": "中性",
+                "confidence": "medium",
+                "must_preserve_risks": ["风险边界"],
+            },
+            "golden_pit_checklist": {
+                "current_state": "状态说明",
+                "entries": [
+                    {
+                        "current_status": "met",
+                        "condition": "这是一条很长的条件说明，用来确认普通证据卡不会被压进编号列。",
+                        "falsification_conditions": ["失效条件"],
+                        "evidence_refs": ["L1.get_net_liquidity_momentum"],
+                    }
+                ],
+            },
+        }
+    )
+    css = reporter._css("slate_v2")
+
+    assert 'class="chain-card chain-card--plain"' in html
+    assert ".chain-card--plain" in css
+    assert "@media (max-width: 720px)" in css
+    assert "min-width: 0;" in css
+
+
 def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     run_dir = tmp_path / "run"
     _write_json(

@@ -918,6 +918,9 @@ p, li {
   border-radius: var(--radius);
   padding: 18px 20px;
 }
+.chain-card--plain {
+  grid-template-columns: minmax(0, 1fr);
+}
 @media (max-width: 720px) {
   .chain-card { grid-template-columns: 1fr; }
 }
@@ -1216,7 +1219,7 @@ p, li {
 }
 .chart-table {
   width: 100%;
-  min-width: 620px;
+  min-width: min(620px, 100%);
   border-collapse: collapse;
   font-family: var(--sans);
   font-size: 12px;
@@ -1233,6 +1236,17 @@ p, li {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: .08em;
+}
+@media (max-width: 720px) {
+  .chart-table {
+    min-width: 0;
+    table-layout: fixed;
+  }
+  .chart-table th,
+  .chart-table td {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 .pressure-chart {
   display: grid;

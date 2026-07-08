@@ -1792,7 +1792,7 @@ class VNextReportGenerator:
             refs = self._ref_chips(item.get("evidence_refs", [])[:4] if isinstance(item.get("evidence_refs"), list) else [])
             falsifiers = "；".join(str(value) for value in _as_list(item.get("falsification_conditions"))[:2])
             item_rows += f"""
-      <article class="chain-card">
+      <article class="chain-card chain-card--plain">
         <h3>{_escape(status_label.get(str(item.get('current_status')), str(item.get('current_status') or '未记录')))} · {_escape(_sentence(item.get('condition'), 96))}</h3>
         <p><b>反证/失效：</b>{_escape(falsifiers or '未记录')}</p>
         <div class="ref-row">{refs}</div>
@@ -2607,7 +2607,7 @@ class VNextReportGenerator:
                     continue
                 missing = "；".join(str(item) for item in _as_list(card.get("missing_evidence"))[:3])
                 news_rows += f"""
-        <article class="chain-card">
+        <article class="chain-card chain-card--plain">
           <h3>{_escape(card.get('title') or '未命名新闻')}</h3>
           <p>{_escape(card.get('one_line_summary') or '')}</p>
           <p><b>AI 分析：</b>{_escape(card.get('ai_analysis') or '')}</p>
@@ -2616,7 +2616,7 @@ class VNextReportGenerator:
         </article>
 """
             mainline_rows += f"""
-    <article class="chain-card">
+    <article class="chain-card chain-card--plain">
       <h3>{_escape(line.get('title') or '新闻主线')}</h3>
       <p>{_escape(line.get('plain_summary') or '')}</p>
       <p><b>可以说：</b>{_escape(line.get('can_say') or '')}</p>
@@ -2682,7 +2682,7 @@ class VNextReportGenerator:
 
         event_rows = "".join(
             f"""
-      <article class="chain-card">
+      <article class="chain-card chain-card--plain">
         <h3>{_escape(item.get('minimum_fact') or item.get('event_cluster_id') or '未命名事件')}</h3>
         <p>{_escape('重要性：' + str(item.get('materiality') or 'unknown') + '；研究置信度：' + str(item.get('agent_confidence') or 'unknown'))}</p>
       </article>
