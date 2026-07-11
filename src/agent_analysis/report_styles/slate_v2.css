@@ -2965,8 +2965,34 @@ body { line-height: 1.75; }
   border-bottom: 1px solid color-mix(in oklch, var(--rule) 70%, transparent);
 }
 .pit-list .pit-item:last-child { border-bottom: 0; }
-.pit-list .pit-item > .pill { flex: 0 0 auto; margin-top: 3px; }
+.pit-list .pit-item > .pit-badges {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.pit-list .pit-item > .pit-badges .pill { margin-top: 0; }
 .pit-list .pit-item > div { min-width: 0; }
+.side-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-chip);
+  border: 1px solid var(--rule-strong);
+  padding: 1px 7px;
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+  background: var(--paper-muted);
+  white-space: nowrap;
+}
+.side-chip.side-buy { border-color: var(--severity-low); }
+.side-chip.side-sell,
+.side-chip.side-risk { border-color: var(--severity-high); }
+.side-chip.side-hold { border-color: var(--severity-watch); }
+.side-chip.side-claim { border-color: var(--accent); }
 .pit-list .pit-item p { margin: 0; font-size: 15px; line-height: 1.7; }
 .pit-list .pit-item small {
   display: block;

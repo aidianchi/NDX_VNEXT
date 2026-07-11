@@ -745,6 +745,50 @@ def _severity_class(value: Any) -> str:
     return "watch"
 
 
+_DISCIPLINE_SIDE_LABELS: Dict[str, str] = {
+    "buy": "买入条件",
+    "sell": "卖出条件",
+    "hold": "持有纪律",
+    "risk": "风险边界",
+    "claim": "研究结论",
+}
+
+_DISCIPLINE_STATUS_TEXT: Dict[str, str] = {
+    "met": "已满足",
+    "not_met": "未满足",
+    "insufficient_evidence": "证据不足",
+}
+
+
+def _discipline_status_view(side: Any, status: Any) -> Dict[str, str]:
+    """把 (discipline_side, current_status) 映射成 {tone, text, side_label, side_class}。
+
+    读者出口清单的核心语义修正：risk/sell 类条目一旦 "met" 代表风险已触发/卖出条件
+    已成立，是需要读者警惕的信号，绝不能渲染成 good（绿色"已满足"）；只有 buy 类条目
+    met 才是真正的好消息。discipline_side 缺失或不是已知取值时一律回退中性 tone
+    （不猜方向），文案维持原有的通用状态文案，逻辑集中在这一处。
+    """
+    status_key = status if status in _DISCIPLINE_STATUS_TEXT else ""
+    text = _DISCIPLINE_STATUS_TEXT.get(status_key, str(status) if status else "未记录")
+    side_key = side if side in _DISCIPLINE_SIDE_LABELS else ""
+
+    if not side_key:
+        return {"tone": "watch", "text": text, "side_label": "", "side_class": ""}
+
+    side_label = _DISCIPLINE_SIDE_LABELS[side_key]
+    side_class = f"side-{side_key}"
+
+    if status_key == "met" and side_key == "sell":
+        return {"tone": "risk", "text": "卖出条件已成立", "side_label": side_label, "side_class": side_class}
+    if status_key == "met" and side_key == "risk":
+        return {"tone": "risk", "text": "风险已触发", "side_label": side_label, "side_class": side_class}
+    if status_key == "met" and side_key == "hold":
+        return {"tone": "watch", "text": "持有条件已成立", "side_label": side_label, "side_class": side_class}
+
+    default_tone = {"met": "good", "not_met": "risk", "insufficient_evidence": "watch"}.get(status_key, "watch")
+    return {"tone": default_tone, "text": text, "side_label": side_label, "side_class": side_class}
+
+
 def _as_list(value: Any) -> List[Any]:
     return value if isinstance(value, list) else []
 
@@ -1861,8 +1905,6 @@ class VNextReportGenerator:
 """
 
         entries = [item for item in _as_list(checklist.get("entries")) if isinstance(item, dict)][:8]
-        status_label = {"met": "已满足", "not_met": "未满足", "insufficient_evidence": "证据不足"}
-        status_tone = {"met": "good", "not_met": "risk", "insufficient_evidence": "watch"}
         # 上游 checklist 往往把同一批 refs / 反证整包写进每一条；共享部分只展示一次。
         ref_lists = [[_canonical_ref(ref) for ref in _as_list(item.get("evidence_refs"))] for item in entries]
         shared_refs: List[str] = []
@@ -1877,6 +1919,12 @@ class VNextReportGenerator:
         item_rows = ""
         for index, item in enumerate(entries):
             status = str(item.get("current_status") or "")
+            view = _discipline_status_view(item.get("discipline_side"), status)
+            side_chip = (
+                f'<span class="side-chip {view["side_class"]}">{_escape(view["side_label"])}</span>'
+                if view["side_label"]
+                else ""
+            )
             own_falsifiers = [
                 str(value) for value in _as_list(item.get("falsification_conditions"))
                 if str(value) not in shared_falsifiers
@@ -1889,7 +1937,10 @@ class VNextReportGenerator:
                 detail_bits += f'<div class="ref-row">{own_refs}</div>'
             item_rows += f"""
       <li class="pit-item">
-        <span class="pill {status_tone.get(status, 'watch')}">{_escape(status_label.get(status, status or '未记录'))}</span>
+        <div class="pit-badges">
+          {side_chip}
+          <span class="pill {view['tone']}">{_escape(view['text'])}</span>
+        </div>
         <div>
           <p>{_escape(_sentence(item.get('condition'), 140))}</p>
           {detail_bits}

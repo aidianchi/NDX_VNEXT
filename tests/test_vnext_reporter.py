@@ -129,6 +129,64 @@ def test_reader_exit_checklist_renders_compact_rows_with_shared_dedup():
     assert "min-width: 0;" in css
 
 
+def test_reader_exit_checklist_encodes_discipline_side_semantics():
+    reporter = VNextReportGenerator()
+
+    html = reporter._reader_exit_section(
+        {
+            "final_adjudication": {"final_stance": "中性", "confidence": "medium"},
+            "golden_pit_checklist": {
+                "current_state": "状态说明",
+                "entries": [
+                    {
+                        "discipline_side": "buy",
+                        "current_status": "met",
+                        "condition": "买入触发条件已经出现，估值和情绪同时进入历史低位区间。",
+                        "falsification_conditions": [],
+                        "evidence_refs": [],
+                    },
+                    {
+                        "discipline_side": "risk",
+                        "current_status": "met",
+                        "condition": "信用利差已经确认恶化，风险边界条件被触发。",
+                        "falsification_conditions": [],
+                        "evidence_refs": [],
+                    },
+                    {
+                        "current_status": "met",
+                        "condition": "这条历史遗留条目没有携带 discipline_side 字段。",
+                        "falsification_conditions": [],
+                        "evidence_refs": [],
+                    },
+                ],
+            },
+        }
+    )
+
+    # 拆出每条 <li class="pit-item">...</li>，逐条断言，避免不同条目互相干扰。
+    items = re.findall(r'<li class="pit-item">.*?</li>', html, flags=re.S)
+    assert len(items) == 3
+    buy_item, risk_item, missing_item = items
+
+    # buy 类条目 met -> good（绿色），这是唯一应当出现绿色徽章的场景。
+    assert 'class="pill good"' in buy_item
+    assert "side-chip side-buy" in buy_item
+    assert "已满足" in buy_item
+
+    # 语义修正核心：risk 类条目 met 绝不能渲染成 good（绿）；
+    # 应为警示色（risk）且文案改写为"风险已触发"，不能用通用的"已满足"。
+    assert "good" not in risk_item
+    assert 'class="pill risk"' in risk_item
+    assert "side-chip side-risk" in risk_item
+    assert "风险已触发" in risk_item
+
+    # discipline_side 缺失：中性兜底（不猜方向），不渲染类型 chip，文案维持现状。
+    assert "side-chip" not in missing_item
+    assert 'class="pill watch"' in missing_item
+    assert "good" not in missing_item
+    assert "已满足" in missing_item
+
+
 def test_reader_exit_without_entries_keeps_empty_note():
     reporter = VNextReportGenerator()
     html = reporter._reader_exit_section(
