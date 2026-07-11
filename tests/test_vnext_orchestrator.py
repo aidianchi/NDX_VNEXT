@@ -3,6 +3,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+import pytest
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -14,13 +15,17 @@ from agent_analysis.contracts import (
     ClaimLedgerEntry,
     CompetingHypothesis,
     Confidence,
+    ContextBrief,
+    CoreFact,
     Critique,
     EvidenceRegistry,
     FinalAdjudication,
     GoldenPitChecklist,
     HypothesisCompetition,
     InvestigationReport,
+    IndicatorAnalysis,
     KeySupportChain,
+    LayerCard,
     ReaderFinal,
     RiskBoundaryReport,
     SynthesisPacket,
@@ -29,8 +34,22 @@ from agent_analysis.contracts import (
     UserDecisionCondition,
     UserDecisionProfile,
 )
+from agent_analysis import orchestrator as orchestrator_module
 from agent_analysis.orchestrator import VNextOrchestrator
 from agent_analysis.packet_builder import AnalysisPacketBuilder
+
+
+@pytest.fixture(autouse=True)
+def _register_mini_stage_inline_prompt():
+    # 本文件多个测试使用合成 stage "mini"；生产代码现在要求 prompt 缺失时显式
+    # 报错，所以测试必须自己声明这个 stage 的 inline prompt，不能依赖静默兜底。
+    for synthetic_stage in ("mini", "test"):
+        orchestrator_module.INLINE_PROMPTS[synthetic_stage] = "测试用合成 stage prompt：请返回严格合法的 JSON。"
+    try:
+        yield
+    finally:
+        for synthetic_stage in ("mini", "test"):
+            orchestrator_module.INLINE_PROMPTS.pop(synthetic_stage, None)
 
 
 class FakeLLMEngine:
@@ -348,6 +367,134 @@ def test_unavailable_nested_none_indicator_is_not_analysis_required(tmp_path: Pa
     manifest = orchestrator._layer_indicator_manifest(packet.raw_data["L3"])
     failed = [item for item in manifest if item["function_id"] == "get_advance_decline_line"][0]
     assert failed["analysis_required"] is False
+
+
+def test_load_prompt_never_uses_nested_legacy_copy(tmp_path: Path):
+    prompts_dir = tmp_path / "prompt_root"
+    nested_dir = prompts_dir / "prompts"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "l4_analyst.md").write_text("STALE_NESTED_L4_PROMPT", encoding="utf-8")
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path / "output"),
+        prompts_dir=str(prompts_dir),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    # l4_analyst has no INLINE_PROMPTS fallback, so a missing direct file must raise loudly
+    # instead of silently reading the nested legacy copy or a generic placeholder string.
+    with pytest.raises(RuntimeError, match="l4_analyst"):
+        orchestrator._load_prompt("l4_analyst")
+
+
+def test_load_prompt_uses_only_direct_file_in_configured_prompt_dir(tmp_path: Path):
+    prompts_dir = tmp_path / "prompt_root"
+    nested_dir = prompts_dir / "prompts"
+    nested_dir.mkdir(parents=True)
+    (prompts_dir / "l4_analyst.md").write_text("CURRENT_DIRECT_L4_PROMPT", encoding="utf-8")
+    (nested_dir / "l4_analyst.md").write_text("STALE_NESTED_L4_PROMPT", encoding="utf-8")
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path / "output"),
+        prompts_dir=str(prompts_dir),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    assert orchestrator._load_prompt("l4_analyst") == "CURRENT_DIRECT_L4_PROMPT"
+
+
+def test_load_prompt_falls_back_to_inline_prompt_when_file_missing(tmp_path: Path):
+    prompts_dir = tmp_path / "prompt_root"
+    prompts_dir.mkdir(parents=True)
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path / "output"),
+        prompts_dir=str(prompts_dir),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    # "bridge" has both a PROMPT_FILES entry and an INLINE_PROMPTS entry; when the
+    # file is missing it should still fall back to the inline prompt instead of raising.
+    assert orchestrator._load_prompt("bridge") == "你负责显式识别跨层支撑关系、冲突关系与关键不确定性。只返回合法 JSON。"
+
+
+def test_load_prompt_raises_for_unknown_stage_without_inline_fallback(tmp_path: Path):
+    prompts_dir = tmp_path / "prompt_root"
+    prompts_dir.mkdir(parents=True)
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path / "output"),
+        prompts_dir=str(prompts_dir),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    with pytest.raises(RuntimeError, match="totally_unknown_stage"):
+        orchestrator._load_prompt("totally_unknown_stage")
+
+
+def test_l4_prompt_drops_audit_bookkeeping_without_dropping_metric_body(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    source_switches = [
+        {
+            "ticker": "AMAT",
+            "field": "market_cap",
+            "selected_source": "yahoo_quote_summary",
+            "previous_source": None,
+            "reason": "yfinance_missing",
+        }
+    ]
+
+    prompt = orchestrator._compose_prompt(
+        "l4_analyst",
+        MiniStageModel,
+        {
+            "layer": "L4",
+            "layer_raw_data": {
+                "get_ndx_pe_and_earnings_yield": {
+                    "function_id": "get_ndx_pe_and_earnings_yield",
+                    "metric_name": "NDX PE and Earnings Yield",
+                    "value": {
+                        "PE_TTM": 36.6,
+                        "EarningsYield": 2.73,
+                        "Coverage": {
+                            "market_cap_coverage_pct": 92.5,
+                            "source_switches": source_switches,
+                        },
+                        "SourceReconciliation": {"source_switches": source_switches},
+                    },
+                    "unit": {"PE_TTM": "x", "EarningsYield": "%"},
+                    "source_tier": "component_model",
+                    "source_name": "Component model",
+                    "date": "2026-07-07",
+                    "data_quality": {
+                        "source_tier": "component_model",
+                        "formula": "weighted component valuation",
+                        "source_switches": source_switches,
+                        "large_rows": [{"row": i} for i in range(12)],
+                    },
+                    "notes": "synthetic valuation payload",
+                    "manual_override_used": False,
+                }
+            },
+        },
+    )
+
+    manifest_text = prompt.split("### 当前层指标清单\n", 1)[1].split("\n\n### 结构示例", 1)[0]
+    runtime_input = prompt.split("## Runtime Input\n", 1)[1]
+
+    assert "selected_source" not in prompt
+    assert "source_switches" not in prompt
+    assert '"value"' not in manifest_text
+    assert "PE_TTM" not in manifest_text
+    assert '"count": 12' in manifest_text
+    assert '"row": 0' not in manifest_text
+    assert '"PE_TTM": 36.6' in runtime_input
+    assert '"EarningsYield": 2.73' in runtime_input
+    assert "单位未标注" in prompt
 
 
 def test_historical_percentile_string_is_sanitized(tmp_path: Path):
@@ -2113,12 +2260,166 @@ def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path:
         "known_data_gaps" in list(getattr(entry, "dropped_non_evidence_tokens", []) or [])
         for entry in ledger.entries
     )
-    # 幻觉引用名（形如真实 ref 但不在注册表，如 L5.get_ta_indicators）按比例原则处理：
-    # 存在其他可核验引用时点名降级，不整条阻断。
-    assert all(entry.authority_status != "blocked" for entry in ledger.entries)
+    # 幻觉引用名若是某类 claim 唯一的同层证据，必须阻断该 claim；
+    # 不能再用其他层的强证据为它“洗白”。
+    assert any(entry.claim_type == "timing" and entry.authority_status == "blocked" for entry in ledger.entries)
+    assert market_entry.authority_status != "blocked"
+    assert ledger.publish_gate["status"] == "blocked"
     assert any("unverifiable_evidence_refs:L5.get_ta_indicators" in (entry.downgrade_reason or "") for entry in ledger.entries)
     assert any(entry.claim_type == "valuation" for entry in ledger.entries)
     assert any(entry.claim_type == "timing" for entry in ledger.entries)
+    # layer_scope 放宽后：valuation claim 允许引用 L1（cross_validation_targets 里的
+    # get_10y_real_rate 同类利率证据），但仍不能引用 L5（技术指标不能证明估值便宜）。
+    valuation_entry = next(entry for entry in ledger.entries if entry.claim_type == "valuation")
+    assert "L1.get_fed_funds_rate" in valuation_entry.evidence_refs
+    assert "L5.get_ta_indicators" not in valuation_entry.evidence_refs
+
+
+def test_field_authority_is_persisted_and_applied_per_claimed_wind_metric(tmp_path: Path):
+    field_authority = {
+        "PE": {"usage": "core_allowed", "authority": "licensed_provider_wind_index_fundamentals"},
+        "PB": {"usage": "core_allowed", "authority": "licensed_provider_wind_index_fundamentals"},
+        "RiskPremium": {"usage": "supporting_only", "authority": "provider_label_definition_unverified"},
+        "ForwardPE": {"usage": "supporting_only", "authority": "synthetic_supporting_for_test"},
+        "EarningsYield": {"usage": "core_allowed", "authority": "synthetic_core_for_test"},
+        "PS": {"usage": "rejected", "authority": "synthetic_rejected_for_test"},
+    }
+    packet = AnalysisPacketBuilder().build(
+        {
+            "timestamp_utc": "2026-07-10T00:00:00Z",
+            "indicators": [
+                {
+                    "layer": 4,
+                    "metric_name": "Wind NDX Valuation and Risk Premium Snapshot",
+                    "function_id": "get_ndx_wind_valuation_snapshot",
+                    "raw_data": {
+                        "name": "Wind NDX Valuation and Risk Premium Snapshot",
+                        "value": {
+                            "PE": 35.2,
+                            "PB": 10.3,
+                            "PS": 7.4,
+                            "ForwardPE": 31.0,
+                            "EarningsYield": 2.84,
+                            "RiskPremium": 1.1,
+                            "MetricAuthority": field_authority,
+                        },
+                        "source_tier": "licensed_provider/Wind",
+                        "source_name": "Wind index_data.get_index_fundamentals",
+                    },
+                    "error": None,
+                    "collection_timestamp_utc": "2026-07-10T00:00:01Z",
+                }
+            ],
+        },
+        manual_overrides={"active": False, "metrics": {}},
+    )
+    evidence_ref = "L4.get_ndx_wind_valuation_snapshot"
+    synthesis_packet = SynthesisPacket(
+        packet_meta=packet.meta,
+        evidence_index={
+            evidence_ref: {
+                "layer": "L4",
+                "function_id": "get_ndx_wind_valuation_snapshot",
+                "canonical_question": "NDX 估值与风险补偿处于什么位置？",
+                "permission_type": "fact",
+                "source_tier": "licensed_provider/Wind",
+            }
+        },
+        bridge_summaries=[],
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    registry = orchestrator._build_evidence_registry(
+        packet_model=packet,
+        synthesis_packet=synthesis_packet,
+        investigation_reports=[],
+        hypothesis_competition=HypothesisCompetition(),
+    )
+    generated_synthesis = orchestrator._build_synthesis_packet(
+        packet,
+        ContextBrief(data_summary="synthetic", task_description="field authority test"),
+        [
+            LayerCard(
+                layer="L4",
+                core_facts=[CoreFact(metric="Wind NDX Valuation", value=35.2)],
+                local_conclusion="仅测试字段级证据引用。",
+                confidence=Confidence.MEDIUM,
+                indicator_analyses=[
+                    IndicatorAnalysis(
+                        function_id="get_ndx_wind_valuation_snapshot",
+                        metric="Wind NDX Valuation and Risk Premium Snapshot",
+                        current_reading="Wind PE 35.2。",
+                        narrative="仅测试字段级证据引用。",
+                        reasoning_process="读取显式字段后按字段权限引用。",
+                        evidence_refs=[f"{evidence_ref}#PE"],
+                    )
+                ],
+            )
+        ],
+        [],
+    )
+
+    parent_passport = registry.passports[evidence_ref]
+    assert parent_passport.authority_model["field_authority"] == field_authority
+    assert parent_passport.authority_model["mixed_field_authority"] is True
+    assert parent_passport.verified is False
+    assert "mixed_field_authority" in parent_passport.downgrade_rules
+    assert registry.passports[f"{evidence_ref}#PE"].authority_model["field_usage"] == "core_allowed"
+    assert registry.passports[f"{evidence_ref}#PB"].authority_model["field_usage"] == "core_allowed"
+    assert registry.passports[f"{evidence_ref}#PS"].authority_model["field_usage"] == "rejected"
+    assert registry.passports[f"{evidence_ref}#RiskPremium"].authority_model["field_usage"] == "supporting_only"
+    assert generated_synthesis.evidence_index[evidence_ref]["mixed_field_authority"] is True
+    assert generated_synthesis.evidence_index[f"{evidence_ref}#PE"]["field_authority"]["usage"] == "core_allowed"
+
+    def verify(claim_text: str, refs: list[str]) -> ClaimLedgerEntry:
+        return orchestrator._verify_claim_entry(
+            ClaimLedgerEntry(
+                claim_id="claim:test:" + str(len(claim_text)),
+                source_stage="final",
+                claim_text=claim_text,
+                claim_type="valuation",
+                evidence_refs=refs,
+                counter_evidence_refs=["counter:test"],
+                inference_steps=["字段级权限检查"],
+                falsification_conditions=["字段口径被重新核验"],
+            ),
+            registry,
+        )
+
+    for parent_claim_text in [
+        "NDX 估值昂贵。",
+        "Wind PE（市盈率）为 35.2 倍。",
+        "Wind ForwardPE 为 31 倍。",
+        "Wind EarningsYield 为 2.84%。",
+    ]:
+        parent_claim = verify(parent_claim_text, [evidence_ref])
+        assert parent_claim.authority_status == "downgraded"
+        assert "mixed_field_authority_parent_ref" in parent_claim.downgrade_reason
+        assert parent_claim.evidence_field_refs == []
+
+    pe_claim = verify("Wind PE（市盈率）为 35.2 倍。", [f"{evidence_ref}#PE"])
+    risk_premium_claim = verify(
+        "Wind RiskPremium（风险溢价）为 1.1。",
+        [f"{evidence_ref}#RiskPremium"],
+    )
+    rejected_ps_claim = verify("Wind PS（市销率）为 7.4 倍。", [f"{evidence_ref}#PS"])
+
+    assert pe_claim.authority_status == "verified"
+    assert pe_claim.evidence_field_refs == [f"{evidence_ref}#PE"]
+    assert risk_premium_claim.authority_status == "downgraded"
+    assert "field_authority_supporting_only" in risk_premium_claim.downgrade_reason
+    assert risk_premium_claim.evidence_field_refs == [f"{evidence_ref}#RiskPremium"]
+    assert rejected_ps_claim.authority_status == "blocked"
+    assert "field_authority_rejected" in rejected_ps_claim.downgrade_reason
+    assert rejected_ps_claim.evidence_field_refs == [f"{evidence_ref}#PS"]
+    assert orchestrator._validate_stage_evidence_refs(
+        RefStageModel(evidence_refs=[f"{evidence_ref}#PE"]),
+        set(registry.passports),
+        "final",
+    ) == []
 
 
 def test_stage5_golden_pit_checklist_defers_cross_run_diff_even_if_previous_exists(tmp_path: Path):

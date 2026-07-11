@@ -74,6 +74,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--models", type=str, help="Comma-separated model priority override.")
     parser.add_argument("--collect-only", action="store_true", help="Only collect market data JSON, then exit before any LLM calls.")
     parser.add_argument("--enable-news", action="store_true", help="Write an independent official news/event sidecar artifact.")
+    parser.add_argument("--enable-component-model", action="store_true", help="Enable yfinance component-model PE computation (default OFF; use Wind + History of Market instead).")
     parser.add_argument("--official", action="store_true", help="Mark this run as an official daily entry in the cross-run state ledger.")
     parser.add_argument("--event-only", action="store_true", help="Only build the independent event/news report artifacts; do not run L1-L5 or LLM synthesis.")
     parser.add_argument("--skip-report", action="store_true", help="Stop after logic_json generation.")
@@ -501,6 +502,11 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         resume_from_existing=resume_from_existing,
     )
     artifacts = orchestrator.run(packet)
+    claim_ledger = artifacts.get("final_claim_ledger") if isinstance(artifacts, dict) else None
+    claim_gate = getattr(claim_ledger, "publish_gate", {}) if claim_ledger is not None else {}
+    if not isinstance(claim_gate, dict):
+        claim_gate = claim_gate.model_dump(mode="json") if hasattr(claim_gate, "model_dump") else {}
+    claim_gate_status = str(claim_gate.get("status") or "missing")
 
     logic_json = adapt_vnext_to_legacy(
         artifacts["final_adjudication"],
@@ -535,13 +541,17 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     )
 
     report_path = ""
-    if not args.skip_report:
+    if not args.skip_report and claim_gate_status != "blocked":
         reporter = ReportGenerator(use_charts=not args.disable_charts)
         report_path = reporter.run(logic_json, data_json, backtest_date=backtest_date)
 
     schema_summary = _schema_guard_summary(artifacts)
     publish_quality_status = "publishable"
     if schema_summary and not schema_summary.get("passed", True):
+        publish_quality_status = "review_required"
+    if claim_gate_status == "blocked":
+        publish_quality_status = "blocked_by_claim_gate"
+    elif claim_gate_status != "pass":
         publish_quality_status = "review_required"
 
     state_ledger_result: Dict[str, Any] = {}
@@ -583,6 +593,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "runtime_diagnostics": _runtime_diagnostics_summary(data_json),
         "data_quality_summary": _data_quality_summary(data_json),
         "schema_guard_summary": schema_summary,
+        "claim_ledger_publish_gate": claim_gate,
         "publish_quality_status": publish_quality_status,
     }
     with open(os.path.join(run_dir, "run_summary.json"), "w", encoding="utf-8") as handle:
@@ -594,6 +605,8 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
 def main() -> int:
     args = parse_args()
     setup_logging()
+    if args.enable_component_model:
+        os.environ["NDX_ENABLE_COMPONENT_MODEL"] = "1"
     if args.event_only:
         run_event_only(args)
         return 0

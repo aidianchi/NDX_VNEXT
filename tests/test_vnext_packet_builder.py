@@ -286,10 +286,12 @@ def test_l4_signal_carries_worldperatio_relative_position_without_percentile():
                 "value": {
                     "PE": 32.8,
                     "ThirdPartyChecks": [
-                        {
-                            "source_name": "WorldPERatio",
-                            "source_id": "worldperatio_pe",
-                            "metric": "ndx_trailing_pe",
+                            {
+                                "source_name": "WorldPERatio",
+                                "source_id": "worldperatio_pe",
+                                "availability": "available",
+                                "usage": "validation_only",
+                                "metric": "ndx_trailing_pe",
                             "value": 32.27,
                             "historical_percentile": None,
                             "relative_position": {
@@ -321,7 +323,7 @@ def test_l4_signal_carries_worldperatio_relative_position_without_percentile():
     assert packet.facts_by_layer["L4"].state == "neutral"
 
 
-def test_l4_state_accepts_trendonify_or_manual_real_percentile():
+def test_l4_state_rejects_trendonify_percentile_without_current_validation_status():
     data = _mock_data_json()
     for indicator in data["indicators"]:
         if indicator["function_id"] == "get_ndx_pe_and_earnings_yield":
@@ -347,7 +349,9 @@ def test_l4_state_accepts_trendonify_or_manual_real_percentile():
         signal for signal in packet.facts_by_layer["L4"].core_signals if signal["metric"] == "get_ndx_pe_and_earnings_yield"
     )
 
-    assert valuation_signal["historical_percentile"] == 86.0
+    assert valuation_signal["historical_percentile"] is None
+    # The untouched mock simple-yield-gap percentile remains restrictive; the
+    # assertion here is only that Trendonify did not supply the percentile.
     assert packet.facts_by_layer["L4"].state == "expensive"
 
 
@@ -437,10 +441,12 @@ def test_l4_state_accepts_danjuan_real_percentile_after_trendonify():
                     "PE": 34.0,
                     "TrailingPE": 34.0,
                     "ThirdPartyChecks": [
-                        {
-                            "source_name": "WorldPERatio",
-                            "source_id": "worldperatio_pe",
-                            "metric": "ndx_trailing_pe",
+                            {
+                                "source_name": "WorldPERatio",
+                                "source_id": "worldperatio_pe",
+                                "availability": "available",
+                                "usage": "validation_only",
+                                "metric": "ndx_trailing_pe",
                             "value": 32.27,
                             "historical_percentile": None,
                             "relative_position": {
@@ -473,7 +479,7 @@ def test_l4_state_accepts_danjuan_real_percentile_after_trendonify():
     assert packet.facts_by_layer["L4"].state == "expensive"
 
 
-def test_l4_trendonify_percentile_has_priority_over_danjuan():
+def test_l4_trendonify_percentile_does_not_override_current_danjuan_validation():
     data = _mock_data_json()
     for indicator in data["indicators"]:
         if indicator["function_id"] == "get_ndx_pe_and_earnings_yield":
@@ -507,8 +513,8 @@ def test_l4_trendonify_percentile_has_priority_over_danjuan():
         signal for signal in packet.facts_by_layer["L4"].core_signals if signal["metric"] == "get_ndx_pe_and_earnings_yield"
     )
 
-    assert valuation_signal["historical_percentile"] == 62.0
-    assert packet.facts_by_layer["L4"].state == "neutral"
+    assert valuation_signal["historical_percentile"] == 87.0
+    assert packet.facts_by_layer["L4"].state == "expensive"
 
 
 def test_l3_state_treats_declining_ad_line_as_deteriorating():
@@ -529,6 +535,53 @@ def test_l3_state_treats_declining_ad_line_as_deteriorating():
 
     packet = AnalysisPacketBuilder().build(data, manual_overrides={"active": False, "metrics": {}})
 
+    assert packet.facts_by_layer["L3"].state == "deteriorating"
+
+
+def test_packet_builder_normalizes_ratio_scale_percentiles_before_signals_and_state():
+    data = {
+        "timestamp_utc": "2026-07-10T00:00:00Z",
+        "backtest_date": None,
+        "indicators": [
+            {
+                "layer": 1,
+                "metric_name": "10Y Real Rate",
+                "function_id": "get_10y_real_rate",
+                "raw_data": {"value": {"level": 1.0, "relativity": {"percentile_10y": 0.82}}},
+                "error": None,
+            },
+            {
+                "layer": 2,
+                "metric_name": "VIX",
+                "function_id": "get_vix",
+                "raw_data": {"value": {"level": 18.0, "relativity": {"percentile_10y": 82.0}}},
+                "error": None,
+            },
+            {
+                "layer": 3,
+                "metric_name": "NDX/NDXE Ratio",
+                "function_id": "get_ndx_ndxe_ratio",
+                "raw_data": {
+                    "value": {
+                        "level": 2.9,
+                        # Deliberately put 1Y first: window priority must not
+                        # depend on dictionary insertion order.
+                        "relativity": {"percentile_1y": 0.10, "percentile_10y": 0.96538},
+                    }
+                },
+                "error": None,
+            },
+        ],
+    }
+
+    packet = AnalysisPacketBuilder().build(data, manual_overrides={"active": False, "metrics": {}})
+
+    l1_signal = next(item for item in packet.facts_by_layer["L1"].core_signals if item["metric"] == "get_10y_real_rate")
+    l2_signal = next(item for item in packet.facts_by_layer["L2"].core_signals if item["metric"] == "get_vix")
+    l3_signal = next(item for item in packet.facts_by_layer["L3"].core_signals if item["metric"] == "get_ndx_ndxe_ratio")
+    assert l1_signal["historical_percentile"] == 82.0
+    assert l2_signal["historical_percentile"] == 82.0
+    assert l3_signal["historical_percentile"] == 96.538
     assert packet.facts_by_layer["L3"].state == "deteriorating"
 
 

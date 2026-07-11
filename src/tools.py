@@ -113,10 +113,12 @@ TOOLS_REGISTRY = {
 
     # Layer 4
     "get_ndx_wind_valuation_snapshot": get_ndx_wind_valuation_snapshot,
+    "get_ndx_wind_point_in_time_earnings_expectations": get_ndx_wind_point_in_time_earnings_expectations,
     "get_ndx_pe_and_earnings_yield": get_ndx_pe_and_earnings_yield,
     "get_ndx_forward_earnings_quality": get_ndx_forward_earnings_quality,
     "get_equity_risk_premium": get_equity_risk_premium,
     "get_damodaran_us_implied_erp": get_damodaran_us_implied_erp,
+    "get_ndx_valuation_history_of_market": get_ndx_valuation_history_of_market,
     "get_crowdedness_dashboard": get_crowdedness_dashboard,
 
     # Layer 5

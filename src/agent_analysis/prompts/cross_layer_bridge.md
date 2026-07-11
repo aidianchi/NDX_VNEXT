@@ -25,6 +25,10 @@
    - L3-L5: 广度→趋势
    - 等等
 
+【字段级证据引用】
+
+如果 Layer Card 中某个数据函数是 mixed-field payload（同一 payload 的字段 `usage` 不一致），Bridge 引用其 PE、PB、PS、RiskPremium、ForwardPE、EarningsYield 等具体字段时，必须沿用 `L4.function_id#FieldName` 子引用。函数级父引用只能表示混合容器，不能支撑强估值、盈利或风险补偿结论；不得根据自然语言猜测字段权限。
+
 ## 输出格式
 
 ```json

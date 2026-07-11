@@ -22,6 +22,8 @@
 
 所有 `evidence_refs` 必须来自 `synthesis_packet.evidence_index`。`event_refs` 只能作为催化剂、背景或观察事项，不能替代 evidence refs。
 
+如果 `evidence_index` 的函数级父条目标记 `mixed_field_authority=true`，它只能表示混合容器，不能支撑强结论。涉及具体估值、盈利或风险补偿字段时，必须引用索引中对应的 `L4.function_id#FieldName` 子条目；不得靠结论文字猜字段，也不得把弱字段权限借用为整个 licensed provider payload 的权限。
+
 【反模板与一致性约束】
 
 下面 JSON 只说明字段结构，不是可复用文案。不得照抄示例里的整句、半句或固定搭配。

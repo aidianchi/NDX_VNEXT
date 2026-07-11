@@ -76,12 +76,12 @@ LAYER_FUNCTIONS = {
         "get_percent_above_ma",
         "get_ndx_ndxe_ratio",
         "get_qqq_top10_concentration",
-        "get_m7_fundamentals",
         "get_new_highs_lows",
         "get_mcclellan_oscillator_nasdaq_or_nyse",
     },
     "L4": {
         "get_ndx_wind_valuation_snapshot",
+        "get_ndx_wind_point_in_time_earnings_expectations",
         "get_ndx_pe_and_earnings_yield",
         "get_ndx_forward_earnings_quality",
         "get_equity_risk_premium",
@@ -130,6 +130,26 @@ def _has_meaningful_observation_value(value: Any, *, parent_key: str = "") -> bo
 
 def _payload_unavailable_reason(payload: Dict[str, Any]) -> Optional[str]:
     return _shared_no_data_reason(payload)
+
+
+def _normalize_historical_percentile(value: Any) -> Optional[float]:
+    """Normalize supported percentile scales to 0-100 and reject invalid values."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    percentile = float(value)
+    if not 0.0 <= percentile <= 100.0:
+        return None
+    if percentile <= 1.0:
+        percentile *= 100.0
+    return percentile
+
+
+_HISTORICAL_PERCENTILE_KEY_PRIORITY = (
+    "percentile_10y",
+    "percentile_5y",
+    "percentile_1y",
+    "percentile",
+)
 
 
 def indicator_payload_unavailable_reason(payload: Dict[str, Any]) -> Optional[str]:
@@ -605,7 +625,16 @@ class AnalysisPacketBuilder:
         elif percentile is not None:
             summary_bits.append(f"分位={percentile}")
         if function_id == "get_ndx_wind_valuation_snapshot" and isinstance(value, dict):
-            risk_pct = _find_first_number(value, ("riskpremiumhistoricalpercentile", "risk_premium_historical_percentile", "RiskPremiumHistoricalPercentile"))
+            risk_pct = _normalize_historical_percentile(
+                _find_first_number(
+                    value,
+                    (
+                        "riskpremiumhistoricalpercentile",
+                        "risk_premium_historical_percentile",
+                        "RiskPremiumHistoricalPercentile",
+                    ),
+                )
+            )
             risk_level = _find_first_number(value, ("riskpremium", "risk_premium", "RiskPremium"))
             if risk_level is not None:
                 summary_bits.append(f"Wind风险溢价={_round_if_float(risk_level)}")
@@ -669,21 +698,27 @@ class AnalysisPacketBuilder:
         return _compact_value(value)
 
     def _extract_percentile(self, value: Any) -> Optional[float]:
-        return _find_first_number(value, ("percentile_10y", "percentile_5y", "percentile_1y", "percentile"))
+        # Search one window at a time so dictionary insertion order cannot make
+        # a shorter window override an available 10Y/5Y percentile.
+        for key in _HISTORICAL_PERCENTILE_KEY_PRIORITY:
+            percentile = _normalize_historical_percentile(_find_first_number(value, (key,)))
+            if percentile is not None:
+                return percentile
+        return None
 
     def _extract_damodaran_erp_percentile(self, value: Any) -> Optional[float]:
         if not isinstance(value, dict):
             return None
         percentile = value.get("damodaran_erp_percentile_10y")
         if isinstance(percentile, (int, float)) and not isinstance(percentile, bool):
-            return float(percentile)
+            return _normalize_historical_percentile(percentile)
         windows = value.get("damodaran_erp_historical_percentiles", {}).get("windows", {})
         if isinstance(windows, dict):
             window_10y = windows.get("10y")
             if isinstance(window_10y, dict):
                 percentile = window_10y.get("percentile")
                 if isinstance(percentile, (int, float)) and not isinstance(percentile, bool):
-                    return float(percentile)
+                    return _normalize_historical_percentile(percentile)
         return None
 
     def _extract_wind_ndx_valuation_percentile(self, value: Any) -> Optional[float]:
@@ -692,7 +727,7 @@ class AnalysisPacketBuilder:
         for key in ("PEHistoricalPercentile", "pe_historical_percentile", "pe_percentile"):
             percentile = value.get(key)
             if isinstance(percentile, (int, float)) and not isinstance(percentile, bool):
-                return float(percentile)
+                return _normalize_historical_percentile(percentile)
         return None
 
     def _extract_l4_valuation_percentile(self, value: Any, *, payload: Optional[Dict[str, Any]] = None) -> Optional[float]:
@@ -717,7 +752,11 @@ class AnalysisPacketBuilder:
 
         def source_percentile(*source_tokens: str) -> Optional[float]:
             for item in checks:
-                if not isinstance(item, dict) or item.get("availability") == "unavailable":
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("availability") or "").lower() != "available":
+                    continue
+                if str(item.get("usage") or "validation_only").lower() not in {"validation_only", "core_allowed"}:
                     continue
                 source_label = " ".join(
                     str(item.get(key) or "")
@@ -725,18 +764,16 @@ class AnalysisPacketBuilder:
                 ).lower()
                 if not any(token in source_label for token in source_tokens):
                     continue
-                percentile = _find_first_number(
-                    item,
-                    ("historical_percentile", "percentile_10y", "percentile_5y", "percentile_1y", "percentile"),
-                )
-                if percentile is not None:
-                    return percentile
+                for key in ("historical_percentile", *_HISTORICAL_PERCENTILE_KEY_PRIORITY):
+                    percentile = _normalize_historical_percentile(_find_first_number(item, (key,)))
+                    if percentile is not None:
+                        return percentile
             return None
 
         for percentile in (
-            source_percentile("trendonify"),
             source_percentile("danjuan"),
             source_percentile("worldperatio"),
+            source_percentile("history_of_market"),
         ):
             if percentile is not None:
                 return percentile
@@ -751,6 +788,10 @@ class AnalysisPacketBuilder:
         context: Dict[str, Any] = {}
         for item in checks:
             if not isinstance(item, dict) or not isinstance(item.get("relative_position"), dict):
+                continue
+            if str(item.get("availability") or "").lower() != "available":
+                continue
+            if str(item.get("usage") or "validation_only").lower() not in {"validation_only", "core_allowed"}:
                 continue
             source_name = str(item.get("source_name") or item.get("source_id") or item.get("source") or "unknown")
             context[source_name] = item["relative_position"]
@@ -840,7 +881,8 @@ class AnalysisPacketBuilder:
 
         if layer == "L3":
             usable_count = sum(1 for payload in metrics.values() if not _payload_unavailable_reason(payload))
-            breadth_ratio_pct = self._metric_level(metrics, "get_ndx_ndxe_ratio", "percentile_10y", "percentile_1y", "percentile")
+            ratio_payload = metrics.get("get_ndx_ndxe_ratio", {})
+            breadth_ratio_pct = self._extract_percentile(ratio_payload.get("value"))
             top10_weight = self._metric_level(metrics, "get_qqq_top10_concentration", "top10_weight_pct")
             ad_line_trend = self._metric_text(metrics, "get_advance_decline_line", "trend", "direction")
             pct_above = self._metric_level(
@@ -870,11 +912,17 @@ class AnalysisPacketBuilder:
             wind_payload = metrics.get("get_ndx_wind_valuation_snapshot", {})
             wind_value = wind_payload.get("value") if isinstance(wind_payload.get("value"), dict) else {}
             wind_pe_pct = self._extract_wind_ndx_valuation_percentile(wind_value)
-            wind_pb_pct = _find_first_number(wind_value, ("PBHistoricalPercentile", "pb_historical_percentile"))
-            wind_ps_pct = _find_first_number(wind_value, ("PSHistoricalPercentile", "ps_historical_percentile"))
-            wind_risk_premium_pct = _find_first_number(
-                wind_value,
-                ("RiskPremiumHistoricalPercentile", "risk_premium_historical_percentile"),
+            wind_pb_pct = _normalize_historical_percentile(
+                _find_first_number(wind_value, ("PBHistoricalPercentile", "pb_historical_percentile"))
+            )
+            wind_ps_pct = _normalize_historical_percentile(
+                _find_first_number(wind_value, ("PSHistoricalPercentile", "ps_historical_percentile"))
+            )
+            wind_risk_premium_pct = _normalize_historical_percentile(
+                _find_first_number(
+                    wind_value,
+                    ("RiskPremiumHistoricalPercentile", "risk_premium_historical_percentile"),
+                )
             )
             valuation_payload = metrics.get("get_ndx_pe_and_earnings_yield", {})
             pe_pct = self._extract_l4_valuation_percentile(

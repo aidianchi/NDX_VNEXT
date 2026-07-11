@@ -139,6 +139,32 @@ def test_l4_prompt_distinguishes_current_monthly_erp_stddev_context_and_true_per
         assert fragment in text
 
 
+def test_l4_prompt_does_not_interpret_unverified_wind_risk_premium_absolute_value():
+    text = (PROMPT_DIR / "l4_analyst.md").read_text(encoding="utf-8")
+
+    assert "绝对值无论高低都不能解释为补偿厚薄" in text
+    assert "只能复述 provider label" in text
+    assert "不得与 Damodaran ERP 或简式收益差距直接比较" in text
+    assert "数据日、新鲜度、窗口、样本量和 0-100 尺度检查" in text
+    assert "定义未核验的 provider label 不适用这条经济含义推断" in text
+    assert "Wind NDX 风险溢价低或分位低" not in text
+    assert "Wind NDX 风险溢价高或分位高" not in text
+
+
+def test_mixed_field_payload_prompts_require_explicit_field_evidence_refs():
+    prompt_requirements = {
+        "l4_analyst.md": ["mixed-field payload", "L4.function_id#FieldName"],
+        "cross_layer_bridge.md": ["mixed-field payload", "L4.function_id#FieldName"],
+        "thesis_builder.md": ["mixed_field_authority=true", "L4.function_id#FieldName"],
+        "final_adjudicator.md": ["mixed-field payload", "L4.function_id#FieldName"],
+    }
+
+    for name, fragments in prompt_requirements.items():
+        text = (PROMPT_DIR / name).read_text(encoding="utf-8")
+        for fragment in fragments:
+            assert fragment in text
+
+
 def test_prompts_do_not_call_ndx_simple_yield_gap_low_erp():
     prompt_files = [
         "l1_analyst.md",

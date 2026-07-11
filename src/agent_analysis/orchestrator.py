@@ -135,6 +135,15 @@ PROMPT_FILES = {
     "final": "final_adjudicator.md",
 }
 
+PROMPT_AUDIT_BOOKKEEPING_FIELDS = {
+    "source_switches",
+    "StaleReferences",
+    "HistoryOfMarket",
+    "raw_wind_payload_compact",
+}
+MANIFEST_DATA_QUALITY_LIST_LIMIT = 10
+MANIFEST_DATA_QUALITY_OBJECT_CHAR_LIMIT = 1200
+
 INLINE_PROMPTS = {
     "bridge": "你负责显式识别跨层支撑关系、冲突关系与关键不确定性。只返回合法 JSON。",
     "thesis": "你负责把 synthesis_packet 整合成状态、价格、赔率、动作和失效条件，并保留未解决冲突。只返回合法 JSON。",
@@ -167,7 +176,7 @@ def _as_list(value: Any) -> List[Any]:
 
 
 _SEVERITY_HIGH_MEDIUM = frozenset({"high", "medium"})
-_EVIDENCE_REF_PATTERN = re.compile(r"L[1-5]\.[A-Za-z_][A-Za-z0-9_]*")
+_EVIDENCE_REF_PATTERN = re.compile(r"L[1-5]\.[A-Za-z_][A-Za-z0-9_]*(?:#[A-Za-z_][A-Za-z0-9_]*)?")
 _AUTHORITY_OVERREACH_RULES: Dict[str, List[tuple[str, str]]] = {
     "technical": [
         (r"(估值便宜|估值低估|undervalued|cheap valuation)", "technical_indicator_claims_valuation"),
@@ -465,6 +474,15 @@ class VNextOrchestrator:
         )
         final_adjudication.claim_ledger = final_claim_ledger
         evidence_registry = self._attach_claims_to_evidence_registry(evidence_registry, final_claim_ledger)
+        # Persist the enriched final artifact as well as the standalone ledger.
+        # Otherwise the in-memory final has a claim gate that the saved final omits.
+        self._save_json("final_adjudication.json", final_adjudication)
+        self._record_stage_artifact(
+            self.output_dir / "final_adjudication.json",
+            stage_key="final",
+            stage_name="final_adjudicator",
+            payload=final_payload,
+        )
         self._save_json("final_claim_ledger.json", final_claim_ledger)
         self._save_json("evidence_registry.json", evidence_registry)
         user_decision_profile = self._load_user_decision_profile()
@@ -1732,14 +1750,27 @@ class VNextOrchestrator:
         effective_date = self._effective_date(packet_model)
         passports: Dict[str, EvidencePassport] = {}
 
-        for evidence_id, item in synthesis_packet.evidence_index.items():
+        for evidence_id, item in list(synthesis_packet.evidence_index.items()):
+            if "#" in evidence_id:
+                continue
             raw_payload = self._raw_payload_for_evidence_ref(packet_model, evidence_id)
             quality = raw_payload.get("data_quality") if isinstance(raw_payload.get("data_quality"), dict) else {}
             permission = item.get("permission_type") if isinstance(item, dict) else ""
             issues = data_evidence_issues(raw_payload, function_id=evidence_id.split(".", 1)[-1], backtest_date=packet_model.meta.get("backtest_date") if isinstance(packet_model.meta, dict) else None) if raw_payload else {"hard_block": [], "degraded": [], "audit_warn": []}
             downgrade_rules = [issue["code"] for issue in issues.get("hard_block", []) + issues.get("degraded", []) if isinstance(issue, dict)]
             item_source_tier = item.get("source_tier") if isinstance(item, dict) else ""
-            source_tier = self._normalize_source_tier(quality.get("source_tier") or item_source_tier)
+            source_tier = self._normalize_source_tier(
+                quality.get("source_tier") or item_source_tier or raw_payload.get("source_tier")
+            )
+            field_authority = self._field_authority_from_payload(raw_payload)
+            field_usages = self._field_authority_usages(field_authority)
+            mixed_field_authority = len(field_usages) > 1
+            parent_usage = next(iter(field_usages), "") if len(field_usages) == 1 else ""
+            parent_downgrade_rules = list(downgrade_rules)
+            if mixed_field_authority:
+                parent_downgrade_rules.append("mixed_field_authority")
+            elif parent_usage and parent_usage != "core_allowed":
+                parent_downgrade_rules.append(f"field_authority_{parent_usage}")
             passports[evidence_id] = EvidencePassport(
                 evidence_id=evidence_id,
                 evidence_kind="data",
@@ -1750,13 +1781,54 @@ class VNextOrchestrator:
                     "can_support": item.get("canonical_question") if isinstance(item, dict) else "",
                     "cannot_support": list(item.get("misread_guards") or []) if isinstance(item, dict) else [],
                     "requires_confirmation": list(item.get("cross_validation_targets") or []) if isinstance(item, dict) else [],
+                    "field_authority": field_authority,
+                    "field_usages": sorted(field_usages),
+                    "field_usage": parent_usage,
+                    "mixed_field_authority": mixed_field_authority,
                 },
-                downgrade_rules=downgrade_rules,
+                downgrade_rules=list(dict.fromkeys(parent_downgrade_rules)),
                 data_quality=quality,
                 effective_date=str(quality.get("effective_date") or effective_date),
-                verified=source_tier not in {"unknown"} and not issues.get("hard_block"),
+                verified=(
+                    source_tier not in {"unknown"}
+                    and not issues.get("hard_block")
+                    and not mixed_field_authority
+                    and parent_usage != "rejected"
+                ),
                 limitations=list(item.get("misread_guards") or []) if isinstance(item, dict) else [],
             )
+            for field, field_rule in field_authority.items():
+                if not isinstance(field_rule, dict):
+                    continue
+                field_ref = f"{evidence_id}#{field}"
+                usage = str(field_rule.get("usage") or "").strip().lower()
+                field_rules = list(downgrade_rules)
+                if usage and usage != "core_allowed":
+                    field_rules.append(f"field_authority_{usage}")
+                passports[field_ref] = EvidencePassport(
+                    evidence_id=field_ref,
+                    evidence_kind="data",
+                    source_ref=str(quality.get("source_name") or quality.get("provider") or evidence_id),
+                    source_tier=source_tier,
+                    permission_type=permission or None,
+                    authority_model={
+                        "parent_evidence_ref": evidence_id,
+                        "field_name": field,
+                        "field_usage": usage,
+                        "field_authority": field_rule,
+                        "can_support": item.get("canonical_question") if isinstance(item, dict) else "",
+                        "cannot_support": list(item.get("misread_guards") or []) if isinstance(item, dict) else [],
+                    },
+                    downgrade_rules=list(dict.fromkeys(field_rules)),
+                    data_quality=quality,
+                    effective_date=str(quality.get("effective_date") or effective_date),
+                    verified=(
+                        source_tier not in {"unknown"}
+                        and not issues.get("hard_block")
+                        and usage != "rejected"
+                    ),
+                    limitations=list(item.get("misread_guards") or []) if isinstance(item, dict) else [],
+                )
 
         for event_passport in self._event_passports(effective_date):
             passports[event_passport.evidence_id] = event_passport
@@ -1827,9 +1899,26 @@ class VNextOrchestrator:
         if "." not in evidence_ref:
             return {}
         layer, function_id = evidence_ref.split(".", 1)
+        function_id = function_id.split("#", 1)[0]
         layer_data = packet.raw_data.get(layer, {}) if isinstance(packet.raw_data, dict) else {}
         payload = layer_data.get(function_id) if isinstance(layer_data, dict) else {}
         return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _field_authority_from_payload(raw_payload: Dict[str, Any]) -> Dict[str, Any]:
+        value = raw_payload.get("value") if isinstance(raw_payload.get("value"), dict) else {}
+        value_field_authority = value.get("MetricAuthority") if isinstance(value.get("MetricAuthority"), dict) else {}
+        quality = raw_payload.get("data_quality") if isinstance(raw_payload.get("data_quality"), dict) else {}
+        quality_field_authority = quality.get("metric_authority") if isinstance(quality.get("metric_authority"), dict) else {}
+        return value_field_authority or quality_field_authority
+
+    @staticmethod
+    def _field_authority_usages(field_authority: Dict[str, Any]) -> set[str]:
+        return {
+            str(rule.get("usage") or "").strip().lower() or "unknown"
+            for rule in field_authority.values()
+            if isinstance(rule, dict)
+        }
 
     def _normalize_source_tier(self, value: Any) -> str:
         return normalize_source_tier_for_evidence_passport(value)
@@ -1935,6 +2024,17 @@ class VNextOrchestrator:
                 return
             claim_id = f"claim:{source_stage}:{hashlib.sha1((claim_type + '|' + text).encode('utf-8')).hexdigest()[:12]}"
             raw_refs = self._compact_string_refs(evidence_refs or common_refs)
+            # valuation 放宽到 {L1, L3, L4}：deep_research_canon.get_ndx_pe_and_earnings_yield 的
+            # cross_validation_targets 显式包含 get_10y_real_rate（L1）与 get_ndx_ndxe_ratio（L3），
+            # 二者是估值判断的合法交叉验证证据；仍排除 L2/L5，"技术指标/情绪不能证明估值便宜"的红线不变。
+            # risk_boundary 不设层级白名单：风险表述的合法来源覆盖全部层，限制无意义。
+            layer_scope = {
+                "valuation": {"L1", "L3", "L4"},
+                "timing": {"L2", "L3", "L5"},
+                "price_reflection": {"L5"},
+            }.get(claim_type)
+            if layer_scope:
+                raw_refs = [ref for ref in raw_refs if str(ref).split(".", 1)[0] in layer_scope]
             # LLM 有时把 "known_data_gaps" 一类说明性 token 混进 evidence refs；
             # 只保留形如 L#.func 或注册表内的真实引用，其余记录为被剔除 token，不让它冒充缺失证据去阻断发布。
             entry_refs = [
@@ -2005,6 +2105,25 @@ class VNextOrchestrator:
         ]
         reasons = []
         block = False
+        evidence_field_refs = [ref for ref in registered_refs if "#" in ref]
+        field_authority_records: List[tuple[str, str, str, str, bool]] = []
+        for ref in registered_refs:
+            passport = registry.passports[ref]
+            authority_model = passport.authority_model if isinstance(passport.authority_model, dict) else {}
+            if "#" in ref:
+                field = str(authority_model.get("field_name") or ref.rsplit("#", 1)[-1])
+                field_rule = authority_model.get("field_authority") if isinstance(authority_model.get("field_authority"), dict) else {}
+                usage = str(authority_model.get("field_usage") or field_rule.get("usage") or "unknown").strip().lower()
+                field_authority_records.append((ref, field, usage, passport.source_tier, passport.verified))
+            elif authority_model.get("mixed_field_authority"):
+                reasons.append(f"mixed_field_authority_parent_ref:{ref}")
+            else:
+                parent_usage = str(authority_model.get("field_usage") or "").strip().lower()
+                if parent_usage in {"supporting_only", "validation_only", "audit_only", "unknown"}:
+                    reasons.append(f"field_authority_{parent_usage}_parent_ref:{ref}")
+                elif parent_usage == "rejected":
+                    reasons.append(f"field_authority_rejected_parent_ref:{ref}")
+                    block = True
         if not entry.evidence_refs:
             reasons.append("missing_evidence_refs")
             block = True
@@ -2024,12 +2143,33 @@ class VNextOrchestrator:
             reasons.append("falsification_conditions_not_claim_specific")
         if weak_refs and not any(registry.passports[ref].source_tier in {"official", "licensed_provider", "licensed_manual", "formal_data_source"} for ref in registered_refs):
             reasons.append("only_weak_or_derived_evidence_refs")
+        supporting_field_refs = [
+            field_ref
+            for field_ref, _, usage, _, _ in field_authority_records
+            if usage in {"supporting_only", "validation_only", "audit_only", "unknown", ""}
+        ]
+        rejected_field_refs = [field_ref for field_ref, _, usage, _, _ in field_authority_records if usage == "rejected"]
+        if supporting_field_refs:
+            usages = sorted({usage or "unknown" for ref, _, usage, _, _ in field_authority_records if ref in supporting_field_refs})
+            reasons.append("field_authority_" + "_or_".join(usages) + ":" + ",".join(supporting_field_refs))
+        if rejected_field_refs:
+            reasons.append("field_authority_rejected:" + ",".join(rejected_field_refs))
+            rejected_fields = {field for _, field, usage, _, _ in field_authority_records if usage == "rejected"}
+            strong_tiers = {"official", "licensed_provider", "licensed_manual", "formal_data_source"}
+            rescued_fields = {
+                field
+                for _, field, usage, source_tier, passport_verified in field_authority_records
+                if usage == "core_allowed" and source_tier in strong_tiers and passport_verified
+            }
+            if not rejected_fields.issubset(rescued_fields):
+                block = True
         verified = not reasons
         return entry.model_copy(
             update={
                 "verified": verified,
                 "authority_status": "verified" if verified else ("blocked" if block else "downgraded"),
                 "downgrade_reason": "；".join(reasons),
+                "evidence_field_refs": list(dict.fromkeys(evidence_field_refs)),
             }
         )
 
@@ -2558,7 +2698,11 @@ class VNextOrchestrator:
             for analysis in card.indicator_analyses:
                 ref = f"{layer_label}.{analysis.function_id}"
                 indicator_refs.append(ref)
-                evidence_index[ref] = {
+                raw_payload = self._raw_payload_for_evidence_ref(packet, ref)
+                field_authority = self._field_authority_from_payload(raw_payload)
+                field_usages = self._field_authority_usages(field_authority)
+                raw_quality = raw_payload.get("data_quality") if isinstance(raw_payload.get("data_quality"), dict) else {}
+                evidence_item = {
                     "layer": layer_label,
                     "function_id": analysis.function_id,
                     "metric": analysis.metric,
@@ -2576,7 +2720,27 @@ class VNextOrchestrator:
                     "falsifiers": analysis.falsifiers,
                     "core_vs_tactical_boundary": analysis.core_vs_tactical_boundary,
                     "confidence": _enum_value(analysis.confidence),
+                    "source_tier": raw_payload.get("source_tier") or raw_quality.get("source_tier"),
+                    "mixed_field_authority": len(field_usages) > 1,
                 }
+                evidence_index[ref] = evidence_item
+                value = raw_payload.get("value") if isinstance(raw_payload.get("value"), dict) else {}
+                for field, field_rule in field_authority.items():
+                    if not isinstance(field_rule, dict):
+                        continue
+                    evidence_index[f"{ref}#{field}"] = {
+                        "layer": layer_label,
+                        "function_id": analysis.function_id,
+                        "metric": analysis.metric,
+                        "parent_evidence_ref": ref,
+                        "field_name": field,
+                        "field_value": value.get(field),
+                        "field_authority": field_rule,
+                        "permission_type": _enum_value(analysis.permission_type),
+                        "canonical_question": analysis.canonical_question,
+                        "misread_guards": analysis.misread_guards,
+                        "source_tier": evidence_item.get("source_tier"),
+                    }
                 if analysis.current_reading:
                     key_evidence.append(f"{analysis.metric}: {analysis.current_reading}")
                 else:
@@ -2676,6 +2840,7 @@ class VNextOrchestrator:
                 "必须显式消费 principal_contradictions / Bridge principal_contradiction：先判断当前主要矛盾，再判断价格是否已经反映风险，最后才给动作。",
                 "必须显式消费 competing_hypotheses / hypothesis_competition_summary：正式综合前至少比较主线解释和反方解释；若证据不足，必须降级或保留争议。",
                 "必须尊重 evidence_registry_summary：数据、事件、调查、假说和最终 claim 使用同一种 evidence id；弱权限证据不能越权支撑强结论。",
+                "mixed_field_authority=true 的函数级父 evidence ref 只能表示混合容器；具体字段结论必须使用 evidence_index 中的 #FieldName 子 ref。",
                 "Thesis / Final 的重要自然语言结论会进入 final_claim_ledger；缺证据、缺反证、缺失效条件或证据权限不足时必须降级。",
                 "所有 key_support_chains 的 evidence_refs 必须来自 evidence_index 或 bridge_summaries。",
                 "event_refs 与 evidence_refs 分离：事件只能写成解释/触发/观察背景，不能用来证明估值、广度、利率或趋势结论。",
@@ -3561,18 +3726,22 @@ class VNextOrchestrator:
         soft_canon_warnings: List[str] = []
         l3_structural_warnings: List[str] = []
         semantic_warnings: List[str] = []
-        valid_evidence_refs = {
-            f"{layer}.{function_id}"
-            for layer, metrics in packet.raw_data.items()
-            if isinstance(metrics, dict)
-            for function_id in metrics.keys()
-        }
+        valid_evidence_refs: set[str] = set()
+        for layer, metrics in packet.raw_data.items():
+            if not isinstance(metrics, dict):
+                continue
+            for function_id, raw_payload in metrics.items():
+                parent_ref = f"{layer}.{function_id}"
+                valid_evidence_refs.add(parent_ref)
+                if isinstance(raw_payload, dict):
+                    for field in self._field_authority_from_payload(raw_payload):
+                        valid_evidence_refs.add(f"{parent_ref}#{field}")
 
         def _bad_refs(refs: List[str]) -> List[str]:
             bad: List[str] = []
             for ref in refs or []:
                 ref_text = str(ref)
-                if not re.fullmatch(r"L[1-5]\.[A-Za-z_][A-Za-z0-9_]*", ref_text) or ref_text not in valid_evidence_refs:
+                if not _EVIDENCE_REF_PATTERN.fullmatch(ref_text) or ref_text not in valid_evidence_refs:
                     bad.append(ref_text)
             return bad
 
@@ -3929,6 +4098,7 @@ class VNextOrchestrator:
             "- indicator_analyses[].function_id 必须等于输入 function_id。\n"
             "- indicator_analyses[].metric 必须优先等于输入 metric_name。\n"
             "- indicator_analyses[].evidence_refs 必须是字符串数组，例如 [\"L2.get_vix\"]，不得输出对象/dict。\n"
+            "- 若一个 payload 的 MetricAuthority 含不同 usage，它是 mixed-field payload；引用其中任何字段时必须写成 L4.function_id#FieldName。父级 L4.function_id 只能表示混合容器，不能支撑强字段结论。\n"
             "- indicator_analyses[].narrative 是可进入最终报告的典范化解读。\n"
             "- indicator_analyses[].reasoning_process 必须展示从当前读数、分位/趋势到局部判断的因果推理。\n"
             "- indicator_analyses[].first_principles_chain 用列表写出机制链，例如 利率上升 -> 折现率上升 -> 成长股估值受压。\n"
@@ -3940,6 +4110,8 @@ class VNextOrchestrator:
             "- 跨层内容只能写成待 Bridge 验证的问题，不能写成已经成立的跨层结论。\n"
             "- 不得为了形成完整市场故事而提前综合其他层。\n"
             "- 不得给出最终买卖建议。\n\n"
+            "### 数值单位纪律\n"
+            "- 引用金额/规模数值时必须带上 payload 中的 unit 单位；payload 无单位标注时不得猜测单位，只能写明“单位未标注”。\n\n"
             "### 当前层指标清单\n"
             f"{json.dumps(expected_indicators, ensure_ascii=False, indent=2, default=str)}\n\n"
             "### 结构示例\n"
@@ -3983,7 +4155,8 @@ class VNextOrchestrator:
             "输出仍保持 BridgeMemo 结构，但 conflicts 和 cross_layer_claims 需要引用具体 function_id。\n"
             "cross_layer_claims[].supporting_facts 只能填写 evidence ref 字符串，格式如 "
             "\"L4.get_ndx_pe_and_earnings_yield\"；不要写中文事实句、数值解释或自然语言，"
-            "这些解释应放在 claim 或 mechanism。"
+            "这些解释应放在 claim 或 mechanism。若 LayerCard 标出 mixed-field payload，必须沿用其显式 "
+            "#FieldName 子引用；不得退回函数级父 ref。"
         )
         bridge_contract += (
             "\nBridge v2 新增字段必须尽量原生填写：\n"
@@ -4017,6 +4190,7 @@ class VNextOrchestrator:
             "你的职责是把 layer_summaries、bridge_summaries、high_severity_conflicts 与 evidence_index "
             "整合成主论点、支撑链、保留冲突、依赖前提，以及定价与赔率判断面。\n\n"
             "key_support_chains[].evidence_refs 应引用 synthesis_packet.evidence_index 的键或 Bridge 摘要。"
+            "若 evidence_index 条目标记 mixed_field_authority=true，函数级父 ref 不能支持强结论；必须改用同一索引内显式的 #FieldName 子 ref。"
             "retained_conflicts 必须包含 synthesis_packet.high_severity_conflicts 中的所有高严重度冲突。"
         )
         thesis_contract += (
@@ -4044,7 +4218,7 @@ class VNextOrchestrator:
         return f"{thesis_contract}\n\n{prompt_body}"
 
     def _filter_layer_raw_data_for_prompt(self, layer: str, layer_raw_data: Any) -> Any:
-        """Drop known indicators whose canon belongs to another layer."""
+        """Drop cross-layer indicators and prompt-only audit bookkeeping."""
         if not isinstance(layer_raw_data, dict):
             return layer_raw_data
 
@@ -4055,11 +4229,23 @@ class VNextOrchestrator:
             try:
                 canon = get_indicator_canon(function_id)
             except KeyError:
-                filtered[key] = payload
+                filtered[key] = self._strip_prompt_audit_bookkeeping_fields(payload)
                 continue
             if canon.layer.value == layer_value:
-                filtered[key] = payload
+                filtered[key] = self._strip_prompt_audit_bookkeeping_fields(payload)
         return filtered
+
+    @classmethod
+    def _strip_prompt_audit_bookkeeping_fields(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: cls._strip_prompt_audit_bookkeeping_fields(item)
+                for key, item in value.items()
+                if key not in PROMPT_AUDIT_BOOKKEEPING_FIELDS
+            }
+        if isinstance(value, list):
+            return [cls._strip_prompt_audit_bookkeeping_fields(item) for item in value]
+        return value
 
     def _summarize_l4_raw_data_for_prompt(self, layer_raw_data: Dict[str, Any]) -> Dict[str, Any]:
         """压缩 L4 prompt 中的长序列数据。
@@ -4161,16 +4347,45 @@ class VNextOrchestrator:
                     "metric_name": payload.get("metric_name") or payload.get("name") or function_id,
                     "analysis_required": not self._indicator_unavailable_for_analysis(payload),
                     "error": payload.get("error"),
-                    "value": payload.get("value"),
                     "source_tier": payload.get("source_tier") or (payload.get("data_quality") or {}).get("source_tier"),
                     "source_name": payload.get("source_name"),
                     "date": payload.get("date"),
-                    "data_quality": payload.get("data_quality"),
+                    "data_quality": self._summarize_manifest_data_quality(payload.get("data_quality")),
                     "notes": payload.get("notes"),
                     "manual_override_used": payload.get("manual_override_used", False),
                 }
             )
         return manifest
+
+    @classmethod
+    def _summarize_manifest_data_quality(cls, value: Any, depth: int = 0) -> Any:
+        if isinstance(value, dict):
+            summarized = {
+                key: cls._summarize_manifest_data_quality(item, depth + 1)
+                for key, item in value.items()
+                if key not in PROMPT_AUDIT_BOOKKEEPING_FIELDS
+            }
+            if (
+                depth > 0
+                and len(json.dumps(summarized, ensure_ascii=False, default=str))
+                > MANIFEST_DATA_QUALITY_OBJECT_CHAR_LIMIT
+            ):
+                return {
+                    "keys": list(summarized.keys()),
+                    "summary": "large object omitted from indicator manifest; full detail remains in analysis_packet artifact",
+                }
+            return summarized
+        if isinstance(value, list):
+            if (
+                len(value) > MANIFEST_DATA_QUALITY_LIST_LIMIT
+                or len(json.dumps(value, ensure_ascii=False, default=str)) > MANIFEST_DATA_QUALITY_OBJECT_CHAR_LIMIT
+            ):
+                return {
+                    "count": len(value),
+                    "summary": "large list omitted from indicator manifest; full detail remains in analysis_packet artifact",
+                }
+            return [cls._summarize_manifest_data_quality(item, depth + 1) for item in value]
+        return value
 
     def _run_and_save(
         self,
@@ -4211,10 +4426,14 @@ class VNextOrchestrator:
             prompt_path = self.prompts_dir / prompt_name
             if prompt_path.exists():
                 return prompt_path.read_text(encoding="utf-8")
-            nested_prompt_path = self.prompts_dir / "prompts" / prompt_name
-            if nested_prompt_path.exists():
-                return nested_prompt_path.read_text(encoding="utf-8")
-        return INLINE_PROMPTS.get(stage_key, "请基于输入返回严格合法的 JSON。")
+        else:
+            prompt_path = self.prompts_dir / f"{stage_key}.md"
+        if stage_key in INLINE_PROMPTS:
+            return INLINE_PROMPTS[stage_key]
+        raise RuntimeError(
+            f"未找到 stage `{stage_key}` 的 prompt 文件（期望路径：{prompt_path}），"
+            "且 INLINE_PROMPTS 没有对应兜底条目。绝不静默返回通用占位 prompt。"
+        )
 
     def _normalize_historical_percentile(self, value: Any) -> tuple[Optional[float], Optional[str]]:
         if value is None or isinstance(value, bool):
