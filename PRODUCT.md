@@ -4,15 +4,16 @@ register: product
 
 ## Product Purpose
 
-NDX vNext is a research operating system for judging Nasdaq-100 market conditions through an auditable reasoning chain. Its job is not to produce a prettier one-page market note. Its job is to help a serious reader move from raw market data, through isolated L1-L5 analysis, into explicit conflicts, resonances, risks, and a final thesis that preserves unresolved tension.
+NDX vNext is a research operating system for producing reliable, calibrated judgments of Nasdaq-100 market conditions. The auditable reasoning chain is the means; measurable judgment quality is the goal (redefined by the user on 2026-07-11). Its job is to help a serious reader move from raw market data, through isolated L1-L5 analysis, into explicit conflicts, resonances, risks, and a final thesis that preserves unresolved tension — and then to find out, over time, whether those judgments were right, and to correct the method when they were not.
 
-The product should answer five questions every time:
+The product should answer six questions every time:
 
 1. What object are we judging: NDX, QQQ exposure, or an equal-weight reference?
 2. What does each indicator have permission to say?
 3. Which facts confirm each other?
 4. Which facts disagree?
 5. What new evidence would change the conclusion?
+6. In hindsight, was the judgment right or wrong, and what did the system correct because of it?
 
 ## Users
 
@@ -23,6 +24,8 @@ Secondary users include future code agents and maintainers who need clear artifa
 ## Product Principles
 
 - Context-first, role-second. Agents exist to isolate context and cognitive transformation boundaries, not to imitate human job titles.
+- Calibration over completeness. A falsifiable, scoreable judgment beats an exhaustively documented one. Every official run must leave scoreable claims behind, and scores must eventually feed back into method.
+- Balanced evidence menu. Bull-side structural evidence (industry capex cycles, earnings revisions, buybacks) deserves data sources as authoritative as the bear-side macro/valuation sources; a menu that can only argue one direction is a defect, not caution.
 - Conflicts are assets. The product must preserve high-severity tension instead of smoothing it away.
 - Native vNext artifacts are the source of truth. Legacy HTML is compatibility output, not the main product.
 - Data humility beats fluent certainty. Missing, stale, weak, or proxy data must lower confidence visibly.
@@ -67,6 +70,16 @@ Avoid:
 - Turning news into narrative confirmation before numeric evidence is checked.
 
 ## Success Criteria
+
+Judgment quality (primary — these define success):
+
+- Every official run leaves behind falsifiable claims with explicit invalidation conditions and time horizons.
+- Claims are scored after the fact (T+20/60/120) and scores accumulate in a durable ledger.
+- Perturbing the input evidence demonstrably changes the conclusions — evidence drives judgment, not model priors.
+- Judgment quality can be compared against naive baselines (buy-and-hold, simple trend rule, single-prompt LLM) instead of being asserted.
+- Every derived number entering a judgment survives independent recomputation.
+
+Auditability (supporting — necessary but not sufficient):
 
 The product is successful when a reader can:
 
