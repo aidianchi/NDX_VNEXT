@@ -147,3 +147,104 @@ def test_pandas_datareader_fred_fallback_normalizes_to_date_value(monkeypatch):
     assert list(df.columns) == ["date", "value"]
     assert df["date"].dt.strftime("%Y-%m-%d").tolist() == ["2025-01-01", "2025-01-02"]
     assert df["value"].tolist() == [4.1, 4.2]
+
+
+def test_safe_request_exposes_structured_timeout_reason(monkeypatch):
+    def fake_get(*_args, **_kwargs):
+        raise tools_common.requests.exceptions.Timeout("timed out")
+
+    monkeypatch.setattr(tools_common.requests, "get", fake_get)
+    monkeypatch.setattr(tools_common.time, "sleep", lambda *_args, **_kwargs: None)
+
+    error = {}
+    result = tools_common.safe_request("https://example.test", retry_count=1, error_out=error)
+
+    assert result is None
+    assert error["reason"] == "timeout"
+    assert error["exception_type"] == "Timeout"
+    assert tools_common.get_safe_request_last_error()["reason"] == "timeout"
+
+
+def test_fred_series_primary_api_success_records_quality(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "observations": [
+                    {"date": "2025-01-01", "value": "4.1"},
+                    {"date": "2025-01-02", "value": "."},
+                    {"date": "2025-01-03", "value": "4.2"},
+                ]
+            }
+
+    monkeypatch.setattr(tools_common, "get_fred_api_key", lambda: "test-key")
+    monkeypatch.setattr(tools_common.requests, "get", lambda *_args, **_kwargs: FakeResponse())
+    monkeypatch.setattr(tools_common.time, "sleep", lambda *_args, **_kwargs: None)
+
+    df = tools_common.get_fred_series("DGS10", days=10, end_date="2025-01-10")
+
+    assert df is not None
+    assert df["value"].tolist() == [4.1, 4.2]
+    assert df.attrs["data_quality"]["source_tier"] == "official_api"
+    assert df.attrs["data_quality"]["fallback_chain"] == ["fred_api"]
+
+
+def test_fred_series_api_failure_uses_keyless_csv_fallback(monkeypatch):
+    class FakeCsvResponse:
+        text = "observation_date,DGS10\n2025-01-01,4.1\n2025-01-02,.\n2025-01-03,4.2\n"
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, *_args, **_kwargs):
+        if "fredgraph.csv" in url:
+            return FakeCsvResponse()
+        raise tools_common.requests.exceptions.ConnectionError("NameResolutionError DNS failure")
+
+    monkeypatch.setattr(tools_common, "get_fred_api_key", lambda: "test-key")
+    monkeypatch.setattr(tools_common, "PANDAS_DATAREADER_AVAILABLE", False)
+    monkeypatch.setattr(tools_common, "pdr_data", None)
+    monkeypatch.setattr(tools_common.requests, "get", fake_get)
+    monkeypatch.setattr(tools_common.time, "sleep", lambda *_args, **_kwargs: None)
+
+    df = tools_common.get_fred_series("DGS10", days=10, end_date="2025-01-10")
+
+    assert df is not None
+    assert df["date"].dt.strftime("%Y-%m-%d").tolist() == ["2025-01-01", "2025-01-03"]
+    assert df["value"].tolist() == [4.1, 4.2]
+    quality = df.attrs["data_quality"]
+    assert quality["source_tier"] == "official_keyless_csv"
+    assert quality["fallback_chain"] == [
+        "fred_api_failed",
+        "pandas_datareader_unavailable",
+        "fredgraph_csv",
+    ]
+    assert quality["fallback_failures"][0]["reason"] == "dns_error"
+
+
+def test_fred_series_all_channels_failed_records_diagnostics(monkeypatch):
+    def fake_get(url, *_args, **_kwargs):
+        if "fredgraph.csv" in url:
+            raise tools_common.requests.exceptions.ConnectionError("connection refused")
+        raise tools_common.requests.exceptions.Timeout("timed out")
+
+    monkeypatch.setattr(tools_common, "get_fred_api_key", lambda: "test-key")
+    monkeypatch.setattr(tools_common, "PANDAS_DATAREADER_AVAILABLE", False)
+    monkeypatch.setattr(tools_common, "pdr_data", None)
+    monkeypatch.setattr(tools_common.requests, "get", fake_get)
+    monkeypatch.setattr(tools_common.time, "sleep", lambda *_args, **_kwargs: None)
+
+    df = tools_common.get_fred_series("FEDFUNDS", days=10, end_date="2025-01-10")
+    diagnostics = tools_common.get_fred_series_diagnostics("FEDFUNDS")
+
+    assert df is None
+    assert diagnostics["availability"] == "unavailable"
+    assert diagnostics["failure_type"] == "connection_error"
+    assert diagnostics["fallback_chain"] == [
+        "fred_api_failed",
+        "pandas_datareader_unavailable",
+        "fredgraph_csv_failed",
+    ]
+    assert diagnostics["fallback_failures"][0]["reason"] == "timeout"

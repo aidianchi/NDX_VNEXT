@@ -8,6 +8,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import tools_L2
 import tools_L3
+import core.collector as collector_module
+from core.collector import DataCollector
 
 
 def _price_panel():
@@ -112,6 +114,26 @@ def test_advance_decline_coverage_excludes_empty_components(monkeypatch):
     assert any("DDD" in item for item in result["data_quality"]["anomalies"])
 
 
+def test_advance_decline_ignores_sparse_latest_outer_join_row(monkeypatch):
+    panel = _price_panel()
+    latest = panel.index[-1]
+    previous = panel.index[-2]
+    panel.loc[latest, ("Close", "BBB")] = float("nan")
+    panel.loc[latest, ("Close", "CCC")] = float("nan")
+    monkeypatch.setattr(tools_L2, "YF_AVAILABLE", True)
+    monkeypatch.setattr(
+        tools_L2,
+        "_get_ndx100_common_price_data",
+        lambda effective_date, **kwargs: (["AAA", "BBB", "CCC"], panel),
+    )
+
+    result = tools_L2.get_advance_decline_line("2025-12-31")
+
+    assert result["value"]["date"] == previous.strftime("%Y-%m-%d")
+    assert result["value"]["date"] != latest.strftime("%Y-%m-%d")
+    assert any("latest_raw_row_excluded_for_sparse_coverage" in item for item in result["data_quality"]["anomalies"])
+
+
 def test_mcclellan_oscillator_uses_ad_series_when_available(monkeypatch):
     monkeypatch.setattr(tools_L2, "YF_AVAILABLE", True)
     monkeypatch.setattr(
@@ -125,6 +147,128 @@ def test_mcclellan_oscillator_uses_ad_series_when_available(monkeypatch):
     assert isinstance(result["value"]["level"], float)
     assert result["value"]["coverage"]["constituents_used"] == 3
     assert result["source_tier"] == "component_model"
+
+
+def test_three_breadth_metrics_skip_sparse_latest_row_without_dropping_tickers(monkeypatch):
+    panel = _price_panel()
+    latest = panel.index[-1]
+    previous = panel.index[-2]
+    panel.loc[latest, ("Close", "BBB")] = float("nan")
+    panel.loc[latest, ("Close", "CCC")] = float("nan")
+    panel.attrs["archive_repair"] = {
+        "triggered": True,
+        "status": "incomplete",
+        "requested_tickers": ["BBB", "CCC"],
+        "remaining_tickers": ["BBB", "CCC"],
+    }
+    monkeypatch.setattr(tools_L2, "YF_AVAILABLE", True)
+    monkeypatch.setattr(
+        tools_L2,
+        "_get_ndx100_common_price_data",
+        lambda effective_date, **kwargs: (["AAA", "BBB", "CCC"], panel),
+    )
+
+    results = [
+        tools_L2.get_percent_above_ma("2025-12-31"),
+        tools_L2.get_new_highs_lows("2025-12-31"),
+        tools_L2.get_mcclellan_oscillator_nasdaq_or_nyse("2025-12-31"),
+    ]
+
+    for result in results:
+        assert result["availability"] == "available"
+        assert result["value"]["date"] == previous.strftime("%Y-%m-%d")
+        assert result["value"]["date"] != latest.strftime("%Y-%m-%d")
+        assert result["data_quality"]["coverage"]["archive_repair_triggered"] is True
+        assert result["data_quality"]["coverage"]["archive_repair_status"] == "incomplete"
+        assert any("latest_raw_row_excluded_for_sparse_coverage" in item for item in result["data_quality"]["anomalies"])
+
+
+def test_internal_single_day_hole_does_not_delete_entire_component_column(monkeypatch):
+    panel = _price_panel()
+    panel.loc[panel.index[120], ("Close", "BBB")] = float("nan")
+    monkeypatch.setattr(tools_L2, "YF_AVAILABLE", True)
+    monkeypatch.setattr(
+        tools_L2,
+        "_get_ndx100_common_price_data",
+        lambda effective_date, **kwargs: (["AAA", "BBB", "CCC"], panel),
+    )
+
+    above_ma = tools_L2.get_percent_above_ma("2025-12-31")
+    highs_lows = tools_L2.get_new_highs_lows("2025-12-31")
+    mcclellan = tools_L2.get_mcclellan_oscillator_nasdaq_or_nyse("2025-12-31")
+
+    assert above_ma["value"]["coverage"]["constituents_used"] == 3
+    assert highs_lows["value"]["coverage"]["constituents_used"] == 3
+    assert mcclellan["value"]["coverage"]["constituents_used"] == 3
+
+
+def test_archive_sparse_rows_trigger_targeted_repair_and_merge(tmp_path, monkeypatch):
+    tools_L2._NDX100_PRICE_PANEL_RUN_CACHE.clear()
+    monkeypatch.setattr(tools_L2.path_config, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(tools_L2, "get_ndx100_components", lambda end_date=None: ["AAA", "BBB", "CCC"])
+    sparse = _price_panel()
+    sparse.loc[sparse.index[-1], ("Close", "BBB")] = float("nan")
+    sparse.loc[sparse.index[-1], ("Close", "CCC")] = float("nan")
+    sparse.loc[sparse.index[120], ("Close", "AAA")] = float("nan")
+    tools_L2._write_ndx100_component_price_archive(sparse)
+    calls = []
+
+    def repaired_download(tickers, **kwargs):
+        batch = [tickers] if isinstance(tickers, str) else list(tickers)
+        calls.extend(batch)
+        return _price_panel()
+
+    monkeypatch.setattr(tools_L2, "cached_yf_download", repaired_download)
+
+    _components, repaired = tools_L2._get_ndx100_common_price_data(
+        datetime(2025, 12, 31), historical_date="2025-12-31"
+    )
+
+    repair = repaired.attrs["archive_repair"]
+    latest = tools_L2._extract_component_close_prices(repaired).iloc[-1]
+    assert set(calls) == {"AAA", "BBB", "CCC"}
+    assert repair["triggered"] is True
+    assert repair["status"] == "completed"
+    assert repair["remaining_tickers"] == []
+    assert latest.notna().all()
+
+
+def test_archive_repair_failure_is_explicit_and_does_not_fabricate_rows(tmp_path, monkeypatch):
+    tools_L2._NDX100_PRICE_PANEL_RUN_CACHE.clear()
+    monkeypatch.setattr(tools_L2.path_config, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(tools_L2, "get_ndx100_components", lambda end_date=None: ["AAA", "BBB", "CCC"])
+    sparse = _price_panel()
+    sparse.loc[sparse.index[-1], ("Close", "BBB")] = float("nan")
+    sparse.loc[sparse.index[-1], ("Close", "CCC")] = float("nan")
+    tools_L2._write_ndx100_component_price_archive(sparse)
+    monkeypatch.setattr(tools_L2, "_download_ndx100_missing_price_archive", lambda *args, **kwargs: None)
+
+    _components, unrepaired = tools_L2._get_ndx100_common_price_data(
+        datetime(2025, 12, 31), historical_date="2025-12-31"
+    )
+
+    repair = unrepaired.attrs["archive_repair"]
+    latest = tools_L2._extract_component_close_prices(unrepaired).iloc[-1]
+    assert repair["triggered"] is True
+    assert repair["status"] == "incomplete"
+    assert set(repair["remaining_tickers"]) == {"BBB", "CCC"}
+    assert latest.isna().sum() == 2
+
+
+def test_formal_collector_run_clears_ndx_component_panel_cache(tmp_path, monkeypatch):
+    calls = {"count": 0}
+    monkeypatch.setattr(collector_module.path_config, "data_dir", str(tmp_path))
+    monkeypatch.setattr(
+        collector_module,
+        "reset_ndx100_price_panel_run_cache",
+        lambda: calls.__setitem__("count", calls["count"] + 1),
+    )
+    collector = DataCollector()
+    collector.LAYER_FUNCTIONS = {}
+
+    collector.run()
+
+    assert calls["count"] == 1
 
 
 def test_m7_summary_uses_weighted_contribution_not_simple_average():

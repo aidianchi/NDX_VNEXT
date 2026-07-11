@@ -10,6 +10,7 @@ import time
 import json
 import hashlib
 import logging
+import io
 import requests
 import threading
 import pandas as pd
@@ -114,6 +115,8 @@ YF_RUNTIME_EVENT_LIMIT = 200
 
 _YF_RUNTIME_EVENTS: List[Dict[str, Any]] = []
 _YF_RUNTIME_LOCK = threading.Lock()
+_SAFE_REQUEST_LAST_ERROR: Optional[Dict[str, Any]] = None
+_FRED_SERIES_LAST_DIAGNOSTICS: Dict[str, Dict[str, Any]] = {}
 
 
 def reset_yfinance_runtime_diagnostics() -> None:
@@ -261,9 +264,16 @@ def safe_request(
     timeout: int = 15,
     retry_count: int = 2,
     proxies: Optional[Dict[str, str]] = None,
+    error_out: Optional[Dict[str, Any]] = None,
 ) -> Optional[dict]:
     """安全的HTTP请求包装器"""
-    for _ in range(retry_count):
+    global _SAFE_REQUEST_LAST_ERROR
+    _SAFE_REQUEST_LAST_ERROR = None
+    if error_out is not None:
+        error_out.clear()
+
+    last_error: Optional[Dict[str, Any]] = None
+    for attempt in range(retry_count):
         try:
             response = requests.get(
                 url,
@@ -273,9 +283,71 @@ def safe_request(
             )
             response.raise_for_status()
             return response.json()
-        except Exception:
+        except Exception as exc:
+            last_error = _request_error_payload(exc, url=url, attempt=attempt + 1, attempts=retry_count)
+            logging.warning(
+                "HTTP request failed (%s/%s) for %s: %s",
+                attempt + 1,
+                retry_count,
+                url,
+                last_error.get("reason"),
+            )
             time.sleep(0.5)
+    if last_error:
+        _SAFE_REQUEST_LAST_ERROR = last_error
+        if error_out is not None:
+            error_out.update(last_error)
     return None
+
+
+def get_safe_request_last_error() -> Optional[Dict[str, Any]]:
+    return dict(_SAFE_REQUEST_LAST_ERROR) if isinstance(_SAFE_REQUEST_LAST_ERROR, dict) else None
+
+
+def _request_error_payload(
+    exc: Exception,
+    *,
+    url: str,
+    attempt: int = 1,
+    attempts: int = 1,
+) -> Dict[str, Any]:
+    status_code = None
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status_code = getattr(response, "status_code", None)
+
+    if isinstance(exc, requests.exceptions.Timeout):
+        reason = "timeout"
+    elif isinstance(exc, requests.exceptions.ConnectionError):
+        text = str(exc).lower()
+        if (
+            "name resolution" in text
+            or "nameresolutionerror" in text
+            or "nodename nor servname" in text
+            or "temporary failure in name resolution" in text
+            or "dns" in text
+        ):
+            reason = "dns_error"
+        else:
+            reason = "connection_error"
+    elif isinstance(exc, requests.exceptions.HTTPError) and status_code:
+        reason = f"http_{status_code}"
+    elif isinstance(exc, requests.exceptions.JSONDecodeError):
+        reason = "invalid_json"
+    elif isinstance(exc, ValueError):
+        reason = "invalid_json"
+    else:
+        reason = exc.__class__.__name__
+
+    return {
+        "reason": reason,
+        "exception_type": exc.__class__.__name__,
+        "detail": str(exc)[:240],
+        "url": url,
+        "status_code": status_code,
+        "attempt": attempt,
+        "attempts": attempts,
+    }
 
 
 def _format_yf_cache_value(value: Optional[Any]) -> str:
@@ -978,6 +1050,90 @@ def _normalize_start_date(start_date: Optional[Any]) -> Optional[str]:
         return None
 
 
+def _empty_fred_frame(data_quality: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+    df = pd.DataFrame(columns=["date", "value"])
+    if data_quality:
+        df.attrs["data_quality"] = data_quality
+    return df
+
+
+def _attach_fred_quality(df: pd.DataFrame, data_quality: Dict[str, Any]) -> pd.DataFrame:
+    df.attrs["data_quality"] = data_quality
+    return df
+
+
+def _record_fred_diagnostics(series_id: str, data_quality: Dict[str, Any]) -> None:
+    _FRED_SERIES_LAST_DIAGNOSTICS[series_id] = dict(data_quality)
+
+
+def get_fred_series_diagnostics(series_id: str) -> Dict[str, Any]:
+    return dict(_FRED_SERIES_LAST_DIAGNOSTICS.get(series_id) or {})
+
+
+def _fetch_fred_series_csv(
+    series_id: str,
+    start_date: Optional[Any] = None,
+    end_date: Optional[Any] = None,
+) -> pd.DataFrame:
+    """FRED keyless CSV fallback from fredgraph.csv."""
+    url = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+    params = {"id": series_id}
+    start_dt = pd.to_datetime(start_date) if start_date is not None else None
+    end_dt = pd.to_datetime(end_date) if end_date is not None else None
+    last_error: Optional[Dict[str, Any]] = None
+
+    try:
+        response = requests.get(
+            url,
+            params=params,
+            timeout=15,
+            proxies=get_requests_proxies(),
+        )
+        response.raise_for_status()
+        raw = pd.read_csv(io.StringIO(response.text))
+        if raw.empty or len(raw.columns) < 2:
+            quality = {
+                "availability": "unavailable",
+                "failure_type": "empty_response",
+                "failure_reason": "fredgraph_csv_empty",
+                "fallback_chain": ["fredgraph_csv_empty"],
+            }
+            return _empty_fred_frame(quality)
+
+        date_col = "observation_date" if "observation_date" in raw.columns else raw.columns[0]
+        value_col = series_id if series_id in raw.columns else raw.columns[1]
+        out = raw[[date_col, value_col]].rename(columns={date_col: "date", value_col: "value"})
+        out = out[out["value"] != "."]
+        out["date"] = pd.to_datetime(out["date"], errors="coerce")
+        out["value"] = pd.to_numeric(out["value"], errors="coerce")
+        out = out.dropna(subset=["date", "value"])
+        if start_dt is not None:
+            out = out[out["date"] >= start_dt]
+        if end_dt is not None:
+            out = out[out["date"] <= end_dt]
+        out = out[["date", "value"]].sort_values("date")
+        quality = {
+            "availability": "available" if not out.empty else "unavailable",
+            "source_tier": "official_keyless_csv",
+            "source_url": url,
+            "fallback_chain": ["fredgraph_csv"],
+        }
+        if out.empty:
+            quality.update({"failure_type": "empty_response", "failure_reason": "fredgraph_csv_no_rows_after_filter"})
+        return _attach_fred_quality(out, quality)
+    except Exception as exc:
+        last_error = _request_error_payload(exc, url=url)
+        logging.warning("FRED fredgraph.csv fallback failed for %s: %s", series_id, last_error.get("reason"))
+        quality = {
+            "availability": "unavailable",
+            "failure_type": last_error.get("reason"),
+            "failure_reason": last_error.get("detail"),
+            "request_error": last_error,
+            "fallback_chain": ["fredgraph_csv_failed"],
+        }
+        return _empty_fred_frame(quality)
+
+
 def _fetch_fred_series_pdr(
     series_id: str,
     start_date: Optional[Any] = None,
@@ -988,24 +1144,53 @@ def _fetch_fred_series_pdr(
     价值：当 FRED API key 缺失或官方 JSON API 短暂失败时，仍保留同一 FRED 序列的轻量 fallback。
     """
     if not PANDAS_DATAREADER_AVAILABLE or pdr_data is None:
-        return pd.DataFrame(columns=["date", "value"])
+        return _empty_fred_frame(
+            {
+                "availability": "unavailable",
+                "failure_type": "provider_unavailable",
+                "failure_reason": "pandas_datareader_unavailable",
+                "fallback_chain": ["pandas_datareader_unavailable"],
+            }
+        )
 
     try:
         start_dt = pd.to_datetime(start_date) if start_date is not None else datetime.now() - timedelta(days=365 * 15)
         end_dt = pd.to_datetime(end_date) if end_date is not None else datetime.now()
         df = pdr_data.DataReader(series_id, "fred", start_dt, end_dt)
         if df is None or df.empty or series_id not in df.columns:
-            return pd.DataFrame(columns=["date", "value"])
+            return _empty_fred_frame(
+                {
+                    "availability": "unavailable",
+                    "failure_type": "empty_response",
+                    "failure_reason": "pandas_datareader_empty",
+                    "fallback_chain": ["pandas_datareader_empty"],
+                }
+            )
 
         out = df[[series_id]].rename(columns={series_id: "value"}).reset_index()
         date_col = "DATE" if "DATE" in out.columns else "date" if "date" in out.columns else out.columns[0]
         out = out.rename(columns={date_col: "date"})
         out["date"] = pd.to_datetime(out["date"])
         out["value"] = pd.to_numeric(out["value"], errors="coerce")
-        return out.dropna(subset=["value"])[["date", "value"]]
+        out = out.dropna(subset=["value"])[["date", "value"]]
+        return _attach_fred_quality(
+            out,
+            {
+                "availability": "available" if not out.empty else "unavailable",
+                "source_tier": "official_pandas_datareader",
+                "fallback_chain": ["pandas_datareader"],
+            },
+        )
     except Exception as exc:
         logging.warning(f"pandas-datareader FRED fallback failed for {series_id}: {exc}")
-        return pd.DataFrame(columns=["date", "value"])
+        return _empty_fred_frame(
+            {
+                "availability": "unavailable",
+                "failure_type": exc.__class__.__name__,
+                "failure_reason": str(exc)[:240],
+                "fallback_chain": ["pandas_datareader_failed"],
+            }
+        )
 
 
 def _fetch_fred_series(series_id: str, start_date: Optional[Any] = None) -> pd.DataFrame:
@@ -1015,8 +1200,26 @@ def _fetch_fred_series(series_id: str, start_date: Optional[Any] = None) -> pd.D
     """
     fred_api_key = get_fred_api_key()
     start_date_str = _normalize_start_date(start_date)
+    fallback_chain: List[str] = []
+    failures: List[Dict[str, Any]] = []
     if not fred_api_key:
-        return _fetch_fred_series_pdr(series_id, start_date=start_date_str)
+        fallback_chain.append("fred_api_key_missing")
+        pdr_df = _fetch_fred_series_pdr(series_id, start_date=start_date_str)
+        pdr_quality = dict(pdr_df.attrs.get("data_quality") or {})
+        fallback_chain.extend(pdr_quality.get("fallback_chain") or [])
+        if not pdr_df.empty:
+            pdr_quality["fallback_chain"] = fallback_chain
+            _record_fred_diagnostics(series_id, pdr_quality)
+            return _attach_fred_quality(pdr_df, pdr_quality)
+        failures.append(pdr_quality)
+        csv_df = _fetch_fred_series_csv(series_id, start_date=start_date_str)
+        csv_quality = dict(csv_df.attrs.get("data_quality") or {})
+        fallback_chain.extend(csv_quality.get("fallback_chain") or [])
+        csv_quality["fallback_chain"] = fallback_chain
+        if failures:
+            csv_quality["fallback_failures"] = failures
+        _record_fred_diagnostics(series_id, csv_quality)
+        return _attach_fred_quality(csv_df, csv_quality)
 
     params = {
         "series_id": series_id,
@@ -1027,19 +1230,58 @@ def _fetch_fred_series(series_id: str, start_date: Optional[Any] = None) -> pd.D
     if start_date_str:
         params["observation_start"] = start_date_str
 
-    data = safe_request(get_fred_base_url(), params)
+    request_error: Dict[str, Any] = {}
+    data = safe_request(get_fred_base_url(), params, error_out=request_error)
     if not data or "observations" not in data:
-        return _fetch_fred_series_pdr(series_id, start_date=start_date_str)
+        fallback_chain.append("fred_api_failed")
+        if request_error:
+            failures.append(request_error)
+        pdr_df = _fetch_fred_series_pdr(series_id, start_date=start_date_str)
+        pdr_quality = dict(pdr_df.attrs.get("data_quality") or {})
+        fallback_chain.extend(pdr_quality.get("fallback_chain") or [])
+        if not pdr_df.empty:
+            pdr_quality["fallback_chain"] = fallback_chain
+            if failures:
+                pdr_quality["fallback_failures"] = failures
+            _record_fred_diagnostics(series_id, pdr_quality)
+            return _attach_fred_quality(pdr_df, pdr_quality)
+        failures.append(pdr_quality)
+        csv_df = _fetch_fred_series_csv(series_id, start_date=start_date_str)
+        csv_quality = dict(csv_df.attrs.get("data_quality") or {})
+        fallback_chain.extend(csv_quality.get("fallback_chain") or [])
+        csv_quality["fallback_chain"] = fallback_chain
+        if failures:
+            csv_quality["fallback_failures"] = failures
+        _record_fred_diagnostics(series_id, csv_quality)
+        return _attach_fred_quality(csv_df, csv_quality)
 
     df = pd.DataFrame(data["observations"])
     if df.empty:
-        return _fetch_fred_series_pdr(series_id, start_date=start_date_str)
+        quality = {
+            "availability": "unavailable",
+            "failure_type": "empty_response",
+            "failure_reason": "fred_api_empty_observations",
+            "fallback_chain": fallback_chain or ["fred_api_empty_observations"],
+        }
+        _record_fred_diagnostics(series_id, quality)
+        return _empty_fred_frame(quality)
 
     df = df[df["value"] != "."]
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
     df["date"] = pd.to_datetime(df["date"])
     df = df.dropna(subset=["value"])
-    return df[["date", "value"]]
+    quality = {
+        "availability": "available" if not df.empty else "unavailable",
+        "source_tier": "official_api",
+        "source_url": get_fred_base_url(),
+        "fallback_chain": fallback_chain or ["fred_api"],
+    }
+    if failures:
+        quality["fallback_failures"] = failures
+    if df.empty:
+        quality.update({"failure_type": "empty_response", "failure_reason": "fred_api_no_numeric_observations"})
+    _record_fred_diagnostics(series_id, quality)
+    return _attach_fred_quality(df[["date", "value"]], quality)
 
 
 
@@ -1132,9 +1374,26 @@ def get_fred_series(series_id: str, days: int = 5475, end_date: str = None) -> O
     start_date_obj = effective_date - timedelta(days=days)
 
     fred_api_key = get_fred_api_key()
+    fallback_chain: List[str] = []
+    failures: List[Dict[str, Any]] = []
     if not fred_api_key:
+        fallback_chain.append("fred_api_key_missing")
         df = _fetch_fred_series_pdr(series_id, start_date=start_date_obj, end_date=effective_date)
-        return df if not df.empty else None
+        pdr_quality = dict(df.attrs.get("data_quality") or {})
+        fallback_chain.extend(pdr_quality.get("fallback_chain") or [])
+        if not df.empty:
+            pdr_quality["fallback_chain"] = fallback_chain
+            _record_fred_diagnostics(series_id, pdr_quality)
+            return _attach_fred_quality(df, pdr_quality)
+        failures.append(pdr_quality)
+        csv_df = _fetch_fred_series_csv(series_id, start_date=start_date_obj, end_date=effective_date)
+        csv_quality = dict(csv_df.attrs.get("data_quality") or {})
+        fallback_chain.extend(csv_quality.get("fallback_chain") or [])
+        csv_quality["fallback_chain"] = fallback_chain
+        if failures:
+            csv_quality["fallback_failures"] = failures
+        _record_fred_diagnostics(series_id, csv_quality)
+        return _attach_fred_quality(csv_df, csv_quality) if not csv_df.empty else None
 
     params = {
         "series_id": series_id, "api_key": fred_api_key, "file_type": "json",
@@ -1143,15 +1402,47 @@ def get_fred_series(series_id: str, days: int = 5475, end_date: str = None) -> O
         "sort_order": "asc"
     }
 
-    data = safe_request(get_fred_base_url(), params)
+    request_error: Dict[str, Any] = {}
+    data = safe_request(get_fred_base_url(), params, error_out=request_error)
     if data and "observations" in data:
         df = pd.DataFrame(data["observations"])
         df = df[df["value"] != "."]
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
         df["date"] = pd.to_datetime(df["date"])
-        return df.dropna(subset=["value"])
+        df = df.dropna(subset=["value"])
+        quality = {
+            "availability": "available" if not df.empty else "unavailable",
+            "source_tier": "official_api",
+            "source_url": get_fred_base_url(),
+            "fallback_chain": fallback_chain or ["fred_api"],
+        }
+        if failures:
+            quality["fallback_failures"] = failures
+        if df.empty:
+            quality.update({"failure_type": "empty_response", "failure_reason": "fred_api_no_numeric_observations"})
+        _record_fred_diagnostics(series_id, quality)
+        return _attach_fred_quality(df, quality) if not df.empty else None
+    fallback_chain.append("fred_api_failed")
+    if request_error:
+        failures.append(request_error)
     df = _fetch_fred_series_pdr(series_id, start_date=start_date_obj, end_date=effective_date)
-    return df if not df.empty else None
+    pdr_quality = dict(df.attrs.get("data_quality") or {})
+    fallback_chain.extend(pdr_quality.get("fallback_chain") or [])
+    if not df.empty:
+        pdr_quality["fallback_chain"] = fallback_chain
+        if failures:
+            pdr_quality["fallback_failures"] = failures
+        _record_fred_diagnostics(series_id, pdr_quality)
+        return _attach_fred_quality(df, pdr_quality)
+    failures.append(pdr_quality)
+    csv_df = _fetch_fred_series_csv(series_id, start_date=start_date_obj, end_date=effective_date)
+    csv_quality = dict(csv_df.attrs.get("data_quality") or {})
+    fallback_chain.extend(csv_quality.get("fallback_chain") or [])
+    csv_quality["fallback_chain"] = fallback_chain
+    if failures:
+        csv_quality["fallback_failures"] = failures
+    _record_fred_diagnostics(series_id, csv_quality)
+    return _attach_fred_quality(csv_df, csv_quality) if not csv_df.empty else None
 
 
 def analyze_series_momentum_relativity(series: pd.DataFrame) -> Dict[str, Any]:

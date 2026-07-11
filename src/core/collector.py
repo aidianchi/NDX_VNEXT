@@ -51,6 +51,14 @@ except ImportError:
     except ImportError:
         reset_l4_component_snapshot_cache = None
 
+try:
+    from ..tools_L2 import reset_ndx100_price_panel_run_cache
+except ImportError:
+    try:
+        from tools_L2 import reset_ndx100_price_panel_run_cache
+    except ImportError:
+        reset_ndx100_price_panel_run_cache = None
+
 class DataCollector:
     """负责从tools.py收集、缓存和格式化所有市场数据。"""
     def __init__(self):
@@ -75,11 +83,18 @@ class DataCollector:
             
             # 第三层：指数内部健康度 (Index Internal Health)
             # 核心问题：趋势是由广泛参与驱动还是由少数领导者支撑？
-            3: ["get_advance_decline_line", "get_percent_above_ma", "get_ndx_ndxe_ratio", "get_qqq_top10_concentration", "get_m7_fundamentals", "get_new_highs_lows", "get_mcclellan_oscillator_nasdaq_or_nyse"],
+            3: ["get_advance_decline_line", "get_percent_above_ma", "get_ndx_ndxe_ratio", "get_qqq_top10_concentration", "get_new_highs_lows", "get_mcclellan_oscillator_nasdaq_or_nyse"],
             
             # 第四层：指数基本面估值 (Index Fundamental Valuation)
             # 核心问题：当前价格相对于其内在价值和无风险资产，是否具有吸引力？
-            4: ["get_ndx_wind_valuation_snapshot", "get_ndx_pe_and_earnings_yield", "get_ndx_forward_earnings_quality", "get_equity_risk_premium", "get_damodaran_us_implied_erp"],
+            4: [
+                "get_ndx_wind_valuation_snapshot",
+                "get_ndx_wind_point_in_time_earnings_expectations",
+                "get_ndx_pe_and_earnings_yield",
+                "get_ndx_forward_earnings_quality",
+                "get_equity_risk_premium",
+                "get_damodaran_us_implied_erp",
+            ],
             
             # 第五层：价格趋势与波动率 (Price Trend & Volatility) - V6.0完整版
             # 核心问题：价格的路径、动能和波动状态如何？
@@ -346,6 +361,8 @@ class DataCollector:
             enable_news: 是否启用新闻采集（默认False，非侵入性）
         """
         reset_yfinance_runtime_diagnostics()
+        if reset_ndx100_price_panel_run_cache is not None:
+            reset_ndx100_price_panel_run_cache()
         if reset_l4_component_snapshot_cache is not None:
             reset_l4_component_snapshot_cache()
         # --- 【新增逻辑】: 尝试导入手动数据模块 ---

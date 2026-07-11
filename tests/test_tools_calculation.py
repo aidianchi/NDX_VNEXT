@@ -11,6 +11,37 @@ import numpy as np
 import pytest
 
 
+def test_m2_missing_level_and_date_is_not_counted_as_valid(monkeypatch):
+    import tools_L1
+
+    monkeypatch.setattr(tools_L1, "calculate_yoy_change", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(tools_L1, "calculate_yoy_series", lambda *args, **kwargs: pd.DataFrame())
+
+    result = tools_L1.get_m2_yoy()
+
+    assert result["value"] is None
+    assert result["availability"] == "unavailable"
+    assert result["unavailable_reason"] == "m2_yoy_level_or_observation_date_missing"
+
+
+def test_hyg_uses_dividend_adjusted_prices_and_remains_a_proxy(monkeypatch):
+    import tools_L1
+
+    captured = {}
+
+    def fake_series(*args, **kwargs):
+        captured.update(kwargs)
+        return {"name": kwargs.get("name"), "value": {"level": 80.0, "date": "2026-07-09"}}
+
+    monkeypatch.setattr(tools_L1, "_get_yf_series_with_analysis", fake_series)
+
+    result = tools_L1.get_hyg_momentum()
+
+    assert captured["auto_adjust"] is True
+    assert result["source_tier"] == "proxy"
+    assert "HY OAS is the primary" in result["notes"]
+
+
 def test_net_liquidity_repairs_pre_2007_tga_scale_anomaly(monkeypatch):
     import tools_L1
 
@@ -89,7 +120,40 @@ def test_net_liquidity_momentum_respects_backtest_end_date(monkeypatch):
 
     assert result["value"]["date"] == "2025-04-09"
     assert result["value"]["level"] == 6039.0
+    assert result["value"]["level_unit"] == "billion_usd"
+    assert result["value"]["momentum_4w_unit"] == "billion_usd"
     assert result["value"]["components"]["fed_assets"] == 7039.0
+    assert result["value"]["components_unit"] == "billion_usd"
+    assert result["value"]["component_units"]["fed_assets"] == "billion_usd"
+    assert result["value"]["component_units"]["tga"] == "billion_usd"
+    assert result["value"]["component_units"]["rrp"] == "billion_usd"
+
+
+def test_fed_funds_rate_reports_fred_failure_reason(monkeypatch):
+    import tools_L1
+
+    empty = pd.DataFrame(columns=["date", "value"])
+    empty.attrs["data_quality"] = {
+        "availability": "unavailable",
+        "failure_type": "dns_error",
+        "failure_reason": "NameResolutionError DNS failure",
+        "fallback_chain": ["fred_api_failed", "pandas_datareader_unavailable", "fredgraph_csv_failed"],
+    }
+
+    monkeypatch.setattr(tools_L1, "get_fred_series", lambda *_args, **_kwargs: empty)
+
+    result = tools_L1.get_fed_funds_rate(end_date="2025-01-10")
+
+    assert result["value"] is None
+    assert result["data_quality"]["failure_type"] == "dns_error"
+    assert result["data_quality"]["failure_reason"] == "NameResolutionError DNS failure"
+    assert result["data_quality"]["observations_available"] == 0
+    assert result["data_quality"]["fallback_chain"] == [
+        "fred_api_failed",
+        "pandas_datareader_unavailable",
+        "fredgraph_csv_failed",
+    ]
+    assert "dns_error" in result["notes"]
 
 
 # ---------------------------------------------------------------------------

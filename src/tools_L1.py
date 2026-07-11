@@ -19,7 +19,51 @@ except ImportError:
 
 _VOL_LEVEL_CACHE = {}
 
-def _get_yf_series_with_analysis(ticker: str, name: str, end_date: Optional[str] = None, use_ma20_trend: bool = False) -> Dict[str, Any]:
+AMOUNT_UNIT_BILLION_USD = "billion_usd"
+
+
+def _fred_unavailable_payload(
+    *,
+    name: str,
+    series_id: str,
+    unit: str,
+    minimum_points: int,
+    series: Optional[pd.DataFrame] = None,
+    calculation: Optional[str] = None,
+) -> Dict[str, Any]:
+    quality = dict(getattr(series, "attrs", {}).get("data_quality") or get_fred_series_diagnostics(series_id) or {})
+    failure_type = quality.get("failure_type") or "insufficient_observations"
+    failure_reason = quality.get("failure_reason") or f"FRED returned fewer than {minimum_points} usable observations."
+    quality.update(
+        {
+            "availability": "unavailable",
+            "failure_type": failure_type,
+            "failure_reason": failure_reason,
+            "observations_available": 0 if series is None else len(series),
+            "minimum_observations_required": minimum_points,
+        }
+    )
+    if calculation:
+        quality["calculation"] = calculation
+    return {
+        "name": name,
+        "series_id": series_id,
+        "value": None,
+        "unit": unit,
+        "source_name": "FRED",
+        "notes": f"FRED data unavailable or insufficient: {failure_type} ({failure_reason})",
+        "data_quality": quality,
+    }
+
+
+def _get_yf_series_with_analysis(
+    ticker: str,
+    name: str,
+    end_date: Optional[str] = None,
+    use_ma20_trend: bool = False,
+    *,
+    auto_adjust: bool = False,
+) -> Dict[str, Any]:
     """
     (内部函数) 使用yfinance获取时间序列数据。use_ma20_trend=True 时（如 VIX/VXN）
     输出 spot_over_ma20_ratio 替代日度动量，用于分层降噪。
@@ -42,7 +86,7 @@ def _get_yf_series_with_analysis(ticker: str, name: str, end_date: Optional[str]
             start=request_start_date.strftime("%Y-%m-%d"),
             end=request_end_date.strftime("%Y-%m-%d"),
             progress=False,
-            auto_adjust=False
+            auto_adjust=auto_adjust
         )
         
         if df.empty:
@@ -313,11 +357,14 @@ def get_10y2y_spread_bp(end_date: str = None) -> Dict[str, Any]:
     """获取10年-2年期美债利差。分层降噪：用 MA20 乖离率替代日度动量。"""
     series = get_fred_series("T10Y2Y", end_date=end_date)
     if series is None or len(series) < 20:
-        return {
-            "name": "10Y-2Y Treasury Spread", "series_id": "T10Y2Y", "value": None,
-            "unit": "basis points", "source_name": "FRED",
-            "notes": "数据不足，无法计算 MA20 乖离率。"
-        }
+        return _fred_unavailable_payload(
+            name="10Y-2Y Treasury Spread",
+            series_id="T10Y2Y",
+            unit="basis points",
+            minimum_points=20,
+            series=series,
+            calculation="ma20_deviation",
+        )
     series = series.copy()
     series['value'] = series['value'] * 100  # Convert to BPS
     analysis = analyze_series_ma_deviation(series, ma_period=20)
@@ -334,11 +381,14 @@ def get_hy_oas_bp(end_date: str = None) -> Dict[str, Any]:
     """获取高收益企业债OAS。分层降噪：用 MA5 vs MA20 趋势替代日度动量。"""
     series = get_fred_series("BAMLH0A0HYM2", end_date=end_date)
     if series is None or len(series) < 20:
-        return {
-            "name": "High Yield OAS", "series_id": "BAMLH0A0HYM2", "value": None,
-            "unit": "basis points", "source_name": "FRED",
-            "notes": "数据不足，无法计算 MA5/MA20 趋势。"
-        }
+        return _fred_unavailable_payload(
+            name="High Yield OAS",
+            series_id="BAMLH0A0HYM2",
+            unit="basis points",
+            minimum_points=20,
+            series=series,
+            calculation="ma5_ma20_trend",
+        )
     analysis = analyze_series_ma_trend(series, short_period=5, long_period=20)
     stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
     analysis["relativity"] = stats
@@ -353,11 +403,14 @@ def get_ig_oas_bp(end_date: str = None) -> Dict[str, Any]:
     """获取投资级企业债OAS。分层降噪：用 MA5 vs MA20 趋势替代日度动量。"""
     series = get_fred_series("BAMLC0A0CM", end_date=end_date)
     if series is None or len(series) < 20:
-        return {
-            "name": "Investment Grade OAS", "series_id": "BAMLC0A0CM", "value": None,
-            "unit": "basis points", "source_name": "FRED",
-            "notes": "数据不足，无法计算 MA5/MA20 趋势。"
-        }
+        return _fred_unavailable_payload(
+            name="Investment Grade OAS",
+            series_id="BAMLC0A0CM",
+            unit="basis points",
+            minimum_points=20,
+            series=series,
+            calculation="ma5_ma20_trend",
+        )
     analysis = analyze_series_ma_trend(series, short_period=5, long_period=20)
     stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
     analysis["relativity"] = stats
@@ -372,11 +425,14 @@ def get_10y_real_rate(end_date: str = None) -> Dict[str, Any]:
     """获取10年期实际利率。分层降噪：L1宏观层使用MA20乖离率替代日度动量。"""
     series = get_fred_series("DFII10", end_date=end_date)
     if series is None or len(series) < 20:
-        return {
-            "name": "10Y Real Rate", "series_id": "DFII10", "value": None,
-            "unit": "percent", "source_name": "FRED",
-            "notes": "数据不足，无法计算 MA20 乖离率。"
-        }
+        return _fred_unavailable_payload(
+            name="10Y Real Rate",
+            series_id="DFII10",
+            unit="percent",
+            minimum_points=20,
+            series=series,
+            calculation="ma20_deviation",
+        )
     analysis = analyze_series_ma_deviation(series, ma_period=20)
     stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
     analysis["relativity"] = stats
@@ -391,11 +447,14 @@ def get_10y_treasury(end_date: str = None) -> Dict[str, Any]:
     """获取10年期美债名义收益率。分层降噪：L1宏观层使用MA20乖离率替代日度动量。"""
     series = get_fred_series("DGS10", end_date=end_date)
     if series is None or len(series) < 20:
-        return {
-            "name": "10Y Treasury Yield", "series_id": "DGS10", "value": None,
-            "unit": "percent", "source_name": "FRED",
-            "notes": "数据不足，无法计算 MA20 乖离率。"
-        }
+        return _fred_unavailable_payload(
+            name="10Y Treasury Yield",
+            series_id="DGS10",
+            unit="percent",
+            minimum_points=20,
+            series=series,
+            calculation="ma20_deviation",
+        )
     analysis = analyze_series_ma_deviation(series, ma_period=20)
     stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
     analysis["relativity"] = stats
@@ -410,11 +469,14 @@ def get_10y_breakeven(end_date: str = None) -> Dict[str, Any]:
     """获取10年期盈亏平衡通胀率。分层降噪：L1宏观层使用MA20乖离率替代日度动量。"""
     series = get_fred_series("T10YIE", end_date=end_date)
     if series is None or len(series) < 20:
-        return {
-            "name": "10Y Breakeven Inflation", "series_id": "T10YIE", "value": None,
-            "unit": "percent", "source_name": "FRED",
-            "notes": "数据不足，无法计算 MA20 乖离率。"
-        }
+        return _fred_unavailable_payload(
+            name="10Y Breakeven Inflation",
+            series_id="T10YIE",
+            unit="percent",
+            minimum_points=20,
+            series=series,
+            calculation="ma20_deviation",
+        )
     analysis = analyze_series_ma_deviation(series, ma_period=20)
     stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
     analysis["relativity"] = stats
@@ -428,7 +490,25 @@ def get_10y_breakeven(end_date: str = None) -> Dict[str, Any]:
 def get_fed_funds_rate(end_date: str = None) -> Dict[str, Any]:
     """获取联邦基金利率 (V5.1升级)"""
     series = get_fred_series("FEDFUNDS", end_date=end_date)
+    if series is None or len(series) < 3:
+        return _fred_unavailable_payload(
+            name="Fed Funds Rate",
+            series_id="FEDFUNDS",
+            unit="percent",
+            minimum_points=3,
+            series=series,
+            calculation="momentum_relativity",
+        )
     analysis = analyze_series_momentum_relativity(series)
+    if not analysis or analysis.get("level") is None:
+        return _fred_unavailable_payload(
+            name="Fed Funds Rate",
+            series_id="FEDFUNDS",
+            unit="percent",
+            minimum_points=3,
+            series=series,
+            calculation="momentum_relativity",
+        )
     return {
         "name": "Fed Funds Rate", "series_id": "FEDFUNDS", "value": analysis,
         "unit": "percent", "source_name": "FRED",
@@ -444,6 +524,17 @@ def get_m2_yoy(end_date: str = None) -> Dict[str, Any]:
     if yoy_history is not None and not yoy_history.empty:
         analysis = analyze_series_momentum_relativity(yoy_history)
         relativity = analysis.get("relativity")
+    if yoy is None or not date:
+        return {
+            "name": "M2 YoY Growth",
+            "series_id": "M2SL",
+            "value": None,
+            "unit": "percent",
+            "source_name": "FRED",
+            "availability": "unavailable",
+            "unavailable_reason": "m2_yoy_level_or_observation_date_missing",
+            "notes": "M2 YoY cannot be used because the level or observation date is missing.",
+        }
     return {
         "name": "M2 YoY Growth", "series_id": "M2SL",
         "value": {"level": yoy, "date": date, "momentum": "monthly", "relativity": relativity},
@@ -718,8 +809,12 @@ def get_net_liquidity_momentum(end_date: str = None) -> Dict[str, Any]:
         "series_id": "WALCL-WTREGEN-RRPONTSYD",
         "value": {
             "level": round(latest_level, 2),
+            "level_unit": AMOUNT_UNIT_BILLION_USD,
             "momentum_4w": round(momentum_4w, 2) if momentum_4w is not None else None,
+            "momentum_4w_unit": AMOUNT_UNIT_BILLION_USD,
             "components": {k: round(v, 2) for k, v in components.items()},
+            "components_unit": AMOUNT_UNIT_BILLION_USD,
+            "component_units": {k: AMOUNT_UNIT_BILLION_USD for k in components},
             "historical_stats": historical_stats,
             "date": latest_date.strftime("%Y-%m-%d"),
         },
@@ -793,7 +888,19 @@ def get_qqq_net_liquidity_ratio(end_date: str = None) -> Dict[str, Any]:
 
 def get_hyg_momentum(end_date: str = None) -> Dict[str, Any]:
     """获取高收益公司债ETF(HYG)的价格动量，作为信用利差的实时代理"""
-    return _get_yf_series_with_analysis(ticker="HYG", name="High Yield Corp Bond (HYG) Momentum", end_date=end_date)
+    result = _get_yf_series_with_analysis(
+        ticker="HYG",
+        name="High Yield Corp Bond (HYG) Adjusted-Price Momentum",
+        end_date=end_date,
+        auto_adjust=True,
+    )
+    result["source_tier"] = "proxy"
+    result["notes"] = (
+        str(result.get("notes") or "")
+        + " Uses dividend-adjusted prices so bond ETF distributions do not masquerade as credit deterioration. "
+        "This remains a tradable-price proxy; HY OAS is the primary credit-spread measure."
+    ).strip()
+    return result
 
 # =====================================================
 # 第二层：市场内部结构
@@ -1044,14 +1151,14 @@ def get_dxy_index(end_date: str = None) -> Dict[str, Any]:
     """
     series = get_fred_series("DTWEXBGS", end_date=end_date)
     if series is None or len(series) < 20:
-        return {
-            "name": "DXY Dollar Index",
-            "series_id": "DTWEXBGS",
-            "value": None,
-            "unit": "index level",
-            "source_name": "FRED",
-            "notes": "数据不足，无法计算MA20乖离率。"
-        }
+        return _fred_unavailable_payload(
+            name="DXY Dollar Index",
+            series_id="DTWEXBGS",
+            unit="index level",
+            minimum_points=20,
+            series=series,
+            calculation="ma20_deviation",
+        )
 
     analysis = analyze_series_ma_deviation(series, ma_period=20)
     stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
@@ -1088,14 +1195,14 @@ def get_sofr_rate(end_date: str = None) -> Dict[str, Any]:
     """
     series = get_fred_series("SOFR", end_date=end_date)
     if series is None or len(series) < 20:
-        return {
-            "name": "SOFR Rate",
-            "series_id": "SOFR",
-            "value": None,
-            "unit": "percent",
-            "source_name": "FRED",
-            "notes": "数据不足，无法计算MA20乖离率。"
-        }
+        return _fred_unavailable_payload(
+            name="SOFR Rate",
+            series_id="SOFR",
+            unit="percent",
+            minimum_points=20,
+            series=series,
+            calculation="ma20_deviation",
+        )
 
     analysis = analyze_series_ma_deviation(series, ma_period=20)
     stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])

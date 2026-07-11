@@ -19,6 +19,13 @@ except ImportError:
 
 _NDX100_PRICE_PANEL_RUN_CACHE: Dict[str, Tuple[List[str], pd.DataFrame]] = {}
 NDX100_ARCHIVE_DOWNLOAD_BATCH_SIZE = 20
+NDX100_BREADTH_MIN_DAILY_COVERAGE = 0.80
+NDX100_ARCHIVE_ROLLING_ROWS = 260
+
+
+def reset_ndx100_price_panel_run_cache() -> None:
+    """Clear the shared component panel at the start of each formal collector run."""
+    _NDX100_PRICE_PANEL_RUN_CACHE.clear()
 
 
 def _yf_daily_end_inclusive(effective_date: datetime) -> datetime:
@@ -116,21 +123,95 @@ def _write_ndx100_component_price_archive(frame: pd.DataFrame) -> None:
             logging.warning("Failed writing NDX100 price archive for %s: %s", ticker, exc)
 
 
-def _archive_close_to_yf_panel(close: pd.DataFrame) -> pd.DataFrame:
+def _archive_close_to_yf_panel(close: pd.DataFrame, repair_meta: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
     if close.empty:
         return pd.DataFrame()
     panel = pd.concat({"Close": close.sort_index()}, axis=1)
     panel.attrs["source_name"] = "local NDX100 component price archive"
     panel.attrs["market_data_source"] = "ndx100_component_price_archive"
+    panel.attrs["archive_repair"] = dict(repair_meta or {})
     return panel
 
 
-def _component_archive_missing_tickers(
+def _component_archive_coverage_diagnostics(
+    close: pd.DataFrame,
+    tickers: List[str],
+    start_date: datetime,
+    target_date: pd.Timestamp,
+) -> Dict[str, Any]:
+    """Find stale endpoints, sparse dates and ticker holes in the active window."""
+    ticker_keys = [str(ticker).upper() for ticker in tickers]
+    if close.empty:
+        return {
+            "repair_tickers": list(tickers),
+            "latest_observed_date": None,
+            "latest_date_coverage_pct": 0.0,
+            "rolling_min_daily_coverage_pct": 0.0,
+            "rolling_min_ticker_coverage_pct": 0.0,
+            "sparse_dates": [],
+        }
+
+    start = pd.Timestamp(start_date).tz_localize(None).normalize()
+    target = pd.Timestamp(target_date).tz_localize(None).normalize()
+    aligned = close.copy()
+    aligned.index = pd.to_datetime(aligned.index).tz_localize(None).normalize()
+    aligned.columns = [str(column).upper() for column in aligned.columns]
+    aligned = aligned.loc[(aligned.index >= start) & (aligned.index <= target)]
+    aligned = aligned.reindex(columns=ticker_keys)
+    window = aligned.tail(NDX100_ARCHIVE_ROLLING_ROWS)
+    if window.empty:
+        return {
+            "repair_tickers": list(tickers),
+            "latest_observed_date": None,
+            "latest_date_coverage_pct": 0.0,
+            "rolling_min_daily_coverage_pct": 0.0,
+            "rolling_min_ticker_coverage_pct": 0.0,
+            "sparse_dates": [],
+        }
+
+    repair_keys = {
+        str(ticker).upper()
+        for ticker in _component_archive_missing_tickers_by_endpoints(aligned, tickers, start, target)
+    }
+    daily_coverage = window.notna().sum(axis=1) / max(len(ticker_keys), 1)
+    latest_date = window.index[-1]
+    latest_missing = window.columns[window.loc[latest_date].isna()]
+    repair_keys.update(str(ticker).upper() for ticker in latest_missing)
+
+    sparse_rows = daily_coverage[daily_coverage < NDX100_BREADTH_MIN_DAILY_COVERAGE]
+    for row_date in sparse_rows.index:
+        repair_keys.update(str(ticker).upper() for ticker in window.columns[window.loc[row_date].isna()])
+
+    ticker_coverage = window.notna().sum(axis=0) / max(len(window), 1)
+    for ticker in ticker_keys:
+        series = window[ticker]
+        first = series.first_valid_index()
+        last = series.last_valid_index()
+        if first is None or last is None:
+            repair_keys.add(ticker)
+            continue
+        bounded = series.loc[first:last]
+        if bounded.isna().any():
+            repair_keys.add(ticker)
+
+    original_by_upper = {str(ticker).upper(): ticker for ticker in tickers}
+    return {
+        "repair_tickers": [original_by_upper[key] for key in ticker_keys if key in repair_keys],
+        "latest_observed_date": latest_date.strftime("%Y-%m-%d"),
+        "latest_date_coverage_pct": round(float(daily_coverage.iloc[-1]) * 100, 2),
+        "rolling_min_daily_coverage_pct": round(float(daily_coverage.min()) * 100, 2),
+        "rolling_min_ticker_coverage_pct": round(float(ticker_coverage.min()) * 100, 2),
+        "sparse_dates": [item.strftime("%Y-%m-%d") for item in sparse_rows.index[-10:]],
+    }
+
+
+def _component_archive_missing_tickers_by_endpoints(
     close: pd.DataFrame,
     tickers: List[str],
     start_date: datetime,
     target_date: pd.Timestamp,
 ) -> List[str]:
+    """Legacy endpoint checks retained as one part of the repair plan."""
     if close.empty:
         return list(tickers)
     start = pd.Timestamp(start_date).tz_localize(None).normalize()
@@ -150,6 +231,15 @@ def _component_archive_missing_tickers(
         if series.index.max().normalize() < target_date - pd.Timedelta(days=5):
             missing.append(ticker)
     return missing
+
+
+def _component_archive_missing_tickers(
+    close: pd.DataFrame,
+    tickers: List[str],
+    start_date: datetime,
+    target_date: pd.Timestamp,
+) -> List[str]:
+    return _component_archive_coverage_diagnostics(close, tickers, start_date, target_date)["repair_tickers"]
 
 
 def _component_price_source_name(frame: pd.DataFrame) -> str:
@@ -242,7 +332,10 @@ def _get_ndx100_common_price_data(
         return list(cached_components), cached_data.copy()
 
     archived_close = _read_ndx100_component_price_archive(ndx100_components, common_start, target_date)
-    missing_tickers = _component_archive_missing_tickers(archived_close, ndx100_components, common_start, target_date)
+    before_repair = _component_archive_coverage_diagnostics(
+        archived_close, ndx100_components, common_start, target_date
+    )
+    missing_tickers = before_repair["repair_tickers"]
 
     if missing_tickers:
         _download_ndx100_missing_price_archive(
@@ -252,8 +345,26 @@ def _get_ndx100_common_price_data(
         )
         archived_close = _read_ndx100_component_price_archive(ndx100_components, common_start, target_date)
 
+    after_repair = _component_archive_coverage_diagnostics(
+        archived_close, ndx100_components, common_start, target_date
+    )
+    repair_meta = {
+        **after_repair,
+        "triggered": bool(missing_tickers),
+        "requested_tickers": [str(ticker).upper() for ticker in missing_tickers],
+        "remaining_tickers": [str(ticker).upper() for ticker in after_repair["repair_tickers"]],
+        "status": (
+            "not_needed"
+            if not missing_tickers
+            else "completed"
+            if not after_repair["repair_tickers"]
+            else "incomplete"
+        ),
+        "before_latest_date_coverage_pct": before_repair["latest_date_coverage_pct"],
+    }
+
     if not archived_close.empty:
-        result = _archive_close_to_yf_panel(archived_close)
+        result = _archive_close_to_yf_panel(archived_close, repair_meta)
     else:
         result = pd.DataFrame()
     result = _filter_daily_frame_to_effective_date(result, effective_date)
@@ -487,6 +598,74 @@ def _component_coverage_anomalies(components: List[str], used_columns: Iterable[
     return [f"excluded_constituents_due_to_missing_or_incomplete_price_data: {preview}{suffix}"]
 
 
+def _rolling_by_observation(close: pd.DataFrame, window: int, operation: str) -> pd.DataFrame:
+    """Roll over each ticker's available observations instead of requiring a hole-free panel."""
+    result = pd.DataFrame(index=close.index, columns=close.columns, dtype=float)
+    for ticker in close.columns:
+        series = pd.to_numeric(close[ticker], errors="coerce").dropna()
+        if operation == "mean":
+            rolled = series.rolling(window=window, min_periods=window).mean()
+        elif operation == "max":
+            rolled = series.rolling(window=window, min_periods=window).max()
+        elif operation == "min":
+            rolled = series.rolling(window=window, min_periods=window).min()
+        else:
+            raise ValueError(f"Unsupported rolling operation: {operation}")
+        result.loc[rolled.index, ticker] = rolled
+    return result
+
+
+def _archive_repair_metadata(frame: pd.DataFrame) -> Dict[str, Any]:
+    if not isinstance(frame, pd.DataFrame):
+        return {}
+    metadata = frame.attrs.get("archive_repair")
+    return dict(metadata) if isinstance(metadata, dict) else {}
+
+
+def _breadth_sparse_anomalies(
+    data: pd.DataFrame,
+    close_prices: pd.DataFrame,
+    qualified: pd.Series,
+    latest_qualified_index: pd.Timestamp,
+) -> List[str]:
+    anomalies: List[str] = []
+    excluded = [index for index in close_prices.index if not bool(qualified.get(index, False))]
+    if excluded:
+        anomalies.append(
+            f"excluded_sparse_or_insufficient_history_dates: count={len(excluded)}, latest={excluded[-1].strftime('%Y-%m-%d')}"
+        )
+    if len(close_prices.index) and close_prices.index[-1] != latest_qualified_index:
+        anomalies.append(
+            f"latest_raw_row_excluded_for_sparse_coverage: {close_prices.index[-1].strftime('%Y-%m-%d')}"
+        )
+    repair = _archive_repair_metadata(data)
+    if repair.get("triggered"):
+        anomalies.append(
+            "archive_repair_triggered: "
+            f"status={repair.get('status')}, requested={len(repair.get('requested_tickers') or [])}, "
+            f"remaining={len(repair.get('remaining_tickers') or [])}"
+        )
+    return anomalies
+
+
+def _breadth_coverage_extra(
+    data: pd.DataFrame,
+    *,
+    latest_daily_coverage_pct: float,
+    excluded_dates_count: int,
+) -> Dict[str, Any]:
+    repair = _archive_repair_metadata(data)
+    return {
+        "latest_daily_coverage_pct": round(float(latest_daily_coverage_pct), 2),
+        "minimum_daily_coverage_pct": round(NDX100_BREADTH_MIN_DAILY_COVERAGE * 100, 2),
+        "excluded_sparse_or_insufficient_history_dates": int(excluded_dates_count),
+        "archive_repair_triggered": bool(repair.get("triggered")),
+        "archive_repair_status": repair.get("status") or "not_reported",
+        "archive_repair_requested_tickers": len(repair.get("requested_tickers") or []),
+        "archive_repair_remaining_tickers": len(repair.get("remaining_tickers") or []),
+    }
+
+
 def _breadth_quality(
     *,
     data_date: str,
@@ -494,12 +673,14 @@ def _breadth_quality(
     constituents_used: int,
     total_constituents: int,
     anomalies: Optional[List[str]] = None,
+    coverage_extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     coverage = {
         "constituents_used": constituents_used,
         "total_constituents": total_constituents,
         "constituent_coverage_pct": round(constituents_used / total_constituents * 100, 2) if total_constituents else 0.0,
     }
+    coverage.update(coverage_extra or {})
     return {
         "source_tier": "component_model",
         "data_date": data_date,
@@ -560,21 +741,32 @@ def get_advance_decline_line(end_date: str = None) -> Dict[str, Any]:
         if len(close_prices) < 2:
             raise ValueError(f"Insufficient trading days: {len(close_prices)}")
 
-        # 计算每日涨跌家数净值
-        daily_ad_values = []
-        for i in range(1, len(close_prices)):
-            price_change = close_prices.iloc[i] - close_prices.iloc[i-1]
-            advances = (price_change > 0).sum()
-            declines = (price_change < 0).sum()
-            net_advances = advances - declines
-            daily_ad_values.append(net_advances)
+        # A/D 只能在同一股票连续两个交易日都有价格时计算。外连接数据的
+        # 最新一行常只有少数股票更新；把 NaN 当作“不涨不跌”会制造假广度。
+        minimum_daily_coverage = 0.80
+        changes = close_prices.diff()
+        valid_pairs = close_prices.notna() & close_prices.shift(1).notna()
+        valid_counts = valid_pairs.sum(axis=1)
+        # Columns that are entirely empty were already removed and are reported
+        # separately as universe coverage loss. The daily floor is measured
+        # against the actually observable panel, so one permanently missing
+        # constituent does not invalidate every day.
+        observable_constituents = max(len(close_prices.columns), 1)
+        daily_coverage = valid_counts / observable_constituents
+        qualified = daily_coverage >= minimum_daily_coverage
+        daily_net = ((changes > 0) & valid_pairs).sum(axis=1) - ((changes < 0) & valid_pairs).sum(axis=1)
+        daily_net = daily_net[qualified]
+        if daily_net.empty:
+            raise ValueError("No A/D observations meet the 80% valid-pair coverage floor.")
+        daily_ad_values = daily_net.astype(int).tolist()
 
         # 累积求和形成腾落线
         cumulative_ad_line = np.cumsum(daily_ad_values)
 
         # 获取最新值
         current_level = int(cumulative_ad_line[-1])
-        latest_date_val = close_prices.index[-1].strftime("%Y-%m-%d")
+        latest_qualified_index = daily_net.index[-1]
+        latest_date_val = latest_qualified_index.strftime("%Y-%m-%d")
 
         # 计算MA20判断趋势
         if len(cumulative_ad_line) >= 20:
@@ -594,9 +786,12 @@ def get_advance_decline_line(end_date: str = None) -> Dict[str, Any]:
             trend = "insufficient_data"
 
         # 计算最近的涨跌家数（用于notes）
-        latest_price_change = close_prices.iloc[-1] - close_prices.iloc[-2]
-        latest_advances = (latest_price_change > 0).sum()
-        latest_declines = (latest_price_change < 0).sum()
+        latest_change = changes.loc[latest_qualified_index]
+        latest_valid = valid_pairs.loc[latest_qualified_index]
+        latest_advances = int(((latest_change > 0) & latest_valid).sum())
+        latest_declines = int(((latest_change < 0) & latest_valid).sum())
+        latest_valid_count = int(valid_counts.loc[latest_qualified_index])
+        latest_coverage_pct = round(float(daily_coverage.loc[latest_qualified_index]) * 100, 2)
 
         return {
             "name": "Advance/Decline Line (NDX100)",
@@ -612,19 +807,33 @@ def get_advance_decline_line(end_date: str = None) -> Dict[str, Any]:
             "unit": "cumulative_count",
             "source_tier": "component_model",
             "source_name": _component_price_source_name(data),
+            "availability": "available",
             "data_quality": _breadth_quality(
                 data_date=latest_date_val,
-                formula="daily advancing constituents - declining constituents, cumulatively summed",
-                constituents_used=len(close_prices.columns),
+                formula="daily advancing constituents - declining constituents among valid consecutive-price pairs; days below 80% coverage are excluded, cumulatively summed",
+                constituents_used=latest_valid_count,
                 total_constituents=len(ndx100_components),
-                anomalies=_component_coverage_anomalies(ndx100_components, close_prices.columns),
+                anomalies=(
+                    _component_coverage_anomalies(ndx100_components, close_prices.columns)
+                    + _breadth_sparse_anomalies(data, close_prices, qualified, latest_qualified_index)
+                ),
+                coverage_extra=_breadth_coverage_extra(
+                    data,
+                    latest_daily_coverage_pct=latest_coverage_pct,
+                    excluded_dates_count=int((~qualified).sum()),
+                ),
             ),
-            "notes": f"基于{len(ndx100_components)}只成分股的{len(daily_ad_values)}天累积数据。最新：上涨{latest_advances}只，下跌{latest_declines}只。"
+            "notes": (
+                f"基于{len(ndx100_components)}只成分股、仅保留有效价格对覆盖率至少80%的{len(daily_ad_values)}个交易日。"
+                f"最新合格日{latest_date_val}覆盖{latest_valid_count}只({latest_coverage_pct}%)：上涨{latest_advances}只，下跌{latest_declines}只。"
+            )
         }
     except Exception as e:
         return {
             "name": "Advance/Decline Line (NDX100)",
             "value": {"level": None, "date": None, "momentum": None, "relativity": None},
+            "availability": "unavailable",
+            "unavailable_reason": "insufficient_valid_pair_coverage",
             "notes": f"Failed to calculate: {str(e)}"
         }
 
@@ -635,6 +844,9 @@ def get_percent_above_ma(end_date: str = None) -> Dict[str, Any]:
         return {
             "name": "% Stocks Above MA (NDX100)",
             "value": {"level": None, "date": None, "momentum": None, "relativity": None},
+            "source_tier": "unavailable",
+            "availability": "unavailable",
+            "unavailable_reason": "yfinance_not_available",
             "notes": "yfinance not available, cannot fetch component data."
         }
 
@@ -653,29 +865,39 @@ def get_percent_above_ma(end_date: str = None) -> Dict[str, Any]:
         if data.empty:
             raise ValueError("No data returned from yfinance.")
 
-        close_prices = _extract_component_close_prices(data).dropna(axis=1, how='any') # 删除数据不完整的列
+        close_prices = _extract_component_close_prices(data).sort_index()
+        if close_prices.empty:
+            raise ValueError("No observable component close columns.")
 
-        if close_prices.empty or len(close_prices) < 200:
-             raise ValueError(f"Insufficient data for MA calculation (days={len(close_prices)}).")
+        ma50_panel = _rolling_by_observation(close_prices, 50, "mean")
+        ma200_panel = _rolling_by_observation(close_prices, 200, "mean")
+        eligible = close_prices.notna() & ma50_panel.notna() & ma200_panel.notna()
+        valid_counts = eligible.sum(axis=1)
+        observable_constituents = max(len(close_prices.columns), 1)
+        daily_coverage = valid_counts / observable_constituents
+        qualified = daily_coverage >= NDX100_BREADTH_MIN_DAILY_COVERAGE
+        if not qualified.any():
+            raise ValueError("No MA observation meets the 80% daily coverage and 200-observation floor.")
 
-        # 获取最新收盘价
-        latest_prices = close_prices.iloc[-1]
-
-        # 计算50日和200日移动平均线
-        ma50 = close_prices.rolling(window=50).mean().iloc[-1]
-        ma200 = close_prices.rolling(window=200).mean().iloc[-1]
-
-        # 比较并计算高于均线的股票数量
-        above_50d = (latest_prices > ma50).sum()
-        above_200d = (latest_prices > ma200).sum()
-
-        # 计算百分比
-        total_stocks = len(close_prices.columns)
+        latest_qualified_index = qualified[qualified].index[-1]
+        latest_eligible = eligible.loc[latest_qualified_index]
+        latest_prices = close_prices.loc[latest_qualified_index, latest_eligible]
+        ma50 = ma50_panel.loc[latest_qualified_index, latest_eligible]
+        ma200 = ma200_panel.loc[latest_qualified_index, latest_eligible]
+        above_50d = int((latest_prices > ma50).sum())
+        above_200d = int((latest_prices > ma200).sum())
+        total_stocks = int(latest_eligible.sum())
         percent_above_50d = round((above_50d / total_stocks) * 100, 2)
         percent_above_200d = round((above_200d / total_stocks) * 100, 2)
 
         # 获取最新日期
-        latest_date_val = close_prices.index[-1].strftime("%Y-%m-%d")
+        latest_date_val = latest_qualified_index.strftime("%Y-%m-%d")
+        latest_coverage_pct = float(daily_coverage.loc[latest_qualified_index]) * 100
+        repair = _archive_repair_metadata(data)
+        anomalies = (
+            _component_coverage_anomalies(ndx100_components, close_prices.columns)
+            + _breadth_sparse_anomalies(data, close_prices, qualified, latest_qualified_index)
+        )
 
         return {
             "name": "% Stocks Above MA (NDX100)",
@@ -694,19 +916,32 @@ def get_percent_above_ma(end_date: str = None) -> Dict[str, Any]:
             "unit": "percent",
             "source_tier": "component_model",
             "source_name": _component_price_source_name(data),
+            "availability": "available",
             "data_quality": _breadth_quality(
                 data_date=latest_date_val,
-                formula="latest component close above 50-day and 200-day moving average",
+                formula="latest qualified component close above 50- and 200-observation moving averages; dates below 80% eligible coverage are excluded",
                 constituents_used=total_stocks,
                 total_constituents=len(ndx100_components),
-                anomalies=_component_coverage_anomalies(ndx100_components, close_prices.columns),
+                anomalies=anomalies,
+                coverage_extra=_breadth_coverage_extra(
+                    data,
+                    latest_daily_coverage_pct=latest_coverage_pct,
+                    excluded_dates_count=int((~qualified).sum()),
+                ),
             ),
-            "notes": f"Based on {total_stocks} NDX100 components with complete data."
+            "notes": (
+                f"最新合格日{latest_date_val}使用{total_stocks}/{len(ndx100_components)}只成分股，"
+                f"当日可计算覆盖率{latest_coverage_pct:.2f}%；单日缺失不会删除整只股票。"
+                f" archive repair={repair.get('status') or 'not_reported'}。"
+            )
         }
     except Exception as e:
         return {
             "name": "% Stocks Above MA (NDX100)",
             "value": {"level": None, "date": None, "momentum": None, "relativity": None},
+            "source_tier": "unavailable",
+            "availability": "unavailable",
+            "unavailable_reason": "insufficient_component_price_coverage_or_history",
             "notes": f"Failed to calculate: {str(e)}"
         }
 
@@ -719,6 +954,8 @@ def get_new_highs_lows(end_date: str = None) -> Dict[str, Any]:
             "name": "New Highs-Lows Index",
             "value": {"level": None, "date": None, "momentum": None, "relativity": None},
             "source_tier": "unavailable",
+            "availability": "unavailable",
+            "unavailable_reason": "yfinance_not_available",
             "notes": "yfinance not available, cannot fetch component data."
         }
 
@@ -729,18 +966,32 @@ def get_new_highs_lows(end_date: str = None) -> Dict[str, Any]:
             components, data = _get_ndx100_common_price_data(effective_date, lookback_days=420, historical_date=end_date)
         except TypeError:
             components, data = _get_ndx100_common_price_data(effective_date, historical_date=end_date)
-        close_prices = _extract_component_close_prices(data).dropna(axis=1, how="any")
-        if close_prices.empty or len(close_prices) < 252:
-            raise ValueError(f"Insufficient data for 52-week high/low calculation (days={len(close_prices)}).")
+        close_prices = _extract_component_close_prices(data).sort_index()
+        if close_prices.empty:
+            raise ValueError("No observable component close columns.")
+        rolling_high = _rolling_by_observation(close_prices, 252, "max")
+        rolling_low = _rolling_by_observation(close_prices, 252, "min")
+        eligible = close_prices.notna() & rolling_high.notna() & rolling_low.notna()
+        valid_counts = eligible.sum(axis=1)
+        observable_constituents = max(len(close_prices.columns), 1)
+        daily_coverage = valid_counts / observable_constituents
+        qualified = daily_coverage >= NDX100_BREADTH_MIN_DAILY_COVERAGE
+        if not qualified.any():
+            raise ValueError(
+                f"Insufficient data for 52-week high/low calculation (max_eligible={int(valid_counts.max())})."
+            )
 
-        window = close_prices.tail(252)
-        latest = window.iloc[-1]
-        highs = window.max()
-        lows = window.min()
+        latest_qualified_index = qualified[qualified].index[-1]
+        latest_eligible = eligible.loc[latest_qualified_index]
+        latest = close_prices.loc[latest_qualified_index, latest_eligible]
+        highs = rolling_high.loc[latest_qualified_index, latest_eligible]
+        lows = rolling_low.loc[latest_qualified_index, latest_eligible]
         new_highs = int((latest >= highs).sum())
         new_lows = int((latest <= lows).sum())
-        total_used = int(len(window.columns))
-        latest_date_val = window.index[-1].strftime("%Y-%m-%d")
+        total_used = int(latest_eligible.sum())
+        latest_date_val = latest_qualified_index.strftime("%Y-%m-%d")
+        latest_coverage_pct = float(daily_coverage.loc[latest_qualified_index]) * 100
+        repair = _archive_repair_metadata(data)
         level = {
             "new_highs_52w": new_highs,
             "new_lows_52w": new_lows,
@@ -766,20 +1017,35 @@ def get_new_highs_lows(end_date: str = None) -> Dict[str, Any]:
             "unit": "count/percent",
             "source_tier": "component_model",
             "source_name": _component_price_source_name(data),
+            "availability": "available",
             "data_quality": _breadth_quality(
                 data_date=latest_date_val,
-                formula="component latest close equals 252-trading-day high or low",
+                formula="component latest qualified close equals its trailing 252 available-observation high or low; dates below 80% eligible coverage are excluded",
                 constituents_used=total_used,
                 total_constituents=len(components),
-                anomalies=_component_coverage_anomalies(components, window.columns),
+                anomalies=(
+                    _component_coverage_anomalies(components, close_prices.columns)
+                    + _breadth_sparse_anomalies(data, close_prices, qualified, latest_qualified_index)
+                ),
+                coverage_extra=_breadth_coverage_extra(
+                    data,
+                    latest_daily_coverage_pct=latest_coverage_pct,
+                    excluded_dates_count=int((~qualified).sum()),
+                ),
             ),
-            "notes": f"52周新高{new_highs}只，新低{new_lows}只，覆盖{total_used}/{len(components)}只成分股。"
+            "notes": (
+                f"52周新高{new_highs}只，新低{new_lows}只；最新合格日{latest_date_val}"
+                f"覆盖{total_used}/{len(components)}只({latest_coverage_pct:.2f}%)。"
+                f" archive repair={repair.get('status') or 'not_reported'}。"
+            )
         }
     except Exception as e:
         return {
             "name": "New Highs-Lows Index",
             "value": {"level": None, "date": None, "momentum": None, "relativity": None},
             "source_tier": "unavailable",
+            "availability": "unavailable",
+            "unavailable_reason": "insufficient_component_price_coverage_or_history",
             "notes": f"Failed to calculate: {str(e)}"
         }
 
@@ -791,6 +1057,8 @@ def get_mcclellan_oscillator_nasdaq_or_nyse(end_date: str = None) -> Dict[str, A
             "name": "McClellan Oscillator",
             "value": {"level": None, "date": None, "momentum": None, "relativity": None},
             "source_tier": "unavailable",
+            "availability": "unavailable",
+            "unavailable_reason": "yfinance_not_available",
             "notes": "yfinance not available, cannot fetch component data."
         }
 
@@ -798,20 +1066,34 @@ def get_mcclellan_oscillator_nasdaq_or_nyse(end_date: str = None) -> Dict[str, A
 
     try:
         components, data = _get_ndx100_common_price_data(effective_date, historical_date=end_date)
-        close_prices = _extract_component_close_prices(data).dropna(axis=1, how="any")
+        close_prices = _extract_component_close_prices(data).sort_index()
         if close_prices.empty or len(close_prices) < 40:
             raise ValueError(f"Insufficient data for McClellan calculation (days={len(close_prices)}).")
 
-        price_changes = close_prices.diff().dropna()
-        advances = (price_changes > 0).sum(axis=1)
-        declines = (price_changes < 0).sum(axis=1)
-        net_advances = advances - declines
+        price_changes = close_prices.diff()
+        valid_pairs = close_prices.notna() & close_prices.shift(1).notna()
+        valid_counts = valid_pairs.sum(axis=1)
+        observable_constituents = max(len(close_prices.columns), 1)
+        daily_coverage = valid_counts / observable_constituents
+        qualified = daily_coverage >= NDX100_BREADTH_MIN_DAILY_COVERAGE
+        net_advances = (
+            ((price_changes > 0) & valid_pairs).sum(axis=1)
+            - ((price_changes < 0) & valid_pairs).sum(axis=1)
+        )
+        net_advances = net_advances[qualified]
+        if len(net_advances) < 39:
+            raise ValueError(
+                f"Insufficient qualified daily breadth observations for McClellan (days={len(net_advances)})."
+            )
         ema19 = net_advances.ewm(span=19, adjust=False).mean()
         ema39 = net_advances.ewm(span=39, adjust=False).mean()
         oscillator = ema19 - ema39
         latest_value = float(oscillator.iloc[-1])
-        latest_date_val = oscillator.index[-1].strftime("%Y-%m-%d")
-        total_used = int(len(close_prices.columns))
+        latest_qualified_index = oscillator.index[-1]
+        latest_date_val = latest_qualified_index.strftime("%Y-%m-%d")
+        total_used = int(valid_counts.loc[latest_qualified_index])
+        latest_coverage_pct = float(daily_coverage.loc[latest_qualified_index]) * 100
+        repair = _archive_repair_metadata(data)
         return {
             "name": "McClellan Oscillator",
             "series_id": "NDX_COMPONENT_MCCLELLAN",
@@ -829,20 +1111,35 @@ def get_mcclellan_oscillator_nasdaq_or_nyse(end_date: str = None) -> Dict[str, A
             "unit": "net_advancers_ema_spread",
             "source_tier": "component_model",
             "source_name": _component_price_source_name(data),
+            "availability": "available",
             "data_quality": _breadth_quality(
                 data_date=latest_date_val,
-                formula="19-day EMA(net advances) - 39-day EMA(net advances)",
+                formula="19-day EMA(net advances) - 39-day EMA(net advances) using only valid consecutive-price pairs and dates with at least 80% coverage",
                 constituents_used=total_used,
                 total_constituents=len(components),
-                anomalies=_component_coverage_anomalies(components, close_prices.columns),
+                anomalies=(
+                    _component_coverage_anomalies(components, close_prices.columns)
+                    + _breadth_sparse_anomalies(data, close_prices, qualified, latest_qualified_index)
+                ),
+                coverage_extra=_breadth_coverage_extra(
+                    data,
+                    latest_daily_coverage_pct=latest_coverage_pct,
+                    excluded_dates_count=int((~qualified).sum()),
+                ),
             ),
-            "notes": "基于NDX100成分股每日涨跌家数序列的广度动能确认指标。"
+            "notes": (
+                f"基于NDX100成分股每日涨跌家数序列；最新合格日{latest_date_val}"
+                f"覆盖{total_used}/{len(components)}只({latest_coverage_pct:.2f}%)。"
+                f" archive repair={repair.get('status') or 'not_reported'}。"
+            )
         }
     except Exception as e:
         return {
             "name": "McClellan Oscillator",
             "value": {"level": None, "date": None, "momentum": None, "relativity": None},
             "source_tier": "unavailable",
+            "availability": "unavailable",
+            "unavailable_reason": "insufficient_valid_pair_coverage_or_history",
             "notes": f"Failed to calculate: {str(e)}"
         }
 
