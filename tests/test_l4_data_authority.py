@@ -110,7 +110,8 @@ def _damodaran_monthly_xlsx(start: str, values, future_rows=None):
     return _minimal_xlsx(rows)
 
 
-def test_weighted_metrics_use_aggregate_earnings_and_fcf_with_coverage():
+def test_weighted_metrics_use_aggregate_earnings_and_fcf_with_coverage(monkeypatch):
+    monkeypatch.setattr(tools_L4, "MIN_FORWARD_PE_STOCKS", 2)
     df = pd.DataFrame(
         [
             {

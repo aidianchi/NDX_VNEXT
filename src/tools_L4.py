@@ -72,6 +72,7 @@ VALUATION_FALLBACK_CHAIN = [
 
 L4_COMPONENT_SNAPSHOT_CACHE: Dict[str, Tuple[pd.DataFrame, Dict[str, Any]]] = {}
 L4_WIND_NDX_VALUATION_CACHE: Dict[str, Dict[str, Any]] = {}
+L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE: Dict[str, Dict[str, Any]] = {}
 _YAHOO_QUOTE_SUMMARY_SESSION: Optional[requests.Session] = None
 L4_COMPONENT_SOURCE_DISAGREEMENT_THRESHOLDS = {
     "market_cap": 15.0,
@@ -83,7 +84,9 @@ WIND_PERCENTILE_WINDOW_MIN_SAMPLES = {
     "1y": 200,
     "2y": 450,
     "5y": 1000,
-    "10y": 1900,
+    # Roughly ten US trading years. A 1,900-point series is closer to 7.5 years
+    # and must not be relabelled as a 10-year percentile.
+    "10y": 2300,
 }
 L4_COMPONENT_FIELD_SOURCE_POLICY = {
     "market_cap": "yfinance_primary_yahoo_cross_check",
@@ -142,6 +145,20 @@ SEC_OFFICIAL_CHECK_TOTAL_BUDGET_SECONDS = 20
 YFINANCE_INFO_WAIT_SECONDS = 6
 YAHOO_QUOTE_SUMMARY_WAIT_SECONDS = 6
 L4_COMPONENT_LIVE_SOURCE_TOTAL_BUDGET_SECONDS = 60
+MIN_FORWARD_PE_STOCKS = 50
+MIN_FORWARD_QUALITY_CONSTITUENTS = 50
+MIN_M7_QUALITY_MEMBERS = 5
+VALUATION_FRESHNESS_DAYS = {
+    "ndx_trailing_pe": 7,
+    "ndx_forward_pe": 45,
+    "ndx_trailing_and_forward_pe": 45,
+}
+HISTORY_OF_MARKET_PERCENTILE_REQUIREMENTS = {
+    # Daily observations: require roughly one trading year, not a few weeks of data.
+    "trailing": {"min_observations": 200, "min_span_days": 270},
+    # Monthly observations: require five years of points and at least 4.5 calendar years.
+    "forward": {"min_observations": 60, "min_span_days": 1642},
+}
 
 
 def _utc_timestamp() -> str:
@@ -172,6 +189,68 @@ def _safe_float(value: Any) -> Optional[float]:
 
 def _round_or_none(value: Optional[float], digits: int = 2) -> Optional[float]:
     return round(value, digits) if value is not None and np.isfinite(value) else None
+
+
+def _parse_valuation_date(value: Any) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = pd.to_datetime(value, errors="coerce", dayfirst=False)
+        if pd.isna(parsed):
+            return None
+        return parsed.to_pydatetime().replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _apply_valuation_freshness(
+    source: Dict[str, Any],
+    *,
+    as_of_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Assign decision eligibility from the source observation date, not fetch time."""
+    result = dict(source)
+    metric = str(result.get("metric") or "")
+    threshold_days = VALUATION_FRESHNESS_DAYS.get(metric, 7)
+    observed_at = _parse_valuation_date(result.get("data_date"))
+    as_of = _parse_valuation_date(as_of_date) or datetime.now()
+    if observed_at is None:
+        result.update(
+            {
+                "freshness_status": "unknown_freshness",
+                "freshness_days": None,
+                "freshness_threshold_days": threshold_days,
+                "usage": "audit_only",
+            }
+        )
+        if result.get("availability") == "available":
+            result["availability"] = "unknown_freshness"
+        return result
+
+    age_days = max(0, (as_of.date() - observed_at.date()).days)
+    if age_days > threshold_days:
+        result.update(
+            {
+                "freshness_status": "stale_for_decision",
+                "freshness_days": age_days,
+                "freshness_threshold_days": threshold_days,
+                "usage": "audit_only",
+                "availability": "stale",
+            }
+        )
+        stale_reason = f"stale_for_decision:{age_days}d>{threshold_days}d"
+        prior_reason = result.get("unavailable_reason")
+        result["unavailable_reason"] = f"{prior_reason}; {stale_reason}" if prior_reason else stale_reason
+    else:
+        result.update(
+            {
+                "freshness_status": "current",
+                "freshness_days": age_days,
+                "freshness_threshold_days": threshold_days,
+                "usage": "validation_only",
+            }
+        )
+    return result
 
 
 def _quality_block(
@@ -315,6 +394,45 @@ def _wind_unavailable_snapshot(reason: str, *, date_str: Optional[str] = None) -
     }
 
 
+def _wind_unavailable_earnings_expectations(reason: str, *, date_str: Optional[str] = None) -> Dict[str, Any]:
+    data_date = date_str or datetime.now().strftime("%Y-%m-%d")
+    return {
+        "name": "Wind NDX Point-in-Time Earnings Expectations",
+        "series_id": "WIND_NDX_PIT_EARNINGS_EXPECTATIONS",
+        "value": None,
+        "unit": "index EPS/percent",
+        "date": data_date,
+        "source_tier": SOURCE_TIER_UNAVAILABLE,
+        "source_name": "Wind index_data.get_index_fundamentals",
+        "source_url": "https://aifinmarket.wind.com.cn",
+        "availability": "unavailable",
+        "unavailable_reason": reason,
+        "error": reason,
+        "data_quality": build_data_quality(
+            provider="Wind",
+            source_name="Wind index_data.get_index_fundamentals",
+            source_url="https://aifinmarket.wind.com.cn",
+            source_tier=SOURCE_TIER_UNAVAILABLE,
+            data_date=data_date,
+            as_of_date=data_date,
+            effective_date=data_date,
+            collected_at_utc=_utc_timestamp(),
+            availability="unavailable",
+            fallback_reason=reason,
+            fallback_chain=[SOURCE_TIER_LICENSED_PROVIDER, SOURCE_TIER_UNAVAILABLE],
+            license_note="licensed_provider",
+            coverage={"index_code": "NDX.GI", "required_vintages": ["current", "30d_ago"]},
+            methodology="Same-horizon NDX consensus EPS vintages are required before any revision slope is emitted.",
+            formula="revision_pct = (current_consensus_eps / prior_consensus_eps - 1) * 100",
+            anomalies=[reason],
+        ),
+        "notes": (
+            "Wind point-in-time earnings expectations were not usable this run. "
+            "No current value is substituted for a missing historical vintage."
+        ),
+    }
+
+
 def _call_wind_cli(server_type: str, tool_name: str, params: Dict[str, Any], *, timeout: int = 45) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     skill_dir = _wind_skill_dir()
     cli_path = skill_dir / "scripts" / "cli.mjs"
@@ -413,7 +531,14 @@ def _extract_wind_rows(payload: Any) -> List[Dict[str, Any]]:
             table_rows = _rows_from_table_dict(node)
             if table_rows:
                 rows.extend(table_rows)
-            elif any("风险溢价" in str(key) or "市盈率" in str(key) or str(key).lower() in {"pe", "pb", "ps"} for key in node):
+            elif any(
+                "风险溢价" in str(key)
+                or "市盈率" in str(key)
+                or "一致预期" in str(key)
+                or "eps" in str(key).lower()
+                or str(key).lower() in {"pe", "pb", "ps"}
+                for key in node
+            ):
                 rows.append(node)
             for value in node.values():
                 walk(value)
@@ -859,9 +984,13 @@ def get_ndx_wind_valuation_snapshot(end_date: str = None) -> Dict[str, Any]:
                 source=SOURCE_TIER_LICENSED_PROVIDER,
             ),
             "RiskPremium": _component_metric_authority(
-                usage="core_allowed",
-                authority="licensed_provider_wind_ndx_specific_risk_premium",
-                reason="NDX-specific Wind risk premium; do not mix it with Damodaran US ERP or simple yield gap.",
+                usage="supporting_only",
+                authority="provider_label_definition_unverified",
+                reason=(
+                    "Wind is the licensed provider, but this natural-language response does not preserve a field code, "
+                    "formula or unit. Repeat the provider label/percentile only; do not interpret the absolute value "
+                    "until the field definition is verified."
+                ),
                 source=SOURCE_TIER_LICENSED_PROVIDER,
             ),
         },
@@ -923,6 +1052,353 @@ def get_ndx_wind_valuation_snapshot(end_date: str = None) -> Dict[str, Any]:
         ),
     }
     L4_WIND_NDX_VALUATION_CACHE[cache_key] = deepcopy(result)
+    return result
+
+
+def _wind_date(value: Any) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.strftime("%Y-%m-%d")
+
+
+def _normalize_wind_forecast_basis(value: Any) -> Optional[str]:
+    """Return a supported, comparable Wind forecast basis."""
+    normalized = _norm_wind_key(value)
+    if normalized in {
+        "ntm",
+        "12m",
+        "next12months",
+        "forward12months",
+        "未来12个月",
+        "未来十二个月",
+    }:
+        return "NTM"
+    fy_match = re.fullmatch(r"fy([1-5])", normalized)
+    if fy_match:
+        return f"FY{fy_match.group(1)}"
+    chinese_fy_match = re.fullmatch(r"未来([1-5])个?财年", normalized)
+    if chinese_fy_match:
+        return f"FY{chinese_fy_match.group(1)}"
+    if normalized in {"下一财年", "下一个财年"}:
+        return "FY1"
+    return None
+
+
+def _parse_wind_ndx_earnings_vintages(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Parse long-form Wind consensus rows without inventing missing vintages."""
+    vintages: List[Dict[str, Any]] = []
+    for row in _extract_wind_rows(payload):
+        if not isinstance(row, dict):
+            continue
+        as_of_date = _wind_date(
+            _wind_row_value(
+                row,
+                "预期日期",
+                "预测日期",
+                "估值日期",
+                "数据日期",
+                "日期",
+                "as_of_date",
+                "vintage_date",
+            )
+        )
+        consensus_eps = _safe_float(
+            _wind_row_value(
+                row,
+                "一致预期每股收益",
+                "一致预期EPS",
+                "预测EPS",
+                "consensus_eps",
+                exclude=("增长", "变化", "修正", "幅度", "分位"),
+            )
+        )
+        if as_of_date is None or consensus_eps is None or consensus_eps <= 0:
+            continue
+        forecast_basis = _wind_row_value(
+            row,
+            "预测口径",
+            "预测周期",
+            "一致预期口径",
+            "forecast_period",
+            "horizon",
+        )
+        fiscal_period_end = _wind_date(
+            _wind_row_value(row, "预测期末", "报告期", "财年末", "fiscal_period_end")
+        )
+        vintages.append(
+            {
+                "as_of_date": as_of_date,
+                "forecast_basis": _normalize_wind_forecast_basis(forecast_basis),
+                "forecast_basis_raw": str(forecast_basis or "").strip() or None,
+                "fiscal_period_end": fiscal_period_end,
+                "consensus_eps": consensus_eps,
+                "forward_pe": _safe_float(
+                    _wind_row_value(row, "预期市盈率", "一致预期市盈率", "forward_pe", exclude=("分位",))
+                ),
+                "analyst_count": _safe_float(_wind_row_value(row, "分析师数量", "分析师覆盖", "analyst_count")),
+                "up_revision_count": _safe_float(_wind_row_value(row, "上调家数", "上调次数", "up_revision_count")),
+                "down_revision_count": _safe_float(_wind_row_value(row, "下调家数", "下调次数", "down_revision_count")),
+                "index_code": _wind_row_value(row, "Wind代码", "指数代码", "windcode") or "NDX.GI",
+                "index_name": _wind_row_value(row, "证券简称", "指数名称", "指数简称") or "Nasdaq 100",
+            }
+        )
+    deduped: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for item in vintages:
+        key = (
+            item["as_of_date"],
+            _norm_wind_key(item.get("forecast_basis") or ""),
+            item.get("fiscal_period_end") or "",
+        )
+        deduped[key] = item
+    return sorted(deduped.values(), key=lambda item: item["as_of_date"])
+
+
+def _wind_revision_prior(
+    current: Dict[str, Any],
+    vintages: List[Dict[str, Any]],
+    *,
+    target_days: int,
+) -> Optional[Tuple[Dict[str, Any], int]]:
+    current_date = pd.Timestamp(current["as_of_date"])
+    current_basis = current.get("forecast_basis")
+    current_period_end = current.get("fiscal_period_end")
+    if current_basis is None:
+        return None
+    fiscal_year_basis = bool(re.fullmatch(r"FY[1-5]", current_basis))
+    if fiscal_year_basis and current_period_end is None:
+        return None
+    candidates: List[Tuple[int, Dict[str, Any]]] = []
+    lower, upper = ((15, 45) if target_days == 30 else (60, 120))
+    for item in vintages:
+        if item is current:
+            continue
+        gap = int((current_date - pd.Timestamp(item["as_of_date"])).days)
+        if gap < lower or gap > upper:
+            continue
+        if item.get("forecast_basis") != current_basis:
+            continue
+        if fiscal_year_basis and (
+            item.get("fiscal_period_end") is None
+            or item.get("fiscal_period_end") != current_period_end
+        ):
+            continue
+        candidates.append((gap, item))
+    if not candidates:
+        return None
+    gap, item = min(candidates, key=lambda pair: abs(pair[0] - target_days))
+    return item, gap
+
+
+def get_ndx_wind_point_in_time_earnings_expectations(end_date: str = None) -> Dict[str, Any]:
+    """Wind NDX consensus EPS revisions using explicit same-horizon historical vintages.
+
+    The metric is intentionally unavailable unless the provider response carries
+    explicit observation dates and at least one comparable prior vintage.
+    """
+    target_date = end_date or datetime.now().strftime("%Y-%m-%d")
+    cache_key = f"wind_ndx_pit_earnings:{target_date}"
+    cached = L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE.get(cache_key)
+    if cached is not None:
+        result = deepcopy(cached)
+        result["cache_hit"] = True
+        return result
+    if _wind_l4_disabled():
+        return _wind_unavailable_earnings_expectations("wind_l4_disabled_by_NDX_DISABLE_WIND_L4", date_str=target_date)
+
+    target_compact = target_date.replace("-", "")
+    question = (
+        f"纳斯达克100指数NDX.GI截至{target_compact}未来12个月NTM一致预期每股收益，"
+        "以及同一预测口径在此前30日和90日各历史时点当时可见的数值、分析师覆盖数、上调家数和下调家数"
+    )
+    payload, error = _call_wind_cli(
+        "index_data",
+        "get_index_fundamentals",
+        {"question": question, "lang": "中文"},
+    )
+    if error or payload is None:
+        result = _wind_unavailable_earnings_expectations(error or "wind_empty_payload", date_str=target_date)
+        L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE[cache_key] = deepcopy(result)
+        return result
+
+    vintages = _parse_wind_ndx_earnings_vintages(payload)
+    target_ts = pd.Timestamp(target_date)
+    eligible = [item for item in vintages if pd.Timestamp(item["as_of_date"]) <= target_ts]
+    if not eligible:
+        result = _wind_unavailable_earnings_expectations(
+            "wind_payload_missing_explicit_consensus_eps_vintages_on_or_before_effective_date",
+            date_str=target_date,
+        )
+        result["raw_wind_payload_compact"] = _compact_wind_payload(payload)
+        L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE[cache_key] = deepcopy(result)
+        return result
+
+    # Prefer NTM rows. If Wind returns FY1 instead, keep that basis explicit and
+    # compare only within the same basis/period end.
+    ntm_rows = [item for item in eligible if item.get("forecast_basis") == "NTM"]
+    comparable_rows = ntm_rows or eligible
+    current = max(comparable_rows, key=lambda item: item["as_of_date"])
+    current_basis = current.get("forecast_basis")
+    if current_basis is None:
+        result = _wind_unavailable_earnings_expectations(
+            "wind_current_consensus_missing_or_unsupported_forecast_basis",
+            date_str=target_date,
+        )
+        result["data_quality"]["coverage"].update(
+            {"parsed_vintages": len(vintages), "latest_vintage": current["as_of_date"]}
+        )
+        L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE[cache_key] = deepcopy(result)
+        return result
+    if re.fullmatch(r"FY[1-5]", current_basis) and current.get("fiscal_period_end") is None:
+        result = _wind_unavailable_earnings_expectations(
+            "wind_current_fiscal_year_consensus_missing_fiscal_period_end",
+            date_str=target_date,
+        )
+        result["data_quality"]["coverage"].update(
+            {"parsed_vintages": len(vintages), "latest_vintage": current["as_of_date"]}
+        )
+        L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE[cache_key] = deepcopy(result)
+        return result
+    freshness_days = int((target_ts - pd.Timestamp(current["as_of_date"])).days)
+    if freshness_days > 7:
+        result = _wind_unavailable_earnings_expectations(
+            "wind_current_consensus_vintage_stale_for_effective_date",
+            date_str=target_date,
+        )
+        result["data_quality"]["coverage"].update({"latest_vintage": current["as_of_date"], "freshness_days": freshness_days})
+        L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE[cache_key] = deepcopy(result)
+        return result
+
+    prior_30 = _wind_revision_prior(current, comparable_rows, target_days=30)
+    prior_90 = _wind_revision_prior(current, comparable_rows, target_days=90)
+    if prior_30 is None:
+        result = _wind_unavailable_earnings_expectations(
+            "wind_missing_same_horizon_30d_consensus_vintage",
+            date_str=target_date,
+        )
+        result["data_quality"]["coverage"].update({"parsed_vintages": len(vintages), "latest_vintage": current["as_of_date"]})
+        L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE[cache_key] = deepcopy(result)
+        return result
+
+    prior_30_row, gap_30 = prior_30
+    revision_30 = (current["consensus_eps"] / prior_30_row["consensus_eps"] - 1.0) * 100.0
+    revision_90 = None
+    slope_90 = None
+    prior_90_row = None
+    gap_90 = None
+    if prior_90 is not None:
+        prior_90_row, gap_90 = prior_90
+        revision_90 = (current["consensus_eps"] / prior_90_row["consensus_eps"] - 1.0) * 100.0
+        slope_90 = revision_90 * 30.0 / gap_90 if gap_90 else None
+    slope_30 = revision_30 * 30.0 / gap_30 if gap_30 else None
+    up_count = current.get("up_revision_count")
+    down_count = current.get("down_revision_count")
+    breadth = None
+    if up_count is not None and down_count is not None and up_count + down_count > 0:
+        breadth = (up_count - down_count) / (up_count + down_count) * 100.0
+
+    value = {
+        "index_code": current.get("index_code") or "NDX.GI",
+        "index_name": current.get("index_name") or "Nasdaq 100",
+        "as_of_date": current["as_of_date"],
+        "forecast_basis": current.get("forecast_basis"),
+        "fiscal_period_end": current.get("fiscal_period_end"),
+        "consensus_eps_current": _round_or_none(current["consensus_eps"], 4),
+        "consensus_eps_30d_ago": _round_or_none(prior_30_row["consensus_eps"], 4),
+        "consensus_eps_90d_ago": _round_or_none(prior_90_row["consensus_eps"], 4) if prior_90_row else None,
+        "revision_30d_pct": _round_or_none(revision_30, 4),
+        "revision_90d_pct": _round_or_none(revision_90, 4),
+        "revision_slope_30d_pct_per_30d": _round_or_none(slope_30, 4),
+        "revision_slope_90d_pct_per_30d": _round_or_none(slope_90, 4),
+        "revision_direction_30d": _direction_from_change(revision_30),
+        "up_revision_count": int(up_count) if up_count is not None else None,
+        "down_revision_count": int(down_count) if down_count is not None else None,
+        "revision_breadth_pct": _round_or_none(breadth, 2),
+        "analyst_count": int(current["analyst_count"]) if current.get("analyst_count") is not None else None,
+        "forward_pe": _round_or_none(current.get("forward_pe")),
+        "point_in_time_verified": True,
+        "vintages": [
+            {
+                "as_of_date": item["as_of_date"],
+                "consensus_eps": _round_or_none(item["consensus_eps"], 4),
+                "forecast_basis": item.get("forecast_basis"),
+                "fiscal_period_end": item.get("fiscal_period_end"),
+            }
+            for item in (prior_90_row, prior_30_row, current)
+            if item is not None
+        ],
+        "MetricAuthority": {
+            "revision_30d_pct": _component_metric_authority(
+                usage="core_allowed",
+                authority="licensed_provider_same_horizon_point_in_time",
+                reason="Same-horizon index consensus EPS vintages with explicit observation dates support earnings-expectation direction.",
+                source=SOURCE_TIER_LICENSED_PROVIDER,
+            ),
+            "revision_slope_30d_pct_per_30d": _component_metric_authority(
+                usage="core_allowed",
+                authority="licensed_provider_same_horizon_point_in_time",
+                reason="Calendar-normalized slope derived only from explicit same-horizon Wind vintages.",
+                source=SOURCE_TIER_LICENSED_PROVIDER,
+            ),
+            "forward_pe": _component_metric_authority(
+                usage="supporting_only",
+                authority="provider_label_definition_unverified",
+                reason="Natural-language response does not preserve a deterministic Wind field code or index calculation method.",
+                source=SOURCE_TIER_LICENSED_PROVIDER,
+            ),
+        },
+    }
+    result = {
+        "name": "Wind NDX Point-in-Time Earnings Expectations",
+        "series_id": "WIND_NDX_PIT_EARNINGS_EXPECTATIONS",
+        "value": value,
+        "unit": "index EPS/percent",
+        "date": current["as_of_date"],
+        "source_tier": SOURCE_TIER_LICENSED_PROVIDER,
+        "source_name": "Wind index_data.get_index_fundamentals",
+        "source_url": "https://aifinmarket.wind.com.cn",
+        "availability": "available",
+        "notes": "Wind NDX same-horizon point-in-time consensus EPS revisions. 数据来源于万得 Wind 金融数据服务。",
+        "data_quality": build_data_quality(
+            provider="Wind",
+            source_name="Wind index_data.get_index_fundamentals",
+            source_url="https://aifinmarket.wind.com.cn",
+            source_tier=SOURCE_TIER_LICENSED_PROVIDER,
+            data_date=current["as_of_date"],
+            as_of_date=current["as_of_date"],
+            effective_date=target_date,
+            vintage_date=current["as_of_date"],
+            collected_at_utc=_utc_timestamp(),
+            availability="available",
+            fallback_reason="none",
+            fallback_chain=[SOURCE_TIER_LICENSED_PROVIDER, SOURCE_TIER_UNAVAILABLE],
+            license_note="licensed_provider",
+            coverage={
+                "parsed_vintages": len(vintages),
+                "forecast_basis": current.get("forecast_basis"),
+                "fiscal_period_end": current.get("fiscal_period_end"),
+                "current_freshness_days": freshness_days,
+                "30d_actual_gap_days": gap_30,
+                "90d_actual_gap_days": gap_90,
+                "analyst_count": value["analyst_count"],
+                "provider_question": question,
+            },
+            methodology=(
+                "Compare NDX consensus EPS only across supported, non-empty forecast bases. "
+                "FY1-FY5 comparisons require the same non-empty fiscal period end; NTM comparisons do not require a fiscal period end. "
+                "Normalize the percentage change to a 30-calendar-day slope."
+            ),
+            formula=(
+                "revision_pct = (current EPS / prior EPS - 1) * 100; "
+                "revision_slope_pct_per_30d = revision_pct * 30 / actual_gap_days"
+            ),
+            anomalies=[] if prior_90 is not None else ["90d_same_horizon_vintage_unavailable"],
+            metric_authority=value["MetricAuthority"],
+        ),
+    }
+    L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE[cache_key] = deepcopy(result)
     return result
 
 
@@ -1300,7 +1776,7 @@ def calculate_weighted_metrics(df: pd.DataFrame) -> Dict[str, Any]:
             metrics["weighted_earnings_yield"] = round(total_earnings / covered_cap * 100, 2)
 
     forward = _valid_pe_frame("forward_pe", "forward_pe")
-    if not forward.empty:
+    if not forward.empty and len(forward) >= MIN_FORWARD_PE_STOCKS:
         forward_earnings = forward["market_cap"] / forward["_pe"]
         covered_cap = float(forward["market_cap"].sum())
         total_forward_earnings = float(forward_earnings.sum())
@@ -1594,6 +2070,7 @@ def reset_l4_component_snapshot_cache() -> None:
     """Clear the run-local L4 component snapshot cache."""
     L4_COMPONENT_SNAPSHOT_CACHE.clear()
     L4_WIND_NDX_VALUATION_CACHE.clear()
+    L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE.clear()
 
 
 def _raw_yahoo_value(container: Dict[str, Any], key: str) -> Any:
@@ -2766,55 +3243,6 @@ def _parse_worldperatio_relative_position(text: str, *, percentile_is_explicit: 
     }
 
 
-def _trendonify_sidecar_default_path() -> Path:
-    return Path(path_config.output_dir) / "browser_sidecar" / "trendonify_ndx_valuation.json"
-
-
-def _trusted_trendonify_sidecar_sources(path: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Load user-trusted Trendonify browser sidecar values for L4 cross-checks.
-
-    Direct HTTP requests to Trendonify often return 403. The browser sidecar is
-    intentionally explicit and opt-in, but once the user marked it trusted it
-    should be visible in ThirdPartyChecks rather than stranded in output/.
-    """
-    sidecar_path = Path(path) if path else _trendonify_sidecar_default_path()
-    if not sidecar_path.exists():
-        return []
-    try:
-        payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-    if payload.get("source") != "trendonify_ndx_valuation":
-        return []
-
-    sources: List[Dict[str, Any]] = []
-    for page in payload.get("pages", []):
-        if not isinstance(page, dict) or not page.get("user_trusted"):
-            continue
-        parsed = page.get("parsed")
-        if not isinstance(parsed, dict):
-            continue
-        if parsed.get("availability") != "available" and parsed.get("value") is None:
-            continue
-        item = dict(parsed)
-        item["source_tier"] = SOURCE_TIER_THIRD_PARTY
-        item["browser_sidecar"] = {
-            "path": str(sidecar_path),
-            "page_type": page.get("page_type"),
-            "collected_at_utc": page.get("collected_at_utc") or payload.get("generated_at_utc"),
-            "user_trusted": True,
-            "collection_method": "bb-browser",
-        }
-        if page.get("preserved_after_failed_refresh_at_utc"):
-            item["browser_sidecar"]["preserved_after_failed_refresh_at_utc"] = page.get("preserved_after_failed_refresh_at_utc")
-        if page.get("latest_failed_refresh"):
-            item["browser_sidecar"]["latest_failed_refresh"] = page.get("latest_failed_refresh")
-        item["methodology"] = f"{item.get('methodology', '')}; user-trusted bb-browser sidecar".strip("; ")
-        item["availability"] = "available"
-        sources.append(item)
-    return sources
-
-
 def _parse_trendonify_ndx_pe(html: str, *, forward: bool = False) -> Dict[str, Any]:
     text = _html_text(html)
     title = "Nasdaq 100 Forward PE Ratio" if forward else "Nasdaq 100 PE Ratio"
@@ -2960,7 +3388,11 @@ def _parse_danjuan_ndx_valuation(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_ndx_valuation_third_party_checks() -> List[Dict[str, Any]]:
-    """读取第三方NDX估值页面，作为校验源，不作为主估值源。"""
+    """读取当前第三方NDX估值页面，仅作为带新鲜度的校验源。
+
+    Browser sidecars are deliberately excluded here.  They are candidate/audit
+    material and must not be smuggled into an L1-L5 runtime payload.
+    """
     checks: List[Dict[str, Any]] = []
     sources = [
         ("worldperatio_pe", "https://worldperatio.com/index/nasdaq-100/", _parse_worldperatio_ndx_pe),
@@ -3033,15 +3465,13 @@ def get_ndx_valuation_third_party_checks() -> List[Dict[str, Any]]:
                     methodology="DanjuanFunds detail/NDX JSON requires browser User-Agent and valuation detail Referer",
                 )
             )
-    sidecar_sources = _trusted_trendonify_sidecar_sources()
-    if sidecar_sources:
-        by_id = {item.get("source_id"): item for item in checks if isinstance(item, dict)}
-        for item in sidecar_sources:
-            by_id[item.get("source_id")] = item
-        ordered_ids = [source_id for source_id, _, _ in sources] + ["danjuan_ndx_valuation"]
-        checks = [by_id[source_id] for source_id in ordered_ids if source_id in by_id]
-        checks.extend(item for key, item in by_id.items() if key not in set(ordered_ids))
-    return checks
+    as_of_date = datetime.now().strftime("%Y-%m-%d")
+    return [
+        _apply_valuation_freshness(item, as_of_date=as_of_date)
+        if isinstance(item, dict) and item.get("availability") != "unavailable"
+        else item
+        for item in checks
+    ]
 
 
 def _damodaran_table_candidates(table: pd.DataFrame) -> List[pd.DataFrame]:
@@ -3513,25 +3943,392 @@ def get_damodaran_us_implied_erp(end_date: str = None) -> Dict[str, Any]:
     }
 
 
+HISTORY_OF_MARKET_NDX_URL = "https://historyofmarket.com/api/ndx/forward-pe.json"
+
+
+def _closest_in_history(history: List[Dict[str, Any]], target_date: str) -> Optional[float]:
+    target = datetime.strptime(target_date, "%Y-%m-%d").date()
+    best_val = None
+    best_date = None
+    for entry in history:
+        try:
+            d = datetime.strptime(entry["date"], "%Y-%m-%d").date()
+            v = float(entry["value"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        if d <= target:
+            if best_date is None or d > best_date:
+                best_date = d
+                best_val = v
+    return best_val
+
+
+def _history_up_to(history: List[Dict[str, Any]], target_date: str) -> List[Dict[str, Any]]:
+    target = datetime.strptime(target_date, "%Y-%m-%d").date()
+    filtered = []
+    for entry in history:
+        try:
+            d = datetime.strptime(entry["date"], "%Y-%m-%d").date()
+        except (ValueError, KeyError):
+            continue
+        if d <= target:
+            filtered.append(entry)
+    filtered.sort(key=lambda x: x.get("date", ""))
+    return filtered
+
+
+def _history_percentile(value: float, history: List[Dict[str, Any]]) -> Optional[float]:
+    values = sorted(
+        float(h["value"]) for h in history
+        if isinstance(h.get("value"), (int, float))
+    )
+    if not values:
+        return None
+    count = sum(1 for v in values if v <= value)
+    return round(count / len(values) * 100, 1)
+
+
+def _history_percentile_context(
+    value: Optional[float],
+    history: List[Dict[str, Any]],
+    *,
+    series_kind: str,
+) -> Dict[str, Any]:
+    """Gate source-derived percentiles by both observation count and calendar span."""
+    requirements = HISTORY_OF_MARKET_PERCENTILE_REQUIREMENTS[series_kind]
+    valid_rows: List[Dict[str, Any]] = []
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            observed_date = datetime.strptime(str(entry.get("date")), "%Y-%m-%d").date()
+            observed_value = float(entry.get("value"))
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(observed_value):
+            continue
+        valid_rows.append(
+            {
+                "date": observed_date.strftime("%Y-%m-%d"),
+                "value": observed_value,
+            }
+        )
+    valid_rows.sort(key=lambda row: row["date"])
+    sample_count = len(valid_rows)
+    window_start = valid_rows[0]["date"] if valid_rows else None
+    window_end = valid_rows[-1]["date"] if valid_rows else None
+    span_days = None
+    if window_start and window_end:
+        span_days = (
+            datetime.strptime(window_end, "%Y-%m-%d").date()
+            - datetime.strptime(window_start, "%Y-%m-%d").date()
+        ).days
+
+    percentile = None
+    status = "available"
+    reason = ""
+    if value is None or not isinstance(value, (int, float)) or not np.isfinite(value):
+        status = "unavailable"
+        reason = "current valuation unavailable"
+    elif sample_count < requirements["min_observations"]:
+        status = "insufficient_history"
+        reason = f"requires at least {requirements['min_observations']} observations"
+    elif span_days is None or span_days < requirements["min_span_days"]:
+        status = "insufficient_history"
+        reason = f"requires at least {requirements['min_span_days']} calendar days of history"
+    else:
+        percentile = _history_percentile(value, valid_rows)
+
+    values = [row["value"] for row in valid_rows]
+    return {
+        "percentile": percentile,
+        "status": status,
+        "reason": reason,
+        "sample_count": sample_count,
+        "required_min_observations": requirements["min_observations"],
+        "span_days": span_days,
+        "required_min_span_days": requirements["min_span_days"],
+        "window_start": window_start,
+        "window_end": window_end,
+        "relative_context": {
+            "minimum": round(min(values), 4) if values else None,
+            "median": round(float(np.median(values)), 4) if values else None,
+            "maximum": round(max(values), 4) if values else None,
+        },
+        "raw_series": valid_rows,
+    }
+
+
+def _latest_history_date(history: List[Dict[str, Any]]) -> Optional[str]:
+    dated = [str(item.get("date")) for item in history if isinstance(item, dict) and item.get("date")]
+    return max(dated) if dated else None
+
+
+def _history_value_on_date(history: List[Dict[str, Any]], target_date: Optional[str]) -> Optional[float]:
+    if not target_date:
+        return None
+    for entry in history:
+        if not isinstance(entry, dict) or str(entry.get("date")) != target_date:
+            continue
+        try:
+            return float(entry.get("value"))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _current_value_matches_history_tail(
+    current_value: Optional[float],
+    history_value: Optional[float],
+    *,
+    tolerance_pct: float = 1.0,
+) -> bool:
+    """Guard against the live `current.*` field silently drifting from the
+    history array tail; the two are independent fields in the upstream API
+    payload with no built-in consistency guarantee."""
+    if current_value is None or history_value is None:
+        return False
+    if history_value == 0:
+        return current_value == 0
+    return abs(current_value - history_value) / abs(history_value) * 100 <= tolerance_pct
+
+
+def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
+    if end_date:
+        try:
+            effective = datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            return _unavailable_valuation_source(
+                source_id="history_of_market",
+                source_name="History of Market (Bloomberg BEst)",
+                source_url=HISTORY_OF_MARKET_NDX_URL,
+                metric="ndx_trailing_and_forward_pe",
+                reason=f"invalid_end_date_format:{end_date}",
+                methodology="JSON API",
+            )
+    else:
+        effective = datetime.now()
+    date_str = effective.strftime("%Y-%m-%d")
+    try:
+        resp = requests.get(
+            HISTORY_OF_MARKET_NDX_URL,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; ndx-vnext/1.0)"},
+            timeout=10,
+            proxies=get_requests_proxies(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        return _unavailable_valuation_source(
+            source_id="history_of_market",
+            source_name="History of Market (Bloomberg BEst)",
+            source_url=HISTORY_OF_MARKET_NDX_URL,
+            metric="ndx_trailing_and_forward_pe",
+            reason=str(exc)[:120],
+            methodology="JSON API: cap-weighted trailing PE from 100 NDX constituents + Bloomberg BEst forward PE",
+        )
+    if not isinstance(data, dict):
+        return _unavailable_valuation_source(
+            source_id="history_of_market",
+            source_name="History of Market (Bloomberg BEst)",
+            source_url=HISTORY_OF_MARKET_NDX_URL,
+            metric="ndx_trailing_and_forward_pe",
+            reason="response_not_object",
+            methodology="JSON API",
+        )
+    current = data.get("current", {})
+    if not isinstance(current, dict):
+        return _unavailable_valuation_source(
+            source_id="history_of_market",
+            source_name="History of Market (Bloomberg BEst)",
+            source_url=HISTORY_OF_MARKET_NDX_URL,
+            metric="ndx_trailing_and_forward_pe",
+            reason="missing_current_field",
+            methodology="JSON API",
+        )
+    if end_date:
+        trailing = _closest_in_history(data.get("trailing", []), end_date)
+        forward = _closest_in_history(data.get("forward", []), end_date)
+        trailing_history = _history_up_to(data.get("trailing", []), end_date)
+        forward_history = _history_up_to(data.get("forward", []), end_date)
+    else:
+        trailing = current.get("trailing")
+        forward = current.get("forward")
+        trailing_history = data.get("trailing", [])
+        forward_history = data.get("forward", [])
+    trailing_ok = isinstance(trailing, (int, float)) and trailing > 0
+    forward_ok = isinstance(forward, (int, float)) and forward > 0
+    if not trailing_ok and not forward_ok:
+        return _unavailable_valuation_source(
+            source_id="history_of_market",
+            source_name="History of Market (Bloomberg BEst)",
+            source_url=HISTORY_OF_MARKET_NDX_URL,
+            metric="ndx_trailing_and_forward_pe",
+            reason="no_valid_trailing_or_forward_pe",
+            methodology="JSON API",
+        )
+    trailing_percentile_context = _history_percentile_context(
+        trailing if trailing_ok else None,
+        trailing_history,
+        series_kind="trailing",
+    )
+    forward_percentile_context = _history_percentile_context(
+        forward if forward_ok else None,
+        forward_history,
+        series_kind="forward",
+    )
+    trailing_percentile = trailing_percentile_context["percentile"]
+    forward_percentile = forward_percentile_context["percentile"]
+    updated = data.get("updated", date_str)
+    trailing_data_date = _latest_history_date(trailing_history)
+    forward_data_date = _latest_history_date(forward_history)
+    if not end_date:
+        # Live path: `trailing`/`forward` come from the API's `current` field,
+        # while trailing_data_date/forward_data_date come from the history
+        # array tail. These are independent fields with no upstream
+        # consistency guarantee, so if they disagree we cannot trust that the
+        # displayed value actually belongs to that date; drop the date to
+        # force freshness to unknown_freshness rather than silently pairing
+        # a possibly-stale/mismatched value with an unrelated date.
+        if trailing_ok and not _current_value_matches_history_tail(
+            trailing, _history_value_on_date(trailing_history, trailing_data_date)
+        ):
+            trailing_data_date = None
+        if forward_ok and not _current_value_matches_history_tail(
+            forward, _history_value_on_date(forward_history, forward_data_date)
+        ):
+            forward_data_date = None
+    trailing_freshness = _apply_valuation_freshness(
+        {"metric": "ndx_trailing_pe", "data_date": trailing_data_date, "availability": "available"},
+        as_of_date=date_str,
+    )
+    forward_freshness = _apply_valuation_freshness(
+        {"metric": "ndx_forward_pe", "data_date": forward_data_date, "availability": "available"},
+        as_of_date=date_str,
+    )
+    trailing_coverage = current.get("trailingCoverage") if not end_date else None
+    forward_coverage = current.get("forwardCoverage") if not end_date else None
+    api_note = data.get("note", "")
+    source_info = data.get("source", {})
+    return {
+        "name": "NDX Valuation from History of Market",
+        "series_id": "NDX_HISTORY_OF_MARKET",
+        "value": {
+            "trailing_pe": round(trailing, 2) if trailing_ok else None,
+            "forward_pe": round(forward, 2) if forward_ok else None,
+            "trailing_coverage_pct": trailing_coverage,
+            "forward_coverage_pct": forward_coverage,
+            "trailing_percentile": trailing_percentile,
+            "forward_percentile": forward_percentile,
+            "trailing_percentile_status": trailing_percentile_context["status"],
+            "forward_percentile_status": forward_percentile_context["status"],
+            "trailing_percentile_context": trailing_percentile_context,
+            "forward_percentile_context": forward_percentile_context,
+            "trailing_history_data_points": len(trailing_history) if trailing_history else 0,
+            "forward_history_data_points": len(forward_history) if forward_history else 0,
+            "trailing_data_date": trailing_data_date,
+            "forward_data_date": forward_data_date,
+            "trailing_freshness_status": trailing_freshness.get("freshness_status"),
+            "forward_freshness_status": forward_freshness.get("freshness_status"),
+            "trailing_decision_eligible": trailing_freshness.get("usage") != "audit_only",
+            "forward_decision_eligible": forward_freshness.get("usage") != "audit_only",
+            "api_updated_at": updated,
+        },
+        "unit": "ratio",
+        "date": forward_data_date or trailing_data_date or updated,
+        "availability": "available" if (
+            trailing_freshness.get("usage") != "audit_only" or forward_freshness.get("usage") != "audit_only"
+        ) else "stale",
+        "source_tier": SOURCE_TIER_THIRD_PARTY,
+        "source_name": "History of Market (Bloomberg BEst)",
+        "source_url": HISTORY_OF_MARKET_NDX_URL,
+        "data_quality": _quality_block(
+            source_tier=SOURCE_TIER_THIRD_PARTY,
+            data_date=forward_data_date or trailing_data_date or updated,
+            update_frequency="trailing PE daily; forward PE monthly",
+            formula=(
+                "Trailing PE = cap-weighted Σ(w·P)/Σ(w·trailingEps) from 100 NDX constituents; "
+                "Forward PE = Bloomberg BEst P/E Ratio (12-month forward consensus, monthly)"
+            ),
+            coverage={
+                "trailing": f"{trailing_coverage}% of NDX mcap" if trailing_coverage is not None else "not point-in-time verified",
+                "forward": f"{forward_coverage}% of NDX mcap (source claim)" if forward_coverage is not None else "not point-in-time verified",
+                "trailing_data_date": trailing_data_date,
+                "forward_data_date": forward_data_date,
+                "trailing_freshness_status": trailing_freshness.get("freshness_status"),
+                "forward_freshness_status": forward_freshness.get("freshness_status"),
+            },
+            fallback_chain=[SOURCE_TIER_THIRD_PARTY, SOURCE_TIER_COMPONENT_MODEL, SOURCE_TIER_UNAVAILABLE],
+        ),
+        "notes": (
+            f"Source: {source_info.get('method', 'History of Market')}. "
+            f"Trailing history starts {data.get('historyStarts', {}).get('trailing', 'unknown')}; "
+            f"forward history starts {data.get('historyStarts', {}).get('forward', 'unknown')}. "
+            f"{api_note}"
+        ),
+    }
+
+
+def _component_model_enabled() -> bool:
+    return str(os.environ.get("NDX_ENABLE_COMPONENT_MODEL", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
-    """获取NDX100的P/E、盈利收益率与FCF收益率（V5.6修复版）"""
+    """获取NDX100的P/E、盈利收益率与FCF收益率"""
     if end_date:
         effective_date = datetime.strptime(end_date, "%Y-%m-%d")
     else:
         effective_date = datetime.now()
+    date_str = effective_date.strftime("%Y-%m-%d")
 
-    # 优先使用yfinance完整成分股计算
-    if YF_AVAILABLE:
+    # Primary source: History of Market (Bloomberg BEst Forward PE + Trailing PE)
+    hom = get_ndx_valuation_history_of_market(end_date=end_date)
+    hom_value = hom.get("value", {}) if isinstance(hom.get("value"), dict) else {}
+    hom_forward_pe = hom_value.get("forward_pe")
+    hom_trailing_pe = hom_value.get("trailing_pe")
+    hom_forward_percentile = hom_value.get("forward_percentile")
+    hom_trailing_percentile = hom_value.get("trailing_percentile")
+    hom_forward_eligible = bool(hom_value.get("forward_decision_eligible"))
+    hom_trailing_eligible = bool(hom_value.get("trailing_decision_eligible"))
+    hom_available = hom_forward_pe is not None or hom_trailing_pe is not None
+
+    # Fall back to component model only when explicitly enabled
+    component_enabled = _component_model_enabled()
+
+    # Helper: build third-party checks for the simplified path
+    def _build_simple_source_disagreement() -> Dict[str, Any]:
+        third_party = get_ndx_valuation_third_party_checks()
+        return {
+            "history_of_market": {
+                "source_id": "history_of_market",
+                "metric": "ndx_trailing_and_forward_pe",
+                "trailing_pe": hom_value.get("trailing_pe"),
+                "forward_pe": hom_forward_pe,
+                "trailing_percentile": hom_trailing_percentile,
+                "forward_percentile": hom_forward_percentile,
+                "source_tier": SOURCE_TIER_THIRD_PARTY,
+                "availability": "available" if hom_available else "unavailable",
+            },
+            **{
+                item.get("source_id") or item.get("source"): {
+                    "metric": item.get("metric"),
+                    "value": item.get("value"),
+                    "data_date": item.get("data_date"),
+                    "source_tier": item.get("source_tier"),
+                    "availability": item.get("availability"),
+                }
+                for item in third_party
+            },
+        }
+
+    if component_enabled and YF_AVAILABLE:
         try:
             df, stats = get_ndx_components_data_yf_v5(end_date=end_date)
             if df.empty:
                 raise Exception(f"无有效NDX成分股数据：{stats.get('error', 'Unknown')}")
-
-            # 计算加权指标
             metrics = calculate_weighted_metrics(df)
             if not metrics:
                 raise Exception("无法计算加权指标（数据不足）")
-
             coverage_pct = stats['coverage'] * 100
             third_party_checks = get_ndx_valuation_third_party_checks()
             valuation_audit = audit_component_valuation_metrics(metrics, third_party_checks)
@@ -3595,7 +4392,28 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
                 data_quality["degraded_reason"] = (
                     "High yfinance/Yahoo component valuation disagreement; affected ticker fields were rejected from core aggregate calculation."
                 )
-            data_quality["metric_authority"] = valuation_audit.get("metric_authority", {})
+            metric_authority = dict(valuation_audit.get("metric_authority", {}))
+            if hom_forward_eligible:
+                # ForwardPE/ForwardEarningsYield below are displayed as History of
+                # Market (Bloomberg BEst) numbers, not the component model's own
+                # aggregate, so their authority entries must describe the HoM
+                # source rather than inherit the component-model cross-check
+                # authority. Usage is capped at the level the "Simplified path"
+                # branch grants HoM (validation_only), not the higher
+                # core_allowed level component-model fields normally carry.
+                metric_authority["ForwardPE"] = _component_metric_authority(
+                    usage="validation_only",
+                    authority="third_party_bloomberg_attribution_unverified",
+                    reason="ForwardPE shown here is sourced from History of Market (Bloomberg BEst), not the component model aggregate; the public API attributes this series to Bloomberg BEst, but the attribution is not independently verifiable here and the field must pass freshness.",
+                    source=SOURCE_TIER_THIRD_PARTY,
+                )
+                metric_authority["ForwardEarningsYield"] = _component_metric_authority(
+                    usage="validation_only",
+                    authority="derived_from_third_party_bloomberg_forward_pe_attribution_unverified",
+                    reason="ForwardEarningsYield is derived from the History of Market (Bloomberg BEst) ForwardPE above, not the component model aggregate; the same unverified-attribution caveat applies.",
+                    source=SOURCE_TIER_THIRD_PARTY,
+                )
+            data_quality["metric_authority"] = metric_authority
             data_quality["source_disagreement_issues"] = (
                 list(valuation_audit.get("source_disagreement_issues", []))
                 + [
@@ -3622,15 +4440,20 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
             data_quality["sec_official_facts"] = stats.get("sec_official_facts", {})
             data_quality["rejected_metrics"] = rejected_metrics
             data_quality["core_usage_rule"] = valuation_audit.get("core_usage_rule")
+            metrics["forward_pe_override"] = "component_model"
+            if hom_available:
+                metrics["forward_pe_override"] = "history_of_market" if hom_forward_eligible else "component_model"
             return {
                 "name": "NDX P/E and Earnings Yield",
                 "series_id": "NDX_WEIGHTED",
                 "value": {
                     "PE": metrics.get('weighted_trailing_pe'),
                     "TrailingPE": metrics.get('weighted_trailing_pe'),
-                    "ForwardPE": metrics.get('weighted_forward_pe'),
+                    "ForwardPE": hom_forward_pe if hom_forward_eligible else metrics.get('weighted_forward_pe'),
                     "EarningsYield": metrics.get('weighted_earnings_yield'),
-                    "ForwardEarningsYield": metrics.get('weighted_forward_earnings_yield'),
+                    "ForwardEarningsYield": round(100.0 / hom_forward_pe, 2) if (hom_forward_eligible and hom_forward_pe > 0) else metrics.get('weighted_forward_earnings_yield'),
+                    "ForwardPEOverride": "history_of_market" if hom_forward_eligible else ("component_model" if component_enabled else None),
+                    "ForwardPEOverrideNote": "From History of Market source claim" if hom_forward_eligible else None,
                     "ForwardEarningsProxyUSD": metrics.get('forward_earnings_proxy_usd'),
                     "ForwardEPSGrowthProxyPct": metrics.get('weighted_forward_eps_growth_proxy_pct'),
                     "ForwardEPSGrowthProxyMethod": metrics.get("forward_eps_growth_proxy_method"),
@@ -3642,7 +4465,7 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
                     "FCFYield": metrics.get('weighted_fcf_yield'),
                     "PriceToBook": None if "PriceToBook" in rejected_metrics else metrics.get('weighted_price_to_book'),
                     "PriceToBookMethod": metrics.get("price_to_book_method"),
-                    "MetricAuthority": valuation_audit.get("metric_authority", {}),
+                    "MetricAuthority": metric_authority,
                     "RejectedMetrics": rejected_metrics,
                     "Coverage": {
                         "stocks_analyzed": stats['successful'],
@@ -3656,6 +4479,15 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
                     },
                     "Anomalies": anomalies,
                     "ThirdPartyChecks": third_party_checks,
+                    "HistoryOfMarket": hom_value if hom_available else None,
+                    "StaleReferences": {
+                        "history_of_market_forward_pe": {
+                            "value": hom_forward_pe,
+                            "data_date": hom_value.get("forward_data_date"),
+                            "freshness_status": hom_value.get("forward_freshness_status"),
+                            "usage": "audit_only",
+                        }
+                    } if hom_forward_pe is not None and not hom_forward_eligible else {},
                     "SourceReconciliation": {
                         "primary_source": stats.get("primary_source"),
                         "primary_source_by_field": stats.get("primary_source_by_field", {}),
@@ -3670,17 +4502,109 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
                 },
                 "unit": "ratio/percent",
                 "date": effective_date.strftime("%Y-%m-%d"),
-                "source_tier": SOURCE_TIER_COMPONENT_MODEL,
-                "source_name": "field-policy L4 snapshot: Yahoo expectations, SEC facts, yfinance valuation cross-check, Eastmoney QA",
+                "source_tier": SOURCE_TIER_COMPONENT_MODEL if component_enabled else SOURCE_TIER_THIRD_PARTY,
+                "source_name": "History of Market (Bloomberg BEst)" if hom_available else ("field-policy L4 snapshot" if component_enabled else "unavailable"),
                 "data_quality": data_quality,
-                "notes": f"市值加权计算，覆盖{coverage_pct:.1f}%的NDX成分股"
+                "notes": f"ForwardPE from History of Market (Bloomberg BEst, {hom_value.get('forward_coverage_pct', 'N/A')}% coverage)" if hom_available else f"市值加权计算，覆盖{coverage_pct:.1f}%的NDX成分股",
             }
         except Exception as e:
-            print(f"yfinance计算NDX基本面失败：{str(e)[:50]}，尝试Alpha Vantage备用方案")
-            return get_ndx_pe_and_earnings_yield_av(end_date=effective_date.strftime("%Y-%m-%d"))
+            print(f"Component model failed: {str(e)[:80]}, falling back to HoM/AV")
     else:
-        # yfinance不可用时直接降级到Alpha Vantage
-        return get_ndx_pe_and_earnings_yield_av(end_date=effective_date.strftime("%Y-%m-%d"))
+        pass
+
+    # Simplified path: use HoM as primary source
+    if hom_available:
+        third_party = get_ndx_valuation_third_party_checks()
+        current_trailing_pe = hom_trailing_pe if hom_trailing_eligible else None
+        current_forward_pe = hom_forward_pe if hom_forward_eligible else None
+        stale_references = {}
+        if hom_trailing_pe is not None and not hom_trailing_eligible:
+            stale_references["history_of_market_trailing_pe"] = {
+                "value": hom_trailing_pe,
+                "data_date": hom_value.get("trailing_data_date"),
+                "freshness_status": hom_value.get("trailing_freshness_status"),
+                "usage": "audit_only",
+            }
+        if hom_forward_pe is not None and not hom_forward_eligible:
+            stale_references["history_of_market_forward_pe"] = {
+                "value": hom_forward_pe,
+                "data_date": hom_value.get("forward_data_date"),
+                "freshness_status": hom_value.get("forward_freshness_status"),
+                "usage": "audit_only",
+            }
+        return {
+            "name": "NDX P/E and Earnings Yield",
+            "series_id": "NDX_WEIGHTED",
+            "value": {
+                "PE": current_trailing_pe,
+                "TrailingPE": current_trailing_pe,
+                "ForwardPE": current_forward_pe,
+                "EarningsYield": round(100.0 / current_trailing_pe, 2) if (current_trailing_pe and current_trailing_pe > 0) else None,
+                "ForwardEarningsYield": round(100.0 / current_forward_pe, 2) if current_forward_pe and current_forward_pe > 0 else None,
+                "ForwardPEOverride": "history_of_market" if hom_forward_eligible else None,
+                "ForwardPEOverrideNote": "From History of Market source claim" if hom_forward_eligible else None,
+                "ForwardPEHistoricalPercentile": hom_forward_percentile if hom_forward_eligible else None,
+                "ForwardPEHistoryDataPoints": hom_value.get("forward_history_data_points"),
+                "TrailingPEHistoricalPercentile": hom_trailing_percentile if hom_trailing_eligible else None,
+                "FCFYield": None,
+                "PriceToBook": None,
+                "MetricAuthority": {
+                    "TrailingPE": _component_metric_authority(
+                        usage="validation_only" if hom_trailing_eligible else "audit_only",
+                        authority="third_party_source_claim",
+                        reason="History of Market trailing PE is a third-party cross-check, not the Wind primary anchor.",
+                        source=SOURCE_TIER_THIRD_PARTY,
+                    ),
+                    "EarningsYield": _component_metric_authority(
+                        usage="validation_only" if hom_trailing_eligible else "audit_only",
+                        authority="derived_from_third_party_trailing_pe",
+                        reason="Derived from a third-party trailing PE cross-check; simple yield gap should prefer Wind PE.",
+                        source=SOURCE_TIER_THIRD_PARTY,
+                    ),
+                    "ForwardPE": _component_metric_authority(
+                        usage="validation_only" if hom_forward_eligible else "audit_only",
+                        authority="third_party_bloomberg_attribution_unverified",
+                        reason="The public API attributes this series to Bloomberg BEst, but the attribution is not independently verifiable here and the field must pass freshness.",
+                        source=SOURCE_TIER_THIRD_PARTY,
+                    ),
+                },
+                "Coverage": {
+                    "stocks_analyzed": 100,
+                    "total_stocks": 100,
+                    "market_cap_coverage": "100.0%",
+                    "trailing_source": f"cap-weighted {hom_value.get('trailing_coverage_pct', 'N/A')}% of NDX mcap",
+                    "forward_source": f"Bloomberg BEst {hom_value.get('forward_coverage_pct', 'N/A')}% of NDX mcap",
+                },
+                "ThirdPartyChecks": third_party,
+                "HistoryOfMarket": hom_value,
+                "StaleReferences": stale_references,
+            },
+            "unit": "ratio/percent",
+            "date": hom_value.get("trailing_data_date") or hom_value.get("forward_data_date") or date_str,
+            "source_tier": SOURCE_TIER_THIRD_PARTY,
+            "source_name": "History of Market (Bloomberg BEst)",
+            "data_quality": hom.get("data_quality", {}),
+            "notes": (
+                "History of Market is a third-party validation source. "
+                f"Trailing date={hom_value.get('trailing_data_date') or 'unknown'}; "
+                f"Forward date={hom_value.get('forward_data_date') or 'unknown'}; "
+                f"Forward freshness={hom_value.get('forward_freshness_status') or 'unknown'}."
+            ),
+        }
+
+    # Alpha Vantage OVERVIEW is latest-only. It must never be relabelled as a
+    # historical observation in a backtest.
+    if end_date:
+        return {
+            "name": "NDX P/E and Earnings Yield",
+            "series_id": "NDX_WEIGHTED",
+            "value": None,
+            "availability": "unavailable",
+            "source_tier": SOURCE_TIER_UNAVAILABLE,
+            "unavailable_reason": "latest_only_fallback_rejected_in_backtest",
+            "notes": "No point-in-time valuation source was available for the requested historical date.",
+        }
+    return get_ndx_pe_and_earnings_yield_av(end_date=None)
 
 
 def _direction_from_change(change_pct: Optional[float]) -> str:
@@ -3758,6 +4682,21 @@ def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
     """Forward earnings, analyst revision and margin-quality proxy for NDX/M7 valuation support."""
     effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
     date_str = effective_date.strftime("%Y-%m-%d")
+    if not _component_model_enabled():
+        return {
+            "name": "NDX Forward Earnings Quality",
+            "series_id": "NDX_FORWARD_EARNINGS_QUALITY",
+            "value": None,
+            "unit": "mixed",
+            "availability": "unavailable",
+            "source_tier": SOURCE_TIER_UNAVAILABLE,
+            "source_name": "component model disabled",
+            "unavailable_reason": "component_model_requires_explicit_enablement",
+            "notes": (
+                "Component-derived earnings quality is disabled by default. Enable it explicitly only for an audit run; "
+                "the preferred production source is a point-in-time index consensus revision series."
+            ),
+        }
     if not YF_AVAILABLE:
         return {
             "name": "NDX Forward Earnings Quality",
@@ -3773,6 +4712,38 @@ def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
         df, stats = get_ndx_components_data_yf_v5(end_date=end_date)
         if df.empty:
             raise Exception(f"no valid component data: {stats.get('error', 'unknown')}")
+        successful = int(stats.get("successful") or len(df))
+        total_tickers = int(stats.get("total_tickers") or successful)
+        if total_tickers >= MIN_FORWARD_QUALITY_CONSTITUENTS and successful < MIN_FORWARD_QUALITY_CONSTITUENTS:
+            return {
+                "name": "NDX Forward Earnings Quality",
+                "series_id": "NDX_FORWARD_EARNINGS_QUALITY",
+                "value": None,
+                "unit": "mixed",
+                "date": date_str,
+                "availability": "unavailable",
+                "source_tier": SOURCE_TIER_UNAVAILABLE,
+                "source_name": "shared L4 component snapshot",
+                "unavailable_reason": "insufficient_ndx_constituent_coverage",
+                "data_quality": _quality_block(
+                    source_tier=SOURCE_TIER_COMPONENT_MODEL,
+                    data_date=date_str,
+                    update_frequency="latest component fundamentals",
+                    formula="No aggregate emitted when fewer than 50 NDX constituents are available.",
+                    coverage={
+                        "components_successful": successful,
+                        "total_tickers": total_tickers,
+                        "constituent_coverage_pct": round(successful / total_tickers * 100, 2),
+                        "minimum_required_constituents": MIN_FORWARD_QUALITY_CONSTITUENTS,
+                    },
+                    anomalies=["aggregate_withheld_due_to_insufficient_constituent_coverage"],
+                    fallback_chain=[SOURCE_TIER_COMPONENT_MODEL, SOURCE_TIER_UNAVAILABLE],
+                ),
+                "notes": (
+                    f"Only {successful}/{total_tickers} constituents were available. NDX-wide forward earnings, margins "
+                    "and revisions were withheld instead of extrapolating from a network-timing sample."
+                ),
+            }
         metrics = calculate_weighted_metrics(df)
         market_caps = {
             str(row["ticker"]).upper(): float(row["market_cap"])
@@ -3788,6 +4759,14 @@ def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
             eps_revision_primary_source = "yfinance_fallback"
             m7_revisions["fallback_reason"] = yahoo_unavailable_reason
         m7_revisions["primary_source"] = eps_revision_primary_source
+        m7_available = int((m7_revisions.get("coverage") or {}).get("available_members") or 0)
+        if m7_available < MIN_M7_QUALITY_MEMBERS:
+            m7_revisions["weighted_next_year_eps_revision_30d_pct"] = None
+            m7_revisions["revision_direction_30d"] = "unavailable"
+            m7_revisions["availability"] = "insufficient_coverage"
+            m7_revisions["aggregate_withheld_reason"] = (
+                f"requires_at_least_{MIN_M7_QUALITY_MEMBERS}_of_{len(M7_TICKERS)}_members"
+            )
         weighted_eps_revision = _weighted_eps_revision_from_frame(df)
         m7_metrics = calculate_weighted_metrics(m7_frame) if not m7_frame.empty else {}
         coverage_pct = stats.get("coverage", 0) * 100
@@ -3797,8 +4776,10 @@ def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
                 "weighted_forward_pe": metrics.get("weighted_forward_pe"),
                 "forward_earnings_yield_pct": metrics.get("weighted_forward_earnings_yield"),
                 "forward_earnings_proxy_usd": metrics.get("forward_earnings_proxy_usd"),
-                "forward_eps_growth_proxy_pct": metrics.get("weighted_forward_eps_growth_proxy_pct"),
-                "forward_eps_growth_proxy_method": metrics.get("forward_eps_growth_proxy_method"),
+                "forward_vs_trailing_earnings_gap_pct": metrics.get("weighted_forward_eps_growth_proxy_pct"),
+                "forward_vs_trailing_earnings_gap_method": metrics.get("forward_eps_growth_proxy_method"),
+                "forward_eps_growth_proxy_pct": None,
+                "forward_eps_growth_proxy_deprecated_reason": "not_a_time_series_growth_rate",
                 "weighted_earnings_growth_pct": metrics.get("weighted_earnings_growth_pct"),
                 "weighted_revenue_growth_pct": metrics.get("weighted_revenue_growth_pct"),
                 "weighted_profit_margin_pct": metrics.get("weighted_profit_margin_pct"),
@@ -3812,8 +4793,13 @@ def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
             "m7": {
                 "weighted_forward_pe": m7_metrics.get("weighted_forward_pe"),
                 "forward_earnings_yield_pct": m7_metrics.get("weighted_forward_earnings_yield"),
-                "forward_eps_growth_proxy_pct": m7_metrics.get("weighted_forward_eps_growth_proxy_pct"),
-                "forward_eps_growth_proxy_method": m7_metrics.get("forward_eps_growth_proxy_method"),
+                "forward_vs_trailing_earnings_gap_pct": (
+                    m7_metrics.get("weighted_forward_eps_growth_proxy_pct")
+                    if len(m7_frame) >= MIN_M7_QUALITY_MEMBERS else None
+                ),
+                "forward_vs_trailing_earnings_gap_method": m7_metrics.get("forward_eps_growth_proxy_method"),
+                "forward_eps_growth_proxy_pct": None,
+                "forward_eps_growth_proxy_deprecated_reason": "not_a_time_series_growth_rate",
                 "weighted_profit_margin_pct": m7_metrics.get("weighted_profit_margin_pct"),
                 "weighted_gross_margin_pct": m7_metrics.get("weighted_gross_margin_pct"),
                 "weighted_operating_margin_pct": m7_metrics.get("weighted_operating_margin_pct"),
@@ -3875,10 +4861,10 @@ def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
                 authority="duplicate_component_proxy",
                 reason="Use get_ndx_pe_and_earnings_yield for cross-checked Forward PE; this field is kept only as context.",
             ),
-            "forward_eps_growth_proxy_pct": _component_metric_authority(
+            "forward_vs_trailing_earnings_gap_pct": _component_metric_authority(
                 usage="supporting_only",
                 authority="proxy_only",
-                reason="Aggregate forward/trailing earnings proxy derived from component PE fields; not an official NDX aggregate earnings growth estimate.",
+                reason="Forward-versus-trailing earnings gap derived from component PE fields; it is not an earnings growth rate or a same-horizon estimate revision.",
             ),
             "weighted_earnings_growth_pct": _component_metric_authority(
                 usage="supporting_only",
@@ -3936,9 +4922,14 @@ def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:
 
     date_str = effective_date.strftime("%Y-%m-%d")
 
-    # 获取NDX收益率数据
+    # Wind index PE is the production anchor. Third-party/component yields are
+    # fallbacks only and must retain their authority boundary.
+    wind_data = get_ndx_wind_valuation_snapshot(end_date=end_date)
+    wind_value = wind_data.get("value") if isinstance(wind_data.get("value"), dict) else {}
+    wind_pe = _safe_float(wind_value.get("PE")) if isinstance(wind_value, dict) else None
+
     ndx_data = get_ndx_pe_and_earnings_yield(end_date=end_date)
-    if not ndx_data.get("value"):
+    if not ndx_data.get("value") and not (wind_pe and wind_pe > 0):
         return {
             "name": "NDX Simple Yield Gap",
             "value": None,
@@ -3949,12 +4940,24 @@ def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:
     # 优先使用FCF收益率，其次用盈利收益率
     yield_to_use = None
     yield_type = None
-    ndx_value = ndx_data["value"]
+    ndx_value = ndx_data.get("value") if isinstance(ndx_data.get("value"), dict) else {}
 
     metric_authority = ndx_value.get("MetricAuthority") if isinstance(ndx_value.get("MetricAuthority"), dict) else {}
     fcf_usage = (metric_authority.get("FCFYield") or {}).get("usage") if isinstance(metric_authority.get("FCFYield"), dict) else None
     earnings_usage = (metric_authority.get("EarningsYield") or {}).get("usage") if isinstance(metric_authority.get("EarningsYield"), dict) else None
-    if ndx_value.get("FCFYield") is not None and (not metric_authority or fcf_usage == "core_allowed"):
+    if wind_pe and wind_pe > 0:
+        yield_to_use = 100.0 / wind_pe
+        yield_type = "wind_trailing_earnings_yield"
+        metric_authority = {
+            **metric_authority,
+            "EarningsYield": _component_metric_authority(
+                usage="core_allowed",
+                authority="derived_from_licensed_provider_wind_pe",
+                reason="Deterministically derived as 100 / Wind NDX trailing PE.",
+                source=SOURCE_TIER_LICENSED_PROVIDER,
+            ),
+        }
+    elif ndx_value.get("FCFYield") is not None and (not metric_authority or fcf_usage == "core_allowed"):
         yield_to_use = ndx_value["FCFYield"]
         yield_type = "fcf_yield"
     elif ndx_value.get("EarningsYield") is not None and (not metric_authority or earnings_usage == "core_allowed"):
@@ -3994,7 +4997,11 @@ def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:
     gap = round(yield_to_use - treasury_yield, 2)
     method = f"{yield_type}_minus_10y"
     formula = "NDX FCF yield - 10Y Treasury yield" if yield_type == "fcf_yield" else "NDX earnings yield - 10Y Treasury yield"
-    source_tier = ndx_data.get("source_tier") or ndx_data.get("data_quality", {}).get("source_tier") or SOURCE_TIER_COMPONENT_MODEL
+    source_tier = (
+        SOURCE_TIER_LICENSED_PROVIDER
+        if yield_type == "wind_trailing_earnings_yield"
+        else ndx_data.get("source_tier") or ndx_data.get("data_quality", {}).get("source_tier") or SOURCE_TIER_COMPONENT_MODEL
+    )
     data_quality = _quality_block(
         source_tier=source_tier,
         data_date=date_str,
@@ -4030,7 +5037,7 @@ def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:
             },
         },
         "unit": "percent",
-        "source_tier": SOURCE_TIER_COMPONENT_MODEL,
+        "source_tier": source_tier,
         "source_name": "Calculated simple yield gap (NDX valuation + 10Y Treasury)",
         "data_quality": data_quality,
         "notes": "该指标只衡量当前盈利/现金流收益率相对10年期美债的简式差距，未包含未来增长、回购、现金流路径或终值假设，不能当作 Damodaran 式 implied ERP。"

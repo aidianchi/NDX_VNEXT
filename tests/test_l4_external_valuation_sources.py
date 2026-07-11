@@ -5,6 +5,7 @@ import json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest
+import pandas as pd
 
 import tools_L4
 
@@ -452,7 +453,8 @@ def test_wind_ndx_snapshot_fetches_pe_windows_and_marks_authority(monkeypatch):
     assert result["value"]["RiskPremiumHistoricalPercentile"] == 55.54
     assert result["value"]["RiskPremiumHistoricalPercentileWindow"] == "10y"
     assert result["value"]["RiskPremiumRank"] == {"rank": 1770, "sample_count": 3186}
-    assert result["value"]["MetricAuthority"]["RiskPremium"]["usage"] == "core_allowed"
+    assert result["value"]["MetricAuthority"]["RiskPremium"]["usage"] == "supporting_only"
+    assert result["value"]["MetricAuthority"]["RiskPremium"]["authority"] == "provider_label_definition_unverified"
     assert result["data_quality"]["license_note"] == "licensed_provider"
     assert "数据来源于万得 Wind 金融数据服务" in result["notes"]
 
@@ -596,7 +598,8 @@ def test_danjuan_check_is_included_with_required_headers(monkeypatch):
     checks = tools_L4.get_ndx_valuation_third_party_checks()
     by_id = {item["source_id"]: item for item in checks}
 
-    assert by_id["danjuan_ndx_valuation"]["availability"] == "available"
+    assert by_id["danjuan_ndx_valuation"]["availability"] == "stale"
+    assert by_id["danjuan_ndx_valuation"]["usage"] == "audit_only"
     assert by_id["danjuan_ndx_valuation"]["historical_percentile"] == 73.0
     assert captured["url"] == tools_L4.DANJUAN_NDX_VALUATION_URL
     assert "Mozilla/5.0" in captured["headers"]["User-Agent"]
@@ -659,7 +662,7 @@ def test_trendonify_403_returns_unavailable_without_yfinance_fallback(tmp_path, 
     assert all(item["value"] is None for item in trendonify)
 
 
-def test_trendonify_403_uses_user_trusted_browser_sidecar(tmp_path, monkeypatch):
+def test_trendonify_403_does_not_promote_browser_sidecar_into_l4(tmp_path, monkeypatch):
     monkeypatch.setattr(tools_L4.path_config, "output_dir", str(tmp_path))
     sidecar_path = tmp_path / "browser_sidecar" / "trendonify_ndx_valuation.json"
     sidecar_path.parent.mkdir(parents=True)
@@ -726,12 +729,11 @@ def test_trendonify_403_uses_user_trusted_browser_sidecar(tmp_path, monkeypatch)
     checks = tools_L4.get_ndx_valuation_third_party_checks()
     by_id = {item["source_id"]: item for item in checks}
 
-    assert by_id["trendonify_pe"]["availability"] == "available"
-    assert by_id["trendonify_pe"]["value"] == 38.07
-    assert by_id["trendonify_pe"]["historical_percentile"] == 100.0
-    assert by_id["trendonify_pe"]["browser_sidecar"]["user_trusted"] is True
-    assert by_id["trendonify_pe"]["browser_sidecar"]["preserved_after_failed_refresh_at_utc"] == "2026-05-12T13:05:40Z"
-    assert by_id["trendonify_forward_pe"]["value"] == 23.73
+    assert by_id["trendonify_pe"]["availability"] == "unavailable"
+    assert by_id["trendonify_pe"]["value"] is None
+    assert by_id["trendonify_forward_pe"]["availability"] == "unavailable"
+    assert by_id["trendonify_forward_pe"]["value"] is None
+    assert "browser_sidecar" not in by_id["trendonify_pe"]
 
 
 def test_untrusted_trendonify_browser_sidecar_is_ignored(tmp_path, monkeypatch):
@@ -889,3 +891,177 @@ def test_worldperatio_parser_only_uses_explicit_percentile_when_present():
     assert parsed["percentile_10y"] == 74.2
     assert parsed["historical_percentile"] == 74.2
     assert parsed["unavailable_reason"] is None
+
+
+def _install_history_of_market_fixture(monkeypatch):
+    payload = {
+        "updated": "2026-07-09",
+        "current": {
+            "trailing": 33.95,
+            "forward": 24.29,
+            "trailingCoverage": 100.0,
+            "forwardCoverage": 100.0,
+        },
+        "trailing": [
+            {"date": "2026-05-11", "value": 34.50},
+            {"date": "2026-07-09", "value": 33.95},
+        ],
+        "forward": [
+            {"date": "2008-10-31", "value": 15.0},
+            {"date": "2020-03-31", "value": 20.0},
+            {"date": "2022-01-31", "value": 24.0},
+            {"date": "2023-10-31", "value": 20.0},
+            {"date": "2026-05-18", "value": 24.29},
+        ],
+        "historyStarts": {"trailing": "2026-05-11", "forward": "2008-10-31"},
+        "source": {"method": "fixed test fixture"},
+        "note": "deterministic fixture; no live network dependency",
+    }
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return payload
+
+    monkeypatch.setattr(tools_L4.requests, "get", lambda *args, **kwargs: Response())
+
+
+@pytest.mark.parametrize("end_date,expected_forward_min,expected_forward_max", [
+    (None, 20.0, 30.0),
+    ("2026-07-09", 20.0, 30.0),
+    ("2026-07-08", 20.0, 30.0),
+])
+def test_get_ndx_valuation_history_of_market_returns_valid_forward_pe(monkeypatch, end_date, expected_forward_min, expected_forward_max):
+    _install_history_of_market_fixture(monkeypatch)
+    result = tools_L4.get_ndx_valuation_history_of_market(end_date=end_date)
+    value = result.get("value", {})
+    fwd_pe = value.get("forward_pe")
+    assert fwd_pe is not None, f"forward_pe is None for end_date={end_date}"
+    assert expected_forward_min <= fwd_pe <= expected_forward_max, (
+        f"forward_pe={fwd_pe} outside [{expected_forward_min}, {expected_forward_max}] for {end_date}"
+    )
+    if end_date:
+        assert value.get("forward_coverage_pct") is None
+        assert value.get("forward_decision_eligible") is False
+    else:
+        assert value.get("forward_coverage_pct") == 100.0
+    assert value.get("forward_percentile") is None
+    assert value.get("forward_percentile_status") == "insufficient_history"
+    assert value.get("forward_percentile_context", {}).get("sample_count") == 5
+    assert len(value.get("forward_percentile_context", {}).get("raw_series", [])) == 5
+
+
+@pytest.mark.parametrize("backtest_date,expected_min,expected_max", [
+    ("2022-01-31", 18.0, 30.0),
+    ("2008-10-31", 10.0, 25.0),
+    ("2020-03-31", 15.0, 30.0),
+    ("2023-10-31", 15.0, 25.0),
+])
+def test_get_ndx_valuation_history_of_market_backtest_returns_reasonable_values(monkeypatch, backtest_date, expected_min, expected_max):
+    _install_history_of_market_fixture(monkeypatch)
+    result = tools_L4.get_ndx_valuation_history_of_market(end_date=backtest_date)
+    value = result.get("value", {})
+    fwd_pe = value.get("forward_pe")
+    assert fwd_pe is not None, f"forward_pe is None for backtest_date={backtest_date}"
+    assert expected_min <= fwd_pe <= expected_max, (
+        f"forward_pe={fwd_pe} outside [{expected_min}, {expected_max}] for {backtest_date}"
+    )
+
+
+def test_get_ndx_valuation_history_of_market_trailing_only_after_may_2026(monkeypatch):
+    _install_history_of_market_fixture(monkeypatch)
+    result_before = tools_L4.get_ndx_valuation_history_of_market(end_date="2026-05-10")
+    assert result_before.get("value", {}).get("trailing_pe") is None
+
+    result_after = tools_L4.get_ndx_valuation_history_of_market(end_date="2026-05-11")
+    trailing = result_after.get("value", {}).get("trailing_pe")
+    assert trailing is not None and trailing > 0, f"trailing_pe should exist on 2026-05-11, got {trailing}"
+
+
+def test_get_ndx_valuation_history_of_market_handles_invalid_date():
+    result = tools_L4.get_ndx_valuation_history_of_market(end_date="not-a-date")
+    assert result.get("availability") == "unavailable"
+    reason = result.get("unavailable_reason", "")
+    assert "invalid_end_date_format" in reason
+
+
+def test_get_ndx_valuation_history_of_market_handles_too_early_date(monkeypatch):
+    _install_history_of_market_fixture(monkeypatch)
+    result = tools_L4.get_ndx_valuation_history_of_market(end_date="1999-01-01")
+    assert result.get("availability") == "unavailable"
+    assert "no_valid_trailing_or_forward_pe" in result.get("unavailable_reason", "")
+
+
+def test_history_percentile_edge_cases():
+    history = [
+        {"date": "2020-01-01", "value": 10.0},
+        {"date": "2020-02-01", "value": 20.0},
+        {"date": "2020-03-01", "value": 30.0},
+    ]
+    assert tools_L4._history_percentile(10.0, history) == 33.3
+    assert tools_L4._history_percentile(5.0, history) == 0.0
+    assert tools_L4._history_percentile(40.0, history) == 100.0
+    assert tools_L4._history_percentile(15.0, history) == 33.3
+    assert tools_L4._history_percentile(25.0, history) == 66.7
+    assert tools_L4._history_percentile(20.0, []) is None
+
+
+def test_history_of_market_percentile_requires_observations_and_span():
+    sparse_long_span = [
+        {"date": "2001-01-31", "value": 20.0},
+        {"date": "2026-01-31", "value": 25.0},
+    ]
+    context = tools_L4._history_percentile_context(25.0, sparse_long_span, series_kind="forward")
+    assert context["percentile"] is None
+    assert context["status"] == "insufficient_history"
+    assert context["sample_count"] == 2
+    assert context["span_days"] > context["required_min_span_days"]
+    assert context["relative_context"] == {"minimum": 20.0, "median": 22.5, "maximum": 25.0}
+    assert context["raw_series"] == sparse_long_span
+
+
+def test_history_of_market_forward_percentile_available_with_five_year_monthly_history():
+    history = [
+        {
+            "date": (pd.Timestamp("2021-01-31") + pd.offsets.MonthEnd(index)).strftime("%Y-%m-%d"),
+            "value": float(20 + index),
+        }
+        for index in range(60)
+    ]
+    context = tools_L4._history_percentile_context(79.0, history, series_kind="forward")
+    assert context["status"] == "available"
+    assert context["percentile"] == 100.0
+    assert context["sample_count"] == 60
+    assert context["span_days"] >= context["required_min_span_days"]
+
+
+def test_closest_in_history():
+    history = [
+        {"date": "2020-01-01", "value": 10.0},
+        {"date": "2020-06-01", "value": 20.0},
+        {"date": "2020-12-01", "value": 30.0},
+    ]
+    assert tools_L4._closest_in_history(history, "2020-01-01") == 10.0
+    assert tools_L4._closest_in_history(history, "2020-03-01") == 10.0
+    assert tools_L4._closest_in_history(history, "2020-07-01") == 20.0
+    assert tools_L4._closest_in_history(history, "2021-01-01") == 30.0
+    assert tools_L4._closest_in_history(history, "2019-12-31") is None
+    assert tools_L4._closest_in_history([], "2020-01-01") is None
+
+
+def test_history_up_to():
+    history = [
+        {"date": "2020-06-01", "value": 20.0},
+        {"date": "2020-01-01", "value": 10.0},
+        {"date": "2020-12-01", "value": 30.0},
+    ]
+    filtered = tools_L4._history_up_to(history, "2020-06-15")
+    assert len(filtered) == 2
+    assert filtered[0]["date"] == "2020-01-01"
+    assert filtered[1]["date"] == "2020-06-01"
+    filtered = tools_L4._history_up_to(history, "2020-01-01")
+    assert len(filtered) == 1
+    assert filtered[0]["date"] == "2020-01-01"
+    assert tools_L4._history_up_to([], "2020-01-01") == []

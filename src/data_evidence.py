@@ -60,6 +60,7 @@ CORE_EVIDENCE_FUNCTIONS = {
     "get_new_highs_lows",
     "get_mcclellan_oscillator_nasdaq_or_nyse",
     "get_ndx_wind_valuation_snapshot",
+    "get_ndx_wind_point_in_time_earnings_expectations",
     "get_ndx_pe_and_earnings_yield",
     "get_ndx_forward_earnings_quality",
     "get_equity_risk_premium",
@@ -77,8 +78,41 @@ LATEST_ONLY_FUNCTIONS = {
     "get_equity_risk_premium",
 }
 
-PROXY_SOURCE_TOKENS = {"proxy", "component_model", "third_party_estimate"}
+PROXY_SOURCE_TOKENS = {"proxy", "component_model", "market_data_provider", "third_party_estimate"}
 OFFICIAL_SOURCE_TOKENS = {"official", "official_provider", "licensed_manual/wind", "licensed_provider/wind"}
+
+# Coverage is decision-relevant only when a value aggregates constituents or
+# analyst consensus. A direct market series does not become weaker merely
+# because it has no constituent-coverage object.
+COVERAGE_REQUIRED_FUNCTIONS = {
+    "get_advance_decline_line",
+    "get_percent_above_ma",
+    "get_qqq_top10_concentration",
+    "get_m7_fundamentals",
+    "get_new_highs_lows",
+    "get_mcclellan_oscillator_nasdaq_or_nyse",
+    "get_ndx_wind_point_in_time_earnings_expectations",
+    "get_ndx_pe_and_earnings_yield",
+    "get_ndx_forward_earnings_quality",
+}
+
+# A first-vintage requirement matters in a historical replay only for series
+# that can be revised after first publication. Market prices and technical
+# indicators are point observations and intentionally stay outside this set.
+BACKTEST_VINTAGE_REQUIRED_FUNCTIONS = {
+    "get_fed_funds_rate",
+    "get_m2_yoy",
+    "get_net_liquidity_momentum",
+    "get_ndx_wind_point_in_time_earnings_expectations",
+    "get_ndx_forward_earnings_quality",
+}
+
+CONDITIONAL_OR_REFERENCE_ONLY_METADATA_FIELDS = {
+    "source_url",
+    "license_note",
+    "coverage",
+    "vintage_date",
+}
 
 SOURCE_TIER_AUTHORITY_MODEL = {
     "official": {
@@ -245,7 +279,13 @@ def normalize_source_tier_for_evidence_passport(value: Any) -> str:
         return "trusted_sidecar"
     if "candidate" in text or "external" in text or "headline" in text or "media" in text or "rumor" in text:
         return "candidate_external_material"
-    if "proxy" in text or "third_party" in text or "estimate" in text:
+    if (
+        "proxy" in text
+        or "third_party" in text
+        or "estimate" in text
+        or "market_data_provider" in text
+        or "component_model" in text
+    ):
         return "proxy"
     if "derived" in text or "hypothesis" in text or "claim" in text:
         return "derived_inference"
@@ -277,6 +317,8 @@ def _infer_data_date(payload: Dict[str, Any], quality: Dict[str, Any], effective
         payload.get("data_date"),
         payload.get("date"),
         value.get("data_date") if isinstance(value, dict) else None,
+        value.get("date") if isinstance(value, dict) else None,
+        value.get("observation_date") if isinstance(value, dict) else None,
         value.get("effective_date") if isinstance(value, dict) else None,
         effective_date,
     )
@@ -366,23 +408,30 @@ def data_evidence_issues(payload: Dict[str, Any], *, function_id: str, backtest_
     if quality.get("contract_version") != DATA_EVIDENCE_CONTRACT_VERSION:
         add("degraded", "missing_data_evidence_contract", "contract_version is not data_evidence_v1")
 
-    missing = sorted(field for field in REQUIRED_DATA_QUALITY_FIELDS if field not in quality)
+    missing = sorted(
+        field
+        for field in REQUIRED_DATA_QUALITY_FIELDS
+        if field not in quality and field not in CONDITIONAL_OR_REFERENCE_ONLY_METADATA_FIELDS
+    )
     for field in missing:
         add("degraded", f"missing_{field}", "required data_quality field absent")
 
-    if quality.get("source_url") == "missing":
-        add("degraded", "missing_source_url")
-    if quality.get("license_note") in (None, "", "missing"):
-        add("degraded", "missing_license_note")
-    if quality.get("coverage") in (None, "", {}):
-        add("degraded", "missing_coverage")
-    if quality.get("vintage_date") in (None, "", "missing"):
-        add("degraded", "missing_vintage_date")
-    elif quality.get("vintage_date") == "not_available":
-        add("degraded", "vintage_date_not_available")
-
     value = payload.get("value")
     availability = str(quality.get("availability") or payload.get("availability") or "").lower()
+    unavailable = availability == "unavailable" or bool(no_data_reason(payload))
+
+    if (
+        not unavailable
+        and function_id in COVERAGE_REQUIRED_FUNCTIONS
+        and quality.get("coverage") in (None, "", {})
+    ):
+        add("degraded", "missing_coverage")
+    if not unavailable and backtest_date and function_id in BACKTEST_VINTAGE_REQUIRED_FUNCTIONS:
+        if quality.get("vintage_date") in (None, "", "missing"):
+            add("degraded", "missing_vintage_date")
+        elif quality.get("vintage_date") == "not_available":
+            add("degraded", "vintage_date_not_available")
+
     if availability == "available" and not has_meaningful_observation_value(value):
         add("hard_block", "available_without_meaningful_value")
 
@@ -419,9 +468,6 @@ def data_evidence_issues(payload: Dict[str, Any], *, function_id: str, backtest_
         level = "hard_block" if function_id in CORE_EVIDENCE_FUNCTIONS else "degraded"
         add(level, "fallback_without_reason")
 
-    anomalies = quality.get("anomalies") if isinstance(quality.get("anomalies"), list) else []
-    if any(item in anomalies for item in ("missing_source_url", "license_note_defaulted", "coverage_missing_or_unspecified")):
-        add("audit_warn", "metadata_defaulted", ", ".join(str(item) for item in anomalies))
     return issues
 
 

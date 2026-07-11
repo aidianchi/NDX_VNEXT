@@ -10,7 +10,196 @@ import tools_L4
 from data_evidence import data_evidence_issues
 
 
-def test_calculate_weighted_metrics_includes_forward_eps_and_margin_quality():
+def _wind_consensus_payload(rows):
+    return {
+        "content": [
+            {
+                "text": json.dumps(
+                    {
+                        "columns": [
+                            "Wind代码",
+                            "证券简称",
+                            "预期日期",
+                            "预测口径",
+                            "预测期末",
+                            "一致预期EPS",
+                            "一致预期市盈率",
+                            "分析师数量",
+                            "上调家数",
+                            "下调家数",
+                        ],
+                        "data": rows,
+                    },
+                    ensure_ascii=False,
+                )
+            }
+        ]
+    }
+
+
+def test_wind_point_in_time_earnings_uses_same_horizon_vintages(monkeypatch):
+    tools_L4.L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE.clear()
+    payload = _wind_consensus_payload(
+        [
+            ["NDX.GI", "纳斯达克100", "2026-04-10", "NTM", "2027-06-30", 100.0, 28.0, 20, 8, 3],
+            ["NDX.GI", "纳斯达克100", "2026-06-09", "NTM", "2027-06-30", 102.0, 29.0, 22, 10, 4],
+            ["NDX.GI", "纳斯达克100", "2026-07-09", "NTM", "2027-06-30", 104.04, 30.0, 24, 12, 4],
+        ]
+    )
+    monkeypatch.setattr(tools_L4, "_call_wind_cli", lambda *args, **kwargs: (payload, None))
+
+    result = tools_L4.get_ndx_wind_point_in_time_earnings_expectations(end_date="2026-07-10")
+
+    assert result["availability"] == "available"
+    assert result["source_tier"] == tools_L4.SOURCE_TIER_LICENSED_PROVIDER
+    assert result["value"]["point_in_time_verified"] is True
+    assert result["value"]["consensus_eps_30d_ago"] == 102.0
+    assert result["value"]["revision_30d_pct"] == 2.0
+    assert result["value"]["revision_slope_30d_pct_per_30d"] == 2.0
+    assert result["value"]["revision_breadth_pct"] == 50.0
+    assert result["data_quality"]["vintage_date"] == "2026-07-09"
+    assert result["value"]["MetricAuthority"]["revision_30d_pct"]["usage"] == "core_allowed"
+    assert result["value"]["MetricAuthority"]["forward_pe"]["usage"] == "supporting_only"
+
+
+def test_wind_point_in_time_earnings_rejects_mixed_horizon_prior(monkeypatch):
+    tools_L4.L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE.clear()
+    payload = _wind_consensus_payload(
+        [
+            ["NDX.GI", "纳斯达克100", "2026-06-09", "FY1", "2027-06-30", 102.0, 29.0, 22, 10, 4],
+            ["NDX.GI", "纳斯达克100", "2026-07-09", "NTM", "2027-06-30", 104.04, 30.0, 24, 12, 4],
+        ]
+    )
+    monkeypatch.setattr(tools_L4, "_call_wind_cli", lambda *args, **kwargs: (payload, None))
+
+    result = tools_L4.get_ndx_wind_point_in_time_earnings_expectations(end_date="2026-07-10")
+
+    assert result["availability"] == "unavailable"
+    assert result["value"] is None
+    assert result["unavailable_reason"] == "wind_missing_same_horizon_30d_consensus_vintage"
+
+
+def test_wind_point_in_time_earnings_requires_supported_forecast_basis(monkeypatch):
+    tools_L4.L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE.clear()
+    payload = _wind_consensus_payload(
+        [
+            ["NDX.GI", "纳斯达克100", "2026-06-09", "CY2027", "2027-12-31", 102.0, 29.0, 22, 10, 4],
+            ["NDX.GI", "纳斯达克100", "2026-07-09", "CY2027", "2027-12-31", 104.04, 30.0, 24, 12, 4],
+        ]
+    )
+    monkeypatch.setattr(tools_L4, "_call_wind_cli", lambda *args, **kwargs: (payload, None))
+
+    result = tools_L4.get_ndx_wind_point_in_time_earnings_expectations(end_date="2026-07-10")
+
+    assert result["availability"] == "unavailable"
+    assert result["value"] is None
+    assert result["unavailable_reason"] == "wind_current_consensus_missing_or_unsupported_forecast_basis"
+
+
+def test_wind_point_in_time_earnings_requires_nonempty_forecast_basis(monkeypatch):
+    tools_L4.L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE.clear()
+    payload = _wind_consensus_payload(
+        [
+            ["NDX.GI", "纳斯达克100", "2026-06-09", None, None, 102.0, 29.0, 22, 10, 4],
+            ["NDX.GI", "纳斯达克100", "2026-07-09", None, None, 104.04, 30.0, 24, 12, 4],
+        ]
+    )
+    monkeypatch.setattr(tools_L4, "_call_wind_cli", lambda *args, **kwargs: (payload, None))
+
+    result = tools_L4.get_ndx_wind_point_in_time_earnings_expectations(end_date="2026-07-10")
+
+    assert result["availability"] == "unavailable"
+    assert result["value"] is None
+    assert result["unavailable_reason"] == "wind_current_consensus_missing_or_unsupported_forecast_basis"
+
+
+def test_wind_point_in_time_fy_basis_requires_matching_nonempty_period_end(monkeypatch):
+    tools_L4.L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE.clear()
+    payload = _wind_consensus_payload(
+        [
+            ["NDX.GI", "纳斯达克100", "2026-06-09", "FY1", None, 102.0, 29.0, 22, 10, 4],
+            ["NDX.GI", "纳斯达克100", "2026-07-09", "FY1", "2027-06-30", 104.04, 30.0, 24, 12, 4],
+        ]
+    )
+    monkeypatch.setattr(tools_L4, "_call_wind_cli", lambda *args, **kwargs: (payload, None))
+
+    result = tools_L4.get_ndx_wind_point_in_time_earnings_expectations(end_date="2026-07-10")
+
+    assert result["availability"] == "unavailable"
+    assert result["value"] is None
+    assert result["unavailable_reason"] == "wind_missing_same_horizon_30d_consensus_vintage"
+
+
+def test_wind_point_in_time_fy_basis_rejects_different_period_end(monkeypatch):
+    tools_L4.L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE.clear()
+    payload = _wind_consensus_payload(
+        [
+            ["NDX.GI", "纳斯达克100", "2026-06-09", "FY2", "2028-06-30", 102.0, 29.0, 22, 10, 4],
+            ["NDX.GI", "纳斯达克100", "2026-07-09", "FY2", "2028-12-31", 104.04, 30.0, 24, 12, 4],
+        ]
+    )
+    monkeypatch.setattr(tools_L4, "_call_wind_cli", lambda *args, **kwargs: (payload, None))
+
+    result = tools_L4.get_ndx_wind_point_in_time_earnings_expectations(end_date="2026-07-10")
+
+    assert result["availability"] == "unavailable"
+    assert result["value"] is None
+    assert result["unavailable_reason"] == "wind_missing_same_horizon_30d_consensus_vintage"
+
+
+def test_wind_point_in_time_current_fy_basis_requires_period_end(monkeypatch):
+    tools_L4.L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE.clear()
+    payload = _wind_consensus_payload(
+        [
+            ["NDX.GI", "纳斯达克100", "2026-06-09", "FY2", "2028-06-30", 102.0, 29.0, 22, 10, 4],
+            ["NDX.GI", "纳斯达克100", "2026-07-09", "FY2", None, 104.04, 30.0, 24, 12, 4],
+        ]
+    )
+    monkeypatch.setattr(tools_L4, "_call_wind_cli", lambda *args, **kwargs: (payload, None))
+
+    result = tools_L4.get_ndx_wind_point_in_time_earnings_expectations(end_date="2026-07-10")
+
+    assert result["availability"] == "unavailable"
+    assert result["value"] is None
+    assert result["unavailable_reason"] == "wind_current_fiscal_year_consensus_missing_fiscal_period_end"
+
+
+def test_wind_point_in_time_earnings_normalizes_ntm_basis_labels(monkeypatch):
+    tools_L4.L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE.clear()
+    payload = _wind_consensus_payload(
+        [
+            ["NDX.GI", "纳斯达克100", "2026-06-09", "NTM", None, 102.0, 29.0, 22, 10, 4],
+            ["NDX.GI", "纳斯达克100", "2026-07-09", "未来12个月", None, 104.04, 30.0, 24, 12, 4],
+        ]
+    )
+    monkeypatch.setattr(tools_L4, "_call_wind_cli", lambda *args, **kwargs: (payload, None))
+
+    result = tools_L4.get_ndx_wind_point_in_time_earnings_expectations(end_date="2026-07-10")
+
+    assert result["availability"] == "available"
+    assert result["value"]["forecast_basis"] == "NTM"
+    assert result["value"]["point_in_time_verified"] is True
+
+
+def test_wind_point_in_time_earnings_does_not_use_future_vintage(monkeypatch):
+    tools_L4.L4_WIND_NDX_EARNINGS_EXPECTATIONS_CACHE.clear()
+    payload = _wind_consensus_payload(
+        [
+            ["NDX.GI", "纳斯达克100", "2026-06-09", "NTM", "2027-06-30", 102.0, 29.0, 22, 10, 4],
+            ["NDX.GI", "纳斯达克100", "2026-07-11", "NTM", "2027-06-30", 104.04, 30.0, 24, 12, 4],
+        ]
+    )
+    monkeypatch.setattr(tools_L4, "_call_wind_cli", lambda *args, **kwargs: (payload, None))
+
+    result = tools_L4.get_ndx_wind_point_in_time_earnings_expectations(end_date="2026-07-10")
+
+    assert result["availability"] == "unavailable"
+    assert result["value"] is None
+    assert result["unavailable_reason"] == "wind_current_consensus_vintage_stale_for_effective_date"
+
+
+def test_calculate_weighted_metrics_includes_forward_eps_and_margin_quality(monkeypatch):
+    monkeypatch.setattr(tools_L4, "MIN_FORWARD_PE_STOCKS", 2)
     df = pd.DataFrame(
         [
             {
@@ -115,6 +304,8 @@ def test_component_valuation_audit_rejects_pb_when_third_party_cross_check_fails
 
 
 def test_ndx_forward_earnings_quality_uses_component_and_m7_revision_proxies(monkeypatch):
+    monkeypatch.setattr(tools_L4, "_component_model_enabled", lambda: True)
+    monkeypatch.setattr(tools_L4, "MIN_FORWARD_PE_STOCKS", 2)
     df = pd.DataFrame(
         [
             {
@@ -184,17 +375,56 @@ def test_ndx_forward_earnings_quality_uses_component_and_m7_revision_proxies(mon
     assert result["source_tier"] == tools_L4.SOURCE_TIER_COMPONENT_MODEL
     assert value["ndx"]["forward_earnings_yield_pct"] is not None
     assert value["ndx"]["weighted_operating_margin_pct"] == 34.9
-    assert value["m7"]["eps_revisions"]["revision_direction_30d"] == "upward"
+    assert value["m7"]["eps_revisions"]["revision_direction_30d"] == "unavailable"
+    assert value["m7"]["eps_revisions"]["weighted_next_year_eps_revision_30d_pct"] is None
+    assert "requires_at_least_5_of_7" in value["m7"]["eps_revisions"]["aggregate_withheld_reason"]
     assert value["m7"]["eps_revisions"]["primary_source"] == "yahoo_quote_summary"
     assert value["ndx"]["eps_revision_source"] == "yahoo_quote_summary"
     assert value["ndx"]["eps_revision_usage"] == "earnings_expectation_change_only_not_valuation_cheapness"
     assert result["data_quality"]["coverage"]["m7_revision_coverage"]["available_members"] == 2
-    assert result["data_quality"]["metric_authority"]["forward_eps_growth_proxy_pct"]["usage"] == "supporting_only"
+    assert result["data_quality"]["metric_authority"]["forward_vs_trailing_earnings_gap_pct"]["usage"] == "supporting_only"
+    assert value["ndx"]["forward_eps_growth_proxy_pct"] is None
     assert result["data_quality"]["metric_authority"]["weighted_profit_margin_pct"]["usage"] == "supporting_only"
     assert result["data_quality"]["metric_authority"]["ndx_weighted_eps_revision_30d_pct"]["usage"] == "supporting_only"
 
 
+def test_ndx_forward_earnings_quality_withholds_aggregate_below_default_constituent_floor(monkeypatch):
+    """No monkeypatching of MIN_FORWARD_QUALITY_CONSTITUENTS: uses the real
+    default (50) so the insufficient_ndx_constituent_coverage withdrawal
+    branch is exercised against the actual production threshold."""
+    monkeypatch.setattr(tools_L4, "_component_model_enabled", lambda: True)
+    monkeypatch.setattr(tools_L4, "YF_AVAILABLE", True)
+    df = pd.DataFrame([{"ticker": "AAPL", "market_cap": 700.0}])
+    below_floor_successful = tools_L4.MIN_FORWARD_QUALITY_CONSTITUENTS - 1
+    monkeypatch.setattr(
+        tools_L4,
+        "get_ndx_components_data_yf_v5",
+        lambda end_date=None: (
+            df,
+            {
+                "coverage": 0.3,
+                "successful": below_floor_successful,
+                "total_tickers": 100,
+            },
+        ),
+    )
+
+    result = tools_L4.get_ndx_forward_earnings_quality(end_date="2026-05-09")
+
+    assert result["value"] is None
+    assert result["availability"] == "unavailable"
+    assert result["unavailable_reason"] == "insufficient_ndx_constituent_coverage"
+    assert (
+        result["data_quality"]["coverage"]["minimum_required_constituents"]
+        == tools_L4.MIN_FORWARD_QUALITY_CONSTITUENTS
+    )
+    assert result["data_quality"]["coverage"]["components_successful"] == below_floor_successful
+    assert result["data_quality"]["coverage"]["total_tickers"] == 100
+
+
 def test_l4_component_model_degraded_outputs_explain_fallback_reason(monkeypatch):
+    monkeypatch.setattr(tools_L4, "_component_model_enabled", lambda: True)
+    monkeypatch.setattr(tools_L4, "MIN_FORWARD_PE_STOCKS", 2)
     df = pd.DataFrame(
         [
             {
@@ -343,6 +573,11 @@ def test_realtime_equity_risk_premium_keeps_valuation_in_realtime_mode(monkeypat
         }
 
     monkeypatch.setattr(tools_L4, "get_ndx_pe_and_earnings_yield", fake_valuation)
+    monkeypatch.setattr(
+        tools_L4,
+        "get_ndx_wind_valuation_snapshot",
+        lambda end_date=None: {"value": None, "availability": "unavailable"},
+    )
     monkeypatch.setattr(
         tools_L4,
         "get_10y_treasury",
