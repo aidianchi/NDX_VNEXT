@@ -92,12 +92,17 @@ def test_decision_prompts_do_not_teach_reusable_stance_templates():
     assert not offenders
 
 
-def test_decision_prompts_require_payoff_language_consistency():
+def test_decision_prompts_require_symmetric_payoff_burden():
+    # 2026-07-12 起废除单向"高赔率"合取门（它与永久性盈利数据缺口合谋，使建设性
+    # 结论在结构上不可能出现）；改锁双向对称举证 + 姿态中立不变量。
     for name in ["thesis_builder.md", "final_adjudicator.md"]:
         text = (PROMPT_DIR / name).read_text(encoding="utf-8")
-        assert "不得照抄示例里的整句、半句或固定搭配" in text
-        assert "如果 `payoff_assessment` 写“赔率不利 / 赔率偏下行 / 风险收益比不利 / 不支持重仓”" in text
-        assert "不得写“高赔率”" in text
+        assert "不得照抄" in text
+        assert "两个方向都不允许一票定论" in text
+        assert "不允许默认落到" in text
+        assert "当默认安全答案" in text
+        assert "并列出仍然反对的类别" in text
+        assert "并列出仍然相反的类别" in text
 
 
 def test_l4_prompt_requires_data_authority_metadata_for_valuation():
