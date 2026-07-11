@@ -4,7 +4,123 @@
 
 ---
 
-## 2026-07-07
+## 2026-07-10
+
+### 完整 Markdown 体检、薄而硬元信息、L3 稀疏日与 History of Market 分位修复
+
+完成内容：
+
+- 交付根目录 `NDX_L1-L5_数据与推理链完整体检_20260710.md`，按采集、算法语义、来源权威、point-in-time、发布治理、prompt/报告和运维文档分类列出 77 项问题；旧 HTML 不再作为完整问题台账。
+- DataIntegrity 元信息改成“薄而硬”：不可用项只保留真实原因；coverage 只对成分聚合和一致预期等需要覆盖率的指标强制；vintage 只对历史回测中的可修订宏观/盈利预期强制；URL/license 移到来源注册语义；代理公式、未来数据、latest-only 回测混入、代理冒充官方、核心 fallback 无解释和重大估值冲突等硬闸门继续保留。同一 7 月 10 日快照重算从 `110 degraded + 36 audit_warn` 降为 `0 + 0`，完整度仍为 90.0%，没有靠放松发布阈值抬分。
+- L3 共享价格面板新增目标日/窗口/逐股票缺口诊断与定向补抓；每次 `DataCollector.run()` 清空本轮缓存；% Above MA、新高新低和 McClellan 不再因一个稀疏日用 `dropna(any)` 删除整只股票，而是按实际观察数和每日覆盖率选择最近合格日。
+- History of Market 历史分位增加样本数与跨度双门槛：trailing 至少 200 点且跨度 270 天，forward 至少 60 点且跨度 1642 天；不足时输出 `percentile=null`、`status=insufficient_history`，同时保留原始序列和相对位置上下文。Trailing/Forward 观察日、API 更新时间和 freshness 继续独立。
+- L3 主 prompt 只讨论广度、集中度、Top10/M7 权重；M7 盈利质量归 L4。仓库内旧 nested prompt 文件仍在磁盘上，供历史/归档识别，但 `_load_prompt` 已移除二级 fallback，运行时不可达，不能据此声称旧规则仍会进入当前 prompt。
+
+验证结果：
+
+- L3 稀疏日、补洞、缓存与相邻回归：57 项通过；仍待真实网络 fresh collect。
+- History of Market 外部估值源测试文件：31 项通过；2026-07-10 实时抽查 trailing 为 43 点/60 天，正确撤回分位，forward 为 298 点/9149 天并保留独立观察日。
+- 元信息聚焦回归：96 项通过；同一快照重算 `hard_block=0, degraded=0, audit_warn=0`。
+- 本轮多组测试存在重叠，不能把 57、31、96 简单相加成独立测试总数；最新代码尚未完成 fresh 全链 vNext，发布质量仍待最终验收。
+
+剩余边界：
+
+- 历史 current-universe fallback、字段级 `MetricAuthority` 下传、证据家族计权和 fresh E2E 尚未关闭；详见 `NEXT_STEPS.md`。
+- History of Market 与 L3 修复均已通过模拟/聚焦测试，但仍需在 fresh 完整报告中核对数据与展示。
+
+---
+
+### VPN 修复后 FRED 真实恢复、Wind PIT 盈利预期通道布线与本地体检报告交付
+
+完成内容：
+
+- FRED 单序列实测确认 `DFII10`、`DGS10`、`T10YIE` 走官方 API，`source_tier=official_api`，不是旧缓存假恢复；另外实测 Fed Funds 与 M2 成功。
+- 重跑真实 `--collect-only`：40 项旧口径指标约 118 秒完成，FRED/L1 从 7/9 run 的 3/8 恢复到 8/8；DataIntegrity 复算 90.0%、`publish_status=publishable`、无阻断原因。
+- 真实 Wind CLI 对 NDX.GI point-in-time NTM/FY1 一致预期请求返回“没找到数据”；按 Wind skill 的 UNKNOWN 错误指令没有改写问句或切换接口强行重试。
+- 新增 `get_ndx_wind_point_in_time_earnings_expectations`：只接受明确历史观察日、相同 NTM/FY1 口径、相同 fiscal period end 的指数一致预期 EPS；自动计算 30/90 日修正幅度、日历归一的修正斜率和上调/下调广度；历史 vintage 不足、口径混用、财年滚动、当前观察过期或越过 effective date 均明确 unavailable，不用当前值冒充历史。
+- 新指标已进入 L4 collector、tool registry、data evidence、packet builder、canon 与 L4 prompt；Wind Forward PE 在自然语言返回不保留字段代码时仍为 supporting-only，修正斜率只在 PIT 验证通过后才允许作盈利预期主证据。
+- 生成真正可点击的本地报告 `output/reports/NDX_L1-L5_数据与推理链体检_20260710.html`，包含两次运行的分层可用率对比、L4 来源分工、P0/P1 问题表、Wind 盈利预期契约和下一步顺序。
+
+验证结果：
+
+- Wind PIT 盈利预期针对性与 L4/packet/canon 回归：77 passed、6 warnings。
+- 全量回归：493 passed、58 warnings。
+- 报告渲染 QA：浅色/深色/手机宽度均有 1 个 Recharts SVG 挂载，无控制台错误和页面级水平溢出；禁用 JavaScript 时同数据静态 SVG 仍显示。
+
+剩余边界：
+
+- Wind PIT 通道的工程契约已完成，但真实数据仍未取得，尚不能声称生产可用。
+- 当前快照 L3 仅 3/6；DataIntegrity 仍有 110 条 degraded 元信息问题，主要是 source URL、coverage 和 vintage date 未在上游填实。
+
+### L1-L5 数据、指标语义、prompt 与发布链第一性原理审计及第一批硬修复
+
+审计对象：冻结 run `20260709_233816`、当前 `discuss-l4-redesign` 工作区、L1-L5 采集/处理、canon、层 prompt、Claim Ledger、DataIntegrity 与报告渲染。结论：7/9 run 的“NDX 估值偏高”方向仍有 Wind 主锚支持，但该 run 不应按可发布结论使用；L1 仅 3/8，L3 腾落线被稀疏末行污染，L4 的 18.29% 盈利代理仅来自 10/103 只且不是增长率，Trendonify 旧 sidecar 越权进入 L4 prompt，Claim Ledger 的公共 refs 会让无关强证据洗白具体 claim。
+
+完成修复：
+
+- L4 来源治理：正式第三方检查不再读取/提升浏览器 sidecar；Trendonify stale/audit-only 不进入 prompt、分位选择和报告主尺；History of Market 分离 API 更新时间与 trailing/forward 实际观察日，历史覆盖不再复制当前覆盖，无 vintage 的历史值不具决策资格；Alpha Vantage latest-only fallback 禁止伪装成回测日。
+- L4 权限与语义：Wind PE/PB/PS 保持主锚；Wind RiskPremium 在字段代码、公式、单位未核清前降为 supporting-only；10 年 Wind 分位最低样本从 1900 提高到 2300；Forward/trailing proxy 改名为 earnings gap，旧 growth 字段置空；成分覆盖少于 50 只不输出 NDX 聚合，M7 少于 5/7 不输出整体修正方向；成分模型默认关闭、仅显式开启用于审计。
+- 层边界：`get_m7_fundamentals` 退出 L3 主运行时，L3 prompt 同步删除；History of Market 不再作为独立 L4 函数重复计票。
+- L1/L2/L3 数据正确性：M2 level/date 为空时显式 unavailable；HYG 使用 dividend-adjusted price 且明确仍是 OAS 的代理；A/D Line 只在连续两日均有价格的有效对上计算，单日覆盖低于 80% 时排除该日，不再把 NaN 当作不涨不跌。
+- 发布治理：任一 L1-L5 正式层可用率低于 50% 即阻断发布；Final 附加 Claim Ledger 后重新落盘并更新 stage manifest；估值、时点、价格反映和风险 claim 按相关层筛选 refs，不能再由公共证据池洗白；claim gate blocked 时不生成普通报告，downgraded 时标记 review_required。
+- 报告与证据：Wind PE 分位不再被第三方循环覆盖；数据证据日期可从嵌套 `value.date/observation_date` 正确提取；实时网站测试改为固定 fixture，代码正确性不再依赖网站当天连通性。
+
+验证结果：
+
+- `python3 -m compileall -q src`：通过。
+- `.venv/bin/python -m pytest -q`：490 passed，58 warnings；warnings 为 OpenBB/Pydantic、pandas_datareader 与 `datetime.utcnow` 等既有弃用提示及一条常量序列精度提示，无测试失败。
+- 真实 `--collect-only` 验收生成 `output/data/data_collected_v9_live.json`（40 项，约 476 秒）：FRED API / pandas-datareader / fredgraph CSV 三路仍因 SSL connection_error 失败；新 DataIntegrity 复算 65.1%，L1 仅 2/8，按新分层闸门正确 `blocked`。M2 明确 unavailable；A/D Line 自动排除 2026-07-09 稀疏末行，回退到 2026-07-07 的 103/103 有效价格对；Wind PE 35.88、10 年分位 81.42% 可用，RiskPremium 10 年窗口因仅 1925 个样本被拒绝，字段权限为 supporting-only；History of Market forward 观察过期后不再进入当前值；成分盈利模型默认关闭并明确 unavailable；简式收益差因 10Y 缺失而不计算。
+- 已生成 Codex 内报告《NDX L1–L5 数据与推理链体检》，含 7/9 run 分层可用率图、L4 来源角色表、问题/修复优先级和下一步验收标准；7/10 已补成可点击的本地 HTML 文件。
+
+剩余：按 `NEXT_STEPS.md` 先做 fresh collect-only 验收；随后接入 Wind point-in-time 指数级 NTM/FY1 一致预期与修正序列，并把 DataIntegrity 从函数计数升级为证据家族计数。
+
+## 2026-07-08
+
+### codex 双路施工验收通过：FRED 错误穿透与 keyless 兜底、金额单位标注、层 prompt 减肥
+
+完成内容（codex 施工，Fable 独立验收；未 commit，工作区待用户确认）：
+
+- FRED 修复（src/tools_common.py +317 行、src/tools_L1.py +169 行）：`safe_request` 增加结构化失败原因（dns_error/connection_error/timeout/http_<status>/invalid_json，向后兼容旧调用）；新增 `fredgraph.csv` keyless CSV 兜底通道（处理 '.' 缺失值与日期过滤）；`_fetch_fred_series_pdr` 在 pandas_datareader 缺失/空结果时显式记录，不再静默空表；fallback_chain（API→pdr→CSV）与失败原因穿透到 data_quality/DataIntegrity；`get_fed_funds_rate` 空值防护，不再把断网伪装成 empty_observation_payload。
+- 金额单位标注：净流动性 payload 新增 `level_unit / momentum_4w_unit / components_unit / component_units = billion_usd`（数值不变，WALCL 百万→十亿缩放逻辑已核对）。
+- 层 prompt 减肥（src/agent_analysis/orchestrator.py +57 行）：`_layer_indicator_manifest` 不再复制完整 value（只留路由字段，data_quality 大结构摘要化）；`_filter_layer_raw_data_for_prompt` 对 prompt 副本递归剥离 `source_switches` 簿记（副本式重建，artifacts 落盘不变——已人工核查非原地修改）；L4 长序列（如 Damodaran monthly）prompt 内摘要化；层合约新增"引用金额数值必须带 payload unit，无标注不得猜测"纪律。
+- 量化效果（用 20260707_163359 真实 packet 离线重组）：L4 prompt 380,172 → 144,002 字符（-62%）；L5 71,216 → 62,669；L1 50,876 → 49,541。未达 60K 目标的原因经核实成立：剩余主体是估值数值本体、第三方校验、Damodaran 摘要等有效分析数据，不为凑指标删有效信息。
+
+验收过程：文件边界核查（两路各自只动许可文件集，互不相交）；全量测试独立复跑 `pytest tests/ -q` 473 通过（新增 7 个测试全部 monkeypatch 离线，无联网依赖）；剥离函数副本安全性人工审读；单位字段与 CSV 兜底代码抽查。
+
+剩余（见 NEXT_STEPS P0）：FRED 网络恢复后跑一次 fresh run 做端到端综合验收（L1 覆盖回升、报告图组回归、L1 叙事单位正确、prompt_audit 确认输出质量不降）。
+
+### NEXT_STEPS.md 排查确认失去维护，作废重写
+
+- 排查结论：旧版与 2026-07-07 独立审核宣布的"施工收尾、架构冻结一个季度、进入使用期"直接矛盾——仍挂着 P0"Mao/Decision 主链验收"（已被审核收口取代）和 P1"三层研报架构接入攻坚"（6/30-7/1 已落地：三份产物独立落盘、控制台与 brief 入口链接齐全，见当日 WORK_LOG 与 7/7 run 产物）。
+- 重写内容：新增"当前状态锚点"段落固化冻结期规则（允许 bug 修复/数据维修/prompt 卫生/呈现打磨，不允许新增阶段/artifact/改合约）；把审核遗留的三项使用期事项（回测验收打分器、确认决策档案阈值、攒台账 ≥5 条）显式入表；保留仍有效条目（L3 补源、控制台简化、快照审计痕迹、文档归档）并按 7/7 run 实况更新证据；并入 7/8 排查新增的 P0 FRED 修复、P1 prompt 减肥、P1 单位标注、P2 术语弹层、P2 上游产物粒度；方向思考区去掉已完成项，加入用户阅读画像锚点和"与 WORK_LOG 矛盾时以完成事实为准"的自愈规则。
+
+### 第一性原理排查：报告不需要推倒重来，真正的病灶在数据管道与 prompt 工程
+
+排查结论（详细待办已录入 `NEXT_STEPS.md` 新增 P0/P1 行）：
+
+- 形式载体判定：自包含 HTML 保留（用户确认桌面大屏通读完整判断书、常看 L1-L5 底稿、几乎不看审计区、术语要悬浮解释——阅读画像已存入 agent 记忆）；排版经 7/8 改造后为倒金字塔+渐进披露，不需要大刀阔斧重来。
+- 报告以外问题三项实锤：① FRED 采集集体失败（7/7 网络/DNS 故障 + safe_request 吞错误 + pandas_datareader fallback 静默失效 + fed_funds 无空值防护；codex 只读根因排查，6/27、7/1 run 均正常）；② 层 prompt 双重注入 + L4 被 370 条 per-ticker 来源审计记录污染到 38 万字符；③ 金额类 payload 无单位标注，净流动性被 L1 agent 写错 10 倍（"5815.95 亿"实为 5815.95 十亿）。
+- 本次已修（报告渲染层）：`_score_bar` 增加 display 参数，Volume ratio 显示真值（0.55x 而非条位置 27.5）、CMF 显示原始值（-0.14 而非归一化 27.4），删除冗余 "CMF raw" meta；重新生成 brief 验证，`pytest tests/test_vnext_reporter.py` 26 通过。
+
+### brief 报告形式与内容全面进化：清除死叙事、去重、补上被埋没的高价值产物
+
+完成内容（`src/agent_analysis/vnext_reporter.py` + `report_styles/slate_v2.css` + `tests/test_vnext_reporter.py`）：
+
+- 内容诚实性修复：删除 5 分钟图册里写死的三段旧叙事（"高实际利率与价格趋势并存""总量信用利差极低""等权补涨是好消息"——本轮 run 实际利率 N/A、信用数据缺失，正文在与自己的数据打架）。图组改为数据驱动：约束组文案取 `principal_contradiction`，信用/宽度组文案取 L2/L3 层结论；没有图表数据的图组整组不渲染，缺口在"数据缺口"读出格里明示。同步删掉 stat chips 里写死的"信用总量 极宽 / 内部分化 极高"。
+- 去重：① Bridge V2 与第一轮内容逐字段指纹比对，完全一致时折叠为跟进卡（注明"调查未建立新证据，原有张力全部保留"），冲突区体量减半；② 旧口径 conflicts 与 typed_conflicts 同 id 时不再第三次渲染；③ 读者出口纪律条件卡的整包 refs/反证（上游按批次写入每条）改为共用块只展示一次，条目变成紧凑清单；④ hero 与读者出口对 state_diagnosis 的四次重复降为一次；⑤ 层底稿展开后 summary 文本不再与正文重复（CSS）。
+- 补上被埋没的产物：① `hypothesis_competition.json` + `counter_thesis.json` 首次进正文——冲突区新增"谁在竞争解释权"（主线/挑战假说、各自解释不了什么、裁决理由、反方最强论证、还没吵完的争议）；② Final 的 `time_horizon_views`（未来几天/1-3月/6-12月）和 `price_reflection_map`（五类价格反映+状态胶囊）进读者出口；③ `confirmation_cost` + `payoff_assessment` 合为"赔率与等待的代价"；④ hero 副卡首格改为主要矛盾（含 dominant_side）；⑤ 新闻区读出格新增"第三层综合裁决"一行（`integrated_synthesis_report` 的 claim + 待确认比例，其余仍留审计区）。
+- 人话化与排版：个人决策翻译从机器串（`small_position_dca_waiting_for_golden_pit。；`）改为结构化条目并翻译枚举；新闻卡片压缩为紧凑行（AI 分析折叠），每卡重复的"媒体解释不能当官方事实"上收到区块说明；watchlist 去重限 6 条；同层冲突不再显示"L5—L5"轴；章节编号修正为 01-07（原先出现三个 04）。
+- 结果：桌面页高 21050→16248px（-23%），移动 37008→28261px（-24%）；证据 ref chips 31/31 无损，三条 typed 冲突、共振链、传导路径、审计区全部保留。
+
+验证结果：
+
+- `python -m pytest tests/test_vnext_reporter.py -q`：26 通过（含 5 个新契约测试：checklist 共用块去重、空清单兜底、无数据图组省略+缺口披露、主要矛盾驱动约束文案、bridge 指纹去重、假说竞争渲染）。
+- 用 run `20260707_163359` 重新生成 native brief 并覆盖 `output/reports/vnext_brief_20260707_1633.html`；Playwright 1440px/390px 分段截图人工+子代理巡检。
+
+剩余风险 / 上游发现（未在本次修，见 NEXT_STEPS）：
+
+- 上游 `golden_pit_checklist.json` 生成阶段把全量 refs（10 个）和反证（19 条）整包写进每个条目，未按条目区分；报告层已做共用块呈现，但根治要在生成阶段。
+- 上游 `event_mechanism_report.json` 的新闻正文片段在小数点处截断（"利率在3。"），且部分新闻主线归类机械（SpaceX 入指被归为"折现率"线）；属于事件层 prompt/截断逻辑问题。
 
 ### 独立审核确认：4b2163e 批次验收通过，施工阶段收尾，进入冻结使用期
 

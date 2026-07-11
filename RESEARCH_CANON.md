@@ -160,25 +160,31 @@ flowchart TD
 
 本质：它不是 Fed 官方指标，而是投资界常用资金面代理，因此必须明确它是**代理**。正确读法：看变化率，不迷信绝对水平；更重要的是看它与 QQQ/信用利差是否背离。误读：把净流动性代理当成单线因果；现实中财政融资、银行负债结构、准备金分布都会干扰。必须交叉验证：RRP、TGA、WALCL、HY OAS、DTWEXBGS。对美国市场：净流动性改善常有利风险偏好，但并非自动转化为股价；对 QQQ：当盈利与 AI 叙事很强时，流动性改善更容易放大估值扩张。行动边界：核心仓只把它当背景增强器；战术仓可把“净流动性改善 + 信用稳 + 广度修复”视为加仓确认。反证条件：若净流动性改善但信用在恶化，或只是 TGA 技术性回落导致，则不要高估其利多。**B版短提示**：净流动性代理不是官方真理，而是资金面近似；只在与信用、广度、波动同步改善时才有高解释力。
 
-### 估值与内部健康层
+### 估值与盈利预期层（L4）
 
-#### PE 与 Forward PE
+#### PE、PB 与 Forward PE
 
-**判读卡**：名称/英文/代码：Trailing P/E 与 Forward P/E。层级与性质：L3 合成型；中长；核心。来源：Fidelity 估值定义、Invesco QQQ fact sheet。公式与频率：Trailing P/E = 价格 / 过去 12 个月 EPS；Forward P/E = 价格 / 未来 12 个月一致预期 EPS。Invesco 最新 fact sheet 显示 QQQ 在 2026-03-31 的 trailing P/E 为 36.52。真正问题：**你今天支付的价格，相对于已实现和被预期的利润，贵到什么程度？**
+**判读卡**：名称/英文/代码：Trailing P/E、Forward P/E 与 Price-to-Book / P/B。层级与性质：L4 合成型；中长；核心。来源：Fidelity 估值定义、Invesco QQQ fact sheet。公式与频率：Trailing P/E = 价格 / 过去 12 个月 EPS；Forward P/E = 价格 / 未来 12 个月一致预期 EPS；P/B = 市值 / 账面净资产。Invesco 最新 fact sheet 显示 QQQ 在 2026-03-31 的 trailing P/E 为 36.52。真正问题：**你今天支付的价格，相对于已实现盈利、预期盈利和账面资本，贵到什么程度？**
 
 本质：P/E 是“市场愿意为每一单位盈利付多少钱”，但它受**利率、增长、会计口径与利润周期**共同影响。正确读法：必须同时看 trailing 与 forward 的差：若 trailing 高而 forward 快速回落，说明市场在押注盈利加速兑现；若两者都高，且实际利率不低，则容错率低。误读：把高 P/E 直接判死刑，或把低 P/E 当便宜。必须交叉验证：DFII10、ERP、FCF yield、NDX/NDXE、A/D。对美国市场：P/E 只是估值位置，不是择时按钮；对 QQQ：高 P/E 在高集中度环境下要配合更严格的反证制度。行动边界：核心仓只在 P/E 进入极高分位且 DFII10/信用恶化时降低风险；战术仓可利用因盈利上修导致的“forward P/E 回落”做右侧。反证条件：若盈利预期上修被持续兑现，高 P/E 可以维持很久。**B版短提示**：PE 要成对看：trailing 看已发生，forward 看市场押注；真正危险是“估值高、真实利率高、信用也开始坏”。
 
 #### FCF Yield 自由现金流收益率
 
-**判读卡**：名称/英文/代码：Free Cash Flow Yield / FCF Yield。层级与性质：L3 合成型；中长；核心。来源：CFI 与 Fidelity 对 FCF/FCF yield 的定义。公式与频率：常用为 FCF / Market Cap，或每股 FCF / 股价；FCF 近似 CFO - CapEx。真正问题：**在会计利润之外，这个资产真实产生了多少自由现金？**
+**判读卡**：名称/英文/代码：Free Cash Flow Yield / FCF Yield。层级与性质：L4 合成型；中长；核心。来源：CFI 与 Fidelity 对 FCF/FCF yield 的定义。公式与频率：常用为 FCF / Market Cap，或每股 FCF / 股价；FCF 近似 CFO - CapEx。真正问题：**在会计利润之外，这个资产真实产生了多少自由现金？**
 
 本质：FCF yield 通常比 P/E 更接近“现金回报感”，尤其适合识别高资本开支、高股权薪酬或利润质量复杂的标的。正确读法：对纳指100必须看**结构性差异**——部分龙头公司现金极强，部分成长股则要牺牲当前现金以换未来增长。误读：把低 FCF yield 一律当泡沫，忽视高回报率再投资。必须交叉验证：P/E、Forward P/E、ROE/资本开支趋势、QQQ 前十大权重。对美国市场：FCF yield 是“估值抗冲击能力”的好补充；对 QQQ：它能帮助区分“真现金机器”和“纯叙事久期”。行动边界：核心仓在高利率环境中更重视 FCF yield；战术仓若押成长扩张，必须接受低 FCF yield 带来的更高波动。反证条件：若企业处于投资高峰期、未来现金流可见度高，则当前低 FCF yield 未必坏。**B版短提示**：FCF yield 看的是“真钱”，不是会计利润；高利率时代，它往往比单看 P/E 更有约束力。
 
 #### 收益差距与 ERP 股权风险溢价
 
-**判读卡**：名称/英文/代码：Earnings Yield Gap / Equity Risk Premium / ERP。层级与性质：L3 估算型；中长；核心。来源：Damodaran implied ERP 数据、学术/教学资料。公式与频率：粗略收益差距常用 Earnings Yield - 10Y Treasury；更严谨的 implied ERP 以未来现金流、增长和无风险利率反推。Damodaran 的 2026 年更新显示历史隐含 ERP 持续可得。真正问题：**股票相对无风险债，到底多给了你多少补偿？**
+**判读卡**：名称/英文/代码：Earnings Yield Gap / Equity Risk Premium / ERP。层级与性质：L4 估算型；中长；核心。来源：Damodaran implied ERP 数据、学术/教学资料。公式与频率：粗略收益差距常用 Earnings Yield - 10Y Treasury；更严谨的 implied ERP 以未来现金流、增长和无风险利率反推。Damodaran 的 2026 年更新显示历史隐含 ERP 持续可得。真正问题：**股票相对无风险债，到底多给了你多少补偿？**
 
 本质：ERP 是跨资产比较中最重要的桥梁之一。正确读法：不要只用“E/P - 10Y”这个简式；它适合粗框架，不适合精确定价。误读：把 ERP 低理解成“马上暴跌”，或把 ERP 高当“立刻大买”。必须交叉验证：DFII10、P/E、Forward P/E、HY OAS、美元。对美国市场：ERP 压缩过度通常说明市场很贵或债很有吸引力；对 QQQ：高成长资产更依赖“增长足以覆盖 ERP 压缩”。行动边界：核心仓在 ERP 极低且真实利率上行时降低预期收益假设；战术仓不拿大盘 ERP 直接替代 QQQ 专属风险补偿。反证条件：若生产率拐点、盈利增速与资本开支形成新周期，低 ERP 可能被较长时间容忍。**B版短提示**：ERP 不是神奇时点器，但它决定了长期回报的地板；低 ERP + 高真实利率时，长期预期回报要下调。
+
+#### Point-in-time 盈利预期与修正斜率
+
+**判读卡**：名称/英文/代码：Point-in-time Earnings Expectations and Revision Slope。层级与性质：L4 预期型；短中；核心/确认。口径：只比较同一 NTM/FY1 等预测基础、同一财年期末在当前与历史观察日的指数一致预期；30/90 日修正幅度和斜率必须由当时可见的真实 vintage 计算。真正问题：**市场给出的盈利预期是在被持续上修，还是下修？** 缺失预测基础、FY 财年期末不一致、历史观察日晚于 effective date，或只有当前值时，必须 unavailable，不能用 forward/trailing 差冒充增长率。它与 PE/Forward PE、利润率和分析师覆盖率交叉验证，但不能因为预期上修就自动证明估值便宜。
+
+### 内部健康与集中度层（L3）
 
 #### A/D 进退线
 

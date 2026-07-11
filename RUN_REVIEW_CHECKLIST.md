@@ -1,6 +1,6 @@
 # Run Review Checklist：真实运行复盘清单
 
-更新日期：2026-06-16
+更新日期：2026-07-10
 用途：每次跑完真实模型后，用同一套标准判断系统是否真的变稳，而不是只看“有没有生成报告”。
 
 阅读方式：最新运行记录放在最上面；通用检查表放在后面。
@@ -8,6 +8,8 @@
 ---
 
 ## 最新运行记录
+
+> **最新验收提醒（2026-07-10）**：最新完整 vNext 仍是 `20260709_233816`，它早于本轮 L3 稀疏日/补洞、薄元信息、History of Market 低样本分位和 prompt 修复，不能当作这些修改的 fresh 验收。下一轮必须用同一 fresh snapshot 跑完整链，并重点核对：L3 实际采用日与覆盖率、History of Market 的分位状态与独立日期、历史模式不回退当前成分、字段级 `MetricAuthority` 是否进入 claim gate、函数覆盖与证据家族覆盖是否同时展示。未完成该 run 前，不得填写“最新代码全链通过”。
 
 ### 2026-05-13 / `20260513_191253`
 
@@ -60,7 +62,7 @@
 | --- | --- | --- |
 | Damodaran 月度 ERP 采集 | 通过 | `data_collected_v9_live.json` 中包含 120 条月度序列，`ERPbymonth.xlsx` 优先。 |
 | WorldPERatio 窗口数据 | 通过 | 1Y/5Y/10Y/20Y 标准差窗口可结构化解析，不冒充 historical percentile。 |
-| Trendonify sidecar | 通过 | `bb-browser` sidecar 可用，带 `browser_sidecar` 元数据；403 不硬修为主链路。 |
+| Trendonify sidecar | 审计附件通过；正式证据不适用 | 当时 `bb-browser` sidecar 可读取并带元数据，但当前治理规则禁止它进入 L1-L5 raw prompt、`evidence_ref`、分位选择或来源投票；403 继续按正式源不可用处理。 |
 | ThirdPartyChecks 交叉校验 | 通过 | Manual/Wind ERP 仍为主值，collector 附加 live ThirdPartyChecks。 |
 
 ---
@@ -162,7 +164,7 @@
 | 日期 | run 目录 | 最终判断 | 审批状态 | 总体结论 |
 | --- | --- | --- | --- | --- |
 | 2026-05-13 | `output/analysis/vnext/20260513_191253` | 中性偏谨慎 | 有保留地通过 | generated_at 幻觉已修复；L4 prompt 已压缩；workbench 新增缓存/空数据警告；yfinance 限流问题待观察。 |
-| 2026-05-12 | `output/analysis/vnext/20260512_215333_collect_only` | N/A | N/A | L4 外部估值源稳定收口验证通过；Damodaran/WorldPERatio/Trendonify 均可用。 |
+| 2026-05-12 | `output/analysis/vnext/20260512_215333_collect_only` | N/A | N/A | L4 外部估值源当时完成采集验证；Damodaran/WorldPERatio 可作正式背景或参照，Trendonify sidecar 仅为审计附件、正式证据不适用。 |
 | 2026-05-10 | `output/analysis/vnext/20260510_225944` | 中性偏谨慎 | 有保留地通过 | Bridge JSON 容错升级验证通过；所有 stage 一次通过；generated_at 幻觉和 utcnow deprecation 已记录。 |
 | 2026-04-29 | `output/analysis/vnext/20260429_001955` | 中性偏谨慎 | 有保留地通过 | DeepSeek-only 基准通过；治理压缩未丢关键证据；L3 广度数据仍需补强。 |
 | 2026-04-27 | `output/analysis/vnext/20260427_190347` | 谨慎 | 有保留地通过 | 第二轮真实运行通过；发现并修复治理 prompt 中诱导历史概率幻觉的问题。 |
@@ -227,6 +229,8 @@
 | 交叉验证对象是否和指标问题相关 |  |  |  |
 | 实时 L4 是否优先使用 Wind 主锚 |  | `analysis_packet.json` / `raw_data` | Wind 可用时应看到 NDX PE/PB/PS、历史分位和 NDX 专属风险溢价；Wind 不可用时必须明示降级。 |
 | L4 旧替代项是否被正确降权 |  | `layer_cards/L4.json` / `brief` | Damodaran 是美国市场 ERP 背景；WorldPERatio 是相对位置参照；简式收益差距只做诊断或回退。 |
+| History of Market 低样本是否撤回分位 |  | `raw_data` / `layer_cards/L4.json` / `brief` | trailing 少于 200 点或 270 天、forward 少于 60 点或约 4.5 年时，分位必须为空并显示 `insufficient_history`；观察日、API 更新时间和 freshness 分开。 |
+| 元信息是否薄而硬 |  | `data_integrity_report.json` | 不因逐指标 URL/license 噪音降级；未来数据、latest-only 回测混入、代理冒充官方、核心 fallback 无解释等仍应阻断。 |
 
 ### 2. 跨层冲突是否稳定、具体、可追溯
 

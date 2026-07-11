@@ -1,0 +1,12 @@
+# Project-level Codex orchestration defaults.
+# The root session is the supervisor: it plans, delegates bounded work, and
+# owns the final integration and publication decision.
+model = "gpt-5.6"
+model_reasoning_effort = "high"
+
+[agents]
+# Keep delegation shallow and predictable: the root may spawn workers, but
+# workers may not recursively spawn more workers.
+max_threads = 4
+max_depth = 1
+interrupt_message = true
