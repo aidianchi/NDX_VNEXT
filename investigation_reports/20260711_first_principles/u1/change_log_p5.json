@@ -1,0 +1,34 @@
+{
+  "hy_quality_spread": [
+    {
+      "level": 8.15,
+      "trend": "short_above_long",
+      "pct10y": 0.9987293519695044
+    },
+    {
+      "level": 4.0,
+      "trend": "short_below_long",
+      "pct10y": 0.3
+    }
+  ],
+  "vxn": [
+    26.91,
+    20.0
+  ],
+  "vxn_vix_ratio": [
+    1.6989,
+    1.3
+  ],
+  "skew": [
+    144.67,
+    130.0
+  ],
+  "put_call": [
+    1.58,
+    1.0
+  ],
+  "fear_greed": [
+    47.66,
+    60.0
+  ]
+}

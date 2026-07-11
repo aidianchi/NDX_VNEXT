@@ -1,0 +1,105 @@
+{
+  "p1_reused": {
+    "get_ndx_wind_valuation_snapshot.value.PE": [
+      35.88,
+      22.5
+    ],
+    "get_ndx_wind_valuation_snapshot.value.PB": "scaled by same factor",
+    "get_ndx_wind_valuation_snapshot.value.PS": "scaled by same factor",
+    "get_ndx_wind_valuation_snapshot.value.PEHistoricalPercentile": [
+      81.42,
+      22.0
+    ],
+    "get_ndx_wind_valuation_snapshot.value.PEPercentileWindows": "1y/2y/5y/10y all lowered to 18-24",
+    "get_ndx_wind_valuation_snapshot.value.RiskPremium": [
+      1.0474,
+      1.6758
+    ],
+    "get_ndx_pe_and_earnings_yield.value.PE/TrailingPE": [
+      34.12,
+      21.0
+    ],
+    "get_ndx_pe_and_earnings_yield.value.EarningsYield": "raised inversely with PE",
+    "get_ndx_pe_and_earnings_yield.value.ThirdPartyChecks[*].value": "scaled to stay consistent with new PE"
+  },
+  "p3_reused": {
+    "get_net_liquidity_momentum.value.momentum_4w": [
+      -19.93,
+      19.93
+    ],
+    "get_net_liquidity_momentum.value.level": [
+      5955.78,
+      6200.0
+    ],
+    "get_fed_funds_rate.value.level": [
+      3.63,
+      1.5
+    ],
+    "get_10y_treasury.value.level": [
+      4.56,
+      2.8
+    ],
+    "get_10y_real_rate.value.level": [
+      2.31,
+      0.3
+    ],
+    "get_10y_breakeven.value.level": [
+      2.23,
+      2.5
+    ],
+    "get_10y2y_spread_bp.value.level": [
+      38.0,
+      150.0
+    ],
+    "get_m2_yoy.value.level": [
+      5.58,
+      9.5
+    ]
+  },
+  "p4_extras": {
+    "ThirdPartyChecks[danjuan_ndx_valuation].historical_percentile": [
+      81.6,
+      21.0
+    ],
+    "get_equity_risk_premium.level": [
+      -1.77,
+      1.64
+    ],
+    "damodaran.erp_t12m_adjusted_payout": [
+      4.3,
+      6.0
+    ],
+    "percent_above_50d/200d": [
+      [
+        55.45,
+        62.38
+      ],
+      [
+        70.0,
+        75.0
+      ]
+    ],
+    "new_highs/new_lows": [
+      [
+        4,
+        0
+      ],
+      [
+        30,
+        0
+      ]
+    ],
+    "mcclellan.level": [
+      0.48,
+      25.0
+    ],
+    "ndx_ndxe.percentile_10y": [
+      0.9653800238758456,
+      0.45
+    ],
+    "top10.top10_weight_pct": [
+      45.05,
+      38.0
+    ]
+  }
+}

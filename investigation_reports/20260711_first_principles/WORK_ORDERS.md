@@ -17,11 +17,11 @@
 - 全量测试 522 通过。
 - U1 一阶段结论：层级证据敏感（强阳性）、Bridge 矛盾识别真实、**最终动作层黏性存疑（谨慎吸引子假说，待二阶段判定）**；DataIntegrity 对数值篡改零反应（重算校验带的依据）；P1 的 claim_gate 通过率 1/8 显示 claim 校验能抓数据内部矛盾。
 
-## 进行中（后台管线，不耗 Claude 额度）
+## U1 实验与 prompt 重写：已完结（2026-07-12 凌晨）
 
-- `output/analysis/vnext/u1_experiment_baseline_r2` / `_r3`：基线重复，测同输入随机漂移（噪音标尺）
-- `output/analysis/vnext/u1_experiment_p4`：教科书级全面利多组合（快照 `scratchpad/u1/data_p4.json`，改动清单 `change_log_p4.json`——估值便宜+流动性宽松+广度健康+集中度正常+收益差距转正+Damodaran 充足+第三方一致）
-- **收割方法**：对 7 个 run（baseline×3、P1-P4）提取 L1/L3/L4 local_conclusion+confidence、bridge principal_contradiction id/summary、final_stance、reader_final 动作字段、claim_gate 通过率。判定：P4 下最终动作仍是"赔率不利/极小试探"→ 谨慎吸引子实锤；转向建设性 → 综合层证据敏感成立。变化须超过 baseline×3 自然漂移。一阶段完整报告：`scratchpad/u1/u1_report.md`（scratchpad 会话易失，重要结论须回写本目录）。
+- **U1 全部 10 个 run 完成，完整结论见本目录 `U1_RESULTS.md`**（脚本与改动清单在 `u1/`）。要点：层级证据驱动强阳性；旧 prompt 动作层被"五重合取门 × 盈利数据永久缺失"结构性锁死在谨慎区，叠加范文姿态锚定。
+- **Prompt 重写已应用并提交（`2443be5`），A/B 验证双达标**：新 prompt × 利多世界 → 主导面 opportunity、"赔率中性偏有利"、持仓+对冲的建设性动作；新 prompt × 真实快照 → 仍防御且更果断，无过度矫正。赔率判断变为具名记分卡，矛盾 ID 摆脱范例锚定。
+- **注意（下一次正式 run 的观察点）**：新 prompt 在真实数据下的动作比旧版更果断（"降高贝塔、20-30% 现金" vs 旧"维持纪律"）——姿态校准让两个方向都更敢下结论，正式使用时需人工确认这种果断与用户风险偏好匹配（`config/user_decision_profile.json` 阈值仍是草案，工单队列已有）。
 
 ## 工单队列（按优先级；每单一提交）
 
@@ -35,6 +35,7 @@
 8. **死代码与僵尸子系统**：`tools.py`+`tools_finnhub.py`+`tools_simfin.py` 死链（~1,390 行）；`data_manager.py:99-112` 孤儿陈旧度检测；受控调查反馈环恒零产出（`orchestrator.py:1133` `is_deterministic_stub` 写死 True）——砍除或修复二选一，需用户或主审拍板。
 9. **巨型文件手术**：orchestrator.py 按 audit_C 方案拆 stage_runner / prompt_composer / claim_verification / stage_io / payload_normalizer；tools_L4.py 按数据源拆模块。
 10. **fresh 完整 vNext E2E 验收**（NEXT_STEPS P0）：最新代码全链跑一轮，人工核对发布状态/主要结论/反证/失效条件。
+11. **claim gate 稳定化**：同输入下 verified 率在 7/8 与 1/8 间跳动（U1 基线三连 + P5 复现四次）。排查 `_verify_claim_entry` 链路中受 LLM 措辞随机性支配的环节（疑似 claim 文本与 evidence ref 的匹配方式），改为确定性可复核的匹配，或在 claim 生成端约束引用格式；验收=同输入三连 verified 率方差趋近 0。
 
 ## Prompt 偏误审计（2026-07-11 深夜，Fable 亲自逐份审读，先于 P4 结果完成 = 盲测预测）
 
