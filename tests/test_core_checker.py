@@ -72,6 +72,29 @@ def test_data_integrity_blocks_publish_when_formal_layer_has_no_successes():
     assert any("critical_layer_no_success" in reason and "L5 success=0/3" in reason for reason in report["blocking_reasons"])
 
 
+def test_data_integrity_blocks_when_one_formal_layer_is_below_half_even_if_overall_is_high():
+    data = {
+        "indicators": [
+            {"layer": 1, "function_id": "l1_ok", "value": 1},
+            {"layer": 1, "function_id": "l1_fail_a", "error": "missing"},
+            {"layer": 1, "function_id": "l1_fail_b", "error": "missing"},
+            {"layer": 2, "function_id": "l2_a", "value": 1},
+            {"layer": 2, "function_id": "l2_b", "value": 1},
+            {"layer": 2, "function_id": "l2_c", "value": 1},
+            {"layer": 3, "function_id": "l3_a", "value": 1},
+            {"layer": 3, "function_id": "l3_b", "value": 1},
+            {"layer": 4, "function_id": "l4_a", "value": 1},
+            {"layer": 5, "function_id": "l5_a", "value": 1},
+        ]
+    }
+
+    report = DataIntegrity().run(data)
+
+    assert report["confidence_percent"] == 80.0
+    assert report["publish_status"] == "blocked"
+    assert any("critical_layer_below_publish_floor" in reason and "L1 success=1/3" in reason for reason in report["blocking_reasons"])
+
+
 def test_data_integrity_reports_yfinance_runtime_diagnostics():
     data = {
         "indicators": [
