@@ -36,6 +36,22 @@
 9. **巨型文件手术**：orchestrator.py 按 audit_C 方案拆 stage_runner / prompt_composer / claim_verification / stage_io / payload_normalizer；tools_L4.py 按数据源拆模块。
 10. **fresh 完整 vNext E2E 验收**（NEXT_STEPS P0）：最新代码全链跑一轮，人工核对发布状态/主要结论/反证/失效条件。
 
+## Prompt 偏误审计（2026-07-11 深夜，Fable 亲自逐份审读，先于 P4 结果完成 = 盲测预测）
+
+**总判定**：指令层意外地清醒（反模板约束、对称禁令、"双向风险"条款、干净的 system_constraints、层级 prompt 无姿态锚定），但**范例层在系统性拆台**。病不是"没原理"，是"原理写在指令里、偏误藏在范文里"，而 LLM 对上下文范例的锚定强于对指令的服从。
+
+五个具体偏误机制（按严重度）：
+
+1. **单一姿态范文横贯综合链**：cross_layer_bridge / thesis_builder / final_adjudicator 三份 prompt 的 JSON"结构示例"全部是恐慌市谨慎姿态的完整文案（"风险未解除，核心仓不能升级""只适合小比例试探""维持纪律，不因恐慌被动砍掉核心仓"——最后这句在 thesis 和 final 两处逐字出现）。final 示例的 three_reasons 与真实 run 输出几乎一比一。范例只教了一种"好答案的形状"。
+2. **非对称举证负担**：thesis_builder 与 final_adjudicator 均规定"高赔率"须价格反映/估值ERP/信用/趋势/盈利五类证据**共同**支持才可使用；"赔率不利"零门槛。说空免费，说多要五重合取。
+3. **Critic 配额制**：critic.md 质量检查强制"至少 2 个 major 问题"→ 论点真没问题也必须编；永远无法输出"该论点成立"。且两个攻击示例全是攻击乐观论断（"盈利增长强劲""已充分定价"）。
+4. **置信度单尾检查**：只查"是否避免过度自信"，不查过度骑墙；且全部示例 confidence="medium" → 模式坍缩（实证：U1 七个 run 几乎全 medium）。
+5. **示例矛盾 ID 锚定**：thesis/final 示例中具体写了 `valuation_discount_rate` / `panic_priced_vs_unconfirmed_risk`，而 U1 全部四个 run 输出的主要矛盾 ID 都落在 valuation_* 家族——"动态主要矛盾"疑似部分被范例 ID 锚定。
+
+**盲测预测（写于 P4 结果揭晓前）**：P-a P4 最终动作仍落"谨慎/分批试探"桶（范例词汇表里没有建设性姿态的模板）；P-b confidence 仍是 medium；P-c 主要矛盾仍在 valuation_* 家族或凭空造出张力；P-d Critic 在 P4 上仍产出 ≥2 个 major（配额所迫）。若 P4 实际转向建设性 → 指令战胜范例，机制 1 降级，修复重心转向证据菜单。
+
+**修复方向（待 P4 判定后立工单）**：① 三份综合 prompt 的范文改为 2-3 个对照 regime 的最小示例（恐慌-谨慎 / 教科书利多-建设性 / 混合-分歧），或退化为纯 schema 骨架+占位符；② "赔率不利"同样设具名证据合取门，或改为强制五类赔率记分卡字段；③ Critic 取消 ≥2 major 配额，允许"无重大问题"判定但强制填"幸存的最强反对意见"，补一个攻击过度谨慎论点的示例；④ confidence 定义证据语义并双尾检查；⑤ 示例中的具体 contradiction_id 改为 `<placeholder>`。
+
 ## 续接协议
 
 撞 limit 或会话中断后：读本文件"进行中"与队列 → 检查后台进程/产物是否已完成（`ps aux | grep main.py`；`ls output/analysis/vnext/u1_*`）→ 从最小未完成项恢复。子agent 被中断时优先 SendMessage 续跑（上下文还在），失败再重开。
