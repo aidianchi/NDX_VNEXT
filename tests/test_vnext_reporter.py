@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from agent_analysis.vnext_reporter import (
+    INDICATOR_CHARTS,
     VNextReportGenerator,
     _label,
     _slug,
@@ -82,7 +83,7 @@ def test_vnext_reporter_news_section_shows_event_data_links():
     assert "不是因果证明，也不是 evidence_ref" in html
 
 
-def test_reader_exit_plain_chain_cards_do_not_use_index_grid():
+def test_reader_exit_checklist_renders_compact_rows_with_shared_dedup():
     reporter = VNextReportGenerator()
 
     html = reporter._reader_exit_section(
@@ -98,19 +99,175 @@ def test_reader_exit_plain_chain_cards_do_not_use_index_grid():
                     {
                         "current_status": "met",
                         "condition": "这是一条很长的条件说明，用来确认普通证据卡不会被压进编号列。",
-                        "falsification_conditions": ["失效条件"],
+                        "falsification_conditions": ["共用失效条件", "独有失效条件 A"],
                         "evidence_refs": ["L1.get_net_liquidity_momentum"],
-                    }
+                    },
+                    {
+                        "current_status": "not_met",
+                        "condition": "第二条纪律条件。",
+                        "falsification_conditions": ["共用失效条件"],
+                        "evidence_refs": ["L1.get_net_liquidity_momentum"],
+                    },
                 ],
             },
         }
     )
     css = reporter._css("slate_v2")
 
-    assert 'class="chain-card chain-card--plain"' in html
+    # 条目渲染为紧凑清单，不再逐卡重复整包 refs/反证。
+    assert 'class="pit-item"' in html
+    assert "已满足" in html
+    assert "未满足" in html
+    # 上游整包写入的共用 refs / 反证只展示一次。
+    assert html.count("get_net_liquidity_momentum") == 1
+    assert "这批条件共用的证据与反证" in html
+    assert html.count("共用失效条件") == 1
+    assert "独有失效条件 A" in html
+    assert ".pit-list" in css
     assert ".chain-card--plain" in css
     assert "@media (max-width: 720px)" in css
     assert "min-width: 0;" in css
+
+
+def test_reader_exit_without_entries_keeps_empty_note():
+    reporter = VNextReportGenerator()
+    html = reporter._reader_exit_section(
+        {
+            "final_adjudication": {"final_stance": "中性", "confidence": "medium"},
+            "golden_pit_checklist": {},
+        }
+    )
+    assert "暂无黄金坑清单条目" in html
+
+
+def test_memo_chartbook_omits_groups_without_chart_data_and_reports_gap():
+    reporter = VNextReportGenerator()
+    artifacts = {
+        "final_adjudication": {
+            "final_stance": "中性",
+            "confidence": "medium",
+            "principal_contradiction": {"summary": "估值与流动性矛盾。", "dominant_side": "流动性收紧"},
+        },
+        "layers": {
+            "L2": {"local_conclusion": "信用与波动读数缺失。"},
+            "L3": {"local_conclusion": "集中度高但广度改善。"},
+        },
+        "chart_time_series": {"series": {}},
+    }
+    html = reporter._memo_chartbook_section(artifacts)
+
+    # 没有任何图组数据：不渲染死板块，不引用旧叙事，缺口写明。
+    assert "再看最硬的约束" not in html
+    assert "信用是确认还是警告" not in html
+    assert "本轮缺图" in html
+    assert "总量信用利差极低" not in html
+    assert "等权补涨是好消息" not in html
+
+
+def test_memo_chartbook_constraint_copy_comes_from_principal_contradiction():
+    reporter = VNextReportGenerator()
+    rows = [{"date": f"2026-0{month}-01", "value": 2.0 + month / 10} for month in range(1, 7)]
+    artifacts = {
+        "final_adjudication": {
+            "final_stance": "中性",
+            "confidence": "medium",
+            "principal_contradiction": {"summary": "估值与流动性矛盾。", "dominant_side": "流动性收紧"},
+        },
+        "layers": {},
+        "chart_time_series": {"series": {"US10Y_REAL": {"rows": rows}}},
+    }
+    html = reporter._memo_chartbook_section(artifacts)
+
+    assert "再看最硬的约束" in html
+    assert "估值与流动性矛盾" in html
+    assert "当前占上风的一面" in html
+    assert "本轮报告的核心矛盾不是单纯" not in html
+
+
+def test_conflicts_section_deduplicates_identical_bridges():
+    reporter = VNextReportGenerator()
+    typed = [
+        {
+            "conflict_id": "L4_vs_L1",
+            "severity": "high",
+            "confidence": "medium",
+            "description": "估值与流动性冲突。",
+            "mechanism": "折现率上升。",
+            "implication": "估值承压。",
+            "involved_layers": ["L1", "L4"],
+            "evidence_refs": ["L1.get_net_liquidity_momentum"],
+            "falsifiers": ["流动性转正。"],
+        }
+    ]
+    legacy = [
+        {
+            "conflict_type": "L4_vs_L1",
+            "severity": "high",
+            "description": "旧口径同一冲突。",
+            "implication": "重复。",
+        }
+    ]
+    bridge_base = {
+        "bridge_type": "macro_valuation",
+        "implication_for_ndx": "谨慎。",
+        "typed_conflicts": typed,
+        "resonance_chains": [],
+        "transmission_paths": [],
+        "conflicts": legacy,
+        "cross_layer_claims": [{"claim": "首轮判断", "mechanism": "机制", "supporting_facts": []}],
+    }
+    bridge_v2 = dict(bridge_base)
+    bridge_v2["bridge_type"] = "feedback_bridge_v2"
+    bridge_v2["cross_layer_claims"] = []
+    html = reporter._conflicts_section({"bridges": [bridge_base, bridge_v2]})
+
+    # 第二轮与第一轮完全一致：折叠成跟进卡，不整段重复。
+    assert html.count('data-typed-conflict="L4_vs_L1"') == 1
+    assert "不重复展示" in html
+    assert "反馈复核（第二轮）" in html
+    # 旧口径冲突与 typed 冲突同 id 时不再第三次渲染。
+    assert "旧口径同一冲突" not in html
+
+
+def test_conflicts_section_renders_hypothesis_competition_and_counter_thesis():
+    reporter = VNextReportGenerator()
+    artifacts = {
+        "bridges": [],
+        "hypothesis_competition": {
+            "leading_hypothesis_id": "hyp_a",
+            "hypotheses": [
+                {
+                    "hypothesis_id": "hyp_a",
+                    "hypothesis_text": "主线解释：估值压缩风险主导。",
+                    "status": "leading",
+                    "confidence": "medium",
+                    "cannot_explain": ["信用数据缺失。"],
+                    "adjudication_reason": "证据未触发改判。",
+                },
+                {
+                    "hypothesis_id": "hyp_b",
+                    "hypothesis_text": "挑战解释：流动性才是定价核心。",
+                    "status": "candidate",
+                    "confidence": "low",
+                    "cannot_explain": ["无法解释高位维持。"],
+                },
+            ],
+            "retained_disputes": ["信用利差数据何时可用？"],
+        },
+        "counter_thesis": {
+            "principal_counterargument": "市场可能双重误判。",
+            "cannot_establish": ["无法确定信用利差真实水平。"],
+        },
+    }
+    html = reporter._conflicts_section(artifacts)
+
+    assert "谁在竞争解释权" in html
+    assert "主线解释：估值压缩风险主导。" in html
+    assert "暂时领先" in html
+    assert "候选挑战" in html
+    assert "反方最强论证" in html
+    assert "市场可能双重误判。" in html
+    assert "还没吵完的争议" in html
 
 
 def test_vnext_reporter_generates_native_ui(tmp_path: Path):
@@ -1207,6 +1364,10 @@ def test_l4_manual_erp_visual_does_not_claim_damodaran_monthly(tmp_path: Path):
     assert "Damodaran ERP monthly lens" not in html
     assert "暂无月度序列" not in html
     assert "T12M adjusted payout" not in html
+    assert "不是 Damodaran 官网月度序列，也不是 NDX 专属估值锚" in html
+    assert "补偿越厚" not in html
+    assert "补偿更厚" not in html
+    assert "不作补偿厚薄解读" in html
 
 
 def test_l4_damodaran_visual_shows_official_percentile_windows(tmp_path: Path):
@@ -1241,6 +1402,87 @@ def test_l4_damodaran_visual_shows_official_percentile_windows(tmp_path: Path):
     assert "2021-06-01 - 2026-05-01" in html
     assert "data_cutoff_date=2026-05-01" in html
     assert "not NDX PE/PB/Forward PE historical percentile" in html
+
+
+def test_l4_simple_yield_gap_does_not_reuse_damodaran_monthly_chart(tmp_path: Path):
+    reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
+    artifacts = {
+        "chart_time_series": {
+            "series": {
+                "DAMODARAN_ERP_MONTHLY": {
+                    "rows": [
+                        {"time": "2026-04-01", "value": 4.10},
+                        {"time": "2026-05-01", "value": 4.24},
+                    ]
+                }
+            }
+        },
+        "analysis_packet": {"raw_data": {}},
+        "layers": {},
+        "final_adjudication": {},
+    }
+
+    html = reporter._memo_chartbook_section(artifacts)
+
+    assert "get_equity_risk_premium" not in INDICATOR_CHARTS
+    assert INDICATOR_CHARTS["get_damodaran_us_implied_erp"] == ("DAMODARAN_ERP_MONTHLY", "value")
+    assert 'data-ref="L4.get_damodaran_us_implied_erp"' in html
+    assert 'data-ref="L4.get_equity_risk_premium"' not in html
+
+
+def test_l4_wind_risk_premium_keeps_unverified_unit_unformatted(tmp_path: Path):
+    reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
+    artifacts = {
+        "analysis_packet": {
+            "raw_data": {
+                "L4": {
+                    "get_ndx_wind_valuation_snapshot": {
+                        "value": {
+                            "PE": 32.5,
+                            "RiskPremium": 1.0474,
+                            "RiskPremiumHistoricalPercentile": 42.0,
+                            "RiskPremiumRank": {"rank": 210, "sample_count": 500},
+                        }
+                    },
+                    "get_equity_risk_premium": {"value": {"level": -1.77}},
+                }
+            }
+        },
+        "layers": {},
+        "chart_time_series": {"series": {}},
+    }
+
+    html = "".join(
+        [
+            reporter._valuation_ruler_chart(artifacts),
+            reporter._rate_valuation_pressure_chart(artifacts),
+            reporter._wind_valuation_indicator_visual(
+                "L4.get_ndx_wind_valuation_snapshot",
+                artifacts["analysis_packet"]["raw_data"]["L4"]["get_ndx_wind_valuation_snapshot"]["value"],
+            ),
+        ]
+    )
+
+    assert "Wind NDX RP（Wind口径）" in html
+    assert "1.05" in html
+    assert "1.05%" not in html
+    assert "Simple Yield Gap" in html
+    assert "-1.77%" in html
+    assert "补偿越厚" not in html
+    assert "补偿更厚" not in html
+    assert "不作补偿厚薄解读" in html
+
+
+def test_l3_prompt_keeps_m7_as_concentration_fact_and_delegates_earnings_to_l4():
+    prompt = (
+        Path(__file__).parents[1] / "src" / "agent_analysis" / "prompts" / "l3_analyst.md"
+    ).read_text(encoding="utf-8")
+
+    assert "get_m7_fundamentals" not in prompt
+    assert "M7 盈利质量" not in prompt
+    assert "集中度有盈利支撑" not in prompt
+    assert "Top10 / M7 权重" in prompt
+    assert "L3 本层不得回答这个问题" in prompt
 
 
 def test_l4_valuation_visual_without_worldperatio_uses_neutral_title(tmp_path: Path):

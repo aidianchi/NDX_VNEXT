@@ -2874,3 +2874,168 @@ body { line-height: 1.75; }
 
 /* Better drawer readability */
 .drawer-section p, .drawer-section ul, .drawer-section ol { line-height: 1.7; }
+
+/* --- Reader-exit evolution: horizons, price map, discipline checklist --- */
+.pill.risk { color: var(--severity-high); border-color: var(--severity-high); }
+
+.reader-sub {
+  margin: 34px 0 12px;
+  font: 600 15px/1.4 var(--sans);
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+  text-transform: none;
+}
+
+.profile-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.profile-list li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: 1px solid color-mix(in oklch, var(--rule) 55%, transparent);
+  font-size: 14px;
+}
+.profile-list li:last-child { border-bottom: 0; }
+.profile-list li b {
+  flex: 0 0 auto;
+  font: 600 12px/1.6 var(--sans);
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.profile-list li span { color: var(--ink-soft); }
+
+.reader-odds-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 18px;
+  margin-top: 18px;
+}
+@media (max-width: 860px) {
+  .reader-odds-grid { grid-template-columns: 1fr; }
+}
+.reader-odds-grid article {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-raised);
+  padding: 18px 20px;
+  min-width: 0;
+}
+.reader-odds-grid article h3 {
+  margin: 0 0 10px;
+  font: 600 14px/1.4 var(--sans);
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+}
+.reader-odds-grid article p { margin: 8px 0 0; font-size: 14.5px; line-height: 1.7; }
+
+.price-map {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.price-map li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 9px 0;
+  border-bottom: 1px solid color-mix(in oklch, var(--rule) 55%, transparent);
+}
+.price-map li:last-child { border-bottom: 0; }
+.price-map li .pill { flex: 0 0 auto; margin-top: 2px; }
+.price-map li b { font: 600 13.5px/1.5 var(--sans); }
+.price-map li p { margin: 2px 0 0; font-size: 13.5px; line-height: 1.6; color: var(--ink-soft); }
+
+.pit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-raised);
+}
+.pit-list .pit-item {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px 18px;
+  border-bottom: 1px solid color-mix(in oklch, var(--rule) 70%, transparent);
+}
+.pit-list .pit-item:last-child { border-bottom: 0; }
+.pit-list .pit-item > .pill { flex: 0 0 auto; margin-top: 3px; }
+.pit-list .pit-item > div { min-width: 0; }
+.pit-list .pit-item p { margin: 0; font-size: 15px; line-height: 1.7; }
+.pit-list .pit-item small {
+  display: block;
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.pit-shared { margin-top: 12px; }
+@media (max-width: 720px) {
+  .pit-list .pit-item { flex-direction: column; gap: 8px; }
+}
+
+/* --- Hypothesis competition --- */
+.hypothesis-competition { margin: 26px 0 8px; }
+.hypothesis-competition > h3 {
+  margin: 0 0 6px;
+  font: 600 17px/1.4 var(--sans);
+}
+.hypothesis-card { border-left: 3px solid var(--rule-strong); }
+.hypothesis-card--leading {
+  border-left-color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 5%, var(--paper-raised));
+}
+.hypothesis-card--counter { border-left-color: var(--severity-watch); }
+.hypothesis-card small { display: block; margin-top: 6px; line-height: 1.6; color: var(--muted); }
+.hypothesis-card details { margin-top: 8px; }
+
+/* --- Follow-up bridge (deduplicated second-round memo) --- */
+.bridge-card--followup {
+  padding: 18px 22px;
+  background: var(--paper-muted);
+}
+.bridge-card--followup .small { color: var(--muted); font-size: 13px; }
+
+/* --- Compact news items --- */
+.mainline-card .news-say { font-size: 13.5px; color: var(--ink-soft); line-height: 1.65; }
+.news-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--rule);
+}
+.news-item {
+  padding: 12px 2px;
+  border-bottom: 1px solid color-mix(in oklch, var(--rule) 65%, transparent);
+}
+.news-item:last-child { border-bottom: 0; }
+.news-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+.news-item-head b { font: 600 14.5px/1.5 var(--sans); }
+.news-item p { margin: 4px 0 0; font-size: 14px; line-height: 1.65; color: var(--ink-soft); }
+.news-item details { margin-top: 6px; }
+.news-item details summary {
+  cursor: pointer;
+  font: 500 12.5px/1.5 var(--sans);
+  color: var(--accent);
+}
+.news-item details p { font-size: 13.5px; }
+
+/* --- Layer detail: avoid repeating summary text once expanded --- */
+.layer-detail[open] > summary .layer-summary { display: none; }
+
+/* Odd trailing readout cell spans the full row instead of leaving a hole */
+.memo-readout > div:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+/* Odd trailing governance card spans the row instead of leaving the right half empty */
+.governance-grid > article:last-child:nth-child(odd) { grid-column: 1 / -1; }

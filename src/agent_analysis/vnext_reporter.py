@@ -43,8 +43,22 @@ DISPLAY_LABELS = {
     "partially_reflected": "部分反映",
     "not_reflected": "尚未反映",
     "largely_reflected": "大体反映",
-    "unclear": "不清楚",
+    "unclear": "不明朗",
     "macro_valuation": "宏观与估值",
+    "feedback_bridge_v2": "反馈复核（第二轮）",
+    "small_position_dca_waiting_for_golden_pit": "小仓位定投，等待黄金坑",
+    "credit": "信用",
+    "rates": "利率",
+    "valuation": "估值",
+    "liquidity": "流动性",
+    "technical_panic": "技术与恐慌",
+    "leading": "暂时领先",
+    "candidate": "候选挑战",
+    "retained": "保留竞争",
+    "rejected": "已出局",
+    "merged": "已合并",
+    "downgraded": "已降级",
+    "2-5 decisions per year": "每年 2-5 次关键决策",
 }
 
 TEMPLATE_DESCRIPTIONS = {
@@ -604,7 +618,6 @@ INDICATOR_CHARTS = {
     "get_vxn_vix_ratio": ("VXN_VIX_RATIO", "value"),
     "get_ndx_ndxe_ratio": ("NDX_NDXE_RATIO", "value"),
     "get_qqq_qqew_ratio": ("NDX_NDXE_RATIO", "value"),
-    "get_equity_risk_premium": ("DAMODARAN_ERP_MONTHLY", "value"),
     "get_damodaran_us_implied_erp": ("DAMODARAN_ERP_MONTHLY", "value"),
     "get_l5_deterministic_snapshot": ("QQQ_OHLCV", "close"),
     "get_qqq_technical_indicators": ("QQQ_OHLCV", "close"),
@@ -1282,6 +1295,8 @@ class VNextReportGenerator:
             "schema_guard_report": _load_json(run_path / "schema_guard_report.json", {}),
             "run_review_report": _load_json(run_path / "run_review_report.json", {}),
             "outcome_review_report": _load_json(run_path / "outcome_review_report.json", {}),
+            "hypothesis_competition": _load_json(run_path / "hypothesis_competition.json", {}),
+            "counter_thesis": _load_json(run_path / "counter_thesis.json", {}),
             "user_decision_profile": _load_json(run_path / "user_decision_profile.json", {}),
             "golden_pit_checklist": _load_json(run_path / "golden_pit_checklist.json", {}),
             "data_integrity_report": _load_json(run_path / "data_integrity_report.json", {}),
@@ -1666,6 +1681,13 @@ class VNextReportGenerator:
             data_date = meta.get("data_date") or analysis_meta.get("data_date") or backtest_date
             current_state = checklist.get("current_state") if isinstance(checklist, dict) else ""
             current_state = current_state or final.get("state_diagnosis") or hero_note
+            principal = final.get("principal_contradiction") if isinstance(final.get("principal_contradiction"), dict) else {}
+            principal_summary = principal.get("summary") or ""
+            dominant = principal.get("dominant_side") or ""
+            if principal_summary and dominant:
+                principal_text = f"{principal_summary} 当前占上风的一面：{dominant}"
+            else:
+                principal_text = principal_summary or _sentence(current_state, 110)
             return f"""
 <header class="hero brief-hero" id="top">
   <div class="eyebrow">NDX 投资判断书</div>
@@ -1676,8 +1698,8 @@ class VNextReportGenerator:
     </div>
     <aside class="brief-action-card" aria-label="动作和反证">
       <div>
-        <b>当前状态</b>
-        <p>{_escape(_sentence(current_state, 110))}</p>
+        <b>主要矛盾</b>
+        <p>{_escape(_sentence(principal_text, 130))}</p>
       </div>
       <div>
         <b>距离纪律条件</b>
@@ -1783,45 +1805,132 @@ class VNextReportGenerator:
         state = checklist.get("current_state") or final.get("state_diagnosis") or reader.get("one_liner") or final.get("final_stance") or "未记录"
         changes = _as_list(checklist.get("changed_since_last_run_summary"))
         change_rows = "".join(f"<li>{_escape(item)}</li>" for item in changes[:4]) or "<li>跨 run 对比暂缓启用。</li>"
-        entries = _as_list(checklist.get("entries"))
-        status_label = {"met": "已满足", "not_met": "未满足", "insufficient_evidence": "证据不足"}
-        item_rows = ""
-        for item in entries[:8]:
-            if not isinstance(item, dict):
-                continue
-            refs = self._ref_chips(item.get("evidence_refs", [])[:4] if isinstance(item.get("evidence_refs"), list) else [])
-            falsifiers = "；".join(str(value) for value in _as_list(item.get("falsification_conditions"))[:2])
-            item_rows += f"""
-      <article class="chain-card chain-card--plain">
-        <h3>{_escape(status_label.get(str(item.get('current_status')), str(item.get('current_status') or '未记录')))} · {_escape(_sentence(item.get('condition'), 96))}</h3>
-        <p><b>反证/失效：</b>{_escape(falsifiers or '未记录')}</p>
-        <div class="ref-row">{refs}</div>
+
+        horizon_rows = "".join(
+            f"""
+      <article>
+        <h3>{_escape(_display_label(item.get('horizon', 'time horizon')))}</h3>
+        <p>{_escape(item.get('view', ''))}</p>
+        <small>{_escape(item.get('action_implication', ''))}</small>
       </article>
 """
-        profile_note = (
-            f"决策频率：{profile.get('decision_frequency') or '未记录'}；"
-            f"目标：{profile.get('objective') or '未记录'}；"
-            f"持仓状态：{profile.get('holding_status') or '未知'}。"
+            for item in _as_list(final.get("time_horizon_views"))[:3]
+            if isinstance(item, dict)
         )
-        action_note = "；".join(
-            " ".join(
-                part
-                for part in [
-                    _display_label(item.get("bucket")),
-                    str(item.get("action") or item.get("rationale") or ""),
-                ]
-                if part
-            )
+        horizon_block = (
+            f'<h3 class="reader-sub">不同时间尺度分别怎么看</h3><div class="trigger-grid">{horizon_rows}</div>'
+            if horizon_rows
+            else ""
+        )
+
+        state_tone = {
+            "largely_reflected": "good",
+            "partially_reflected": "watch",
+            "not_reflected": "risk",
+            "unclear": "watch",
+        }
+        price_rows = "".join(
+            f"""
+      <li>
+        <span class="pill {state_tone.get(str(item.get('reflected_state')), 'watch')}">{_escape(_display_label(item.get('reflected_state', 'unclear')))}</span>
+        <div>
+          <b>{_escape(_display_label(item.get('category') or item.get('target', 'price')))}</b>
+          <p>{_escape(_sentence(item.get('rationale', ''), 110))}</p>
+        </div>
+      </li>
+"""
+            for item in _as_list(final.get("price_reflection_map"))[:6]
+            if isinstance(item, dict)
+        )
+        payoff = final.get("payoff_assessment") or ""
+        waiting_cost = final.get("confirmation_cost") or ""
+        odds_block = ""
+        if price_rows or payoff or waiting_cost:
+            odds_block = f"""
+  <div class="reader-odds-grid">
+    <article>
+      <h3>价格已经计入了什么</h3>
+      <ul class="price-map">{price_rows or '<li><p>暂无结构化价格反映地图。</p></li>'}</ul>
+    </article>
+    <article>
+      <h3>赔率与等待的代价</h3>
+      <p>{_escape(payoff or '暂无结构化赔率判断。')}</p>
+      <p><b>等待确认的成本：</b>{_escape(waiting_cost or '未记录')}</p>
+    </article>
+  </div>
+"""
+
+        entries = [item for item in _as_list(checklist.get("entries")) if isinstance(item, dict)][:8]
+        status_label = {"met": "已满足", "not_met": "未满足", "insufficient_evidence": "证据不足"}
+        status_tone = {"met": "good", "not_met": "risk", "insufficient_evidence": "watch"}
+        # 上游 checklist 往往把同一批 refs / 反证整包写进每一条；共享部分只展示一次。
+        ref_lists = [[_canonical_ref(ref) for ref in _as_list(item.get("evidence_refs"))] for item in entries]
+        shared_refs: List[str] = []
+        if len(entries) > 1 and ref_lists and all(refs == ref_lists[0] for refs in ref_lists) and ref_lists[0]:
+            shared_refs = ref_lists[0]
+        falsifier_counts: Dict[str, int] = {}
+        for item in entries:
+            for value in {str(v) for v in _as_list(item.get("falsification_conditions"))}:
+                falsifier_counts[value] = falsifier_counts.get(value, 0) + 1
+        shared_threshold = max(2, (len(entries) + 1) // 2)
+        shared_falsifiers = [text for text, count in falsifier_counts.items() if count >= shared_threshold] if len(entries) > 1 else []
+        item_rows = ""
+        for index, item in enumerate(entries):
+            status = str(item.get("current_status") or "")
+            own_falsifiers = [
+                str(value) for value in _as_list(item.get("falsification_conditions"))
+                if str(value) not in shared_falsifiers
+            ][:2]
+            own_refs = "" if shared_refs else self._ref_chips(ref_lists[index][:4])
+            detail_bits = ""
+            if own_falsifiers:
+                detail_bits += f"<small><b>反证/失效：</b>{_escape('；'.join(_sentence(v, 88) for v in own_falsifiers))}</small>"
+            if own_refs:
+                detail_bits += f'<div class="ref-row">{own_refs}</div>'
+            item_rows += f"""
+      <li class="pit-item">
+        <span class="pill {status_tone.get(status, 'watch')}">{_escape(status_label.get(status, status or '未记录'))}</span>
+        <div>
+          <p>{_escape(_sentence(item.get('condition'), 140))}</p>
+          {detail_bits}
+        </div>
+      </li>
+"""
+        shared_block = ""
+        if item_rows and (shared_refs or shared_falsifiers):
+            shared_falsifier_rows = "".join(f"<li>{_escape(_sentence(text, 110))}</li>" for text in shared_falsifiers[:6])
+            shared_block = f"""
+    <details class="canon-box pit-shared">
+      <summary>这批条件共用的证据与反证（上游按批次记录，未细分到单条）</summary>
+      <div class="ref-row">{self._ref_chips(shared_refs[:10])}</div>
+      <ul>{shared_falsifier_rows or '<li>无共用反证。</li>'}</ul>
+    </details>
+"""
+        checklist_block = (
+            f'<h3 class="reader-sub">距离买入/卖出纪律还差什么</h3><ul class="pit-list">{item_rows}</ul>{shared_block}'
+            if item_rows
+            else "<p>暂无黄金坑清单条目。</p>"
+        )
+
+        action_rows = "".join(
+            f"<li><b>{_escape(_display_label(item.get('bucket', 'position')))}</b><span>{_escape(_sentence(item.get('action') or item.get('rationale') or '', 90))}</span></li>"
             for item in _as_list(final.get("portfolio_actions"))[:3]
             if isinstance(item, dict) and (item.get("action") or item.get("rationale"))
         )
-        if action_note:
-            profile_note = f"{profile_note} Final 条件式动作翻译：{action_note}。"
+        profile_rows = "".join(
+            f"<li><b>{_escape(label)}</b><span>{_escape(_display_label(value))}</span></li>"
+            for label, value in [
+                ("持仓状态", profile.get("holding_status")),
+                ("目标", profile.get("objective")),
+                ("决策频率", profile.get("decision_frequency")),
+            ]
+            if value
+        )
         return f"""
 <section class="panel decision-panel" id="decision">
   <div class="section-kicker">01 · 读者出口</div>
   <h2>30 秒先看三件事</h2>
-  <p class="section-note">这里不是每日交易提示。它把最终 claim 台账翻译成：当前状态是什么、距离你的买入/卖出纪律还差哪几项证据。跨 run 变化对比暂缓启用。</p>
+  <p class="section-note">这里不是每日交易提示。它把最终 claim 台账翻译成：当前状态是什么、距离你的买入/卖出纪律还差哪几项证据。</p>
   <div class="governance-grid">
     <article>
       <h3>市场判断</h3>
@@ -1833,15 +1942,13 @@ class VNextReportGenerator:
     </article>
     <article>
       <h3>个人决策翻译</h3>
-      <p>{_escape(profile_note)}</p>
+      <ul class="profile-list">{profile_rows or '<li><span>个人决策档案未记录。</span></li>'}{action_rows}</ul>
       <small>个人档案只在读者出口使用，不进入上游分析 prompt。</small>
     </article>
   </div>
+  {horizon_block}
+  {odds_block}
   <section class="memo-readout">
-    <div>
-      <b>当前状态</b>
-      <p>{_escape(_sentence(state, 120))}</p>
-    </div>
     <div>
       <b>跨 run 对比</b>
       <ul>{change_rows}</ul>
@@ -1855,7 +1962,7 @@ class VNextReportGenerator:
       <p>30 秒裁决 -> 5 分钟简报 -> 深度研究 -> 审计重放。</p>
     </div>
   </section>
-  <div class="chain-grid">{item_rows or '<p>暂无黄金坑清单条目。</p>'}</div>
+  {checklist_block}
 </section>
 """
 
@@ -2227,8 +2334,6 @@ class VNextReportGenerator:
             return (f"成交量 {_compact_value(last, 1)}", False)
         if function_id == "get_price_volume_quality_qqq":
             return (f"CMF {_compact_value(last, 2)}", True)
-        if function_id == "get_equity_risk_premium":
-            return (f"ERP {_compact_value(last, 2, '%')}", True)
         return (None, True)
 
     def _indicator_micro_chart(self, artifacts: Dict[str, Any], indicator: Any) -> str:
@@ -2348,9 +2453,7 @@ class VNextReportGenerator:
         invalidations = _as_list(final.get("invalidation_conditions"))
         primary_break = invalidations[0] if invalidations else "等待新的反证条件。"
         invalidation_rows = "".join(f"<li>{_escape(_sentence(item, 88))}</li>" for item in invalidations[:3]) or "<li>暂无结构化失效条件。</li>"
-        readout_state = _sentence(final.get("state_diagnosis") or reader.get("one_liner") or final.get("final_stance"), 110)
         readout_priced = _sentence(final.get("priced_narrative", ""), 96)
-        readout_payoff = _sentence(final.get("payoff_assessment", ""), 96)
         reasons = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(reader.get("three_reasons"))[:3])
         support_chains = "".join(
             f"""
@@ -2389,7 +2492,6 @@ class VNextReportGenerator:
             value_suffix="%",
             change_kind="bps",
             percentile_tone="good",
-            extra=[("信用总量", "极宽", "good")],
         )
         quality_stats = self._formal_value_stats(
             artifacts,
@@ -2401,7 +2503,6 @@ class VNextReportGenerator:
             value_suffix="%",
             change_kind="bps",
             percentile_tone="risk",
-            extra=[("内部分化", "极高", "risk")],
         )
         ratio_stats = self._formal_value_stats(
             artifacts,
@@ -2456,7 +2557,7 @@ class VNextReportGenerator:
             layer="L1 宏观约束",
             chart_key="US10Y_REAL",
             field="value",
-            takeaway="真实折现率仍是估值压力主轴。只要它维持高位，NDX 的上涨更依赖盈利和流动性支撑。",
+            takeaway="真实折现率决定估值容错率：它越高，NDX 的上涨越依赖盈利兑现和流动性支撑。",
             stats=rate_stats,
             refs=["L1.get_10y_real_rate", "L1.get_10y_treasury"],
             tone="macro",
@@ -2469,7 +2570,7 @@ class VNextReportGenerator:
                 layer="L2 信用总量",
                 chart_key="HY_OAS",
                 field="value",
-                takeaway="整体信用利差很低，说明市场仍愿意承担风险，这是 risk-on 的重要确认。",
+                takeaway="总量利差回答市场是否仍愿意为风险买单；它必须和质量利差放在一起读。",
                 stats=hy_stats,
                 refs=["L2.get_hy_oas_bp"],
                 tone="credit",
@@ -2481,7 +2582,7 @@ class VNextReportGenerator:
                 layer="L2 信用分层",
                 chart_key="HY_QUALITY_SPREAD",
                 field="value",
-                takeaway="低质信用没有同步乐观，说明宽松风险偏好下仍有一条质量分化暗线。",
+                takeaway="质量利差回答低质信用是否同步乐观；它与总量利差分化时，提示风险偏好并非无差别。",
                 stats=quality_stats,
                 refs=["L2.get_hy_quality_spread_bp"],
                 tone="risk",
@@ -2509,12 +2610,84 @@ class VNextReportGenerator:
             field="value",
             takeaway="估值赔率要同时看利润收益、利率和风险溢价。若 ERP 偏薄且实际利率高，价格上涨对盈利兑现的依赖会更强。",
             stats=erp_stats,
-            refs=["L4.get_equity_risk_premium", "L4.get_ndx_pe_and_earnings_yield", "L1.get_10y_real_rate"],
+            refs=["L4.get_damodaran_us_implied_erp", "L4.get_ndx_pe_and_earnings_yield", "L1.get_10y_real_rate"],
             tone="macro",
             spark_annotation="ERP 月度路径",
             show_guide=False,
         )
         proof_card_count = sum(1 for card in [cards_top, cards_rates, cards_structure, cards_valuation, *credit_cards] if card)
+
+        principal = final.get("principal_contradiction") if isinstance(final.get("principal_contradiction"), dict) else {}
+        layers = artifacts.get("layers", {}) or {}
+
+        def layer_reading(layer_id: str, fallback: str) -> str:
+            card = layers.get(layer_id, {}) if isinstance(layers.get(layer_id), dict) else {}
+            text = card.get("layer_synthesis") or card.get("local_conclusion") or ""
+            fragments = _split_sentences(text, max_items=2, item_limit=110)
+            return "".join(fragments) or fallback
+
+        constraint_copy = principal.get("summary") or ""
+        if principal.get("dominant_side"):
+            constraint_copy = f"{constraint_copy} 当前占上风的一面：{principal.get('dominant_side')}".strip()
+        constraint_copy = constraint_copy or "本组图回答折现率约束有多硬：分位和阈值距离都来自正式数据，不靠感觉。"
+        credit_copy = layer_reading("L2", "信用与波动数据回答风险偏好是否确认当前判断。")
+        structure_copy = layer_reading("L3", "内部结构数据回答指数强弱是否有足够多的成分股参与。")
+
+        flow_groups: List[Tuple[str, str, str, str]] = [
+            (
+                "市场状态",
+                "先判断市场状态",
+                f"""<p class="lede">{_escape(final.get('final_stance'))}</p>
+      <ul class="clean">{reasons or '<li>暂无结构化三条理由。</li>'}</ul>""",
+                f'<div class="grid-2">{cards_top}{cards_valuation}</div>' if (cards_top or cards_valuation) else "",
+            ),
+            (
+                "硬约束",
+                "再看最硬的约束",
+                f"""<p>{_escape(_sentence(constraint_copy, 160))}</p>
+      <p class="small">这类图旁边必须放正式分位和阈值距离，因为它要回答的是“压力有多硬”，不是“线往哪走”。</p>""",
+                cards_rates,
+            ),
+            (
+                "信用信号",
+                "信用是确认还是警告",
+                f"""<p>{_escape(_sentence(credit_copy, 160))}</p>
+      <p class="small">总量利差和质量利差要一起读：任何一张图单独出现都可能误导。</p>""",
+                f'<div class="grid-2">{cards_credit}</div>' if cards_credit else "",
+            ),
+            (
+                "市场宽度",
+                "指数强弱有多少成分股在支撑",
+                f"<p>{_escape(_sentence(structure_copy, 160))}</p>",
+                cards_structure,
+            ),
+        ]
+        flow_sections = ""
+        missing_groups: List[str] = []
+        shown_index = 0
+        group_titles = {"硬约束": "10Y 实际利率", "信用信号": "信用利差（HY OAS / CCC-BB）", "市场宽度": "NDX/NDXE 与集中度"}
+        for kicker_name, heading, copy_html, cards_html in flow_groups:
+            if not cards_html:
+                if kicker_name in {"硬约束", "信用信号", "市场宽度"}:
+                    missing_groups.append(group_titles.get(kicker_name, kicker_name))
+                continue
+            shown_index += 1
+            pair_class = " memo-pair" if "grid-2" in cards_html else ""
+            flow_sections += f"""
+  <section class="memo-flow{pair_class}">
+    <div class="memo-copy">
+      <p class="kicker">{shown_index:02d} · {_escape(kicker_name)}</p>
+      <h3>{_escape(heading)}</h3>
+      {copy_html}
+    </div>
+    {cards_html}
+  </section>
+"""
+        if missing_groups:
+            gap_note = f"本轮缺图：{'；'.join(missing_groups)}。相关判断只能依据现有证据，缺口已写入数据边界，不用旧叙事补位。"
+        else:
+            gap_note = "本轮核心图组齐全。"
+
         return f"""
 <section class="panel memo-chartbook" id="five-minute-brief">
   <div class="section-kicker">02 · 主判断与 5 分钟核心图册</div>
@@ -2523,61 +2696,22 @@ class VNextReportGenerator:
   <section class="memo-readout">
     <div>
       <b>本页读法</b>
-      <p>{_escape(readout_state)}</p>
+      <p>先看市场状态，再依次看约束、信用与宽度；图旁的分位与阈值全部来自正式数据。</p>
     </div>
     <div>
       <b>价格定价</b>
       <p>{_escape(readout_priced)}</p>
     </div>
     <div>
-      <b>赔率判断</b>
-      <p>{_escape(readout_payoff)}</p>
+      <b>数据缺口</b>
+      <p>{_escape(gap_note)}</p>
     </div>
     <div>
       <b>优先复核</b>
       <ul>{invalidation_rows}</ul>
     </div>
   </section>
-
-  <section class="memo-flow memo-pair">
-    <div class="memo-copy">
-      <p class="kicker">01 · 市场状态</p>
-      <h3>先判断市场状态</h3>
-      <p class="lede">{_escape(final.get('final_stance'))}</p>
-      <ul class="clean">{reasons or '<li>暂无结构化三条理由。</li>'}</ul>
-    </div>
-    <div class="grid-2">{cards_top}{cards_valuation}</div>
-  </section>
-
-  <section class="memo-flow">
-    <div class="memo-copy">
-      <p class="kicker">02 · 硬约束</p>
-      <h3>再看最硬的约束</h3>
-      <p>本轮报告的核心矛盾不是单纯“涨多了”，而是高实际利率与价格趋势同时存在。价格能继续走强，但估值容错率被利率压住。</p>
-      <p class="small">这类图旁边必须放正式分位和阈值距离，因为它要回答的是“压力有多硬”，不是“线往哪走”。</p>
-    </div>
-    {cards_rates}
-  </section>
-
-  <section class="memo-flow memo-pair">
-    <div class="memo-copy">
-      <p class="kicker">03 · 信用信号</p>
-      <h3>信用给出确认，也给出警告</h3>
-      <p>总量信用利差极低，确认风险偏好仍然宽；但质量利差维持高位，说明资金并没有无差别追逐低质资产。</p>
-      <p class="small">这里保留两张图，是因为“总量宽松”和“内部分化”同时成立，任何一张图单独出现都会误导。</p>
-    </div>
-    <div class="grid-2">{cards_credit}</div>
-  </section>
-
-  <section class="memo-flow">
-    <div class="memo-copy">
-      <p class="kicker">04 · 市场宽度</p>
-      <h3>结构改善，但不能把风险抹平</h3>
-      <p>等权补涨是好消息，它降低了“只有少数巨头上涨”的脆弱性；但集中度仍在高位，组合仍然暴露于头部权重和盈利兑现风险。</p>
-    </div>
-    {cards_structure}
-  </section>
-
+{flow_sections}
   <section class="memo-support-chain">
     <h3>主论点证据链</h3>
     <p class="section-note">这里保留主论点和 evidence refs 的连接。正文先顺读，审计入口再展开。</p>
@@ -2586,7 +2720,7 @@ class VNextReportGenerator:
 </section>
 """
 
-    def _event_mechanism_report_section(self, mechanism: Dict[str, Any]) -> str:
+    def _event_mechanism_report_section(self, mechanism: Dict[str, Any], artifacts: Optional[Dict[str, Any]] = None) -> str:
         if not isinstance(mechanism, dict) or not mechanism:
             return ""
         headline = mechanism.get("headline_judgment", {}) if isinstance(mechanism.get("headline_judgment"), dict) else {}
@@ -2596,6 +2730,8 @@ class VNextReportGenerator:
             for card in _as_list(mechanism.get("news_cards"))
             if isinstance(card, dict)
         }
+        # 每条新闻都带的通用限制只在区块开头说一次，卡片里只保留这条新闻特有的缺口。
+        boilerplate_gaps = {"媒体解释不能当官方事实", "媒体解释不能当官方事实。"}
         mainline_rows = ""
         for line in _as_list(mechanism.get("mainlines"))[:4]:
             if not isinstance(line, dict):
@@ -2605,23 +2741,34 @@ class VNextReportGenerator:
                 card = cards.get(str(card_id))
                 if not card:
                     continue
-                missing = "；".join(str(item) for item in _as_list(card.get("missing_evidence"))[:3])
+                gaps = [str(item) for item in _as_list(card.get("missing_evidence")) if str(item) not in boilerplate_gaps]
+                gap_chips = "".join(f'<span class="pill watch">{_escape(gap)}</span>' for gap in gaps[:3])
+                confirmations = "；".join(str(item) for item in _as_list(card.get("needs_data_confirmation"))[:3])
+                detail = ""
+                if card.get("ai_analysis") or confirmations:
+                    detail = f"""
+          <details>
+            <summary>展开 AI 分析与待确认项</summary>
+            <p>{_escape(card.get('ai_analysis') or '')}</p>
+            <p><b>还要确认：</b>{_escape(confirmations or '暂无')}</p>
+          </details>
+"""
                 news_rows += f"""
-        <article class="chain-card chain-card--plain">
-          <h3>{_escape(card.get('title') or '未命名新闻')}</h3>
+        <li class="news-item">
+          <div class="news-item-head">
+            <b>{_escape(card.get('title') or '未命名新闻')}</b>
+            {gap_chips}
+          </div>
           <p>{_escape(card.get('one_line_summary') or '')}</p>
-          <p><b>AI 分析：</b>{_escape(card.get('ai_analysis') or '')}</p>
-          <p><b>还要确认：</b>{_escape('；'.join(str(item) for item in _as_list(card.get('needs_data_confirmation'))[:3]) or '暂无')}</p>
-          <p><b>证据缺口：</b>{_escape(missing or '未记录')}</p>
-        </article>
+          {detail}
+        </li>
 """
             mainline_rows += f"""
-    <article class="chain-card chain-card--plain">
+    <article class="chain-card chain-card--plain mainline-card">
       <h3>{_escape(line.get('title') or '新闻主线')}</h3>
       <p>{_escape(line.get('plain_summary') or '')}</p>
-      <p><b>可以说：</b>{_escape(line.get('can_say') or '')}</p>
-      <p><b>不能说：</b>{_escape(line.get('cannot_say') or '')}</p>
-      <div class="chain-grid">{news_rows or '<p>暂无相关新闻。</p>'}</div>
+      <p class="news-say"><b>可以说：</b>{_escape(line.get('can_say') or '')}<br><b>不能说：</b>{_escape(line.get('cannot_say') or '')}</p>
+      <ul class="news-list">{news_rows or '<li class="news-item"><p>暂无相关新闻。</p></li>'}</ul>
     </article>
 """
         question_rows = "".join(
@@ -2629,20 +2776,42 @@ class VNextReportGenerator:
             for item in _as_list(mechanism.get("cross_layer_questions"))[:6]
             if isinstance(item, dict)
         )
-        watchlist = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(delivery.get("watchlist"))[:8]) or "<li>暂无明确追踪项。</li>"
+        watch_items: List[str] = []
+        for item in _as_list(delivery.get("watchlist")):
+            text = str(item).strip()
+            if text and text not in watch_items:
+                watch_items.append(text)
+        watchlist = "".join(f"<li>{_escape(item)}</li>" for item in watch_items[:6]) or "<li>暂无明确追踪项。</li>"
+        integrated_note = ""
+        integrated = (artifacts or {}).get("integrated_synthesis_report", {})
+        if isinstance(integrated, dict) and integrated:
+            judgments = [item for item in _as_list(integrated.get("integrated_judgments")) if isinstance(item, dict)]
+            gate = integrated.get("publish_gate", {}) if isinstance(integrated.get("publish_gate"), dict) else {}
+            matrix = _as_list(integrated.get("conflict_matrix"))
+            unresolved = sum(1 for item in matrix if isinstance(item, dict) and str(item.get("status")) == "unresolved")
+            if judgments or gate:
+                claim_text = _sentence(judgments[0].get("claim"), 150) if judgments else ""
+                matrix_note = f"事件与数据的交叉质询中 {unresolved}/{len(matrix)} 条仍待数据确认。" if matrix else ""
+                integrated_note = f"""
+    <div>
+      <b>第三层综合裁决</b>
+      <p>{_escape(claim_text or '综合裁决未生成。')} {_escape(matrix_note)}</p>
+    </div>
+"""
         return f"""
 <section class="panel" id="event-layer-summary">
-  <div class="section-kicker">04 · 新闻事件研报</div>
+  <div class="section-kicker">05 · 新闻事件研报</div>
   <h2>{_escape(headline.get('title') or '新闻事件初步判断')}</h2>
-  <p class="section-note">{_escape(headline.get('plain_text') or '新闻事件材料不足，综合研报应以纯数据判断为主。')}</p>
+  <p class="section-note">{_escape(headline.get('plain_text') or '新闻事件材料不足，综合研报应以纯数据判断为主。')} 所有媒体解释都不当官方事实；缺 URL、未读全文、只有标题的材料必须降级阅读。</p>
   <section class="memo-readout">
     <div>
       <b>给综合研报的一句话</b>
       <p>{_escape(delivery.get('one_sentence') or '新闻事件只能作为解释线索，不能作为主证据。')}</p>
     </div>
+{integrated_note}
     <div>
       <b>读法</b>
-      <p>先看新闻提出什么解释，再看数据是否回答；缺 URL、未读全文、只有标题的材料必须降级。</p>
+      <p>先看新闻提出什么解释，再看数据是否回答；每条主线先给边界（可以说/不能说），再列材料。</p>
     </div>
   </section>
   <div class="chain-grid">{mainline_rows or '<p>暂无新闻事件主线。</p>'}</div>
@@ -2662,7 +2831,7 @@ class VNextReportGenerator:
         if not isinstance(mechanism, dict) or not mechanism:
             integrated = artifacts.get("integrated_synthesis_report", {})
             mechanism = integrated.get("event_mechanism_report", {}) if isinstance(integrated, dict) else {}
-        rendered = self._event_mechanism_report_section(mechanism)
+        rendered = self._event_mechanism_report_section(mechanism, artifacts)
         if rendered:
             return rendered
 
@@ -2710,7 +2879,7 @@ class VNextReportGenerator:
 
         return f"""
 <section class="panel" id="event-layer-summary">
-  <div class="section-kicker">04 · 事件与叙事层</div>
+  <div class="section-kicker">05 · 事件与叙事层</div>
   <h2>事件只做解释线索，不做主证据</h2>
   <p class="section-note">{_escape(forbidden)} 下面这些事件只能提示哪些金融链路需要复核，不能替代正式数据，也不能证明新闻导致价格变化。</p>
   <section class="memo-readout">
@@ -2876,18 +3045,24 @@ class VNextReportGenerator:
         wind_risk_premium = _safe_number(_first_present(wind_value, "RiskPremium", "risk_premium"))
         forward_pe = _safe_number(value.get("ForwardPE"))
         fcf_yield = _safe_number(_first_present(value, "FCFYield", "FCF_Yield"))
-        sources = [source for source in _as_list(value.get("ThirdPartyChecks")) if isinstance(source, dict)]
+        sources = [
+            source for source in _as_list(value.get("ThirdPartyChecks"))
+            if isinstance(source, dict)
+            and str(source.get("availability") or "").lower() == "available"
+            and str(source.get("usage") or "validation_only").lower() in {"validation_only", "core_allowed"}
+        ]
         percentile = _safe_number(_first_present(wind_value, "PEHistoricalPercentile", "pe_historical_percentile"))
         percentile_window = _first_present(wind_value, "PEHistoricalPercentileWindow", "pe_historical_percentile_window") or "historical"
         if percentile is None:
             percentile = _safe_number(_first_present(value, "PE_TTM_percentile_10y", "PE_TTM_percentile_5y"))
             percentile_window = "fallback"
-        for source in sources:
-            source_percentile = _safe_number(source.get("historical_percentile", source.get("percentile_10y")))
-            if source_percentile is not None:
-                percentile = source_percentile
-                percentile_window = "third-party"
-                break
+        if percentile is None:
+            for source in sources:
+                source_percentile = _safe_number(source.get("historical_percentile", source.get("percentile_10y")))
+                if source_percentile is not None:
+                    percentile = source_percentile
+                    percentile_window = "third-party"
+                    break
         ticks = []
         if percentile is not None:
             ticks.append(
@@ -2899,9 +3074,9 @@ class VNextReportGenerator:
                 f"""
 <li>
   <b>Wind</b>
-  <span>NDX PE/PB/PS + Risk Premium</span>
+  <span>NDX PE/PB/PS + Wind NDX RP（Wind口径）</span>
   <strong>{_fmt_number(pe, digits=2)}x</strong>
-  <small>PE percentile {_escape(str(percentile_window))} {_fmt_number(percentile, suffix='%', digits=1)} · RP {_fmt_number(wind_risk_premium, suffix='%', digits=2)}</small>
+  <small>PE percentile {_escape(str(percentile_window))} {_fmt_number(percentile, suffix='%', digits=1)} · RP {_fmt_number(wind_risk_premium, digits=2)}</small>
 </li>
 """
             )
@@ -2933,7 +3108,7 @@ class VNextReportGenerator:
     <span><b>Forward PE</b>{_fmt_number(forward_pe, digits=2)}x</span>
     <span><b>PB</b>{_fmt_number(pb, digits=2)}x</span>
     <span><b>PS</b>{_fmt_number(ps, digits=2)}x</span>
-    <span><b>Wind RP</b>{_fmt_number(wind_risk_premium, suffix="%", digits=2)}</span>
+    <span><b>Wind NDX RP（Wind口径）</b>{_fmt_number(wind_risk_premium, digits=2)}</span>
     <span><b>FCF Yield</b>{_fmt_number(fcf_yield, suffix="%", digits=2)}</span>
   </div>
   <ul class="chart-source-list">{''.join(source_rows) or '<li>无外部估值源。</li>'}</ul>
@@ -2962,7 +3137,7 @@ class VNextReportGenerator:
         rows = [
             ("10Y Treasury", nominal_pct, _fmt_number(nominal_reading, suffix="%", digits=2), "L1.get_10y_treasury"),
             ("10Y Real Rate", real_pct, _fmt_number(real_reading, suffix="%", digits=2), "L1.get_10y_real_rate"),
-            ("Wind NDX Risk Premium", wind_rp_pressure, _fmt_number(wind_risk_premium, suffix="%", digits=2), "L4.get_ndx_wind_valuation_snapshot"),
+            ("Wind NDX RP（Wind口径）", wind_rp_pressure, _fmt_number(wind_risk_premium, digits=2), "L4.get_ndx_wind_valuation_snapshot"),
             ("Simple Yield Gap", gap_pressure, _fmt_number(gap, suffix="%", digits=2), "L4.get_equity_risk_premium"),
             ("NDX PE", pe_pressure, _fmt_number(pe, suffix="x", digits=2), "L4.get_ndx_pe_and_earnings_yield"),
         ]
@@ -3037,9 +3212,117 @@ class VNextReportGenerator:
 </section>
 """
 
+    def _hypothesis_competition_block(self, artifacts: Dict[str, Any]) -> str:
+        competition = artifacts.get("hypothesis_competition", {}) if isinstance(artifacts.get("hypothesis_competition"), dict) else {}
+        counter = artifacts.get("counter_thesis", {}) if isinstance(artifacts.get("counter_thesis"), dict) else {}
+        hypotheses = [item for item in _as_list(competition.get("hypotheses")) if isinstance(item, dict)]
+        principal_counter = str(counter.get("principal_counterargument") or "")
+        if not hypotheses and not principal_counter:
+            return ""
+        leading_id = str(competition.get("leading_hypothesis_id") or "")
+        status_tone = {"leading": "good", "candidate": "watch", "retained": "watch", "rejected": "risk", "downgraded": "risk"}
+        cards = ""
+        for item in hypotheses[:4]:
+            status = str(item.get("status") or "")
+            is_leading = str(item.get("hypothesis_id")) == leading_id or status == "leading"
+            cannot = "；".join(_sentence(v, 90) for v in _as_list(item.get("cannot_explain"))[:2])
+            reason = _sentence(item.get("adjudication_reason"), 90)
+            cards += f"""
+    <article class="chain-card chain-card--plain hypothesis-card{' hypothesis-card--leading' if is_leading else ''}">
+      <div class="conflict-head">
+        <span>{_escape('主线解释' if is_leading else '挑战解释')}</span>
+        <b class="pill {status_tone.get(status, 'watch')}">{_escape(_display_label(status or 'candidate'))} · 可信度{_escape(_label(item.get('confidence', 'medium'), 'confidence'))}</b>
+      </div>
+      <p>{_escape(_sentence(item.get('hypothesis_text'), 220))}</p>
+      <small><b>它解释不了：</b>{_escape(cannot or '未记录')}</small>
+      {f'<small><b>裁决理由：</b>{_escape(reason)}</small>' if reason else ''}
+    </article>
+"""
+        counter_block = ""
+        if principal_counter:
+            cannot_rows = "".join(
+                f"<li>{_escape(_sentence(item, 110))}</li>" for item in _as_list(counter.get("cannot_establish"))[:4]
+            )
+            counter_block = f"""
+    <article class="chain-card chain-card--plain hypothesis-card hypothesis-card--counter">
+      <div class="conflict-head">
+        <span>反方最强论证（独立生成，未读主线）</span>
+      </div>
+      <p>{_escape(principal_counter)}</p>
+      <details>
+        <summary>反方自己也承认无法确立的点</summary>
+        <ul>{cannot_rows or '<li>未记录</li>'}</ul>
+      </details>
+    </article>
+"""
+        disputes = "".join(
+            f"<li>{_escape(_sentence(item, 110))}</li>" for item in _as_list(competition.get("retained_disputes"))[:4]
+        )
+        disputes_block = f"""
+    <div class="audit-boundaries">
+      <h4>还没吵完的争议</h4>
+      <ul>{disputes}</ul>
+    </div>
+""" if disputes else ""
+        return f"""
+  <section class="hypothesis-competition">
+    <h3>谁在竞争解释权</h3>
+    <p class="section-note">同一批证据允许几种解释同时成立。这里保留竞争中的假说、各自解释不了的部分和裁决理由；主线领先不代表反方出局。</p>
+    <div class="chain-grid">{cards}{counter_block}</div>
+    {disputes_block}
+  </section>
+"""
+
     def _conflicts_section(self, artifacts: Dict[str, Any], section_kicker: str = "05 · 冲突地图") -> str:
         bridge_cards = []
+        seen_fingerprints: Dict[str, str] = {}
         for bridge in artifacts["bridges"]:
+            typed_raw = bridge.get("typed_conflicts")
+            fingerprint = json.dumps(
+                {
+                    "typed": typed_raw,
+                    "resonance": bridge.get("resonance_chains"),
+                    "paths": bridge.get("transmission_paths"),
+                    "conflicts": bridge.get("conflicts"),
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+                default=str,
+            )
+            bridge_name = _display_label(bridge.get("bridge_type", "Bridge"))
+            if fingerprint in seen_fingerprints:
+                claims = "".join(
+                    f"""
+<div class="claim">
+  <strong>{_escape(claim.get('claim', ''))}</strong>
+  <p>{_escape(claim.get('mechanism', ''))}</p>
+  <div class="ref-row">{self._ref_chips(claim.get('supporting_facts', []))}</div>
+</div>
+"""
+                    for claim in _as_list(bridge.get("cross_layer_claims"))
+                )
+                bridge_cards.append(
+                    f"""
+<div class="bridge-card bridge-card--followup">
+  <h3>{_escape(bridge_name)}</h3>
+  <p>{_escape(bridge.get('implication_for_ndx', ''))}</p>
+  <p class="small">本轮复核后的冲突、共振与传导与「{_escape(seen_fingerprints[fingerprint])}」完全一致，不重复展示；这本身是结论：调查没有建立新证据，原有张力全部保留。</p>
+  {claims}
+</div>
+"""
+                )
+                continue
+            seen_fingerprints[fingerprint] = bridge_name
+            typed_ids = {
+                str(conflict.get("conflict_id") or conflict.get("conflict_type"))
+                for conflict in _as_list(typed_raw)
+                if isinstance(conflict, dict)
+            }
+            legacy_conflicts = [
+                conflict
+                for conflict in _as_list(bridge.get("conflicts"))
+                if isinstance(conflict, dict) and str(conflict.get("conflict_type")) not in typed_ids
+            ]
             claims = "".join(
                 f"""
 <div class="claim">
@@ -3061,15 +3344,16 @@ class VNextReportGenerator:
   <small>{_escape(conflict.get('implication', ''))}</small>
 </article>
 """
-                for conflict in _as_list(bridge.get("conflicts"))
+                for conflict in legacy_conflicts
             )
-            typed_conflicts = self._typed_conflict_cards(bridge.get("typed_conflicts"))
+            typed_conflicts = self._typed_conflict_cards(typed_raw)
             resonance_chains = self._resonance_chain_cards(bridge.get("resonance_chains"))
             transmission_paths = self._transmission_path_cards(bridge.get("transmission_paths"))
+            legacy_column = f"<div><h4>需保留的旧口径冲突</h4>{conflicts}</div>" if conflicts else ""
             bridge_cards.append(
                 f"""
 <div class="bridge-card">
-  <h3>{_escape(_display_label(bridge.get('bridge_type', 'Bridge')))}</h3>
+  <h3>{_escape(bridge_name)}</h3>
   <p>{_escape(bridge.get('implication_for_ndx', ''))}</p>
   <div class="typed-map-grid">
     <section>
@@ -3087,7 +3371,7 @@ class VNextReportGenerator:
   </div>
   <div class="bridge-columns">
     <div><h4>Bridge 形成的判断</h4>{claims or '<p>无</p>'}</div>
-    <div><h4>需保留的旧口径冲突</h4>{conflicts or '<p>无</p>'}</div>
+    {legacy_column}
   </div>
 </div>
 """
@@ -3097,6 +3381,7 @@ class VNextReportGenerator:
   <div class="section-kicker">{_escape(section_kicker)}</div>
   <h2>冲突与共振</h2>
   <p class="section-note">这里不追求顺滑，而是保留真正影响判断的张力：哪些证据在确认结论，哪些证据在提醒结论可能过度。</p>
+  {self._hypothesis_competition_block(artifacts)}
   {''.join(bridge_cards) or '<p>无 Bridge Memo。</p>'}
 </section>
 """
@@ -3105,9 +3390,18 @@ class VNextReportGenerator:
         cards = []
         for conflict in _as_list(conflicts):
             conflict_id = str(conflict.get("conflict_id") or conflict.get("conflict_type") or "typed_conflict")
-            layers = " / ".join(str(layer) for layer in _as_list(conflict.get("involved_layers")))
+            distinct_layers = list(dict.fromkeys(str(layer) for layer in _as_list(conflict.get("involved_layers"))))
+            layers = " / ".join(distinct_layers)
             falsifiers = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(conflict.get("falsifiers")))
             title = _sentence(conflict.get("description") or conflict.get("conflict_type") or "跨层冲突", 48)
+            axis = ""
+            if len(distinct_layers) >= 2:
+                axis = f"""
+  <div class="conflict-axis">
+    <span>{_escape(distinct_layers[0])}</span>
+    <i></i>
+    <span>{_escape(distinct_layers[-1])}</span>
+  </div>"""
             cards.append(
                 f"""
 <article class="typed-map-card conflict-card {_severity_class(conflict.get('severity'))}" data-typed-conflict="{_escape(conflict_id)}">
@@ -3116,11 +3410,7 @@ class VNextReportGenerator:
     <b>{_escape(_label(conflict.get('severity', 'medium'), 'severity'))} · {_escape(_label(conflict.get('confidence', 'medium'), 'confidence'))}</b>
   </div>
   <small>{_escape(layers)}</small>
-  <div class="conflict-axis">
-    <span>{_escape(layers.split(' / ')[0] if layers else '证据 A')}</span>
-    <i></i>
-    <span>{_escape(layers.split(' / ')[-1] if layers else '证据 B')}</span>
-  </div>
+  {axis}
   <p>{_escape(conflict.get('description', ''))}</p>
   <p><b>机制：</b>{_escape(conflict.get('mechanism', ''))}</p>
   <p><b>含义：</b>{_escape(conflict.get('implication', ''))}</p>
@@ -3280,7 +3570,7 @@ class VNextReportGenerator:
         )
         return f"""
 <section class="panel layers-panel brief-layers-panel" id="layers">
-  <div class="section-kicker">04 · L1-L5 底稿</div>
+  <div class="section-kicker">06 · L1-L5 底稿</div>
   <h2>L1-L5 五层底稿</h2>
   <p class="section-note">正文只呈现影响判断的内容。每一层 agent 的原始价值保留在这里：读者可以展开看本层结论、风险旗标、关键指标读数和微图。</p>
   <p class="section-note">可信度不是模型自信程度。它提示本层证据是否够用、数据是否可靠、反证是否足够强；具体原因要回到展开后的底稿。</p>
@@ -3570,15 +3860,17 @@ class VNextReportGenerator:
             )
         return f'<div class="component-stack">{"".join(rows)}</div>'
 
-    def _score_bar(self, label: str, score: Any, subtitle: Any = "") -> str:
+    def _score_bar(self, label: str, score: Any, subtitle: Any = "", display: Optional[str] = None) -> str:
         value = _normalize_percent(score)
         if value is None:
             return ""
+        # display 用于条形位置是归一化值、但读者应看到真实读数的场合（如 CMF、量比）。
+        shown = display if display is not None else _fmt_number(value, digits=1)
         return f"""
 <div class="score-row">
   <span>{_escape(label)}</span>
   <div class="score-track"><i style="width:{value:.2f}%"></i></div>
-  <strong>{_fmt_number(value, digits=1)}</strong>
+  <strong>{_escape(shown)}</strong>
   <small>{_escape(subtitle)}</small>
 </div>
 """
@@ -3702,7 +3994,7 @@ class VNextReportGenerator:
             ("PE", value.get("PE"), "x"),
             ("PB", value.get("PB"), "x"),
             ("PS", value.get("PS"), "x"),
-            ("Risk Premium", value.get("RiskPremium"), "%"),
+            ("Wind NDX RP（Wind口径）", value.get("RiskPremium"), ""),
             (f"PE percentile {pe_window}", value.get("PEHistoricalPercentile"), "%"),
             ("RP percentile", value.get("RiskPremiumHistoricalPercentile"), "%"),
         ]
@@ -3717,7 +4009,7 @@ class VNextReportGenerator:
             rank_html = (
                 f"<p class=\"chart-footnote\">风险溢价历史排序："
                 f"{_escape(str(rank.get('rank', 'N/A')))}/{_escape(str(rank.get('sample_count', 'N/A')))}。"
-                "风险溢价分位越高，通常表示相对历史补偿越厚。</p>"
+                "该字段公式与单位未经核实，仅按 Wind 口径原样展示排序位置，不作补偿厚薄解读。</p>"
             )
         body = f"""
 <div class="metric-strip">{metrics}</div>
@@ -3877,7 +4169,7 @@ class VNextReportGenerator:
             )
             body = f"""
 <div class="metric-strip">{metric_html}</div>
-<p class="chart-footnote">人工/Wind ERP 是外部风险补偿参考，不是 Damodaran 官网月度序列，也不是 NDX 专属估值锚。分位越高通常表示相对历史补偿更厚，不能读成估值风险更高。</p>
+<p class="chart-footnote">人工/Wind ERP 是外部风险补偿参考，不是 Damodaran 官网月度序列，也不是 NDX 专属估值锚。该字段公式与单位未经核实，仅按来源口径原样展示排序位置，不作补偿厚薄解读。</p>
 """
             return self._wrap_indicator_visual(ref, "manual-erp-reference", "Manual/Wind ERP reference", body, details=True, open_by_default=True)
         width, height, pad = 640, 260, 34
@@ -3959,10 +4251,16 @@ class VNextReportGenerator:
         return self._wrap_indicator_visual(ref, "yield-gap-pressure", "Yield gap pressure", body)
 
     def _technical_snapshot_visual(self, ref: str, value: Dict[str, Any]) -> str:
+        volume_ratio = _safe_number(value.get("volume_ma_ratio"))
         rows = [
             self._score_bar("RSI", value.get("rsi_14"), value.get("rsi_status")),
             self._score_bar("Donchian", value.get("donchian_position_pct"), value.get("donchian_signal")),
-            self._score_bar("Volume ratio", (_safe_number(value.get("volume_ma_ratio")) or 0) * 50, value.get("volume_status")),
+            self._score_bar(
+                "Volume ratio",
+                (volume_ratio or 0) * 50,
+                value.get("volume_status"),
+                display=f"{volume_ratio:.2f}x" if volume_ratio is not None else None,
+            ),
         ]
         body = f'<div class="score-list">{"".join(row for row in rows if row)}</div>{self._ma_ladder_body(value)}'
         return self._wrap_indicator_visual(ref, "technical-snapshot", "Technical dashboard", body, details=True, open_by_default=True)
@@ -4050,7 +4348,7 @@ class VNextReportGenerator:
         cmf_score = None if cmf is None else _clamp((cmf + 0.3) / 0.6 * 100, 0, 100)
         rows = [
             self._score_bar("MFI", _normalize_percent(value.get("mfi_14")), value.get("mfi_status")),
-            self._score_bar("CMF", cmf_score, value.get("cmf_status")),
+            self._score_bar("CMF", cmf_score, value.get("cmf_status"), display=_fmt_number(cmf, digits=2)),
         ]
         vwap_width = _clamp(abs(vwap_dev or 0) / 5 * 100, 2, 100)
         vwap_width = min(vwap_width, 50)
@@ -4067,7 +4365,6 @@ class VNextReportGenerator:
         meta = f"""
 <div class="indicator-visual-meta">
   <span><b>Price vs VWAP</b>{_escape(value.get('price_vs_vwap_20', ''))}</span>
-  <span><b>CMF raw</b>{_fmt_number(cmf, digits=2)}</span>
 </div>
 """
         body = f'<div class="score-list">{"".join(row for row in rows if row)}</div>{meta}'
@@ -4607,7 +4904,7 @@ class VNextReportGenerator:
         )
         return f"""
 <section class="panel" id="audit">
-  <div class="section-kicker">05 · 数据与审计</div>
+  <div class="section-kicker">07 · 数据与审计</div>
   <h2>主页面只留索引，完整底稿在外部 artifact</h2>
   <p class="section-note">可审计不等于把所有 JSON 塞进正文。这里保留数据包路径、发布闸门、Agent 原文检查器、L1-L5 输出和图表源入口；大文件仍在 run 目录中。</p>
   <div class="audit-grid">
