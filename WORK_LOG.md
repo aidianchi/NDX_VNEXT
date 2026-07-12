@@ -12,6 +12,9 @@
 - 新指标 `get_m7_capex_cycle`（L4）：SEC XBRL 主路（filed_date 级 PIT）+ yfinance 季度现金流备胎（pit_safe=false、仅限 live、回测禁用）；实跑 M7 2026Q1 合计 $135.5B、YoY +75.52%。**重大发现**：SEC 域名全机不可达（疑地区封锁），既有 `_fetch_sec_xbrl_summary` 官方通道生产中从未成功——代理/VPN 决定待用户（WORK_ORDERS #12）。
 - 新指标 `get_vix_term_structure`（L2）：VIX3M/VIX 比值+contango/backwardation 判定+5y/10y 分位；payload 自带原始序列供第二本账独立重算（新规矩首次落地）；2024-08-05 历史极端倒挂回测验证吻合。fed funds futures 免费源探源完成（ZQ 合约可行但远月流动性薄，CME 不可达，建议缩水版）。
 - 测试推进：530 → 577 全绿；main 分四批推送至 `58125a1` 后续。
+- 全链 E2E 验收（工单#10）通过：run `20260712_221916`，publishable 93.2%、belt 0 偏差、claim 7/8（唯一降级为真命中）、两个新指标全链零越权、Critic 抓住并修正一次真实过度悲观、四份报告正常生成；新 prompt 首次正式姿态经人工审定合格。钓出 coverage-factor 子串误读与 Schema Guard 两处疑似误报（WORK_ORDERS #14/#15）。
+- checker 判决可回放（工单#6，Codex gpt-5.4 施工、Fable 验收）：`checker_input_snapshot.json` + `checker_input_sha256`；边界回归测试补齐；580 全绿。
+- Codex 分流通道打通：`codex exec --sandbox workspace-write -m gpt-5.4`（repo 配置的 gpt-5.6 账号不支持、gpt-5.6-luna 需升级 CLI）；脏活默认走 Codex，Fable 负责规格冻结与 diff 级验收。
 
 ### 校准闭环通电、盈利预期 vintage 档案启动、首次推送 main
 
