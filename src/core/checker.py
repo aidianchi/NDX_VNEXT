@@ -67,10 +67,12 @@ class DataIntegrity:
         if isinstance(value, dict):
             for key, item in value.items():
                 key_l = str(key).lower()
+                if key_l.startswith(("minimum_", "required_", "min_")):
+                    continue
                 if isinstance(item, (int, float)) and not isinstance(item, bool):
-                    if "pct" in key_l or "percent" in key_l:
+                    if key_l == "coverage_pct" or key_l.endswith("_coverage_pct"):
                         yield max(0.0, min(1.0, float(item) / 100.0))
-                    elif key_l in {"coverage", "coverage_ratio"}:
+                    elif key_l in {"coverage", "coverage_ratio"} or key_l.endswith("_coverage_ratio"):
                         yield max(0.0, min(1.0, float(item)))
                 elif isinstance(item, dict):
                     yield from self._coverage_numbers(item)

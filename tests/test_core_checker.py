@@ -283,6 +283,48 @@ def test_data_integrity_penalizes_skips_partial_coverage_and_future_dates():
     assert "前瞻风险被跳过" in report["notes"]
 
 
+def test_coverage_factor_ignores_percentile_fields_and_uses_real_coverage():
+    item = {
+        "function_id": "get_vix_term_structure",
+        "raw_data": {
+            "data_quality": {
+                "coverage": {
+                    "primary_window_5y": {
+                        "percentile_5y": 93.6,
+                        "sample_count": 1254,
+                    },
+                    "constituent_coverage_pct": 98.5,
+                }
+            }
+        },
+    }
+
+    assert DataIntegrity()._coverage_factor(item) == 0.985
+
+
+def test_coverage_factor_ignores_minimum_coverage_threshold():
+    item = {
+        "function_id": "get_percent_above_ma",
+        "raw_data": {
+            "data_quality": {
+                "coverage": {
+                    "minimum_daily_coverage_pct": 80.0,
+                    "latest_daily_coverage_pct": 98.5,
+                }
+            }
+        },
+    }
+
+    assert DataIntegrity()._coverage_factor(item) == 0.985
+
+
+def test_coverage_numbers_preserve_legacy_coverage_and_ratio_fields():
+    integrity = DataIntegrity()
+
+    assert list(integrity._coverage_numbers({"coverage": 0.9})) == [0.9]
+    assert list(integrity._coverage_numbers({"coverage_ratio": 0.85})) == [0.85]
+
+
 def test_data_integrity_recursively_blocks_future_observation_dates_and_note_dates():
     data = {
         "backtest_date": "2025-04-09",
