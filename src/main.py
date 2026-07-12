@@ -401,6 +401,12 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     with open(integrity_path, "w", encoding="utf-8") as handle:
         json.dump(integrity_report, handle, ensure_ascii=False, indent=2, default=str)
         handle.write("\n")
+    recompute_belt_report = integrity_report.get("recompute_belt")
+    if isinstance(recompute_belt_report, dict):
+        recompute_report_path = os.path.join(run_dir, "recompute_report.json")
+        with open(recompute_report_path, "w", encoding="utf-8") as handle:
+            json.dump(recompute_belt_report, handle, ensure_ascii=False, indent=2, default=str)
+            handle.write("\n")
     if integrity_report.get("blocked") or integrity_report.get("unpublishable"):
         event_narrative_ledger_path = ""
         if args.enable_news and news_event_ledger_payload:

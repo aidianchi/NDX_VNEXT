@@ -15,12 +15,22 @@ try:
 except ImportError:
     from data_evidence import data_evidence_issues, flatten_issue_groups
 
+try:
+    from ..recompute_belt import critical_deviation_findings, run as run_recompute_belt
+except ImportError:
+    from recompute_belt import critical_deviation_findings, run as run_recompute_belt
+
 
 class DataIntegrity:
     """Generate a compact reliability report from collector output."""
 
     MIN_PUBLISH_CONFIDENCE_PERCENT = 60.0
     MIN_FORMAL_LAYER_CONFIDENCE_PERCENT = 50.0
+
+    # 独立重算校验带总开关（investigation_reports/20260711_first_principles/WORK_ORDERS.md
+    # 工单#3）。关闭时报告仍会计算并落盘，但不参与 blocking_reasons —— 仅用于应急豁免，
+    # 不建议长期关闭。
+    RECOMPUTE_BELT_ENABLED = True
 
     def _raw_data(self, item: Dict[str, Any]) -> Dict[str, Any]:
         return item.get("raw_data") if isinstance(item.get("raw_data"), dict) else {}
@@ -190,6 +200,15 @@ class DataIntegrity:
         audit_evidence_issues = [
             issue for issue in data_evidence_contract_issues if issue.get("severity") == "audit_warn"
         ]
+        # 校验带自身崩溃不得炸掉发布闸门：记录错误、不拦截（带崩溃是带的 bug，不是数据被污染的证据）。
+        try:
+            recompute_report = run_recompute_belt(data_json) if isinstance(data_json, dict) else {}
+            recompute_critical_deviations = (
+                critical_deviation_findings(recompute_report) if self.RECOMPUTE_BELT_ENABLED else []
+            )
+        except Exception as exc:
+            recompute_report = {"module": "recompute_belt", "status": "error", "error": f"{type(exc).__name__}: {exc}"}
+            recompute_critical_deviations = []
         weighted_success = sum(coverage_factors.values())
         if future_violations:
             weighted_success = max(0.0, weighted_success - len(future_violations))
@@ -262,6 +281,12 @@ class DataIntegrity:
                 for issue in hard_evidence_issues[:5]
             ]
             blocking_reasons.append("data_evidence_contract_hard_block: " + "；".join(examples))
+        if recompute_critical_deviations:
+            examples = [
+                f"{item.get('field')}: pipeline={item.get('pipeline_value')} recomputed={item.get('recomputed_value')}"
+                for item in recompute_critical_deviations[:5]
+            ]
+            blocking_reasons.append("recompute_belt_critical_deviation: " + "；".join(examples))
 
         failed_metrics = [
             item.get("metric_name") or item.get("function_id")
@@ -308,6 +333,14 @@ class DataIntegrity:
                 for issue in hard_evidence_issues[:3]
             ]
             notes.append(f"{len(hard_evidence_issues)} 个数据证据合约硬阻断，示例: {'；'.join(examples)}")
+        if recompute_report.get("deviations"):
+            notes.append(
+                f"独立重算校验带发现 {recompute_report.get('deviations')} 处数值偏差"
+                f"（其中关键字段 {len(recompute_critical_deviations)} 处），"
+                f"覆盖率 {recompute_report.get('coverage_ratio')}。"
+            )
+        if recompute_report.get("status") == "error":
+            notes.append(f"独立重算校验带运行失败（未拦截发布，需修带）：{recompute_report.get('error')}")
         if degraded_evidence_issues:
             examples = [
                 f"{issue.get('function_id')}: {issue.get('code')}"
@@ -395,6 +428,8 @@ class DataIntegrity:
                 "degraded": len(degraded_evidence_issues),
                 "audit_warn": len(audit_evidence_issues),
             },
+            "recompute_belt": recompute_report,
+            "recompute_belt_enabled": self.RECOMPUTE_BELT_ENABLED,
             "layer_breakdown": {
                 layer: {
                     "total": stats["total"],
