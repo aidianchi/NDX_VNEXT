@@ -5686,6 +5686,27 @@ def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:
                 "function_id": "get_damodaran_us_implied_erp",
                 "scope": "US equity market reference, not NDX-specific",
             },
+            "MetricAuthority": {
+                "level": _component_metric_authority(
+                    usage="core_allowed",
+                    authority="derived_simple_yield_gap_official_inputs",
+                    reason=(
+                        "这是简式收益差（earnings yield − 10Y 名义），不是 Damodaran 隐含 ERP，不得冒充后者。"
+                        "由已核验的 NDX 收益率与 10Y 美债名义收益率相减得到，可作为估值-利率张力的诊断性证据，"
+                        "但不建模未来增长、回购或现金流路径。"
+                    ),
+                    source=source_tier,
+                ),
+                "yield_type": _component_metric_authority(
+                    usage="supporting_only",
+                    authority="method_metadata_not_a_value",
+                    reason=(
+                        "标注本次计算所用的收益率口径（FCF/盈利/Wind trailing），是方法元数据，不能单独作为估值结论的证据；"
+                        "请引用 #level 获取实际差距数值。"
+                    ),
+                    source=source_tier,
+                ),
+            },
         },
         "unit": "percent",
         "source_tier": source_tier,

@@ -179,6 +179,35 @@ def test_simple_yield_gap_is_not_labeled_as_implied_erp(monkeypatch):
     assert "Damodaran" in result["value"]["not_implied_erp_warning"]
 
 
+def test_simple_yield_gap_registers_metric_authority_for_level(monkeypatch):
+    monkeypatch.setattr(
+        tools_L4,
+        "get_ndx_pe_and_earnings_yield",
+        lambda end_date=None: {
+            "name": "NDX Valuation",
+            "value": {"EarningsYield": 4.0, "FCFYield": 3.5},
+            "data_quality": {"source_tier": "component_model"},
+        },
+    )
+    monkeypatch.setattr(
+        tools_L4,
+        "get_10y_treasury",
+        lambda end_date=None: {"value": {"level": 4.25}},
+    )
+
+    result = tools_L4.get_equity_risk_premium("2026-04-30")
+
+    metric_authority = result["value"]["MetricAuthority"]
+    level_authority = metric_authority["level"]
+    assert level_authority["usage"] == "core_allowed"
+    assert level_authority["authority"] == "derived_simple_yield_gap_official_inputs"
+    assert "Damodaran" in level_authority["reason"]
+    assert "不得冒充" in level_authority["reason"]
+
+    assert "yield_type" in metric_authority
+    assert metric_authority["yield_type"]["usage"] == "supporting_only"
+
+
 def test_damodaran_reference_parser_extracts_latest_fcfe_premium():
     html = """
     <table>

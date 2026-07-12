@@ -3782,6 +3782,30 @@ class VNextOrchestrator:
                 )
             return None
 
+        def _normalize_conflict_text(text: Any) -> str:
+            return " ".join(str(text or "").split())
+
+        def _high_severity_conflict_candidates(memo: BridgeMemo) -> List[Dict[str, Any]]:
+            source: List[Any] = list(memo.typed_conflicts) if memo.typed_conflicts else list(memo.conflicts)
+            candidates: List[Dict[str, Any]] = []
+            for conflict in source:
+                severity = str(getattr(getattr(conflict, "severity", ""), "value", getattr(conflict, "severity", ""))).lower()
+                if severity != "high":
+                    continue
+                conflict_type = str(getattr(conflict, "conflict_type", "") or "")
+                conflict_id = str(getattr(conflict, "conflict_id", "") or "")
+                ids = {value for value in (conflict_type, conflict_id) if value}
+                label = conflict_id or conflict_type or "unknown_conflict"
+                candidates.append(
+                    {
+                        "ids": ids,
+                        "label": label,
+                        "severity": severity,
+                        "description": str(getattr(conflict, "description", "") or ""),
+                    }
+                )
+            return candidates
+
         if len(layer_cards) != 5:
             structural_issues.append(f"Expected 5 layer cards, got {len(layer_cards)}.")
 
@@ -3908,21 +3932,26 @@ class VNextOrchestrator:
         if not risk_report.must_preserve_risks:
             consistency_issues.append("RiskBoundaryReport.must_preserve_risks is empty.")
 
-        high_conflict_types = {
-            conflict.conflict_type
-            for memo in bridge_memos
-            for conflict in memo.conflicts
-            if str(getattr(conflict.severity, "value", conflict.severity)) == "high"
-        }
-        retained_conflict_types = {
-            conflict.conflict_type
+        retained_conflict_ids = {str(conflict.conflict_type) for conflict in thesis.retained_conflicts}
+        retained_conflict_semantic = {
+            (
+                str(getattr(getattr(conflict, "severity", ""), "value", conflict.severity)).lower(),
+                _normalize_conflict_text(conflict.description),
+            )
             for conflict in thesis.retained_conflicts
         }
-        dropped_high_conflicts = sorted(high_conflict_types - retained_conflict_types)
+        dropped_high_conflicts: List[str] = []
+        for memo in bridge_memos:
+            for candidate in _high_severity_conflict_candidates(memo):
+                if candidate["ids"] & retained_conflict_ids:
+                    continue
+                if (candidate["severity"], _normalize_conflict_text(candidate["description"])) in retained_conflict_semantic:
+                    continue
+                dropped_high_conflicts.append(candidate["label"])
         if dropped_high_conflicts:
             consistency_issues.append(
                 "High severity conflicts missing from ThesisDraft.retained_conflicts: "
-                + ", ".join(dropped_high_conflicts)
+                + ", ".join(sorted(set(dropped_high_conflicts)))
             )
 
         if structural_issues:

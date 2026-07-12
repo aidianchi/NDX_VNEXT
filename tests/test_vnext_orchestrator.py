@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import tools_L4
 from agent_analysis.contracts import (
     ApprovalStatus,
     BridgeMemo,
@@ -1461,6 +1462,185 @@ def test_schema_guard_rejects_cnn_submetric_high_conflict_without_aggregate_sema
 
     joined = "\n".join(report.consistency_issues)
     assert "composite sub-metric over-promotion" in joined
+
+
+def test_schema_guard_tolerates_renamed_but_semantically_identical_conflict(tmp_path: Path, monkeypatch):
+    # Fix 2 regression: Bridge's typed_conflicts (conflict_id="C1_...") and Thesis's
+    # retained_conflicts (conflict_type carries a differently-worded id, simulating
+    # the real E2E run) should be reconciled by exact-severity + same-description
+    # semantic match, not flagged as a dropped high severity conflict.
+    #
+    # Also covers Fix 1 end-to-end: the bridge conflict cites
+    # "L4.get_equity_risk_premium#level", which must resolve as a valid evidence
+    # ref now that get_equity_risk_premium registers value["MetricAuthority"].
+    monkeypatch.setattr(
+        tools_L4,
+        "get_ndx_pe_and_earnings_yield",
+        lambda end_date=None: {
+            "name": "NDX Valuation",
+            "value": {"EarningsYield": 4.0, "FCFYield": 3.5},
+            "data_quality": {"source_tier": "component_model"},
+        },
+    )
+    monkeypatch.setattr(
+        tools_L4,
+        "get_10y_treasury",
+        lambda end_date=None: {"value": {"level": 4.25}},
+    )
+    erp_payload = tools_L4.get_equity_risk_premium("2026-04-24")
+
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    data_json = {
+        "timestamp_utc": "2026-04-24T00:00:00Z",
+        "indicators": [
+            {
+                "layer": 1,
+                "metric_name": "Fed Funds Rate",
+                "function_id": "get_fed_funds_rate",
+                "raw_data": {"name": "Fed Funds Rate", "value": {"level": 5.25, "trend": "rising"}},
+                "error": None,
+                "collection_timestamp_utc": "2026-04-24T00:00:01Z",
+            },
+            {
+                "layer": 4,
+                "metric_name": "NDX Simple Yield Gap",
+                "function_id": "get_equity_risk_premium",
+                "raw_data": erp_payload,
+                "error": None,
+                "collection_timestamp_utc": "2026-04-24T00:00:07Z",
+            },
+        ],
+    }
+    packet = AnalysisPacketBuilder().build(
+        data_json,
+        manual_overrides={
+            "active": False,
+            "date": "2026-04-24",
+            "metrics": {
+                "get_fed_funds_rate": {"value": {"level": 5.25}},
+            },
+        },
+    )
+
+    description_text = (
+        "NDX估值昂贵（PE 10年分位82%，简式收益差距-1.76%）与宏观环境紧缩"
+        "（实际利率99%分位，净流动性动量转负）的对立。"
+    )
+
+    bridge = BridgeMemo.model_validate(
+        {
+            "bridge_type": "macro_valuation",
+            "layers_connected": ["L1", "L4"],
+            "cross_layer_claims": [],
+            "typed_conflicts": [
+                {
+                    "conflict_id": "C1_expensive_vs_restrictive",
+                    "conflict_type": "valuation_vs_macro",
+                    "severity": "high",
+                    "description": description_text,
+                    "mechanism": "估值扩张与紧缩流动性相互对立。",
+                    "implication": "需要同时权衡估值贵与流动性紧的双重压力。",
+                    "involved_layers": ["L1", "L4"],
+                    "evidence_refs": ["L1.get_fed_funds_rate", "L4.get_equity_risk_premium#level"],
+                }
+            ],
+            "implication_for_ndx": "测试。",
+        }
+    )
+
+    thesis = ThesisDraft.model_validate(
+        {
+            "environment_assessment": "环境偏紧。",
+            "valuation_assessment": "估值偏高。",
+            "timing_assessment": "趋势待确认。",
+            "main_thesis": "测试。",
+            "overall_confidence": "medium",
+            "retained_conflicts": [
+                {
+                    # Deliberately a different id than the bridge's conflict_id/conflict_type,
+                    # simulating the real run where Thesis echoed typed_conflicts differently.
+                    "conflict_type": "L4_expensive_vs_L1_restrictive",
+                    "severity": "high",
+                    "description": description_text,
+                    "implication": "需要同时权衡估值贵与流动性紧的双重压力。",
+                    "involved_layers": ["L1", "L4"],
+                }
+            ],
+        }
+    )
+
+    report = orchestrator._run_schema_guard(
+        packet,
+        [],
+        [bridge],
+        thesis,
+        Critique.model_validate({"overall_assessment": "测试。", "revision_direction": "测试。"}),
+        RiskBoundaryReport.model_validate({"must_preserve_risks": ["测试风险"]}),
+    )
+
+    assert not any("High severity conflicts missing" in issue for issue in report.consistency_issues)
+    assert not any(
+        "get_equity_risk_premium#level" in issue and "invalid" in issue
+        for issue in report.consistency_issues
+    )
+
+
+def test_schema_guard_still_flags_genuinely_dropped_high_conflict(tmp_path: Path):
+    # Fix 2 regression counterpart: when Thesis drops a high severity conflict
+    # entirely (no id match, no semantic match), Schema Guard must still catch it.
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    packet = _mock_packet()
+
+    bridge = BridgeMemo.model_validate(
+        {
+            "bridge_type": "macro_valuation",
+            "layers_connected": ["L1", "L4"],
+            "cross_layer_claims": [],
+            "typed_conflicts": [
+                {
+                    "conflict_id": "C1_expensive_vs_restrictive",
+                    "conflict_type": "valuation_vs_macro",
+                    "severity": "high",
+                    "description": "NDX估值昂贵与宏观环境紧缩的对立。",
+                    "mechanism": "估值扩张与紧缩流动性相互对立。",
+                    "implication": "需要同时权衡估值贵与流动性紧的双重压力。",
+                    "involved_layers": ["L1", "L4"],
+                    "evidence_refs": ["L1.get_fed_funds_rate"],
+                }
+            ],
+            "implication_for_ndx": "测试。",
+        }
+    )
+
+    report = orchestrator._run_schema_guard(
+        packet,
+        [],
+        [bridge],
+        ThesisDraft.model_validate(
+            {
+                "environment_assessment": "环境偏紧。",
+                "valuation_assessment": "估值偏高。",
+                "timing_assessment": "趋势待确认。",
+                "main_thesis": "测试。",
+                "overall_confidence": "medium",
+                "retained_conflicts": [],
+            }
+        ),
+        Critique.model_validate({"overall_assessment": "测试。", "revision_direction": "测试。"}),
+        RiskBoundaryReport.model_validate({"must_preserve_risks": ["测试风险"]}),
+    )
+
+    joined = "\n".join(report.consistency_issues)
+    assert "High severity conflicts missing" in joined
+    assert "C1_expensive_vs_restrictive" in joined
 
 
 def test_layer_indicator_manifest_carries_data_quality(tmp_path: Path):
