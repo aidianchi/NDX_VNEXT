@@ -1914,8 +1914,7 @@ class VNextReportGenerator:
         for item in entries:
             for value in {str(v) for v in _as_list(item.get("falsification_conditions"))}:
                 falsifier_counts[value] = falsifier_counts.get(value, 0) + 1
-        shared_threshold = max(2, (len(entries) + 1) // 2)
-        shared_falsifiers = [text for text, count in falsifier_counts.items() if count >= shared_threshold] if len(entries) > 1 else []
+        shared_falsifiers = [text for text, count in falsifier_counts.items() if count == len(entries)] if len(entries) > 1 else []
         item_rows = ""
         for index, item in enumerate(entries):
             status = str(item.get("current_status") or "")
@@ -2716,11 +2715,15 @@ class VNextReportGenerator:
         flow_sections = ""
         missing_groups: List[str] = []
         shown_index = 0
-        group_titles = {"硬约束": "10Y 实际利率", "信用信号": "信用利差（HY OAS / CCC-BB）", "市场宽度": "NDX/NDXE 与集中度"}
+        group_titles = {
+            "市场状态": "Top10 权重 / 估值赔率",
+            "硬约束": "10Y 实际利率",
+            "信用信号": "信用利差（HY OAS / CCC-BB）",
+            "市场宽度": "NDX/NDXE 与集中度",
+        }
         for kicker_name, heading, copy_html, cards_html in flow_groups:
             if not cards_html:
-                if kicker_name in {"硬约束", "信用信号", "市场宽度"}:
-                    missing_groups.append(group_titles.get(kicker_name, kicker_name))
+                missing_groups.append(group_titles.get(kicker_name, kicker_name))
                 continue
             shown_index += 1
             pair_class = " memo-pair" if "grid-2" in cards_html else ""
@@ -3285,6 +3288,7 @@ class VNextReportGenerator:
         <b class="pill {status_tone.get(status, 'watch')}">{_escape(_display_label(status or 'candidate'))} · 可信度{_escape(_label(item.get('confidence', 'medium'), 'confidence'))}</b>
       </div>
       <p>{_escape(_sentence(item.get('hypothesis_text'), 220))}</p>
+      {'<small><b>提示：</b>领先仅表示当前证据权重，非确定结论。</small>' if is_leading else ''}
       <small><b>它解释不了：</b>{_escape(cannot or '未记录')}</small>
       {f'<small><b>裁决理由：</b>{_escape(reason)}</small>' if reason else ''}
     </article>

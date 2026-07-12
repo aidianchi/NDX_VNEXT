@@ -198,6 +198,43 @@ def test_reader_exit_without_entries_keeps_empty_note():
     assert "暂无黄金坑清单条目" in html
 
 
+def test_reader_exit_checklist_does_not_call_partial_falsifiers_shared():
+    reporter = VNextReportGenerator()
+
+    html = reporter._reader_exit_section(
+        {
+            "final_adjudication": {"final_stance": "中性", "confidence": "medium"},
+            "golden_pit_checklist": {
+                "current_state": "状态说明",
+                "entries": [
+                    {
+                        "current_status": "met",
+                        "condition": "第一条条件。",
+                        "falsification_conditions": ["两条命中的失效条件"],
+                        "evidence_refs": [],
+                    },
+                    {
+                        "current_status": "not_met",
+                        "condition": "第二条条件。",
+                        "falsification_conditions": ["两条命中的失效条件"],
+                        "evidence_refs": [],
+                    },
+                    {
+                        "current_status": "met",
+                        "condition": "第三条条件。",
+                        "falsification_conditions": ["第三条独有失效条件"],
+                        "evidence_refs": [],
+                    },
+                ],
+            },
+        }
+    )
+
+    assert "这批条件共用的证据与反证" not in html
+    assert html.count("两条命中的失效条件") == 2
+    assert "第三条独有失效条件" in html
+
+
 def test_memo_chartbook_omits_groups_without_chart_data_and_reports_gap():
     reporter = VNextReportGenerator()
     artifacts = {
@@ -240,6 +277,25 @@ def test_memo_chartbook_constraint_copy_comes_from_principal_contradiction():
     assert "估值与流动性矛盾" in html
     assert "当前占上风的一面" in html
     assert "本轮报告的核心矛盾不是单纯" not in html
+
+
+def test_memo_chartbook_reports_market_state_gap_when_overview_cards_missing():
+    reporter = VNextReportGenerator()
+    rows = [{"date": f"2026-0{month}-01", "value": 2.0 + month / 10} for month in range(1, 7)]
+    artifacts = {
+        "final_adjudication": {
+            "final_stance": "中性",
+            "confidence": "medium",
+            "principal_contradiction": {"summary": "估值与流动性矛盾。", "dominant_side": "流动性收紧"},
+        },
+        "layers": {},
+        "chart_time_series": {"series": {"US10Y_REAL": {"rows": rows}}},
+    }
+
+    html = reporter._memo_chartbook_section(artifacts)
+
+    assert "本轮缺图：Top10 权重 / 估值赔率；信用利差（HY OAS / CCC-BB）；NDX/NDXE 与集中度。" in html
+    assert "再看最硬的约束" in html
 
 
 def test_conflicts_section_deduplicates_identical_bridges():
@@ -326,6 +382,37 @@ def test_conflicts_section_renders_hypothesis_competition_and_counter_thesis():
     assert "反方最强论证" in html
     assert "市场可能双重误判。" in html
     assert "还没吵完的争议" in html
+
+
+def test_conflicts_section_leading_hypothesis_carries_caution_note():
+    reporter = VNextReportGenerator()
+    artifacts = {
+        "bridges": [],
+        "hypothesis_competition": {
+            "leading_hypothesis_id": "hyp_a",
+            "hypotheses": [
+                {
+                    "hypothesis_id": "hyp_a",
+                    "hypothesis_text": "主线解释：估值压缩风险主导。",
+                    "status": "leading",
+                    "confidence": "medium",
+                    "cannot_explain": ["信用数据缺失。"],
+                },
+                {
+                    "hypothesis_id": "hyp_b",
+                    "hypothesis_text": "挑战解释：流动性才是定价核心。",
+                    "status": "candidate",
+                    "confidence": "low",
+                    "cannot_explain": ["无法解释高位维持。"],
+                },
+            ],
+        },
+    }
+
+    html = reporter._conflicts_section(artifacts)
+
+    assert html.count("领先仅表示当前证据权重，非确定结论。") == 1
+    assert "hypothesis-card--leading" in html
 
 
 def test_vnext_reporter_generates_native_ui(tmp_path: Path):
