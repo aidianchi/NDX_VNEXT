@@ -27,7 +27,7 @@
 ## 工单队列（按优先级；每单一提交）
 
 1. **discipline_side 渲染区分**：`vnext_reporter.py` ~1805-1995 读者纪律清单不区分买入/卖出/风险条目（字段在 `contracts.py:315`，赋值 `orchestrator.py:2391,2410`），风险描述与买入触发共用绿色"已满足"pill 易误读。按 side 分别渲染+测试。
-2. **校准闭环通电**：`outcome_review.py` 解除 `not_run_for_live_or_non_backtest_context`（live run 也产出 T+N claim 打分并落盘）；打分结果标注 `data_quality_caveat`，数据层验收前只作数据问题探测器；跨 run 展示层（`orchestrator.py` 硬编码 deferred）继续保持关闭。
+2. **校准闭环通电 ✅ 完成（2026-07-12，Fable 验收）**：`outcome_scoring_runner.py` 批量打分器（扫描 vNext run → ≥20 天成熟门槛 → 复用 outcome_review 判定 → per-run `claim_outcome_scores.json` + 幂等 append `output/state_ledger/claim_outcome_ledger.jsonl`）+ 7 项离线测试，530 全绿（Fable 亲跑复核）。实树验证：15 个候选 run 全部"太年轻"被诚实跳过（未编造判定）；判定语义经受控 fixture 三样例复核（bullish 遇 T+20 -20% → falsifier_triggered；risk 主张 → consistent；无方向陈述 → not_scorable）。**遗留**：首次真实成熟 run 打分待 2026-07-27 后执行（`20260707_163359` 过门槛时）并人工复核；注意 20 为自然日、T+20 为交易日（≈28 自然日），pending 标注已正确处理该差异。
 3. **独立重算校验带**：新模块（不 import 主管线计算代码）对派生字段二次实现重算——分位（锁窗口/插值）、增速、比率、单位量纲（billion/million 混用报警）；产出 `recompute_report.json` 接入 checker 硬闸门。依据：U1 证明 DataIntegrity 对数值篡改零反应；历史上净流动性 10 倍错误穿透全部闸门。
 4. **证据菜单再平衡**（金融层最大缺口，见 audit_B）：AI 资本开支周期代理（M7 capex 同比/指引，可复用 `tools_L4.py` XBRL 标签管道）、fed funds futures 隐含利率路径、VIX 期限结构（RESEARCH_CANON 已有判读标准、未实现）、回购与财报静默期日历；完成后做多空证据源对称性审计。
    **盈利预期数据源判决（2026-07-12 凌晨实测，Fable 亲测）**：Wind 路线判死——NDX.GI 指数级"没找到数据"；成分股级对照实验证明机制通（茅台返回真实双时点一致预测 EPS 31.7446/31.7267）但美股无权限（AAPL 同问法返回 null）。PIT 契约代码保留（防伪门槛正确），数据源改道：① **立即启动自建 vintage 档案**——每日/每周快照 yfinance+FMP 的当前一致预期（.env 已有 FMP key），30-90 天后即有可用的自产时点序列，零成本且完全可控；② 评估 FMP/Finnhub 现成的预期历史端点覆盖度（tools_finnhub.py 死码正好是这个用途，可部分复活）；③ Wind 继续做估值主锚（PE/PB/PS 正常），只放弃其美股盈利预期。
@@ -38,7 +38,8 @@
 8. **死代码与僵尸子系统**：`tools.py`+`tools_finnhub.py`+`tools_simfin.py` 死链（~1,390 行）；`data_manager.py:99-112` 孤儿陈旧度检测；受控调查反馈环恒零产出（`orchestrator.py:1133` `is_deterministic_stub` 写死 True）——砍除或修复二选一，需用户或主审拍板。
 9. **巨型文件手术**：orchestrator.py 按 audit_C 方案拆 stage_runner / prompt_composer / claim_verification / stage_io / payload_normalizer；tools_L4.py 按数据源拆模块。
 10. **fresh 完整 vNext E2E 验收**（NEXT_STEPS P0）：最新代码全链跑一轮，人工核对发布状态/主要结论/反证/失效条件。
-11. **claim gate 稳定化**：同输入下 verified 率在 7/8 与 1/8 间跳动（U1 基线三连 + P5 复现四次）。排查 `_verify_claim_entry` 链路中受 LLM 措辞随机性支配的环节（疑似 claim 文本与 evidence ref 的匹配方式），改为确定性可复核的匹配，或在 claim 生成端约束引用格式；验收=同输入三连 verified 率方差趋近 0。
+11. **旧快照回放兼容性（工单#2 施工中发现，2026-07-12）**：① `data_collected_v9_20250409.json` / `20240805.json` 回放被 L3 `available_without_meaningful_value` hard block（`data_evidence.py:436`，四个广度函数）——证据合约收紧后与旧快照不兼容，影响历史回测能力与 #10 E2E；② 回测模式下 Wind 估值函数标 `backtest_skipped_unsupported_function` → L4 1/6 跌破单层及格线，任何日期的回测都无法出发布产物（归 #4 处置）；③ `data_collected_v9_20260509.json` 原为旧 collector schema，已用 `--collect-only --date 2026-05-09` 刷新（gitignored）。
+12. **claim gate 稳定化**：同输入下 verified 率在 7/8 与 1/8 间跳动（U1 基线三连 + P5 复现四次）。排查 `_verify_claim_entry` 链路中受 LLM 措辞随机性支配的环节（疑似 claim 文本与 evidence ref 的匹配方式），改为确定性可复核的匹配，或在 claim 生成端约束引用格式；验收=同输入三连 verified 率方差趋近 0。
 
 ## Prompt 偏误审计（2026-07-11 深夜，Fable 亲自逐份审读，先于 P4 结果完成 = 盲测预测）
 
