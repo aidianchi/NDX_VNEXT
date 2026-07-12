@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-07-12
+
+### 校准闭环通电、盈利预期 vintage 档案启动、首次推送 main
+
+完成内容：
+
+- 首次将全部第一性原理重建工作合并推送到 main（`59d6d96..323bc88` 后续增量到 `ddc08c9`）；此后每批工单验收后推送一次。
+- 校准闭环通电（工单#2）：新增 `src/agent_analysis/outcome_scoring_runner.py` 批量打分器——扫描 vNext run、≥20 自然日成熟门槛、复用 `outcome_review.py` 判定逻辑对照 QQQ 后向价格窗口，落 per-run `claim_outcome_scores.json` 并幂等 append `output/state_ledger/claim_outcome_ledger.jsonl`；每条打分带 `data_quality_caveat`，未成熟窗口标 pending 不硬打分。
+- 盈利预期 vintage 档案启动（工单#4 前置）：新增独立脚本 `src/vintage_archiver.py`，每日快照 NDX 前 15 权重股的 yfinance eps_trend/eps_revisions/earnings_estimate/revenue_estimate + FMP analyst-estimates 原始响应至 `output/vintage_archive/YYYYMMDD/eps_consensus.json`；隔离观察数据，不入 L1-L5 证据链、不得作 evidence_ref；2026-07-12 第一份档案已落盘。定时任务未安装（建议 crontab 见工单报告）。
+- Wind 美股盈利预期判死（实测：茅台对照证明 PIT 机制通、AAPL/NDX.GI 无数据=账号无美股一致预期权限）；yfinance `eps_trend` 实测提供 90 天后视镜，修正斜率立即可算。
+
+验证结果：
+
+- 全量测试 535 通过（530 基线 + 5 档案测试；校准打分器 7 项测试已含在 530 内）。
+- 批量打分器实树运行：15 个候选 run 全部因太年轻被诚实跳过（零编造判定）；判定语义经受控 fixture 三样例人工复核。首次真实成熟打分预计 2026-07-27 后。
+- 档案首日快照：15/15 yfinance 成功；11/15 FMP（MU/GOOG/AVGO/AMAT 被免费层 402 挡住，逐票诚实记录）；Invesco 持仓接口 406 时静态回退生效并如实标注。
+
+剩余边界：
+
+- 旧快照回放兼容性问题（L3 `available_without_meaningful_value` hard block 旧 schema 快照；回测模式 L4 Wind 函数跳过导致跌破单层及格线）记入 WORK_ORDERS #11/#4。
+- yfinance 属 third_party_unofficial：AAPL `60daysAgo=0.0` 一类字段漂移需保持怀疑；升级为正式数据源前仅作隔离观察。
+
+---
+
 ## 2026-07-10
 
 ### 完整 Markdown 体检、薄而硬元信息、L3 稀疏日与 History of Market 分位修复

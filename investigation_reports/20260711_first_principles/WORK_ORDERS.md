@@ -26,12 +26,13 @@
 
 ## 工单队列（按优先级；每单一提交）
 
-1. **discipline_side 渲染区分**：`vnext_reporter.py` ~1805-1995 读者纪律清单不区分买入/卖出/风险条目（字段在 `contracts.py:315`，赋值 `orchestrator.py:2391,2410`），风险描述与买入触发共用绿色"已满足"pill 易误读。按 side 分别渲染+测试。
+1. **discipline_side 渲染区分 ✅ 完成（2026-07-12，`7531721`）**：读者纪律清单已按 side×status 分别渲染（risk/sell 满足 → 红色"风险已触发/卖出条件已成立"，buy 满足 → 绿，hold → watch），含测试。
 2. **校准闭环通电 ✅ 完成（2026-07-12，Fable 验收）**：`outcome_scoring_runner.py` 批量打分器（扫描 vNext run → ≥20 天成熟门槛 → 复用 outcome_review 判定 → per-run `claim_outcome_scores.json` + 幂等 append `output/state_ledger/claim_outcome_ledger.jsonl`）+ 7 项离线测试，530 全绿（Fable 亲跑复核）。实树验证：15 个候选 run 全部"太年轻"被诚实跳过（未编造判定）；判定语义经受控 fixture 三样例复核（bullish 遇 T+20 -20% → falsifier_triggered；risk 主张 → consistent；无方向陈述 → not_scorable）。**遗留**：首次真实成熟 run 打分待 2026-07-27 后执行（`20260707_163359` 过门槛时）并人工复核；注意 20 为自然日、T+20 为交易日（≈28 自然日），pending 标注已正确处理该差异。
 3. **独立重算校验带**：新模块（不 import 主管线计算代码）对派生字段二次实现重算——分位（锁窗口/插值）、增速、比率、单位量纲（billion/million 混用报警）；产出 `recompute_report.json` 接入 checker 硬闸门。依据：U1 证明 DataIntegrity 对数值篡改零反应；历史上净流动性 10 倍错误穿透全部闸门。
 4. **证据菜单再平衡**（金融层最大缺口，见 audit_B）：AI 资本开支周期代理（M7 capex 同比/指引，可复用 `tools_L4.py` XBRL 标签管道）、fed funds futures 隐含利率路径、VIX 期限结构（RESEARCH_CANON 已有判读标准、未实现）、回购与财报静默期日历；完成后做多空证据源对称性审计。
    **盈利预期数据源判决（2026-07-12 凌晨实测，Fable 亲测）**：Wind 路线判死——NDX.GI 指数级"没找到数据"；成分股级对照实验证明机制通（茅台返回真实双时点一致预测 EPS 31.7446/31.7267）但美股无权限（AAPL 同问法返回 null）。PIT 契约代码保留（防伪门槛正确），数据源改道：① **立即启动自建 vintage 档案**——每日/每周快照 yfinance+FMP 的当前一致预期（.env 已有 FMP key），30-90 天后即有可用的自产时点序列，零成本且完全可控；② 评估 FMP/Finnhub 现成的预期历史端点覆盖度（tools_finnhub.py 死码正好是这个用途，可部分复活）；③ Wind 继续做估值主锚（PE/PB/PS 正常），只放弃其美股盈利预期。
    **追加（2026-07-12 Fable 亲测）：修正斜率不必等档案积累**——yfinance `Ticker.eps_trend` 免费返回每只美股"current / 7d / 30d / 60d / 90d ago"的一致预期 EPS（实测 AAPL/MSFT/NVDA 数据完好，NVDA +1y EPS 90 天内 11.11→12.76），`eps_revisions` 另给上/下修分析师家数。指数级做法：取 NDX 前十大权重股聚合（权重覆盖 >50%）。定位：yfinance eps_trend = 立即可用的 90 天后视镜（authority 标 third_party_unofficial，需防字段漂移）；自建 vintage 档案降级为加固层（对冲雅虎黑箱/断供 + 未来把后视镜延长到 90 天以上）；深回测所需的多年期历史 vintage 仍无免费来源（IBES 收费），评估 FMP/Finnhub earnings-surprise 历史作部分替代。
+   **档案已启动（2026-07-12，Fable 验收）**：`src/vintage_archiver.py` 独立脚本 + 5 项离线测试；首日快照 `output/vintage_archive/20260712/`（15/15 yfinance、11/15 FMP，MU/GOOG/AVGO/AMAT 免费层 402；Invesco 持仓 406 → 静态 top15 回退如实标注）。隔离观察数据，未升级数据源、不得作 evidence_ref。**定时任务未安装**——建议 crontab：`30 21 * * 1-5 cd /Users/aidianchi/Desktop/ndx_mac && .venv/bin/python -m src.vintage_archiver >> output/logs/vintage_archiver.log 2>&1`（美股收盘后，时区自行校准）；装不装由用户拍板。注意点：AAPL eps_trend `60daysAgo=0.0` 是 yfinance 原始值——第三方非官方源的字段漂移风险实例，档案原样保存不粉饰。
 5. **报告层小修**：`shared_falsifiers` 过半即称"这批共用"的语义（改严格全等或标注 N/M 命中）；`missing_groups` 对"市场状态"组静默跳过的不对称；hypothesis-card leading 高亮的过度信任风险（低优先级）。
 6. **checker 可观测性**：原始输入 `data_json` 落盘（本次回放只能近似重建）；补"恰好 50%"与"total<3 豁免"边界回归测试。
 7. **Manual/Wind ERP 回退通道**：`manual_data.py:99-119` 允许 Damodaran 槽位被 Wind 人工值填充，弱化三槽位独立性——评估收紧或显式标注。
