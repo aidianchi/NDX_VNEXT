@@ -27,6 +27,7 @@ L2 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 - `get_vix`: 标普隐含波动率。低位可能是稳定，也可能是自满和保护便宜；高位可能是压力，也可能是反向机会。
 - `get_vxn`: 纳指隐含波动率。科技股专属风险温度计。
 - `get_vxn_vix_ratio`: 科技波动率相对大盘波动率。识别科技股是否有特异性压力。
+- `get_vix_term_structure`: VIX3M/VIX 期限结构比值。倒挂（backwardation，比值<1）是近端恐慌溢价信号；正挂（contango，比值>1）是市场常态，不构成看多证据，只说明没有额外恐慌溢价。必须同时看比值的历史分位，不能只看当前是否倒挂。
 - `get_hy_oas_bp`: 高收益债 OAS。信用市场对风险补偿的定价，优先级最高之一。
 - `get_ig_oas_bp`: 投资级 OAS。判断压力是否从低质量信用扩散到高质量信用。
 - `get_hy_quality_spread_bp`: CCC & Lower 减 BB 高收益债 OAS。判断低质信用是否相对高质 HY 更快恶化。
@@ -40,6 +41,7 @@ L2 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 典型机制：
 
 - VIX 极低 -> 对冲成本便宜 -> 市场可能自满 -> 一旦冲击出现，下行凸性风险上升。
+- VIX3M/VIX 比值倒挂（backwardation） -> 近端保险费急升 -> 市场为短期不确定性支付溢价 -> 需与信用和广度交叉确认是否是可布局的过冲恐慌，而不是自动买点；比值正挂（contango）只是常态，不能反向读成看多证据。
 - VIX/VXN 高 -> 保护需求上升 -> 风险规避加剧 -> 高 beta 资产承压；但极端恐慌后可能出现反向机会。
 - HY OAS 扩大 -> 信用市场要求更高补偿 -> 融资环境收紧 -> 股权风险偏好通常滞后承压。
 - HY OAS 低 + FGI 贪婪 -> 风险偏好强，但尾部风险可能被低估。

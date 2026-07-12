@@ -83,6 +83,7 @@ TOOLS_REGISTRY = {
     "get_vix": get_vix,
     "get_vxn": get_vxn,
     "get_vxn_vix_ratio": get_vxn_vix_ratio,
+    "get_vix_term_structure": get_vix_term_structure,
     "get_10y2y_spread_bp": get_10y2y_spread_bp,
     "get_hy_oas_bp": get_hy_oas_bp,
     "get_ig_oas_bp": get_ig_oas_bp,

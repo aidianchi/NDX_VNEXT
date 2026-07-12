@@ -154,6 +154,8 @@ flowchart TD
 
 本质：contango 常见于正常环境，backwardation 往往代表近端紧张；VRP 反映“市场愿意为不确定性支付多少额外费用”。正确读法：先看曲线形状，再看兑现后的 realized vol；不单看 VIX 点位。误读：把 backwardation 机械理解成“马上暴跌”，或把 VRP 为正机械理解成“必卖波动”。必须交叉验证：VIX/VXN、HY OAS、Put/Call、A/D、ATR。对美国市场：期限结构倒挂常意味着短端风险定价急剧抬升；对 QQQ：若 VXN 曲线更陡、VRP 更高，说明市场对科技集中度或财报事件更敏感。行动边界：战术仓只在“期限结构恐慌化但信用未系统恶化、价格跌幅明显超过基本面恶化”的情形下逐步回补；核心仓不依据 VRP 做大幅切换。反证条件：若实现波动开始持续追上甚至超过隐含波动，卖波动或逢恐慌买入都要收敛。**B版短提示**：VIX 点位只是表面；真正关键是曲线是否倒挂，以及隐含波动是否远高于后续实际波动。
 
+**实现细节（2026-07-12 补充，对应 `get_vix_term_structure`）**：曲线形状目前用可得的两腿 yfinance 序列近似——`^VIX3M`/`^VIX` 比值为主判读腿（`^VIX6M`/`^VIX` 作补充观察腿，未做独立分位）；比值 ≥1.005 记为 contango，≤0.995 记为 backwardation，中间 ±0.5% 记为 flat（缓冲带只为防止贴近 1.0 时噪音导致状态跳变，不是判读结论的一部分）。历史分位按真实每日序列在 5y/10y 两个窗口分别计算（`count(比值<=当前)/n*100`），窗口不足（约早于 2011/2016 年的 effective_date）时诚实标记 `insufficient_history`，不得外推。VRP（隐含-已实现波动差）当前未实现，留作后续工单。payload 落地并保存了计算分位所用的原始比值序列（`value.percentile_context.raw_series`），供独立重算校验带（`src/recompute_belt.py`）复核，不是只存结论数字。判读边界维持不变：backwardation 只能作为 L2 风险确认/预警的支持性证据（`supporting_only`），仍需信用利差、A/D、ATR 等交叉验证；contango/flat 不得被引用为看多证据。
+
 #### 净流动性代理
 
 **判读卡**：名称/英文/代码：净流动性代理 / Net Liquidity Proxy；常用近似为 `WALCL - TGA - RRP`，必要时再做同比或 Z-score。层级与性质：L2 代理+合成；中；核心/确认。来源：Fed H.4.1、NY Fed Temporary OMO、Treasury General Account/FRED。公式与频率：把 Fed 资产（WALCL）作为供给，把 TGA 与 RRP 作为抽水项。真正问题：**银行体系与风险资产面前，净可用美元流动性是在扩张还是收缩？**

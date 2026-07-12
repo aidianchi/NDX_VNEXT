@@ -50,6 +50,7 @@ CORE_EVIDENCE_FUNCTIONS = {
     "get_hyg_momentum",
     "get_xly_xlp_ratio",
     "get_vxn_vix_ratio",
+    "get_vix_term_structure",
     "get_cnn_fear_greed_index",
     "get_advance_decline_line",
     "get_percent_above_ma",

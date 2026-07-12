@@ -6,6 +6,13 @@
 
 ## 2026-07-12
 
+### 独立重算校验带、M7 资本开支周期、VIX 期限结构（当日追加）
+
+- 独立重算校验带 `src/recompute_belt.py`（纯 stdlib 第二本账，零管线 import）：分位/比率/均线/动量重算 + 量级哨兵，接入 checker 硬闸门（critical deviation → blocked，standard 只记录，总开关可应急豁免，带自身崩溃不炸闸门）；live 快照实跑 0 偏差，Damodaran 分位与净流动性两本账咬合，注入式篡改与单位混用均被抓获。
+- 新指标 `get_m7_capex_cycle`（L4）：SEC XBRL 主路（filed_date 级 PIT）+ yfinance 季度现金流备胎（pit_safe=false、仅限 live、回测禁用）；实跑 M7 2026Q1 合计 $135.5B、YoY +75.52%。**重大发现**：SEC 域名全机不可达（疑地区封锁），既有 `_fetch_sec_xbrl_summary` 官方通道生产中从未成功——代理/VPN 决定待用户（WORK_ORDERS #12）。
+- 新指标 `get_vix_term_structure`（L2）：VIX3M/VIX 比值+contango/backwardation 判定+5y/10y 分位；payload 自带原始序列供第二本账独立重算（新规矩首次落地）；2024-08-05 历史极端倒挂回测验证吻合。fed funds futures 免费源探源完成（ZQ 合约可行但远月流动性薄，CME 不可达，建议缩水版）。
+- 测试推进：530 → 577 全绿；main 分四批推送至 `58125a1` 后续。
+
 ### 校准闭环通电、盈利预期 vintage 档案启动、首次推送 main
 
 完成内容：

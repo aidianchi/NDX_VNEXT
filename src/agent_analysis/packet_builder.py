@@ -69,6 +69,7 @@ LAYER_FUNCTIONS = {
         "get_xly_xlp_ratio",
         "get_crowdedness_dashboard",
         "get_vxn_vix_ratio",
+        "get_vix_term_structure",
         "get_cnn_fear_greed_index",
     },
     "L3": {

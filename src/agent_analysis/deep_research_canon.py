@@ -577,6 +577,27 @@ INDICATOR_CANONS.update(
             "风险提醒指标，帮助识别 Nasdaq 特有压力。",
             "VXN/VIX 是相对保险价，不是方向结论。",
         ),
+        "get_vix_term_structure": _indicator(
+            "get_vix_term_structure",
+            "VIX Term Structure (VIX3M/VIX)",
+            Layer.L2,
+            PermissionType.COMPOSITE,
+            "市场是在给近端波动定恐慌溢价，还是在给长端不确定性定更高价；期限结构是倒挂还是正常正挂？",
+            [
+                "先看曲线形状（VIX3M/VIX 比值是 contango 还是 backwardation），再看比值自身的历史分位；不要只看 VIX 点位。",
+                "backwardation（比值<1）是近端保险费急剧抬升的恐慌信号；contango（比值>1）是市场默认常态，不能反过来当利多证据。",
+            ],
+            [
+                "不能把 backwardation 机械理解成'马上暴跌'，也不能把 contango 当成'市场健康'的证明——它只是没有额外恐慌溢价，不是看多理由。",
+                "本比值来自 yfinance 每日收盘，是第三方口径，不是 Cboe 官方期限结构分位；历史分位窗口不足（早于约2011/2016年）时必须诚实标记 insufficient_history。",
+            ],
+            ["get_vix", "get_vxn", "get_hy_oas_bp", "get_advance_decline_line"],
+            ["实现波动开始持续追上甚至超过隐含波动，或倒挂后 HY OAS 未同步走阔，说明恐慌定价可能过头或正在消退。"],
+            "风险提醒/预警指标；backwardation 可作战术仓逢恐慌分批布局的确认条件之一，核心仓不因期限结构单独变动仓位。",
+            "先看曲线形状再看点位：倒挂=近端保险贵=恐慌信号；正挂=没有额外恐慌溢价，不是买入理由。",
+            source_hint="yfinance ^VIX / ^VIX3M / ^VIX6M",
+            frequency_hint="daily",
+        ),
         "get_cnn_fear_greed_index": _indicator(
             "get_cnn_fear_greed_index",
             "CNN Fear & Greed",

@@ -9,9 +9,11 @@ from copy import deepcopy
 try:
     from .tools_common import *
     from .tools_common import _fetch_fred_series, _fetch_yf_history
+    from .data_evidence import build_data_quality
 except ImportError:
     from tools_common import *
     from tools_common import _fetch_fred_series, _fetch_yf_history
+    from data_evidence import build_data_quality
 
 # =====================================================
 # 第1层函数
@@ -351,6 +353,356 @@ def get_vxn_vix_ratio(end_date: str = None) -> Dict[str, Any]:
         "name": "VXN/VIX Ratio", "value": {"level": ratio, "date": date}, "unit": "ratio",
         "notes": f"Calculated from latest levels: VXN={vxn_level}, VIX={vix_level}"
     }
+
+
+# ---------------------------------------------------------------------------
+# VIX term structure (added for investigation_reports/20260711_first_principles/
+# WORK_ORDERS.md item 4, task A: RESEARCH_CANON already carried a judgment card
+# for "VIX 期限结构与 VRP" -- this implements it. Same L2 risk-appetite/vol
+# family as get_vix/get_vxn/get_vxn_vix_ratio above, so it lives next to them.
+# ---------------------------------------------------------------------------
+
+VIX_TERM_STRUCTURE_FLAT_BAND = 0.005
+"""Half-width of the ratio band around 1.0 treated as neither contango nor
+backwardation. A bare ratio==1.0 threshold would flip state on sub-percent
+daily noise; 0.5% keeps the state label stable while still being far tighter
+than a real term-structure inversion (historically several percent)."""
+
+VIX_TERM_STRUCTURE_PERCENTILE_WINDOWS = {
+    # ^VIX3M inception is 2006-07-17, so both windows have full coverage for
+    # any effective_date from the mid-2010s onward; requirements are set
+    # loose enough to still emit an honest "insufficient_history" status for
+    # backtests anchored earlier than that, mirroring
+    # HISTORY_OF_MARKET_PERCENTILE_REQUIREMENTS's min_observations/min_span_days
+    # pattern in tools_L4.py rather than inventing a new convention.
+    "5y": {"years": 5, "min_observations": 750, "min_span_days": 365 * 4},
+    "10y": {"years": 10, "min_observations": 1500, "min_span_days": 365 * 8},
+}
+
+
+def _fetch_vix3m_history(start_date: Optional[Any] = None, end_date: Optional[Any] = None) -> pd.DataFrame:
+    """原子化获取 VIX3M（3个月隐含波动率）日频历史。"""
+    return _fetch_yf_history("^VIX3M", start_date=start_date, end_date=end_date)
+
+
+def _fetch_vix6m_history(start_date: Optional[Any] = None, end_date: Optional[Any] = None) -> pd.DataFrame:
+    """原子化获取 VIX6M（6个月隐含波动率）日频历史，仅作补充观察腿。"""
+    return _fetch_yf_history("^VIX6M", start_date=start_date, end_date=end_date)
+
+
+def _vix_term_structure_state(ratio: Optional[float]) -> str:
+    """contango/backwardation/flat classification with a documented flat band."""
+    if ratio is None:
+        return "unavailable"
+    if ratio >= 1.0 + VIX_TERM_STRUCTURE_FLAT_BAND:
+        return "contango"
+    if ratio <= 1.0 - VIX_TERM_STRUCTURE_FLAT_BAND:
+        return "backwardation"
+    return "flat"
+
+
+def _rank_percentile_0_100(values: List[Any], current: float) -> Optional[float]:
+    """count(v<=current)/n*100, rounded to 1dp -- same convention already used
+    by the Damodaran ERP and Wind PE percentile payloads elsewhere in this
+    codebase, so the independent recompute belt can check this one the same
+    way (see recompute_belt.check_vix_term_structure_percentile)."""
+    clean = [
+        float(v) for v in values
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and not (isinstance(v, float) and np.isnan(v))
+    ]
+    if not clean:
+        return None
+    count = sum(1 for v in clean if v <= current)
+    return round(count / len(clean) * 100.0, 1)
+
+
+def _vix_term_structure_percentile_window(
+    merged: pd.DataFrame,
+    *,
+    anchor: Any,
+    years: int,
+    current_value: float,
+    min_observations: int,
+    min_span_days: int,
+) -> Dict[str, Any]:
+    window_start_ts = anchor - pd.DateOffset(years=years)
+    windowed = merged[(merged["date"] >= window_start_ts) & (merged["date"] <= anchor)]
+    sample_count = int(len(windowed))
+    window_start = windowed["date"].min().strftime("%Y-%m-%d") if sample_count else None
+    window_end = windowed["date"].max().strftime("%Y-%m-%d") if sample_count else None
+    span_days = int((windowed["date"].max() - windowed["date"].min()).days) if sample_count >= 2 else 0
+    base = {
+        "current_value": round(float(current_value), 4),
+        "sample_count": sample_count,
+        "required_min_observations": min_observations,
+        "span_days": span_days,
+        "required_min_span_days": min_span_days,
+        "window_start": window_start,
+        "window_end": window_end,
+    }
+    if sample_count < min_observations or span_days < min_span_days:
+        base["percentile"] = None
+        base["status"] = "insufficient_history"
+        base["reason"] = (
+            f"requires >= {min_observations} observations and >= {min_span_days} calendar days; "
+            f"got {sample_count} observations over {span_days} days"
+        )
+        return base
+    base["percentile"] = _rank_percentile_0_100(windowed["ratio_vix3m_over_vix"].tolist(), current_value)
+    base["status"] = "available"
+    base["reason"] = ""
+    return base
+
+
+def get_vix_term_structure(end_date: str = None) -> Dict[str, Any]:
+    """VIX term structure: VIX3M/VIX ratio, contango/backwardation state, and
+    the ratio's own historical percentile (5y/10y). VIX6M/VIX is carried as a
+    secondary, non-percentiled informational leg when available.
+
+    Implements RESEARCH_CANON.md's existing "VIX 期限结构与 VRP" judgment card
+    (投资 investigation_reports/20260711_first_principles/WORK_ORDERS.md item 4,
+    task A). Same L2 risk-appetite/volatility family as get_vix/get_vxn -- see
+    core.collector.DataCollector.LAYER_FUNCTIONS[2].
+
+    Judgment boundary (per RESEARCH_CANON, enforced via
+    value["state_usage_boundary"] and data_quality["metric_authority"]):
+    backwardation (VIX3M < VIX) is a panic/risk confirmation-or-alert signal;
+    contango is the normal default shape and must NOT be cited as bullish
+    evidence -- it only means no extra near-term panic premium is priced in.
+
+    Point-in-time: both legs are fetched through the same
+    _get_series_for_effective_date/_fetch_yf_history path get_vix already
+    uses, so a backtest end_date only ever sees data on or before that date.
+    The raw aligned ratio series (up to 10y, bounded by ^VIX3M's 2006-07-17
+    inception) is embedded under value.percentile_context.raw_series so
+    src/recompute_belt.py can independently recompute the published
+    percentile rather than trusting the stored conclusion number.
+    """
+    effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
+    date_str = effective_date.strftime("%Y-%m-%d")
+    source_name = "yfinance (^VIX / ^VIX3M / ^VIX6M)"
+    source_url = "https://finance.yahoo.com/quote/%5EVIX3M/"
+
+    def _unavailable(reason: str) -> Dict[str, Any]:
+        return {
+            "name": "VIX Term Structure (VIX3M/VIX)",
+            "series_id": "VIX_TERM_STRUCTURE",
+            "value": None,
+            "unit": "ratio",
+            "date": date_str,
+            "source_tier": "unavailable",
+            "source_name": source_name,
+            "availability": "unavailable",
+            "unavailable_reason": reason,
+            "notes": f"VIX term structure unavailable: {reason}",
+        }
+
+    try:
+        vix_df = _get_series_for_effective_date("VIX", _fetch_vix_history, end_date)
+        vix3m_df = _get_series_for_effective_date("VIX3M", _fetch_vix3m_history, end_date)
+        vix6m_df = _get_series_for_effective_date("VIX6M", _fetch_vix6m_history, end_date)
+
+        if vix_df is None or vix_df.empty or vix3m_df is None or vix3m_df.empty:
+            return _unavailable("missing_vix_or_vix3m_history")
+
+        if end_date:
+            anchor_ts = pd.to_datetime(end_date)
+            vix_df = vix_df[vix_df["date"] <= anchor_ts]
+            vix3m_df = vix3m_df[vix3m_df["date"] <= anchor_ts]
+            if vix6m_df is not None and not vix6m_df.empty:
+                vix6m_df = vix6m_df[vix6m_df["date"] <= anchor_ts]
+
+        merged = pd.merge(
+            vix_df[["date", "value"]].rename(columns={"value": "vix"}),
+            vix3m_df[["date", "value"]].rename(columns={"value": "vix3m"}),
+            on="date",
+            how="inner",
+        ).dropna(subset=["vix", "vix3m"])
+        merged = merged[merged["vix"] > 0]
+        if merged.empty:
+            return _unavailable("no_overlapping_vix_vix3m_trading_dates")
+        merged["ratio_vix3m_over_vix"] = merged["vix3m"] / merged["vix"]
+        merged = merged.sort_values("date").reset_index(drop=True)
+
+        latest = merged.iloc[-1]
+        anchor = latest["date"]
+        current_ratio = float(latest["ratio_vix3m_over_vix"])
+        current_vix = float(latest["vix"])
+        current_vix3m = float(latest["vix3m"])
+        current_date_str = anchor.strftime("%Y-%m-%d")
+
+        windows = {
+            window_key: _vix_term_structure_percentile_window(
+                merged,
+                anchor=anchor,
+                years=spec["years"],
+                current_value=current_ratio,
+                min_observations=spec["min_observations"],
+                min_span_days=spec["min_span_days"],
+            )
+            for window_key, spec in VIX_TERM_STRUCTURE_PERCENTILE_WINDOWS.items()
+        }
+
+        raw_series_cutoff = anchor - pd.DateOffset(years=10)
+        raw_series = [
+            {
+                "data_date": row["date"].strftime("%Y-%m-%d"),
+                "vix": round(float(row["vix"]), 4),
+                "vix3m": round(float(row["vix3m"]), 4),
+                "ratio_vix3m_over_vix": round(float(row["ratio_vix3m_over_vix"]), 4),
+            }
+            for _, row in merged[merged["date"] >= raw_series_cutoff].iterrows()
+        ]
+
+        vix6m_block: Dict[str, Any] = {
+            "availability": "unavailable",
+            "reason": "no_vix6m_data_available",
+        }
+        if vix6m_df is not None and not vix6m_df.empty:
+            vix6m_on_date = vix6m_df[vix6m_df["date"] == anchor]
+            if not vix6m_on_date.empty:
+                vix6m_level = float(vix6m_on_date["value"].iloc[0])
+                ratio6 = round(vix6m_level / current_vix, 4) if current_vix else None
+                vix6m_block = {
+                    "availability": "available",
+                    "level": round(vix6m_level, 4),
+                    "date": current_date_str,
+                    "ratio_vix6m_over_vix": ratio6,
+                    "term_structure_state_vix6m_over_vix": _vix_term_structure_state(ratio6),
+                    "usage": "supplementary_only",
+                    "note": (
+                        "VIX6M/VIX 只作长端期限结构补充观察；主判读以 VIX3M/VIX 为准，"
+                        "未对该腿做独立历史分位。"
+                    ),
+                }
+            else:
+                vix6m_block["reason"] = "no_vix6m_observation_on_latest_common_vix_vix3m_date"
+
+        state = _vix_term_structure_state(current_ratio)
+        percentile_5y = windows.get("5y", {}).get("percentile")
+        percentile_10y = windows.get("10y", {}).get("percentile")
+
+        value = {
+            "date": current_date_str,
+            "level": round(current_ratio, 4),
+            "vix": {"level": round(current_vix, 4), "date": current_date_str},
+            "vix3m": {"level": round(current_vix3m, 4), "date": current_date_str},
+            "vix6m": vix6m_block,
+            "ratio_vix3m_over_vix": round(current_ratio, 4),
+            "term_structure_state": state,
+            "state_thresholds": {
+                "contango_at_or_above": round(1.0 + VIX_TERM_STRUCTURE_FLAT_BAND, 4),
+                "backwardation_at_or_below": round(1.0 - VIX_TERM_STRUCTURE_FLAT_BAND, 4),
+                "flat_band_half_width": VIX_TERM_STRUCTURE_FLAT_BAND,
+                "note": "±0.5% 缓冲带内视为 flat，避免比值贴近 1.0 时的噪音导致状态频繁跳变。",
+            },
+            "percentile_5y": percentile_5y,
+            "percentile_10y": percentile_10y,
+            "percentile_context": {
+                "primary_field": "ratio_vix3m_over_vix",
+                "method": "count(v<=current)/n*100；与 Damodaran ERP / Wind PE 历史分位算法口径一致",
+                "windows": windows,
+                "raw_series": raw_series,
+                "raw_series_window_note": (
+                    "raw_series 覆盖至多10年（受 ^VIX3M 2006-07-17 上市日与 effective_date 双重约束），"
+                    "足以独立重算 windows.5y / windows.10y 两个分位。"
+                ),
+            },
+            "state_usage_boundary": {
+                "backwardation": {
+                    "usage": "supporting_only",
+                    "role": "risk_confirmation_or_alert",
+                    "reason": (
+                        "期限结构倒挂（VIX3M<VIX）是恐慌/风险信号，可作为 L2 风险确认或预警证据之一，"
+                        "仍须与 HY OAS/A-D/ATR 等交叉验证，不能单独触发结论。"
+                    ),
+                },
+                "contango": {
+                    "usage": "not_bullish_evidence",
+                    "role": "normal_state_baseline",
+                    "reason": "正挂是期限结构的常态默认形状，不构成看多证据；只说明近端没有额外恐慌溢价。",
+                },
+                "flat": {
+                    "usage": "not_bullish_evidence",
+                    "role": "transition_state",
+                    "reason": "比值贴近 1.0 时不携带方向性证据权重。",
+                },
+            },
+            "source_boundary": (
+                "VIX term structure 只回答近端相对远端的波动保险费定价关系，不能单独证明估值便宜或市场健康；"
+                "期限结构倒挂是恐慌/风险信号，正挂常态不构成看多证据。"
+            ),
+        }
+
+        data_quality = build_data_quality(
+            provider="yfinance",
+            source_name=source_name,
+            source_url=source_url,
+            source_tier="third_party_estimate",
+            data_date=current_date_str,
+            as_of_date=current_date_str,
+            effective_date=date_str,
+            vintage_date=current_date_str,
+            availability="available",
+            fallback_reason="none",
+            fallback_chain=["third_party_estimate", "unavailable"],
+            license_note="public_endpoint_review_required",
+            coverage={
+                "primary_window_5y": windows.get("5y", {}),
+                "primary_window_10y": windows.get("10y", {}),
+                "vix6m_availability": vix6m_block.get("availability"),
+                "raw_series_observations": len(raw_series),
+            },
+            methodology=(
+                "ratio_vix3m_over_vix = ^VIX3M close / ^VIX close on the same trading date (inner-joined "
+                "by date to avoid holiday/gap misalignment); percentile = count(ratio<=current)/n*100 over "
+                "the stated window; state = contango/backwardation/flat via the documented ±0.5% flat band."
+            ),
+            formula="level = ^VIX3M.close / ^VIX.close",
+            anomalies=(["vix6m_unavailable"] if vix6m_block.get("availability") != "available" else []),
+        )
+        data_quality["metric_authority"] = {
+            "term_structure_state": {
+                "source": "third_party_estimate",
+                "usage": "supporting_only",
+                "authority": "asymmetric_risk_signal_only",
+                "reason": (
+                    "backwardation 可支持风险/恐慌确认或预警（仍需交叉验证）；contango/flat 不得被引用为看多证据，"
+                    "只说明近端没有额外恐慌溢价——与 RESEARCH_CANON 的 VIX 期限结构判读边界一致。"
+                ),
+                "reference_sources": [],
+            },
+            "percentile_context": {
+                "source": "third_party_estimate",
+                "usage": "supporting_only",
+                "authority": "derived_from_yfinance_daily_closes",
+                "reason": "历史分位基于 yfinance ^VIX/^VIX3M 每日收盘计算，不是 Cboe 官方期限结构分位；仅作确认/预警强度参考。",
+                "reference_sources": [],
+            },
+            "vix6m_leg": {
+                "source": "third_party_estimate",
+                "usage": "supplementary_only",
+                "authority": "secondary_confirmation_leg_no_percentile",
+                "reason": "VIX6M/VIX 只作长端期限结构补充观察，未做独立历史分位，不得单独驱动结论。",
+                "reference_sources": [],
+            },
+        }
+
+        return {
+            "name": "VIX Term Structure (VIX3M/VIX)",
+            "series_id": "VIX_TERM_STRUCTURE",
+            "value": value,
+            "unit": "ratio",
+            "date": current_date_str,
+            "source_tier": "third_party_estimate",
+            "source_name": source_name,
+            "source_url": source_url,
+            "availability": "available",
+            "data_quality": data_quality,
+            "notes": "VIX 期限结构：VIX3M/VIX 比值 + contango/backwardation 状态 + 历史分位；VIX6M 作补充观察腿。",
+        }
+    except Exception as exc:
+        return _unavailable(f"vix_term_structure_exception: {str(exc)[:150]}")
 
 
 def get_10y2y_spread_bp(end_date: str = None) -> Dict[str, Any]:

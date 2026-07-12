@@ -223,6 +223,111 @@ def test_m7_capex_magnitude_sentinel_missing_indicator_is_honestly_missing():
 
 
 # ---------------------------------------------------------------------------
+# 4b. VIX term structure (get_vix_term_structure): percentile recompute from
+# the embedded raw ratio series, plus an intra-payload ratio consistency
+# check (vix3m.level / vix.level == level). Added for
+# investigation_reports/20260711_first_principles/WORK_ORDERS.md item 4, task A.
+# ---------------------------------------------------------------------------
+
+def _vix_term_structure_indicator(pipeline_percentile_10y, current_value=0.5, window_status="available"):
+    """Minimal but structurally real get_vix_term_structure payload: 10 monthly
+    ratio observations 0.1..1.0, current=0.5 -> true rank percentile is
+    count(v<=0.5)/10*100 = 50.0 (mirrors _damodaran_indicator's construction
+    so the expected numbers are easy to hand-verify)."""
+    raw_series = [
+        {
+            "data_date": f"2025-{month:02d}-01",
+            "vix": 20.0,
+            "vix3m": round(20.0 * (month / 10.0), 4),
+            "ratio_vix3m_over_vix": round(month / 10.0, 4),
+        }
+        for month in range(1, 11)
+    ]
+    vix3m_level = round(20.0 * current_value, 4)
+    return {
+        "layer": 2,
+        "function_id": "get_vix_term_structure",
+        "metric_name": "VIX Term Structure (VIX3M/VIX)",
+        "raw_data": {
+            "value": {
+                "level": current_value,
+                "vix": {"level": 20.0, "date": "2025-10-01"},
+                "vix3m": {"level": vix3m_level, "date": "2025-10-01"},
+                "percentile_context": {
+                    "primary_field": "ratio_vix3m_over_vix",
+                    "windows": {
+                        "10y": {
+                            "current_value": current_value,
+                            "percentile": pipeline_percentile_10y,
+                            "sample_count": 10,
+                            "window_start": "2025-01-01",
+                            "window_end": "2025-10-01",
+                            "status": window_status,
+                        }
+                    },
+                    "raw_series": raw_series,
+                },
+                "percentile_10y": pipeline_percentile_10y,
+            }
+        },
+    }
+
+
+def test_vix_term_structure_percentile_match_against_hand_verified_reference():
+    data = {"indicators": [_vix_term_structure_indicator(pipeline_percentile_10y=50.0)]}
+    report = rb.run(data)
+    findings = {f["field"]: f for f in report["findings"]}
+    key = "get_vix_term_structure.percentile_context.windows.10y.percentile"
+    assert findings[key]["status"] == "match"
+    assert findings[key]["recomputed_value"] == 50.0
+    assert findings[key]["pipeline_value"] == 50.0
+    assert findings[key]["criticality"] == "standard"
+
+
+def test_vix_term_structure_percentile_deviation_is_flagged_with_both_values():
+    data = {"indicators": [_vix_term_structure_indicator(pipeline_percentile_10y=99.9)]}
+    report = rb.run(data)
+    findings = {f["field"]: f for f in report["findings"]}
+    key = "get_vix_term_structure.percentile_context.windows.10y.percentile"
+    finding = findings[key]
+    assert finding["status"] == "deviation"
+    assert finding["pipeline_value"] == 99.9
+    assert finding["recomputed_value"] == 50.0
+    assert report["deviations"] >= 1
+
+
+def test_vix_term_structure_percentile_insufficient_history_agreement_is_match():
+    data = {"indicators": [_vix_term_structure_indicator(
+        pipeline_percentile_10y=None, window_status="insufficient_history",
+    )]}
+    report = rb.run(data)
+    findings = {f["field"]: f for f in report["findings"]}
+    key = "get_vix_term_structure.percentile_context.windows.10y.percentile"
+    assert findings[key]["status"] == "match"
+    assert findings[key]["recomputed_value"] is None
+
+
+def test_vix_term_structure_ratio_cross_check_matches_intra_payload_legs():
+    data = {"indicators": [_vix_term_structure_indicator(pipeline_percentile_10y=50.0, current_value=0.5)]}
+    report = rb.run(data)
+    findings = {f["field"]: f for f in report["findings"]}
+    key = "get_vix_term_structure.level"
+    assert findings[key]["status"] == "match"
+    assert findings[key]["recomputed_value"] == 0.5
+
+
+def test_vix_term_structure_ratio_cross_check_catches_tampered_level():
+    fixture = _vix_term_structure_indicator(pipeline_percentile_10y=50.0, current_value=0.5)
+    fixture["raw_data"]["value"]["level"] = 9.99  # tampered, no longer matches vix3m.level/vix.level
+    report = rb.run({"indicators": [fixture]})
+    findings = {f["field"]: f for f in report["findings"]}
+    key = "get_vix_term_structure.level"
+    assert findings[key]["status"] == "deviation"
+    assert findings[key]["pipeline_value"] == 9.99
+    assert findings[key]["recomputed_value"] == 0.5
+
+
+# ---------------------------------------------------------------------------
 # 5. checker.py hard-gate integration: critical deviations block publish,
 #    non-critical ones do not (criticality tiering avoids over-blocking)
 # ---------------------------------------------------------------------------

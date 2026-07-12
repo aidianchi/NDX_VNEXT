@@ -414,6 +414,81 @@ def check_wind_rank_percentile_consistency(data_json: Dict[str, Any], handled: S
     return findings
 
 
+def check_vix_term_structure_percentile(data_json: Dict[str, Any], handled: Set[str]) -> List[Dict[str, Any]]:
+    """VIX3M/VIX term-structure ratio's own 5y/10y percentile, recomputed from
+    the embedded `percentile_context.raw_series` -- added for
+    investigation_reports/20260711_first_principles/WORK_ORDERS.md item 4,
+    task A (see get_vix_term_structure in tools_L1.py). Shares the same
+    windows-over-one-raw-series shape as check_damodaran_erp_percentiles
+    above, just with a daily instead of monthly primary field."""
+    findings: List[Dict[str, Any]] = []
+    fid = "get_vix_term_structure"
+    value = _indicator_value(_get_indicator(data_json, fid))
+    base_field = f"{fid}.percentile_context"
+    if not isinstance(value, dict):
+        handled.add(base_field)
+        findings.append(_missing(base_field, "percentile", CRITICALITY_STANDARD, "indicator/value absent"))
+        return findings
+
+    ctx = value.get("percentile_context")
+    raw_series = ctx.get("raw_series") if isinstance(ctx, dict) else None
+    if not isinstance(ctx, dict) or not isinstance(raw_series, list):
+        handled.add(base_field)
+        findings.append(_missing(base_field, "percentile", CRITICALITY_STANDARD,
+                                  "percentile_context or raw_series absent from snapshot"))
+        return findings
+
+    primary_field = ctx.get("primary_field") or "ratio_vix3m_over_vix"
+    windows = ctx.get("windows") if isinstance(ctx.get("windows"), dict) else {}
+    for window_key, window_meta in windows.items():
+        if not isinstance(window_meta, dict):
+            continue
+        field = f"{base_field}.windows.{window_key}.percentile"
+        handled.add(field)
+        pipeline_pctl = window_meta.get("percentile")
+        current_value = window_meta.get("current_value")
+        window_start = window_meta.get("window_start")
+        window_end = window_meta.get("window_end")
+        pipeline_status = window_meta.get("status")
+        windowed = [
+            entry.get(primary_field)
+            for entry in raw_series
+            if isinstance(entry, dict)
+            and _is_number(entry.get(primary_field))
+            and (not window_start or str(entry.get("data_date", "")) >= window_start)
+            and (not window_end or str(entry.get("data_date", "")) <= window_end)
+        ]
+        note = (
+            f"method=count(v<=current)/n*100; primary_field={primary_field}; "
+            f"window={window_start}..{window_end}; n={len(windowed)} "
+            f"(pipeline sample_count={window_meta.get('sample_count')}, pipeline_status={pipeline_status})"
+        )
+        if pipeline_status == "insufficient_history" and pipeline_pctl is None:
+            findings.append(_finding(
+                field, pipeline_pctl, None, None, STATUS_MATCH, "percentile", CRITICALITY_STANDARD,
+                note + "; both sides agree window is insufficient_history (methodology match, no numeric percentile to compare)",
+            ))
+            continue
+        if not windowed or not _is_number(current_value):
+            findings.append(_missing(field, "percentile", CRITICALITY_STANDARD, note + "; empty windowed raw series or current_value missing"))
+            continue
+        recomputed = _rank_percentile(windowed, current_value)
+        findings.append(_compare(field, pipeline_pctl, recomputed, TOLERANCE_PERCENTILE_EXACT,
+                                  "percentile", CRITICALITY_STANDARD, note))
+
+    for dup_key, window_key in (("percentile_5y", "5y"), ("percentile_10y", "10y")):
+        field = f"{fid}.{dup_key}"
+        handled.add(field)
+        window_meta = windows.get(window_key) if isinstance(windows.get(window_key), dict) else {}
+        canonical = window_meta.get("percentile")
+        pipeline_val = value.get(dup_key)
+        findings.append(_compare(
+            field, pipeline_val, canonical, EPSILON_EXACT, "percentile", CRITICALITY_INFO,
+            "duplicate top-level convenience field vs nested percentile_context.windows.*.percentile internal consistency",
+        ))
+    return findings
+
+
 # ---------------------------------------------------------------------------
 # Category C (+D): net liquidity -- ratio/diff recompute AND unit sentinel
 # ---------------------------------------------------------------------------
@@ -605,6 +680,25 @@ def check_cross_indicator_ratios(data_json: Dict[str, Any], handled: Set[str]) -
                                   "ratio_or_diff", CRITICALITY_STANDARD, note))
     else:
         findings.append(_missing(field, "ratio_or_diff", CRITICALITY_STANDARD, note + "; component level(s) missing"))
+
+    fid = "get_vix_term_structure"
+    field = f"{fid}.level"
+    handled.add(field)
+    term_structure_val = _indicator_value(_get_indicator(data_json, fid))
+    if isinstance(term_structure_val, dict):
+        vix_leg = term_structure_val.get("vix") if isinstance(term_structure_val.get("vix"), dict) else {}
+        vix3m_leg = term_structure_val.get("vix3m") if isinstance(term_structure_val.get("vix3m"), dict) else {}
+        vix_level = vix_leg.get("level")
+        vix3m_level = vix3m_leg.get("level")
+        pipeline_level = term_structure_val.get("level")
+        note = f"formula=vix3m.level/vix.level (intra-payload legs); vix3m={vix3m_level}, vix={vix_level}"
+        if _is_number(vix3m_level) and _is_number(vix_level) and vix_level:
+            findings.append(_compare(field, pipeline_level, vix3m_level / vix_level, TOLERANCE_ROUNDED_4DP,
+                                      "ratio_or_diff", CRITICALITY_STANDARD, note))
+        else:
+            findings.append(_missing(field, "ratio_or_diff", CRITICALITY_STANDARD, note + "; component level(s) missing"))
+    else:
+        findings.append(_missing(field, "ratio_or_diff", CRITICALITY_STANDARD, "indicator/value absent"))
 
     fid = "get_equity_risk_premium"
     field = f"{fid}.level"
@@ -923,6 +1017,7 @@ def run(data_json: Dict[str, Any]) -> Dict[str, Any]:
     findings.extend(check_damodaran_erp_percentiles(data_json, handled))
     findings.extend(check_wind_pe_percentile(data_json, handled))
     findings.extend(check_wind_rank_percentile_consistency(data_json, handled))
+    findings.extend(check_vix_term_structure_percentile(data_json, handled))
     findings.extend(check_net_liquidity(data_json, handled))
     findings.extend(check_m7_capex_cycle_magnitude(data_json, handled))
     findings.extend(check_cross_indicator_ratios(data_json, handled))
