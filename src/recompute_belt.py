@@ -504,6 +504,86 @@ def check_net_liquidity(data_json: Dict[str, Any], handled: Set[str]) -> List[Di
 
 
 # ---------------------------------------------------------------------------
+# Category E: M7 capex cycle -- order-of-magnitude sentinel
+# ---------------------------------------------------------------------------
+# Added for investigation_reports/20260711_first_principles/WORK_ORDERS.md
+# item 4 (evidence menu rebalancing). The M7 capex cycle metric
+# (get_m7_capex_cycle) is a new quarterly-dollar-figure indicator built from
+# SEC XBRL facts; a billion/million unit mixup in that pipeline is exactly
+# the class of bug this module exists to catch (see module docstring). This
+# is a plausibility band, not a value recompute -- the year-to-date-to-
+# discrete-quarter derivation math itself lives only in tools_L4.py, which
+# this module must not import (independence rule above). Bands are NOT
+# empirically validated against a live snapshot (SEC network access was
+# blocked in the build sandbox that added this check), so criticality is
+# deliberately "standard" (record, do not hard-block) until a real run
+# confirms the ranges; see WORK_LOG for the residual-risk note.
+
+M7_CAPEX_SINGLE_QUARTER_BAND_USD_BN = (0.05, 60.0)
+"""Per-company single-quarter capex band. Smaller M7 members' historical
+quarters sit near the low end; the largest hyperscalers' AI-buildout
+quarters are well under the high end. Wide enough to span the capex
+super-cycle while still catching a ~1e3 unit mixup."""
+
+M7_CAPEX_AGGREGATE_QUARTER_BAND_USD_BN = (5.0, 250.0)
+"""M7 combined single-quarter capex band, spanning pre-AI-cycle norms
+through an elevated buildout scenario with headroom."""
+
+
+def check_m7_capex_cycle_magnitude(data_json: Dict[str, Any], handled: Set[str]) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    fid = "get_m7_capex_cycle"
+    value = _indicator_value(_get_indicator(data_json, fid))
+    if not isinstance(value, dict):
+        field = f"{fid}.companies"
+        handled.add(field)
+        findings.append(_missing(field, "unit_sentinel", CRITICALITY_STANDARD, "indicator/value absent"))
+        return findings
+
+    companies = value.get("companies") if isinstance(value.get("companies"), dict) else {}
+    low, high = M7_CAPEX_SINGLE_QUARTER_BAND_USD_BN
+    for ticker, company in companies.items():
+        quarters = company.get("quarters") if isinstance(company, dict) else None
+        field = f"{fid}.magnitude_sentinel.{ticker}.latest_quarter"
+        handled.add(field)
+        if not isinstance(quarters, list) or not quarters:
+            continue
+        latest = quarters[-1]
+        magnitude = latest.get("value_usd_bn") if isinstance(latest, dict) else None
+        note = (
+            f"plausible_band_usd_bn=[{low}, {high}]; ticker={ticker}; "
+            f"period_end={latest.get('period_end') if isinstance(latest, dict) else None}; {MAGNITUDE_SENTINEL_NOTE}"
+        )
+        if not _is_number(magnitude):
+            findings.append(_missing(field, "unit_sentinel", CRITICALITY_STANDARD, note + "; value missing"))
+            continue
+        in_band = low <= magnitude <= high
+        status = STATUS_MATCH if in_band else STATUS_DEVIATION
+        findings.append(_finding(
+            field, magnitude, None, None, status, "unit_sentinel", CRITICALITY_STANDARD,
+            note + ("; within band" if in_band else "; OUTSIDE PLAUSIBLE BAND -- possible unit mixup, verify source"),
+        ))
+
+    aggregate = value.get("m7_aggregate") if isinstance(value.get("m7_aggregate"), dict) else {}
+    latest_covered = aggregate.get("latest_covered_quarter") if isinstance(aggregate.get("latest_covered_quarter"), dict) else None
+    field = f"{fid}.magnitude_sentinel.m7_aggregate.latest_covered_quarter"
+    handled.add(field)
+    low_agg, high_agg = M7_CAPEX_AGGREGATE_QUARTER_BAND_USD_BN
+    note = f"plausible_band_usd_bn=[{low_agg}, {high_agg}]; {MAGNITUDE_SENTINEL_NOTE}"
+    magnitude = latest_covered.get("sum_usd_bn") if isinstance(latest_covered, dict) else None
+    if not _is_number(magnitude):
+        findings.append(_missing(field, "unit_sentinel", CRITICALITY_STANDARD, note + "; value missing"))
+    else:
+        in_band = low_agg <= magnitude <= high_agg
+        status = STATUS_MATCH if in_band else STATUS_DEVIATION
+        findings.append(_finding(
+            field, magnitude, None, None, status, "unit_sentinel", CRITICALITY_STANDARD,
+            note + ("; within band" if in_band else "; OUTSIDE PLAUSIBLE BAND -- possible unit mixup, verify source"),
+        ))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Category C: cross-indicator and intra-payload ratio/diff checks
 # ---------------------------------------------------------------------------
 
@@ -844,6 +924,7 @@ def run(data_json: Dict[str, Any]) -> Dict[str, Any]:
     findings.extend(check_wind_pe_percentile(data_json, handled))
     findings.extend(check_wind_rank_percentile_consistency(data_json, handled))
     findings.extend(check_net_liquidity(data_json, handled))
+    findings.extend(check_m7_capex_cycle_magnitude(data_json, handled))
     findings.extend(check_cross_indicator_ratios(data_json, handled))
     findings.extend(check_ma_deviation_family(data_json, handled))
     findings.extend(check_l5_moving_averages(data_json, handled))

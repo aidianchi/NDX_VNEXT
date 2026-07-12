@@ -173,6 +173,55 @@ def test_net_liquidity_unit_label_mismatch_is_flagged():
     assert findings["get_net_liquidity_momentum.unit_labels"]["status"] == "deviation"
 
 
+def _m7_capex_indicator(latest_quarter_value_bn, aggregate_sum_bn):
+    return {
+        "layer": 4,
+        "function_id": "get_m7_capex_cycle",
+        "metric_name": "M7 / Hyperscaler Capex Cycle",
+        "raw_data": {
+            "value": {
+                "companies": {
+                    "AAPL": {
+                        "quarters": [
+                            {"calendar_quarter": "2025Q4", "period_end": "2025-12-31", "value_usd_bn": latest_quarter_value_bn}
+                        ]
+                    }
+                },
+                "m7_aggregate": {
+                    "latest_covered_quarter": {"calendar_quarter": "2025Q4", "sum_usd_bn": aggregate_sum_bn}
+                },
+            }
+        },
+    }
+
+
+def test_m7_capex_magnitude_sentinel_passes_for_plausible_values():
+    data = {"indicators": [_m7_capex_indicator(latest_quarter_value_bn=18.0, aggregate_sum_bn=80.0)]}
+    report = rb.run(data)
+    findings = {f["field"]: f for f in report["findings"]}
+    assert findings["get_m7_capex_cycle.magnitude_sentinel.AAPL.latest_quarter"]["status"] == "match"
+    assert findings["get_m7_capex_cycle.magnitude_sentinel.m7_aggregate.latest_covered_quarter"]["status"] == "match"
+
+
+def test_m7_capex_magnitude_sentinel_catches_unit_mixup():
+    # 18000.0 "billion" would actually be a thousand-fold unit mixup (e.g. a
+    # million-USD value mislabeled as billions); combined M7 quarterly capex
+    # has never been anywhere near $18,000bn.
+    data = {"indicators": [_m7_capex_indicator(latest_quarter_value_bn=18000.0, aggregate_sum_bn=80.0)]}
+    report = rb.run(data)
+    findings = {f["field"]: f for f in report["findings"]}
+    sentinel = findings["get_m7_capex_cycle.magnitude_sentinel.AAPL.latest_quarter"]
+    assert sentinel["status"] == "deviation"
+    assert sentinel["criticality"] == "standard"
+    assert "OUTSIDE PLAUSIBLE BAND" in sentinel["note"]
+
+
+def test_m7_capex_magnitude_sentinel_missing_indicator_is_honestly_missing():
+    report = rb.run({"indicators": []})
+    findings = {f["field"]: f for f in report["findings"]}
+    assert findings["get_m7_capex_cycle.companies"]["status"] == "unrecomputable_missing_raw"
+
+
 # ---------------------------------------------------------------------------
 # 5. checker.py hard-gate integration: critical deviations block publish,
 #    non-critical ones do not (criticality tiering avoids over-blocking)

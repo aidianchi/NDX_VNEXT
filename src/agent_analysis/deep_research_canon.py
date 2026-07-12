@@ -306,6 +306,31 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
         "核心估值-利率桥梁指标，但只回答当前收益率差距，不建模长期现金流路径。",
         "简式收益差距薄=安全垫薄；不要伪装成 implied ERP。",
     ),
+    "get_m7_capex_cycle": _indicator(
+        "get_m7_capex_cycle",
+        "M7 / Hyperscaler Capex Cycle",
+        Layer.L4,
+        PermissionType.FACT,
+        "M7头部厂商的资本开支同比增速是在加速还是减速，这对'AI资本开支超级周期是否支撑当前估值'意味着什么？",
+        [
+            "先看单季同比增速方向，再看同比增速相对上一个可比季度是加速还是减速（边际二阶变化）；单季水平不如边际变化重要。",
+            "只有至少5/7家公司同一日历季度都有数据时，M7合计同比才可用；覆盖不足的季度必须明确标不可比。",
+        ],
+        [
+            "资本开支加速不能直接等于'AI叙事成立、可以买入'；资本开支减速也不能直接等于'泡沫破裂'——两者都跳过了这笔支出是否转化为收入和利润的中间环节。",
+            "M7合计按日历季度对齐加总，跨公司不同财年（MSFT 6月结账、NVDA 1月结账）存在数周对齐误差，不是精确同日求和。",
+            "单季申报值多为财年内累计（year-to-date），本指标已做逐季相减还原为单季值；不得把累计值当单季值直接比较。",
+        ],
+        ["get_ndx_forward_earnings_quality", "get_ndx_pe_and_earnings_yield", "get_equity_risk_premium"],
+        [
+            "资本开支同比持续加速但盈利预期转为下修、FCF被显著侵蚀，说明市场在为尚未兑现的支出买单。",
+            "资本开支同比连续两个可比季度系统性减速，是'超级周期见顶'假说需要认真对待的早期信号。",
+        ],
+        "结构性多头证据的直接补位；核心仓可作产业周期支撑证据之一，不能单独据此扩大仓位；战术仓可把边际减速当提前风险预警，但需至少两个季度确认。",
+        "资本开支加速证明巨头还在下注，不证明赌注已经赢了；真正的风险信号是同比增速开始系统性减速，而不是绝对水平高低。",
+        source_hint="SEC XBRL companyconcept (10-Q/10-K capex facts)",
+        frequency_hint="quarterly",
+    ),
     "get_damodaran_us_implied_erp": _indicator(
         "get_damodaran_us_implied_erp",
         "Damodaran US Implied ERP Reference",

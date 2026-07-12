@@ -143,6 +143,46 @@ SEC_CIK_MAP_WAIT_SECONDS = 6
 SEC_COMPANY_FACTS_WAIT_SECONDS = 6
 SEC_OFFICIAL_CHECK_TOTAL_BUDGET_SECONDS = 20
 YFINANCE_INFO_WAIT_SECONDS = 6
+
+# M7 / hyperscaler capex cycle (investigation_reports/20260711_first_principles/
+# WORK_ORDERS.md item 4): candidate XBRL tags for cash capex, tried in order.
+# The first two mirror SEC_L4_METRIC_ALIASES["capex"] above (kept as a
+# separate list so this dedicated multi-quarter fetcher does not change the
+# behaviour of the existing single-latest-fact _fetch_sec_xbrl_summary path).
+# The extra tags cover filers that break out finance-lease additions or use a
+# less common standard element; unverifiable against live SEC data inside
+# this build's sandbox (see WORK LOG), so the runtime fallback/"unavailable"
+# path is the safety net if a company actually uses a tag not listed here.
+M7_CAPEX_XBRL_TAG_CANDIDATES = [
+    "PaymentsToAcquirePropertyPlantAndEquipment",
+    "PaymentsToAcquirePropertyPlantAndEquipmentExcludingFinanceLease",
+    "PaymentsForCapitalImprovements",
+    "PaymentsToAcquireProductiveAssets",
+    "CapitalExpenditures",
+]
+M7_CAPEX_MIN_QUARTERS = 8
+M7_CAPEX_MAX_QUARTERS_RETURNED = 12
+M7_CAPEX_TOTAL_BUDGET_SECONDS = 45
+MIN_M7_CAPEX_COMPANIES_FOR_AGGREGATE = 5
+
+# Second channel (added 2026-07-12 after coordinator verification showed
+# *.sec.gov is unreachable from this machine, not just the agent sandbox --
+# see WORK_LOG). Per-company fallback only, only in a live/current-date
+# context; never in an explicit past-date (backtest) context, because
+# yfinance's normalized quarterly cash flow carries no verifiable filing
+# date and cannot honor point-in-time discipline.
+SOURCE_TIER_MIXED_OFFICIAL_AND_THIRD_PARTY = "mixed_official_and_third_party"
+YFINANCE_CAPEX_ROW_CANDIDATES = [
+    "Capital Expenditure",
+    "Capital Expenditures",
+    "Purchase Of PPE",
+    "Purchases Of Property And Equipment",
+]
+YFINANCE_CAPEX_CONSERVATIVE_VISIBILITY_LAG_DAYS = 75
+"""Informational only, not a filed_date substitute. Covers both the SEC's
+40-day 10-Q deadline and 60-day 10-K deadline for large accelerated filers
+with headroom; used to flag whether a fallback quarter is old enough that a
+real filing very likely already exists, without claiming to know when."""
 YAHOO_QUOTE_SUMMARY_WAIT_SECONDS = 6
 L4_COMPONENT_LIVE_SOURCE_TOTAL_BUDGET_SECONDS = 60
 MIN_FORWARD_PE_STOCKS = 50
@@ -2530,6 +2570,212 @@ def _fetch_sec_xbrl_summary(ticker: str, *, end_date: Optional[str] = None) -> T
         return {}, str(exc)[:160]
 
 
+def _fetch_sec_xbrl_companyconcept(cik: str, tag: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Fetch one us-gaap XBRL concept's full duration-fact history for a company.
+
+    Unlike `_fetch_sec_xbrl_summary` (which keeps only the single latest fact
+    before an as-of date), this is used where a multi-quarter time series is
+    required (M7 capex cycle).
+    """
+    try:
+        response, request_error = _sec_request_get_best_effort(
+            f"https://data.sec.gov/api/xbrl/companyconcept/CIK{cik}/us-gaap/{tag}.json",
+            wait_seconds=SEC_COMPANY_FACTS_WAIT_SECONDS,
+        )
+        if request_error or response is None:
+            return {}, request_error or "missing_response"
+        status_code = getattr(response, "status_code", 200)
+        if status_code == 404:
+            return {}, "tag_not_reported_by_filer"
+        response.raise_for_status()
+        return response.json(), None
+    except Exception as exc:
+        return {}, str(exc)[:160]
+
+
+def _sec_xbrl_duration_facts_before(units: Dict[str, Any], *, end_date: Optional[str]) -> List[Dict[str, Any]]:
+    """All 10-Q/10-K USD duration facts filed on/before end_date (point-in-time filter).
+
+    Deduplicates by (start, end) period, keeping the latest-filed value for a
+    given period (later filings can restate an earlier period).
+    """
+    by_period: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for item in units.get("USD", []) if isinstance(units.get("USD"), list) else []:
+        if item.get("form") not in {"10-Q", "10-K"}:
+            continue
+        start = item.get("start")
+        end = item.get("end")
+        if not start or not end:
+            continue
+        filed = item.get("filed")
+        if end_date and filed and str(filed) > end_date:
+            continue
+        key = (str(start), str(end))
+        existing = by_period.get(key)
+        if existing is None or str(item.get("filed") or "") > str(existing.get("filed") or ""):
+            by_period[key] = dict(item)
+    return sorted(by_period.values(), key=lambda x: (str(x.get("end") or ""), str(x.get("filed") or "")))
+
+
+def _derive_discrete_quarters_from_cumulative(facts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert XBRL duration facts into discrete single-quarter values.
+
+    SEC cash-flow-statement XBRL facts for interim periods are usually
+    reported fiscal-year-to-date cumulative (start = fiscal-year start, end =
+    quarter end), not quarter-only. This groups facts that share the same
+    `start` date (the same fiscal-year chain), sorts each chain by `end`
+    ascending, and takes successive differences to recover discrete quarters.
+    A chain's first fact is used as-is (Q1, or a genuinely quarter-native
+    fact whose own duration is already ~1 quarter).
+    """
+    chains: Dict[str, List[Dict[str, Any]]] = {}
+    for fact in facts:
+        chains.setdefault(str(fact.get("start") or ""), []).append(fact)
+
+    discrete: List[Dict[str, Any]] = []
+    for chain in chains.values():
+        chain_sorted = sorted(chain, key=lambda x: str(x.get("end") or ""))
+        prev_val: Optional[float] = None
+        for idx, fact in enumerate(chain_sorted):
+            val = fact.get("val")
+            if not isinstance(val, (int, float)):
+                continue
+            start_dt = _parse_valuation_date(fact.get("start"))
+            end_dt = _parse_valuation_date(fact.get("end"))
+            duration_days = (end_dt - start_dt).days if start_dt and end_dt else None
+            if idx == 0:
+                quarter_val = float(val)
+                derivation = (
+                    "quarter_native_duration"
+                    if duration_days is not None and 75 <= duration_days <= 100
+                    else "first_period_in_fiscal_year_chain"
+                )
+            else:
+                if prev_val is None:
+                    prev_val = float(val)
+                    continue
+                quarter_val = float(val) - prev_val
+                derivation = "discrete_quarter_from_cumulative_ytd_diff"
+            discrete.append(
+                {
+                    "period_start": fact.get("start"),
+                    "period_end": fact.get("end"),
+                    "value": quarter_val,
+                    "cumulative_value": float(val),
+                    "filed_date": fact.get("filed"),
+                    "form": fact.get("form"),
+                    "fiscal_year": fact.get("fy"),
+                    "fiscal_period": fact.get("fp"),
+                    "accession": fact.get("accn"),
+                    "derivation": derivation,
+                    "duration_days": duration_days,
+                }
+            )
+            prev_val = float(val)
+    return sorted(discrete, key=lambda x: str(x.get("period_end") or ""))
+
+
+def _calendar_quarter_label(date_value: Any) -> Optional[str]:
+    parsed = _parse_valuation_date(date_value)
+    if parsed is None:
+        return None
+    quarter = (parsed.month - 1) // 3 + 1
+    return f"{parsed.year}Q{quarter}"
+
+
+def _prior_year_calendar_quarter_label(label: Optional[str]) -> Optional[str]:
+    if not label or "Q" not in label:
+        return None
+    try:
+        year_str, q_str = label.split("Q")
+        return f"{int(year_str) - 1}Q{q_str}"
+    except (ValueError, TypeError):
+        return None
+
+
+def _attach_calendar_quarter_and_yoy(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Shared post-processing for both the SEC and yfinance capex channels.
+
+    Each row must already have `period_end` and `value`. Mutates each row to
+    add `calendar_quarter`, `yoy_pct`, `yoy_prior_quarter_label`; returns the
+    same rows sorted by `period_end`.
+    """
+    rows = sorted(rows, key=lambda item: str(item.get("period_end") or ""))
+    for row in rows:
+        row["calendar_quarter"] = _calendar_quarter_label(row.get("period_end"))
+    label_index = {row["calendar_quarter"]: row for row in rows if row.get("calendar_quarter")}
+    for row in rows:
+        label = row.get("calendar_quarter")
+        prior_label = _prior_year_calendar_quarter_label(label)
+        prior_row = label_index.get(prior_label) if prior_label else None
+        yoy_pct = None
+        if prior_row and isinstance(prior_row.get("value"), (int, float)) and prior_row["value"]:
+            yoy_pct = _round_or_none((row["value"] / prior_row["value"] - 1.0) * 100.0)
+        row["yoy_pct"] = yoy_pct
+        row["yoy_prior_quarter_label"] = prior_label
+    return rows
+
+
+def _display_quarter(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Uniform per-quarter display shape for both the SEC and yfinance-fallback channels."""
+    return {
+        "calendar_quarter": row.get("calendar_quarter"),
+        "period_start": row.get("period_start"),
+        "period_end": row.get("period_end"),
+        "filed_date": row.get("filed_date"),
+        "form": row.get("form"),
+        "fiscal_year": row.get("fiscal_year"),
+        "fiscal_period": row.get("fiscal_period"),
+        "value_usd": row.get("value"),
+        "value_usd_bn": _round_or_none(row["value"] / 1e9, 3) if isinstance(row.get("value"), (int, float)) else None,
+        "derivation": row.get("derivation"),
+        "source": row.get("source"),
+        "pit_safe": row.get("pit_safe"),
+        "conservative_visible_after_date": row.get("conservative_visible_after_date"),
+        "yoy_pct": row.get("yoy_pct"),
+        "yoy_prior_quarter_label": row.get("yoy_prior_quarter_label"),
+    }
+
+
+def _fetch_yfinance_capex_quarterly(ticker: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """Per-company quarterly capex fallback via yfinance's normalized quarterly
+    cash-flow statement. Yahoo already discretizes this to single quarters (no
+    cumulative-YTD derivation needed here), but it carries no filed_date --
+    callers must treat every row as pit_safe=false and third-party, never as
+    an SEC-official disclosed fact.
+    """
+    if not YF_AVAILABLE:
+        return [], "yfinance_unavailable"
+    try:
+        cashflow = yf.Ticker(ticker).quarterly_cashflow
+        if cashflow is None or cashflow.empty:
+            return [], "yfinance_quarterly_cashflow_empty"
+        row = None
+        used_row_label = None
+        for label in YFINANCE_CAPEX_ROW_CANDIDATES:
+            if label in cashflow.index:
+                row = cashflow.loc[label]
+                used_row_label = label
+                break
+        if row is None:
+            return [], "yfinance_capex_row_not_found"
+        quarters: List[Dict[str, Any]] = []
+        for column, raw_value in row.items():
+            value = _safe_float(raw_value)
+            if value is None:
+                continue
+            try:
+                period_end = column.date().isoformat() if hasattr(column, "date") else str(column)[:10]
+            except Exception:
+                continue
+            quarters.append({"period_end": period_end, "value": abs(value), "yfinance_row_label": used_row_label})
+        if not quarters:
+            return [], "yfinance_capex_row_all_values_missing"
+        return sorted(quarters, key=lambda item: item["period_end"]), None
+    except Exception as exc:
+        return [], str(exc)[:160]
+
+
 def _fetch_eastmoney_gmain_indicator(secucode: str) -> Tuple[Dict[str, Any], Optional[str]]:
     try:
         response = requests.get(
@@ -4911,6 +5157,411 @@ def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
             "source_name": "yfinance component model + M7 EPS trend",
             "notes": f"Forward earnings quality unavailable: {str(exc)[:120]}",
         }
+
+
+def get_m7_capex_cycle(end_date: str = None) -> Dict[str, Any]:
+    """M7 / hyperscaler quarterly capital expenditure cycle, two channels.
+
+    Added for investigation_reports/20260711_first_principles/audit_B_finance.md
+    finding F1: the AI capex super-cycle driving 2023-2025 NDX excess returns
+    had no independent evidence source in the system (capex previously only
+    appeared as an FCF deduction).
+
+    Primary channel: SEC XBRL company-concept duration facts (10-Q/10-K),
+    official tier, point-in-time safe (every fact is filed_date-gated against
+    `end_date`). Fallback channel (2026-07-12, after coordinator confirmed
+    *.sec.gov is unreachable from this machine directly, not just this
+    sandbox -- see WORK_LOG): per-company only, and only in a live/current-
+    date context, Yahoo Finance's own normalized quarterly cash-flow capex
+    row. The fallback has no verifiable filing date and is never used when
+    `end_date` names an explicit past date (a real backtest) -- point-in-time
+    discipline wins over completeness there ("宁缺毋假").
+
+    Either way this answers whether hyperscalers are still increasing spend;
+    it does not answer whether that spend is profitable or whether NDX is
+    cheap. See RESEARCH_CANON.md's M7/hyperscaler capex cycle entry.
+    """
+    effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
+    date_str = effective_date.strftime("%Y-%m-%d")
+    is_live_context = (end_date is None) or (effective_date.date() >= datetime.now().date())
+
+    try:
+        cik_map = _sec_cik_map()
+        companies: Dict[str, Any] = {}
+        discrete_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
+        started_at = time.monotonic()
+
+        for ticker in M7_TICKERS:
+            cik = cik_map.get(ticker)
+            sec_series: List[Dict[str, Any]] = []
+            sec_unavailable_reason: Optional[str] = None
+            selected_tag: Optional[str] = None
+
+            if not cik:
+                sec_unavailable_reason = "missing_cik"
+            elif time.monotonic() - started_at >= M7_CAPEX_TOTAL_BUDGET_SECONDS:
+                sec_unavailable_reason = "sec_total_budget_exhausted"
+            else:
+                payload: Optional[Dict[str, Any]] = None
+                tag_error: Optional[str] = None
+                for tag in M7_CAPEX_XBRL_TAG_CANDIDATES:
+                    candidate_payload, error = _fetch_sec_xbrl_companyconcept(cik, tag)
+                    units = candidate_payload.get("units") if isinstance(candidate_payload, dict) else None
+                    if isinstance(units, dict) and units.get("USD"):
+                        selected_tag = tag
+                        payload = candidate_payload
+                        break
+                    tag_error = error or tag_error
+                if payload is None:
+                    sec_unavailable_reason = tag_error or "no_candidate_xbrl_tag_reported"
+                else:
+                    facts = _sec_xbrl_duration_facts_before(payload.get("units", {}), end_date=date_str)
+                    discrete = _derive_discrete_quarters_from_cumulative(facts)
+                    for row in discrete:
+                        row["source"] = "sec_xbrl"
+                        row["pit_safe"] = True
+                    discrete = _attach_calendar_quarter_and_yoy(discrete)
+                    if discrete:
+                        sec_series = discrete
+                    else:
+                        sec_unavailable_reason = "no_discrete_quarters_derivable_from_available_facts"
+
+            fallback_series: List[Dict[str, Any]] = []
+            fallback_error: Optional[str] = None
+            if not sec_series:
+                if is_live_context:
+                    yf_quarters, yf_error = _fetch_yfinance_capex_quarterly(ticker)
+                    if yf_quarters:
+                        filtered = [q for q in yf_quarters if q.get("period_end") and q["period_end"] <= date_str]
+                        for q in filtered:
+                            q["source"] = "yfinance_fallback"
+                            q["pit_safe"] = False
+                            end_dt = _parse_valuation_date(q.get("period_end"))
+                            q["conservative_visible_after_date"] = (
+                                (end_dt + timedelta(days=YFINANCE_CAPEX_CONSERVATIVE_VISIBILITY_LAG_DAYS)).date().isoformat()
+                                if end_dt is not None else None
+                            )
+                        filtered = _attach_calendar_quarter_and_yoy(filtered)
+                        if filtered:
+                            fallback_series = filtered
+                        else:
+                            fallback_error = "yfinance_fallback_produced_no_quarters_at_or_before_as_of_date"
+                    else:
+                        fallback_error = yf_error
+                else:
+                    fallback_error = "yfinance_fallback_disabled_not_live_context_pit_unsafe"
+
+            series = sec_series or fallback_series
+            primary_source = "sec_xbrl" if sec_series else ("yfinance_fallback" if fallback_series else None)
+
+            if series:
+                quarters_out = [_display_quarter(row) for row in series[-M7_CAPEX_MAX_QUARTERS_RETURNED:]]
+                discrete_by_ticker[ticker] = series
+                company_result: Dict[str, Any] = {
+                    "availability": "available",
+                    "primary_source": primary_source,
+                    "source_tier": SOURCE_TIER_OFFICIAL if primary_source == "sec_xbrl" else SOURCE_TIER_THIRD_PARTY,
+                    "pit_safe": primary_source == "sec_xbrl",
+                    "cik": cik,
+                    "coverage_quarters": len(quarters_out),
+                    "quarters": quarters_out,
+                    "latest_quarter_yoy_pct": quarters_out[-1]["yoy_pct"] if quarters_out else None,
+                }
+                if primary_source == "sec_xbrl":
+                    company_result["xbrl_tag"] = selected_tag
+                else:
+                    company_result["fallback_reason"] = f"sec_xbrl_unavailable: {sec_unavailable_reason}"
+                    company_result["fallback_note"] = (
+                        "Yahoo Finance normalized quarterly cash-flow capex. No verifiable SEC filing "
+                        "date; pit_safe=false. Not an official disclosed fact -- treat as a third-party "
+                        "supporting proxy only, per data_quality.metric_authority.companies_yfinance_fallback."
+                    )
+                if len(quarters_out) < M7_CAPEX_MIN_QUARTERS:
+                    company_result["coverage_note"] = (
+                        f"only {len(quarters_out)} discrete quarters derivable as of {date_str}; "
+                        f"fewer than the {M7_CAPEX_MIN_QUARTERS} requested"
+                    )
+                companies[ticker] = company_result
+            else:
+                reasons = []
+                if sec_unavailable_reason:
+                    reasons.append(f"sec_xbrl:{sec_unavailable_reason}")
+                if fallback_error:
+                    reasons.append(f"yfinance_fallback:{fallback_error}")
+                companies[ticker] = {
+                    "availability": "unavailable",
+                    "primary_source": None,
+                    "unavailable_reason": "; ".join(reasons) if reasons else "no_data_from_any_channel",
+                }
+
+        # M7 aggregate: sum companies sharing a calendar-quarter bucket, from
+        # whichever channel each company actually used.
+        by_label: Dict[str, Dict[str, float]] = {}
+        filed_by_label: Dict[str, List[str]] = {}
+        source_by_label: Dict[str, Dict[str, str]] = {}
+        for ticker, series in discrete_by_ticker.items():
+            for row in series:
+                label = row.get("calendar_quarter")
+                if not label or not isinstance(row.get("value"), (int, float)):
+                    continue
+                by_label.setdefault(label, {})[ticker] = row["value"]
+                source_by_label.setdefault(label, {})[ticker] = row.get("source")
+                if row.get("filed_date"):
+                    filed_by_label.setdefault(label, []).append(str(row["filed_date"]))
+
+        aggregate_rows: List[Dict[str, Any]] = []
+        for label in sorted(by_label.keys()):
+            members = by_label[label]
+            companies_covered = sorted(members.keys())
+            missing = sorted(set(M7_TICKERS) - set(members.keys()))
+            prior_label = _prior_year_calendar_quarter_label(label)
+            prior_members = by_label.get(prior_label, {}) if prior_label else {}
+            comparable = sorted(set(members.keys()) & set(prior_members.keys()))
+            yoy_pct = None
+            if len(comparable) >= MIN_M7_CAPEX_COMPANIES_FOR_AGGREGATE:
+                current_common = sum(members[t] for t in comparable)
+                prior_common = sum(prior_members[t] for t in comparable)
+                if prior_common:
+                    yoy_pct = _round_or_none((current_common / prior_common - 1.0) * 100.0)
+            quarter_sources = sorted({s for s in source_by_label.get(label, {}).values() if s})
+            aggregate_rows.append(
+                {
+                    "calendar_quarter": label,
+                    "sum_usd_bn": _round_or_none(sum(members.values()) / 1e9, 3),
+                    "companies_covered": companies_covered,
+                    "companies_covered_count": len(companies_covered),
+                    "companies_missing": missing,
+                    "sources_used": quarter_sources,
+                    "pit_safe": quarter_sources == ["sec_xbrl"],
+                    "latest_filed_date_in_quarter": max(filed_by_label.get(label, [])) if filed_by_label.get(label) else None,
+                    "yoy_pct": yoy_pct,
+                    "yoy_comparable_companies": comparable,
+                    "yoy_comparable_company_count": len(comparable),
+                    "yoy_prior_quarter_label": prior_label,
+                }
+            )
+
+        eligible_rows = [row for row in aggregate_rows if row["companies_covered_count"] >= MIN_M7_CAPEX_COMPANIES_FOR_AGGREGATE]
+        latest_covered = eligible_rows[-1] if eligible_rows else None
+        prior_covered = eligible_rows[-2] if len(eligible_rows) >= 2 else None
+
+        acceleration = None
+        if (
+            latest_covered
+            and prior_covered
+            and latest_covered.get("yoy_pct") is not None
+            and prior_covered.get("yoy_pct") is not None
+        ):
+            delta = _round_or_none(latest_covered["yoy_pct"] - prior_covered["yoy_pct"])
+            if delta is None:
+                direction = "unavailable"
+            elif delta > 2.0:
+                direction = "accelerating"
+            elif delta < -2.0:
+                direction = "decelerating"
+            else:
+                direction = "stable"
+            acceleration = {
+                "latest_quarter_label": latest_covered["calendar_quarter"],
+                "latest_yoy_pct": latest_covered["yoy_pct"],
+                "prior_quarter_label": prior_covered["calendar_quarter"],
+                "prior_yoy_pct": prior_covered["yoy_pct"],
+                "delta_pp": delta,
+                "direction": direction,
+                "direction_band_note": "direction requires |delta_pp| > 2.0 percentage points; smaller changes are labeled stable",
+                "pit_safe": bool(latest_covered.get("pit_safe")) and bool(prior_covered.get("pit_safe")),
+            }
+
+        available_companies = [ticker for ticker, data in companies.items() if data.get("availability") == "available"]
+        companies_via_sec = sorted(t for t, c in companies.items() if c.get("primary_source") == "sec_xbrl")
+        companies_via_fallback = sorted(t for t, c in companies.items() if c.get("primary_source") == "yfinance_fallback")
+
+        all_filed_dates = [
+            str(row.get("filed_date"))
+            for data in companies.values()
+            for row in (data.get("quarters") or [])
+            if row.get("filed_date")
+        ]
+        vintage_date = max(all_filed_dates) if all_filed_dates else None
+
+        coverage = {
+            "companies_available": len(available_companies),
+            "companies_total": len(M7_TICKERS),
+            "companies_missing": sorted(set(M7_TICKERS) - set(available_companies)),
+            "companies_via_sec_xbrl": companies_via_sec,
+            "companies_via_yfinance_fallback": companies_via_fallback,
+            "aggregate_quarters_with_min_coverage": len(eligible_rows),
+            "min_companies_required_for_aggregate": MIN_M7_CAPEX_COMPANIES_FOR_AGGREGATE,
+        }
+
+        if companies_via_sec and companies_via_fallback:
+            overall_source_tier = SOURCE_TIER_MIXED_OFFICIAL_AND_THIRD_PARTY
+        elif companies_via_sec:
+            overall_source_tier = SOURCE_TIER_OFFICIAL
+        elif companies_via_fallback:
+            overall_source_tier = SOURCE_TIER_THIRD_PARTY
+        else:
+            overall_source_tier = SOURCE_TIER_UNAVAILABLE
+
+        value = {
+            "as_of_date": date_str,
+            "is_live_context": is_live_context,
+            "companies": companies,
+            "m7_aggregate": {
+                "by_calendar_quarter": aggregate_rows[-M7_CAPEX_MAX_QUARTERS_RETURNED:],
+                "latest_covered_quarter": latest_covered,
+                "prior_covered_quarter": prior_covered,
+                "yoy_acceleration": acceleration,
+            },
+            "unit": "USD, nominal, not inflation-adjusted; company-level cash capex (PP&E purchases)",
+            "methodology": (
+                "Primary channel: SEC XBRL company-concept duration facts (10-Q/10-K), which for most "
+                "filers report fiscal-year-to-date cumulative cash-flow values in interim periods; this "
+                "function subtracts consecutive cumulative values within the same fiscal-year XBRL chain "
+                "to recover discrete quarters (pit_safe=true, every fact filed_date-gated against "
+                "end_date). Fallback channel, used per-company only when the SEC path is unavailable and "
+                "only in a live/current-date context (never when end_date names an explicit past date): "
+                "Yahoo Finance's own normalized quarterly cash-flow 'Capital Expenditure' row, which is "
+                "already discrete-quarter but carries no verifiable filing date (pit_safe=false; a "
+                "conservative 'visible after' estimate of period_end + "
+                f"{YFINANCE_CAPEX_CONSERVATIVE_VISIBILITY_LAG_DAYS} days is attached for context only, "
+                "not as a filed_date substitute). Every quarter and every M7-aggregate quarter bucket "
+                "carries 'source'/'sources_used' and 'pit_safe' so mixed-source aggregation stays "
+                "auditable. The M7 aggregate sums companies by CALENDAR quarter (from period end date), "
+                "not fiscal quarter; companies with non-calendar fiscal years (e.g. MSFT FY ends June, "
+                "NVDA FY ends late January) can be offset by several weeks from the calendar-quarter "
+                "bucket -- a known alignment approximation, not a data error."
+            ),
+            "source_boundary": (
+                "Capex acceleration/deceleration describes disclosed capital spending only. It is "
+                "structural bull-case evidence for an AI infrastructure investment cycle narrative; "
+                "it does not by itself prove earnings realization, return on that spending, or that "
+                "NDX valuation is cheap. See RESEARCH_CANON.md's M7/hyperscaler capex cycle entry. Any "
+                "quarter or aggregate marked pit_safe=false or source=yfinance_fallback is a third-party "
+                "normalized proxy, not an SEC-official disclosed fact, and must not be cited as one."
+            ),
+        }
+
+        result: Dict[str, Any] = {
+            "name": "M7 / Hyperscaler Capex Cycle",
+            "series_id": "M7_CAPEX_CYCLE",
+            "value": value,
+            "unit": "USD billions, quarterly",
+            "date": date_str,
+            "source_tier": overall_source_tier,
+            "source_name": "SEC XBRL companyconcept (primary) + Yahoo Finance normalized quarterly cash flow (fallback)",
+            "source_url": "https://data.sec.gov/api/xbrl/companyconcept/",
+            "availability": "available" if available_companies else "unavailable",
+            "data_quality": _quality_block(
+                source_tier=overall_source_tier,
+                data_date=date_str,
+                update_frequency="quarterly (10-Q/10-K filings; yfinance fallback refreshed on each live call)",
+                formula=(
+                    "discrete_quarter = cumulative_fact[t] - cumulative_fact[t-1] within the same "
+                    "fiscal-year XBRL chain (SEC path) or Yahoo's own normalized quarterly figure "
+                    "(fallback path); M7 aggregate = sum of companies sharing a calendar-quarter "
+                    "bucket; YoY = value / value[same calendar quarter, prior year] - 1"
+                ),
+                coverage=coverage,
+                anomalies=(
+                    (["yfinance_fallback_used_for_some_companies_pit_unsafe"] if companies_via_fallback else [])
+                    + (["vintage_date_not_available_fallback_lacks_filed_date"] if not vintage_date and companies_via_fallback else [])
+                ),
+                fallback_chain=[SOURCE_TIER_OFFICIAL, SOURCE_TIER_THIRD_PARTY, SOURCE_TIER_UNAVAILABLE],
+            ),
+        }
+        result["data_quality"]["vintage_date"] = vintage_date or "not_available"
+        result["data_quality"]["pit_safe_summary"] = {
+            "sec_xbrl_companies_pit_safe": companies_via_sec,
+            "yfinance_fallback_companies_not_pit_safe": companies_via_fallback,
+            "is_live_context": is_live_context,
+            "fallback_allowed_in_this_call": is_live_context,
+            "backtest_note": (
+                "yfinance fallback is disabled whenever end_date names an explicit past date; only the "
+                "SEC XBRL primary channel (filed_date-gated) is used in that context, honoring "
+                "point-in-time discipline over completeness."
+            ),
+        }
+        if companies_via_fallback and not companies_via_sec:
+            result["data_quality"]["fallback_reason"] = "sec_xbrl_unavailable_for_all_m7_companies_used_yfinance_fallback_for_all"
+        elif companies_via_fallback:
+            result["data_quality"]["fallback_reason"] = (
+                f"sec_xbrl_unavailable_for_{len(companies_via_fallback)}_of_{len(M7_TICKERS)}_companies_used_yfinance_fallback"
+            )
+        if not available_companies:
+            result["availability"] = "unavailable"
+            result["unavailable_reason"] = "no_m7_company_capex_facts_available_from_sec_xbrl_or_yfinance_fallback"
+            result["data_quality"]["availability"] = "unavailable"
+            result["data_quality"]["fallback_reason"] = "no_m7_company_capex_facts_available_from_sec_xbrl_or_yfinance_fallback"
+
+        metric_authority: Dict[str, Any] = {}
+        if companies_via_sec:
+            metric_authority["companies_sec_xbrl"] = _component_metric_authority(
+                usage="core_allowed",
+                authority="sec_xbrl_official_disclosed_fact",
+                reason=(
+                    "Per-company quarterly capex from SEC XBRL is an as-reported official disclosed "
+                    "spending fact, not a valuation or earnings-quality claim."
+                ),
+                source=SOURCE_TIER_OFFICIAL,
+            )
+        if companies_via_fallback:
+            metric_authority["companies_yfinance_fallback"] = _component_metric_authority(
+                usage="supporting_only",
+                authority="yahoo_normalized_cashflow_third_party_unofficial",
+                reason=(
+                    "SEC XBRL was unavailable for these companies; capex is sourced from Yahoo "
+                    "Finance's normalized quarterly cash-flow statement instead. It has no verifiable "
+                    "filing date (pit_safe=false) and is subject to third-party normalization/field-"
+                    "drift risk; it must not be presented as an SEC-official disclosed fact."
+                ),
+                source=SOURCE_TIER_THIRD_PARTY,
+            )
+        metric_authority["m7_aggregate"] = _component_metric_authority(
+            usage="supporting_only" if companies_via_fallback else "core_allowed",
+            authority=(
+                "derived_from_mixed_official_and_third_party_facts" if companies_via_fallback
+                else "derived_from_sec_xbrl_official_facts"
+            ),
+            reason=(
+                "Calendar-quarter aggregate is a deterministic sum of per-company facts; treat "
+                "calendar-quarter alignment across differing fiscal calendars as an approximation. "
+                + (
+                    "Includes third-party yfinance fallback for companies where SEC XBRL was "
+                    "unavailable; downgraded to supporting_only until SEC access is restored -- check "
+                    "each aggregate quarter's own 'sources_used'/'pit_safe' fields before treating any "
+                    "single quarter as core evidence."
+                    if companies_via_fallback else
+                    "All contributing companies are SEC XBRL official facts."
+                )
+            ),
+            source=overall_source_tier,
+        )
+        metric_authority["yoy_acceleration"] = _component_metric_authority(
+            usage="supporting_only",
+            authority="derived_growth_rate_not_valuation_or_earnings_claim",
+            reason=(
+                "Capex YoY acceleration/deceleration describes spending intent and cadence "
+                "only; it cannot by itself prove earnings realization or justify current NDX "
+                "valuation. See RESEARCH_CANON.md for the full interpretation boundary."
+            ),
+            source=overall_source_tier,
+        )
+        result["data_quality"]["metric_authority"] = metric_authority
+        return result
+    except Exception as exc:
+        return {
+            "name": "M7 / Hyperscaler Capex Cycle",
+            "series_id": "M7_CAPEX_CYCLE",
+            "value": None,
+            "unit": "USD billions, quarterly",
+            "date": date_str,
+            "source_tier": SOURCE_TIER_UNAVAILABLE,
+            "source_name": "SEC XBRL companyconcept (primary) + Yahoo Finance normalized quarterly cash flow (fallback)",
+            "availability": "unavailable",
+            "unavailable_reason": f"m7_capex_cycle_unavailable: {str(exc)[:150]}",
+        }
+
 
 
 def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:

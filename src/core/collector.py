@@ -93,6 +93,7 @@ class DataCollector:
                 "get_ndx_pe_and_earnings_yield",
                 "get_ndx_forward_earnings_quality",
                 "get_equity_risk_premium",
+                "get_m7_capex_cycle",
                 "get_damodaran_us_implied_erp",
             ],
             

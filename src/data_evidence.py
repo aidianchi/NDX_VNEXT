@@ -64,6 +64,7 @@ CORE_EVIDENCE_FUNCTIONS = {
     "get_ndx_pe_and_earnings_yield",
     "get_ndx_forward_earnings_quality",
     "get_equity_risk_premium",
+    "get_m7_capex_cycle",
     "get_damodaran_us_implied_erp",
     "get_l5_deterministic_snapshot",
     "get_qqq_technical_indicators",
@@ -94,6 +95,7 @@ COVERAGE_REQUIRED_FUNCTIONS = {
     "get_ndx_wind_point_in_time_earnings_expectations",
     "get_ndx_pe_and_earnings_yield",
     "get_ndx_forward_earnings_quality",
+    "get_m7_capex_cycle",
 }
 
 # A first-vintage requirement matters in a historical replay only for series
@@ -105,6 +107,7 @@ BACKTEST_VINTAGE_REQUIRED_FUNCTIONS = {
     "get_net_liquidity_momentum",
     "get_ndx_wind_point_in_time_earnings_expectations",
     "get_ndx_forward_earnings_quality",
+    "get_m7_capex_cycle",
 }
 
 CONDITIONAL_OR_REFERENCE_ONLY_METADATA_FIELDS = {
