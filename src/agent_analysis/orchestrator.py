@@ -2095,18 +2095,49 @@ class VNextOrchestrator:
             publish_gate=publish_gate,
         )
 
+    @staticmethod
+    def _normalize_evidence_ref_key(ref: str) -> str:
+        """把 LLM 可能写出的 ref 变体（首尾/内部空白、"# " / " #" 间距）规整成紧凑形式，
+        供大小写不敏感匹配用。不改变 entry.evidence_refs 本身的原始文本（审计留痕）。"""
+        compact = " ".join(str(ref or "").split())
+        return compact.replace(" #", "#").replace("# ", "#")
+
+    def _resolve_claim_evidence_ref(self, ref: str, passports: Dict[str, Any], lower_key_map: Dict[str, str]) -> Optional[str]:
+        """把一条 claim 引用的 ref 字符串解析成 registry.passports 里的规范 key。
+        优先精确匹配；找不到时按规整+大小写不敏感兜底，兜底命中才算已注册引用，
+        未命中仍然计入 missing_refs（笔误/幻觉引用名不能被规范化"洗白"）。"""
+        if ref in passports:
+            return ref
+        normalized = self._normalize_evidence_ref_key(ref)
+        if normalized in passports:
+            return normalized
+        return lower_key_map.get(normalized.lower())
+
     def _verify_claim_entry(self, entry: ClaimLedgerEntry, registry: EvidenceRegistry) -> ClaimLedgerEntry:
-        missing_refs = [ref for ref in entry.evidence_refs if ref not in registry.passports]
-        registered_refs = [ref for ref in entry.evidence_refs if ref in registry.passports]
+        strong_tiers = {"official", "licensed_provider", "licensed_manual", "formal_data_source"}
+        lower_key_map = {key.lower(): key for key in registry.passports}
+        resolved_refs = [
+            (ref, self._resolve_claim_evidence_ref(ref, registry.passports, lower_key_map))
+            for ref in entry.evidence_refs
+        ]
+        missing_refs = [ref for ref, resolved in resolved_refs if resolved is None]
+        registered_refs = [resolved for _, resolved in resolved_refs if resolved is not None]
         weak_refs = [
             ref
             for ref in registered_refs
             if registry.passports[ref].source_tier in {"candidate_external_material", "proxy", "derived_inference", "unknown"}
         ]
-        reasons = []
-        block = False
         evidence_field_refs = [ref for ref in registered_refs if "#" in ref]
+
+        # 第一遍：只分类权限状态，不下结论、不追加 reason。裸引用（无 #field）指向"混合容器"时，
+        # 如果容器内混了 rejected 字段——无法排除引用其实是在借道引用被正式拒绝的口径，这种歧义是
+        # 真违规，判定与是否有其他强证据无关，无条件追加（hard_mixed_parent_refs）。如果容器内所有
+        # 字段都只是弱-但-合法（supporting_only/validation_only/audit_only/unknown，没有 rejected 也
+        # 没有 core_allowed 可"蹭"），裸引用不可能是在冒充强结论，等价于弱字段引用，纳入比例判断
+        # （soft_mixed_parent_refs，并入 weak_parent_refs 一起走比例原则）。
         field_authority_records: List[tuple[str, str, str, str, bool]] = []
+        hard_mixed_parent_refs: List[str] = []
+        parent_usage_by_ref: Dict[str, str] = {}
         for ref in registered_refs:
             passport = registry.passports[ref]
             authority_model = passport.authority_model if isinstance(passport.authority_model, dict) else {}
@@ -2116,14 +2147,50 @@ class VNextOrchestrator:
                 usage = str(authority_model.get("field_usage") or field_rule.get("usage") or "unknown").strip().lower()
                 field_authority_records.append((ref, field, usage, passport.source_tier, passport.verified))
             elif authority_model.get("mixed_field_authority"):
-                reasons.append(f"mixed_field_authority_parent_ref:{ref}")
+                field_usages = authority_model.get("field_usages") if isinstance(authority_model.get("field_usages"), list) else []
+                if "rejected" in field_usages:
+                    hard_mixed_parent_refs.append(ref)
+                else:
+                    parent_usage_by_ref[ref] = "mixed_weak_fields"
             else:
                 parent_usage = str(authority_model.get("field_usage") or "").strip().lower()
-                if parent_usage in {"supporting_only", "validation_only", "audit_only", "unknown"}:
-                    reasons.append(f"field_authority_{parent_usage}_parent_ref:{ref}")
-                elif parent_usage == "rejected":
-                    reasons.append(f"field_authority_rejected_parent_ref:{ref}")
-                    block = True
+                if parent_usage:
+                    parent_usage_by_ref[ref] = parent_usage
+
+        supporting_field_refs = [
+            field_ref
+            for field_ref, _, usage, _, _ in field_authority_records
+            if usage in {"supporting_only", "validation_only", "audit_only", "unknown", ""}
+        ]
+        rejected_field_refs = [field_ref for field_ref, _, usage, _, _ in field_authority_records if usage == "rejected"]
+        weak_parent_refs = [ref for ref, usage in parent_usage_by_ref.items() if usage in {"supporting_only", "validation_only", "audit_only", "unknown", "mixed_weak_fields"}]
+        rejected_parent_refs = [ref for ref, usage in parent_usage_by_ref.items() if usage == "rejected"]
+
+        # 比例原则（工单#13 claim gate 稳定化）：判断这条 claim 除了权限受限/歧义引用之外，
+        # 是否还有独立的强证据（official/licensed_provider/licensed_manual/formal_data_source）支撑
+        # ——独立指该强证据本身不是被限权的字段/裸引用（Wind 这类强 provider 下也可能挂着
+        # supporting_only/validation_only 的子字段，子字段不能借用父级 provider 的强 tier 洗白自己）。
+        # 若存在独立强证据，"顺带多引用一条 validation_only/audit_only 交叉校验字段"只是同一份结论的
+        # 措辞/引用清单差异，不应单独把整条 claim 从 verified 拖到 downgraded——这正是同输入 verified 率
+        # 在 7/8 与 1/8 间跳动的机械来源。若没有独立强证据（孤证/纯弱证据），仍然照常降级。
+        restricted_refs = set(supporting_field_refs) | set(rejected_field_refs) | set(hard_mixed_parent_refs) | set(weak_parent_refs) | set(rejected_parent_refs)
+        has_strong_support = any(
+            ref not in restricted_refs and registry.passports[ref].source_tier in strong_tiers
+            for ref in registered_refs
+        )
+
+        reasons: List[str] = []
+        block = False
+        for ref in hard_mixed_parent_refs:
+            reasons.append(f"mixed_field_authority_parent_ref:{ref}")
+        for ref in rejected_parent_refs:
+            reasons.append(f"field_authority_rejected_parent_ref:{ref}")
+            block = True
+        if not has_strong_support:
+            for ref in weak_parent_refs:
+                usage = parent_usage_by_ref[ref]
+                label = "mixed_field_authority_parent_ref" if usage == "mixed_weak_fields" else f"field_authority_{usage}_parent_ref"
+                reasons.append(f"{label}:{ref}")
         if not entry.evidence_refs:
             reasons.append("missing_evidence_refs")
             block = True
@@ -2141,21 +2208,14 @@ class VNextOrchestrator:
             reasons.append("counter_evidence_not_claim_specific")
         if getattr(entry, "falsifier_method", "") == "not_claim_specific":
             reasons.append("falsification_conditions_not_claim_specific")
-        if weak_refs and not any(registry.passports[ref].source_tier in {"official", "licensed_provider", "licensed_manual", "formal_data_source"} for ref in registered_refs):
+        if weak_refs and not has_strong_support:
             reasons.append("only_weak_or_derived_evidence_refs")
-        supporting_field_refs = [
-            field_ref
-            for field_ref, _, usage, _, _ in field_authority_records
-            if usage in {"supporting_only", "validation_only", "audit_only", "unknown", ""}
-        ]
-        rejected_field_refs = [field_ref for field_ref, _, usage, _, _ in field_authority_records if usage == "rejected"]
-        if supporting_field_refs:
+        if supporting_field_refs and not has_strong_support:
             usages = sorted({usage or "unknown" for ref, _, usage, _, _ in field_authority_records if ref in supporting_field_refs})
             reasons.append("field_authority_" + "_or_".join(usages) + ":" + ",".join(supporting_field_refs))
         if rejected_field_refs:
             reasons.append("field_authority_rejected:" + ",".join(rejected_field_refs))
             rejected_fields = {field for _, field, usage, _, _ in field_authority_records if usage == "rejected"}
-            strong_tiers = {"official", "licensed_provider", "licensed_manual", "formal_data_source"}
             rescued_fields = {
                 field
                 for _, field, usage, source_tier, passport_verified in field_authority_records

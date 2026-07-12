@@ -19,6 +19,7 @@ from agent_analysis.contracts import (
     ContextBrief,
     CoreFact,
     Critique,
+    EvidencePassport,
     EvidenceRegistry,
     FinalAdjudication,
     GoldenPitChecklist,
@@ -2600,6 +2601,180 @@ def test_field_authority_is_persisted_and_applied_per_claimed_wind_metric(tmp_pa
         set(registry.passports),
         "final",
     ) == []
+
+
+def _claim_gate_test_registry() -> EvidenceRegistry:
+    """工单#13 claim gate 稳定化测试专用的最小注册表：两条独立强证据（official/licensed_provider，
+    无字段限权）+ 一条真实复现过方差的弱字段引用（third-party proxy tier、field_usage=validation_only，
+    对齐 u1_experiment_baseline_r2 实跑数据里的 L4.get_ndx_pe_and_earnings_yield#EarningsYield）+
+    两条纯弱证据（供"只有弱证据"回归锚点测试用）。"""
+    return EvidenceRegistry(
+        effective_date="2026-07-10",
+        passports={
+            "L1.get_10y_real_rate": EvidencePassport(
+                evidence_id="L1.get_10y_real_rate",
+                evidence_kind="data",
+                source_tier="official",
+                verified=True,
+            ),
+            "L4.get_equity_risk_premium": EvidencePassport(
+                evidence_id="L4.get_equity_risk_premium",
+                evidence_kind="data",
+                source_tier="licensed_provider",
+                verified=True,
+            ),
+            "L4.get_ndx_pe_and_earnings_yield#EarningsYield": EvidencePassport(
+                evidence_id="L4.get_ndx_pe_and_earnings_yield#EarningsYield",
+                evidence_kind="data",
+                source_tier="proxy",
+                authority_model={
+                    "parent_evidence_ref": "L4.get_ndx_pe_and_earnings_yield",
+                    "field_name": "EarningsYield",
+                    "field_usage": "validation_only",
+                },
+                verified=True,
+            ),
+            "L5.get_adx_qqq": EvidencePassport(
+                evidence_id="L5.get_adx_qqq",
+                evidence_kind="data",
+                source_tier="derived_inference",
+                verified=True,
+            ),
+            "L5.get_qqq_technical_indicators": EvidencePassport(
+                evidence_id="L5.get_qqq_technical_indicators",
+                evidence_kind="data",
+                source_tier="proxy",
+                verified=True,
+            ),
+        },
+    )
+
+
+def _claim_gate_test_orchestrator(tmp_path: Path) -> VNextOrchestrator:
+    return VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+
+def test_claim_gate_stable_across_llm_ref_citation_variants(tmp_path: Path):
+    """工单#13 核心验收：同一份判断，两次 LLM 措辞只差"是否顺带多引用一条 validation_only
+    交叉校验字段"，verified 结果必须一致——修复前这一差异会把 verified 从 True 翻成 False
+    （对齐 u1 基线三连 7/8、1/8、7/8 与 P5 复现出的方差）。"""
+    orchestrator = _claim_gate_test_orchestrator(tmp_path)
+    registry = _claim_gate_test_registry()
+
+    def build_entry(evidence_refs: list[str]) -> ClaimLedgerEntry:
+        return ClaimLedgerEntry(
+            claim_id="claim:test:variant-" + str(len(evidence_refs)),
+            source_stage="final",
+            claim_text="NDX 当前估值偏贵，实际利率高位对折现率构成压力。",
+            claim_type="valuation",
+            evidence_refs=evidence_refs,
+            counter_evidence_refs=["L1.get_10y_real_rate"],
+            inference_steps=["估值与利率交叉校验"],
+            falsification_conditions=["实际利率显著回落"],
+        )
+
+    # "run A" 措辞：只引用两条强证据。
+    run_a = orchestrator._verify_claim_entry(
+        build_entry(["L1.get_10y_real_rate", "L4.get_equity_risk_premium"]), registry
+    )
+    # "run B" 措辞：内容判断完全相同，只是顺带多引用了一条弱字段做交叉校验。
+    run_b = orchestrator._verify_claim_entry(
+        build_entry(
+            [
+                "L1.get_10y_real_rate",
+                "L4.get_equity_risk_premium",
+                "L4.get_ndx_pe_and_earnings_yield#EarningsYield",
+            ]
+        ),
+        registry,
+    )
+
+    assert run_a.verified is True
+    assert run_b.verified is True, run_b.downgrade_reason
+    assert run_a.authority_status == run_b.authority_status == "verified"
+
+    # 同一份输入反复跑 5 次，逐次结果必须完全一致（方差=0）。
+    entry = build_entry(
+        ["L1.get_10y_real_rate", "L4.get_equity_risk_premium", "L4.get_ndx_pe_and_earnings_yield#EarningsYield"]
+    )
+    replays = [orchestrator._verify_claim_entry(entry, registry) for _ in range(5)]
+    signatures = {(r.verified, r.authority_status, r.downgrade_reason) for r in replays}
+    assert len(signatures) == 1, replays
+
+
+def test_claim_gate_regression_only_weak_evidence_still_downgrades(tmp_path: Path):
+    """回归锚点：真正的孤证（只有弱/代理证据、没有任何独立强证据）必须仍然被抓住并降级——
+    对齐 20260712_221916 E2E run 里 price_reflection claim 只引用 L5 技术指标被判
+    only_weak_or_derived_evidence_refs 的真实命中。稳定化不能放松这条真实校验。"""
+    orchestrator = _claim_gate_test_orchestrator(tmp_path)
+    registry = _claim_gate_test_registry()
+    entry = ClaimLedgerEntry(
+        claim_id="claim:test:weak-only",
+        source_stage="thesis",
+        claim_text="价格已经反映了短期技术面走弱。",
+        claim_type="price_reflection",
+        evidence_refs=["L5.get_adx_qqq", "L5.get_qqq_technical_indicators"],
+        counter_evidence_refs=["L5.get_adx_qqq"],
+        inference_steps=["技术面读数"],
+        falsification_conditions=["动能指标反转"],
+    )
+    result = orchestrator._verify_claim_entry(entry, registry)
+    assert result.verified is False
+    assert "only_weak_or_derived_evidence_refs" in result.downgrade_reason
+    assert result.authority_status == "downgraded"
+
+
+def test_claim_gate_regression_field_authority_weak_ref_alone_still_downgrades(tmp_path: Path):
+    """孤证变体：唯一引用就是那条 validation_only 字段（没有任何独立强证据同框）时，
+    比例原则不应该豁免它——field_authority 检查必须仍然生效。"""
+    orchestrator = _claim_gate_test_orchestrator(tmp_path)
+    registry = _claim_gate_test_registry()
+    entry = ClaimLedgerEntry(
+        claim_id="claim:test:field-only",
+        source_stage="final",
+        claim_text="盈利收益率显示估值偏贵。",
+        claim_type="valuation",
+        evidence_refs=["L4.get_ndx_pe_and_earnings_yield#EarningsYield"],
+        counter_evidence_refs=["L1.get_10y_real_rate"],
+        inference_steps=["盈利收益率交叉校验"],
+        falsification_conditions=["盈利收益率回升"],
+    )
+    result = orchestrator._verify_claim_entry(entry, registry)
+    assert result.verified is False
+    assert "field_authority_validation_only" in result.downgrade_reason
+
+
+def test_claim_gate_normalizes_evidence_ref_case_whitespace_and_hash_spacing(tmp_path: Path):
+    """规范化边界：LLM 写出的 ref 大小写、首尾/内部空白、"# " 间距变体都必须能解析到同一条
+    registry 证据，不能被误判成"引用不存在"；但真正的笔误/幻觉引用名不能被规范化洗白。"""
+    orchestrator = _claim_gate_test_orchestrator(tmp_path)
+    registry = _claim_gate_test_registry()
+    entry = ClaimLedgerEntry(
+        claim_id="claim:test:normalization",
+        source_stage="final",
+        claim_text="实际利率高位叠加估值贵，风险溢价偏低。",
+        claim_type="valuation",
+        evidence_refs=[
+            "  L1.get_10y_real_rate  ",  # 首尾空白
+            "l4.get_equity_risk_premium",  # 大小写变体
+            "L4.get_ndx_pe_and_earnings_yield #EarningsYield",  # "#" 前多余空格
+            "L1.get_10y_real_rate_typo",  # 真笔误，不应被规范化救回
+        ],
+        counter_evidence_refs=["L1.get_10y_real_rate"],
+        inference_steps=["规范化匹配测试"],
+        falsification_conditions=["占位失效条件"],
+    )
+    result = orchestrator._verify_claim_entry(entry, registry)
+    # 唯一应该出现在"无法核验"清单里的只有真笔误；三条格式变体都必须成功解析到规范 key。
+    assert result.downgrade_reason.count("unverifiable_evidence_refs:") == 1
+    unverifiable_section = result.downgrade_reason.split("unverifiable_evidence_refs:", 1)[1].split("；", 1)[0]
+    assert unverifiable_section.split(",") == ["L1.get_10y_real_rate_typo"]
+    # 规范化后应解析为规范 key 形式（紧凑、大小写与 registry 一致）。
+    assert "L4.get_ndx_pe_and_earnings_yield#EarningsYield" in result.evidence_field_refs
 
 
 def test_stage5_golden_pit_checklist_defers_cross_run_diff_even_if_previous_exists(tmp_path: Path):
