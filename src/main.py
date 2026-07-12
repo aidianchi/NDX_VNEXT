@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -136,6 +137,17 @@ def resolve_available_models(raw_models: Optional[str]) -> List[str]:
 def load_data_json(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _persist_checker_input(run_dir: str, data_json: Dict[str, Any], integrity_report: Dict[str, Any]) -> None:
+    snapshot_path = os.path.join(run_dir, "checker_input_snapshot.json")
+    with open(snapshot_path, "w", encoding="utf-8") as handle:
+        json.dump(data_json, handle, ensure_ascii=False, indent=2, default=str)
+        handle.write("\n")
+    checker_input_sha256 = hashlib.sha256(
+        json.dumps(data_json, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()
+    integrity_report["checker_input_sha256"] = checker_input_sha256
 
 
 def _unique_run_dir(path: str) -> str:
@@ -397,6 +409,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
 
     integrity_report = DataIntegrity().run(data_json)
     os.makedirs(run_dir, exist_ok=True)
+    _persist_checker_input(run_dir, data_json, integrity_report)
     integrity_path = os.path.join(run_dir, "data_integrity_report.json")
     with open(integrity_path, "w", encoding="utf-8") as handle:
         json.dump(integrity_report, handle, ensure_ascii=False, indent=2, default=str)

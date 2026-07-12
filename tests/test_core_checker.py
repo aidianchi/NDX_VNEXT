@@ -1,8 +1,11 @@
+import hashlib
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from main import _persist_checker_input
 from core.checker import DataIntegrity
 
 
@@ -340,3 +343,65 @@ def test_data_integrity_carries_strict_backtest_invariants_without_blocking():
     assert report["strict_backtest_invariants"]["schema_version"] == "strict_backtest_invariants_v1"
     assert "严格回测限制已明示" in report["notes"]
     assert "alfred_first_vintage_not_enforced" in report["notes"]
+
+
+def test_data_integrity_does_not_flag_formal_layer_at_exactly_fifty_percent():
+    data = {
+        "indicators": [
+            {"layer": 1, "function_id": "l1_success_a", "value": 1},
+            {"layer": 1, "function_id": "l1_success_b", "value": 1},
+            {"layer": 1, "function_id": "l1_fail_a", "error": "missing"},
+            {"layer": 1, "function_id": "l1_fail_b", "error": "missing"},
+            {"layer": 2, "function_id": "l2_success", "value": 1},
+            {"layer": 3, "function_id": "l3_success", "value": 1},
+            {"layer": 4, "function_id": "l4_success", "value": 1},
+        ]
+    }
+
+    report = DataIntegrity().run(data)
+
+    assert report["confidence_percent"] == 71.4
+    assert report["publish_status"] == "publishable"
+    assert not any("critical_layer_below_publish_floor" in reason for reason in report["blocking_reasons"])
+
+
+def test_data_integrity_exempts_formal_layer_floor_when_layer_has_fewer_than_three_items():
+    data = {
+        "indicators": [
+            {"layer": 1, "function_id": "l1_fail_a", "error": "missing"},
+            {"layer": 1, "function_id": "l1_fail_b", "error": "missing"},
+            {"layer": 2, "function_id": "l2_success_a", "value": 1},
+            {"layer": 2, "function_id": "l2_success_b", "value": 1},
+            {"layer": 2, "function_id": "l2_success_c", "value": 1},
+            {"layer": 3, "function_id": "l3_success", "value": 1},
+        ]
+    }
+
+    report = DataIntegrity().run(data)
+
+    assert report["confidence_percent"] == 66.7
+    assert report["publish_status"] == "publishable"
+    assert not any("critical_layer_no_success" in reason for reason in report["blocking_reasons"])
+    assert not any("critical_layer_below_publish_floor" in reason for reason in report["blocking_reasons"])
+
+
+def test_persist_checker_input_writes_snapshot_and_hash(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    data_json = {
+        "backtest_date": "2025-04-09",
+        "indicators": [
+            {"layer": 1, "function_id": "get_vix", "value": 18.0},
+        ],
+    }
+    integrity_report = {"publish_status": "publishable"}
+
+    _persist_checker_input(str(run_dir), data_json, integrity_report)
+
+    snapshot_path = run_dir / "checker_input_snapshot.json"
+    expected_sha256 = hashlib.sha256(
+        json.dumps(data_json, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()
+
+    assert json.loads(snapshot_path.read_text(encoding="utf-8")) == data_json
+    assert integrity_report["checker_input_sha256"] == expected_sha256
