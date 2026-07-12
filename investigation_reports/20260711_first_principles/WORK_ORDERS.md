@@ -15,6 +15,7 @@
   - `18fec6d` 包⑥+② 编排与 prompt（layer_scope 按法典放宽、prompt 缺失显式报错、嵌套旧 prompt 目录删除）
   - `b6d4532` 五份第一性原理审计报告归档
 - 全量测试 522 通过。
+- **首次推送 main（2026-07-12）**：`323bc88` 快进合并至 main 并推送 origin，推送前全量 523 测试通过。此后每个里程碑（一批工单验收完）合并推送一次。
 - U1 一阶段结论：层级证据敏感（强阳性）、Bridge 矛盾识别真实、**最终动作层黏性存疑（谨慎吸引子假说，待二阶段判定）**；DataIntegrity 对数值篡改零反应（重算校验带的依据）；P1 的 claim_gate 通过率 1/8 显示 claim 校验能抓数据内部矛盾。
 
 ## U1 实验与 prompt 重写：已完结（2026-07-12 凌晨）
@@ -30,6 +31,7 @@
 3. **独立重算校验带**：新模块（不 import 主管线计算代码）对派生字段二次实现重算——分位（锁窗口/插值）、增速、比率、单位量纲（billion/million 混用报警）；产出 `recompute_report.json` 接入 checker 硬闸门。依据：U1 证明 DataIntegrity 对数值篡改零反应；历史上净流动性 10 倍错误穿透全部闸门。
 4. **证据菜单再平衡**（金融层最大缺口，见 audit_B）：AI 资本开支周期代理（M7 capex 同比/指引，可复用 `tools_L4.py` XBRL 标签管道）、fed funds futures 隐含利率路径、VIX 期限结构（RESEARCH_CANON 已有判读标准、未实现）、回购与财报静默期日历；完成后做多空证据源对称性审计。
    **盈利预期数据源判决（2026-07-12 凌晨实测，Fable 亲测）**：Wind 路线判死——NDX.GI 指数级"没找到数据"；成分股级对照实验证明机制通（茅台返回真实双时点一致预测 EPS 31.7446/31.7267）但美股无权限（AAPL 同问法返回 null）。PIT 契约代码保留（防伪门槛正确），数据源改道：① **立即启动自建 vintage 档案**——每日/每周快照 yfinance+FMP 的当前一致预期（.env 已有 FMP key），30-90 天后即有可用的自产时点序列，零成本且完全可控；② 评估 FMP/Finnhub 现成的预期历史端点覆盖度（tools_finnhub.py 死码正好是这个用途，可部分复活）；③ Wind 继续做估值主锚（PE/PB/PS 正常），只放弃其美股盈利预期。
+   **追加（2026-07-12 Fable 亲测）：修正斜率不必等档案积累**——yfinance `Ticker.eps_trend` 免费返回每只美股"current / 7d / 30d / 60d / 90d ago"的一致预期 EPS（实测 AAPL/MSFT/NVDA 数据完好，NVDA +1y EPS 90 天内 11.11→12.76），`eps_revisions` 另给上/下修分析师家数。指数级做法：取 NDX 前十大权重股聚合（权重覆盖 >50%）。定位：yfinance eps_trend = 立即可用的 90 天后视镜（authority 标 third_party_unofficial，需防字段漂移）；自建 vintage 档案降级为加固层（对冲雅虎黑箱/断供 + 未来把后视镜延长到 90 天以上）；深回测所需的多年期历史 vintage 仍无免费来源（IBES 收费），评估 FMP/Finnhub earnings-surprise 历史作部分替代。
 5. **报告层小修**：`shared_falsifiers` 过半即称"这批共用"的语义（改严格全等或标注 N/M 命中）；`missing_groups` 对"市场状态"组静默跳过的不对称；hypothesis-card leading 高亮的过度信任风险（低优先级）。
 6. **checker 可观测性**：原始输入 `data_json` 落盘（本次回放只能近似重建）；补"恰好 50%"与"total<3 豁免"边界回归测试。
 7. **Manual/Wind ERP 回退通道**：`manual_data.py:99-119` 允许 Damodaran 槽位被 Wind 人工值填充，弱化三槽位独立性——评估收紧或显式标注。
