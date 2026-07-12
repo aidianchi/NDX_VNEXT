@@ -125,7 +125,7 @@
     }
   ],
   "confirmation_cost": "<等待确认降低什么错误、牺牲什么机会，两面都要写>",
-  "invalidation_conditions": ["<最重要的可观察失效条件>"],
+  "invalidation_conditions": ["<最重要的可观察失效条件。每条必须以方向标签开头：【转多】表示该情况发生时判断应向机会侧修正，【转空】表示应向风险侧修正。两个方向都要覆盖，不得只列单侧>"],
   "principal_contradiction": {
     "contradiction_id": "<当日主导矛盾的短代号，由矛盾内容生成，不得照抄历史代号>",
     "summary": "<主要矛盾>",
@@ -202,7 +202,7 @@
     "three_reasons": ["<支撑最终立场的三个理由，由当日证据生成>"],
     "time_horizon_summary": [],
     "action_summary": [],
-    "invalidation_summary": ["<什么情况下这个判断就错了>"],
+    "invalidation_summary": ["<什么情况下这个判断就错了，每条以【转多】或【转空】开头标明改判方向>"],
     "evidence_refs": ["<ref>"]
   },
   "quality_gate": {

@@ -249,6 +249,27 @@ def _escape(value: Any) -> str:
     return html.escape(str(value), quote=True)
 
 
+_INVALIDATION_DIRECTION_RE = re.compile(r"^\s*【(转多|转空)】\s*")
+
+
+def _split_invalidation_item(text: Any) -> Tuple[str, str]:
+    """Return an optional direction prefix and the condition text."""
+    raw = "" if text is None else str(text)
+    match = _INVALIDATION_DIRECTION_RE.match(raw)
+    if not match:
+        return "", raw
+    return match.group(1), raw[match.end():].strip()
+
+
+def _render_invalidation_item(text: Any) -> str:
+    """Render an invalidation condition, preserving legacy untagged text."""
+    direction, body = _split_invalidation_item(text)
+    if not direction:
+        return _escape(text)
+    tone = "good" if direction == "转多" else "bad"
+    return f'<span class="pill {tone}">{_escape(direction)}</span> {_escape(body)}'
+
+
 def _artifact_href(path: Any) -> str:
     text = str(path or "").strip()
     if not text or text in {"未生成", "未记录"}:
@@ -750,7 +771,7 @@ _DISCIPLINE_SIDE_LABELS: Dict[str, str] = {
     "sell": "卖出条件",
     "hold": "持有纪律",
     "risk": "风险边界",
-    "claim": "研究结论",
+    "claim": "观察确认项",
 }
 
 _DISCIPLINE_STATUS_TEXT: Dict[str, str] = {
@@ -1751,7 +1772,7 @@ class VNextReportGenerator:
       </div>
       <div>
         <b>可信度：{_escape(confidence_label)}</b>
-        <p>{_escape(primary_break)}</p>
+        <p><b>什么情况下我会改判：</b>{_render_invalidation_item(primary_break)}</p>
       </div>
     </aside>
   </div>
@@ -1786,7 +1807,7 @@ class VNextReportGenerator:
   </div>
   <div class="hero-risks">
     <span>风险主展示</span>
-    <p>本次有 {_escape(risk_count)} 条必须保留风险；完整清单在“风险边界”章节，只在一处展开，避免重复放大。</p>
+    <p>本次有 {_escape(risk_count)} 条不能忽视的风险；完整清单在“风险边界”章节，只在一处展开，避免重复放大。</p>
   </div>
   <div class="run-path">{_escape(run_path)}</div>
 </header>
@@ -1822,7 +1843,7 @@ class VNextReportGenerator:
         entries = _as_list(checklist.get("entries")) if isinstance(checklist, dict) else []
         if not entries:
             return {
-                "change": "跨 run 对比暂缓启用。",
+                "change": "和上次判断比，暂缓启用。",
                 "distance": "尚未形成可审计的买入/卖出条件差距。",
             }
         changes = _as_list(checklist.get("changed_since_last_run_summary"))
@@ -1848,7 +1869,7 @@ class VNextReportGenerator:
         reader = self._reader_final(final)
         state = checklist.get("current_state") or final.get("state_diagnosis") or reader.get("one_liner") or final.get("final_stance") or "未记录"
         changes = _as_list(checklist.get("changed_since_last_run_summary"))
-        change_rows = "".join(f"<li>{_escape(item)}</li>" for item in changes[:4]) or "<li>跨 run 对比暂缓启用。</li>"
+        change_rows = "".join(f"<li>{_escape(item)}</li>" for item in changes[:4]) or "<li>和上次判断比，暂缓启用。</li>"
 
         horizon_rows = "".join(
             f"""
@@ -1894,6 +1915,7 @@ class VNextReportGenerator:
   <div class="reader-odds-grid">
     <article>
       <h3>价格已经计入了什么</h3>
+      <small class="section-note">以下是推断而非事实——每条都附证据与反证，欢迎质疑。</small>
       <ul class="price-map">{price_rows or '<li><p>暂无结构化价格反映地图。</p></li>'}</ul>
     </article>
     <article>
@@ -1905,6 +1927,8 @@ class VNextReportGenerator:
 """
 
         entries = [item for item in _as_list(checklist.get("entries")) if isinstance(item, dict)][:8]
+        has_claim_entries = any(item.get("discipline_side") == "claim" for item in entries)
+        claim_note = '<p class="section-note">这类条目不直接触发买卖，只是判断成立与否的观察哨。</p>' if has_claim_entries else ""
         # 上游 checklist 往往把同一批 refs / 反证整包写进每一条；共享部分只展示一次。
         ref_lists = [[_canonical_ref(ref) for ref in _as_list(item.get("evidence_refs"))] for item in entries]
         shared_refs: List[str] = []
@@ -1957,7 +1981,7 @@ class VNextReportGenerator:
     </details>
 """
         checklist_block = (
-            f'<h3 class="reader-sub">距离买入/卖出纪律还差什么</h3><ul class="pit-list">{item_rows}</ul>{shared_block}'
+            f'<h3 class="reader-sub">距离买入/卖出纪律还差什么</h3>{claim_note}<ul class="pit-list">{item_rows}</ul>{shared_block}'
             if item_rows
             else "<p>暂无黄金坑清单条目。</p>"
         )
@@ -1988,7 +2012,7 @@ class VNextReportGenerator:
     </article>
     <article>
       <h3>风险边界</h3>
-      <ul>{''.join(f'<li>{_escape(item)}</li>' for item in _as_list(final.get('invalidation_conditions'))[:4]) or '<li>暂无结构化失效条件。</li>'}</ul>
+      <ul>{''.join(f'<li>{_render_invalidation_item(item)}</li>' for item in _as_list(final.get('invalidation_conditions'))[:4]) or '<li>暂无结构化失效条件。</li>'}</ul>
     </article>
     <article>
       <h3>个人决策翻译</h3>
@@ -2000,7 +2024,7 @@ class VNextReportGenerator:
   {odds_block}
   <section class="memo-readout">
     <div>
-      <b>跨 run 对比</b>
+      <b>和上次判断比，什么变了</b>
       <ul>{change_rows}</ul>
     </div>
     <div>
@@ -2046,7 +2070,7 @@ class VNextReportGenerator:
             for item in _as_list(surface.get("portfolio_actions"))[:3]
             if isinstance(item, dict)
         )
-        invalidations = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(surface.get("invalidation_conditions"))[:5])
+        invalidations = "".join(f"<li>{_render_invalidation_item(item)}</li>" for item in _as_list(surface.get("invalidation_conditions"))[:5])
         principal = surface.get("principal_contradiction") if isinstance(surface.get("principal_contradiction"), dict) else {}
         price_rows = "".join(
             f"<li><b>{_escape(item.get('category') or item.get('target', 'price'))}</b> · {_escape(item.get('reflected_state', 'unclear'))}: "
@@ -2069,7 +2093,7 @@ class VNextReportGenerator:
     </div>
     <div class="risk-list">
       <h3>风险摘要</h3>
-      <p>本轮必须保留风险 {_escape(risk_count)} 条；完整清单见“风险边界”。</p>
+      <p>本轮不能忽视的风险 {_escape(risk_count)} 条；完整清单见“风险边界”。</p>
     </div>
   </div>
   <div class="governance-grid">
@@ -2096,6 +2120,7 @@ class VNextReportGenerator:
     </article>
     <article>
       <h3>价格反映地图</h3>
+      <small class="section-note">以下是推断而非事实——每条都附证据与反证，欢迎质疑。</small>
       <ul>{price_rows or '<li>暂无结构化 price_reflection_map。</li>'}</ul>
     </article>
   </div>
@@ -2127,7 +2152,7 @@ class VNextReportGenerator:
                 for item in structured_actions[:4]
             )
             invalidations = _as_list(final.get("invalidation_conditions") or self._reader_final(final).get("invalidation_summary"))
-            watch_html = "".join(f"<li>{_escape(item)}</li>" for item in invalidations[:6]) or "<li>暂无结构化失效条件。</li>"
+            watch_html = "".join(f"<li>{_render_invalidation_item(item)}</li>" for item in invalidations[:6]) or "<li>暂无结构化失效条件。</li>"
             boundary_text = ", ".join(_label(name, "boundary") for name, status in boundary.items() if str(status).lower() in {"breached", "warning"}) or "无 breached/warning 边界"
             return f"""
 <section class="panel" id="actions">
@@ -2178,7 +2203,7 @@ class VNextReportGenerator:
             (
                 "减仓",
                 reduce_bias,
-                "若失效条件触发、边界状态转为已突破，或必须保留风险开始互相确认，应先降低组合对 NDX/QQQ 的单边暴露。",
+                "若失效条件触发、临界观察转为已突破，或不能忽视的风险开始互相确认，应先降低组合对 NDX/QQQ 的单边暴露。",
             ),
             (
                 "等待",
@@ -2502,7 +2527,7 @@ class VNextReportGenerator:
         reader = self._reader_final(final)
         invalidations = _as_list(final.get("invalidation_conditions"))
         primary_break = invalidations[0] if invalidations else "等待新的反证条件。"
-        invalidation_rows = "".join(f"<li>{_escape(_sentence(item, 88))}</li>" for item in invalidations[:3]) or "<li>暂无结构化失效条件。</li>"
+        invalidation_rows = "".join(f"<li>{_render_invalidation_item(_sentence(item, 88))}</li>" for item in invalidations[:3]) or "<li>暂无结构化失效条件。</li>"
         readout_priced = _sentence(final.get("priced_narrative", ""), 96)
         reasons = "".join(f"<li>{_escape(item)}</li>" for item in _as_list(reader.get("three_reasons"))[:3])
         support_chains = "".join(
@@ -3218,8 +3243,12 @@ class VNextReportGenerator:
 """
 
     def _risks_section(self, artifacts: Dict[str, Any], section_kicker: str = "04 · 风险边界") -> str:
+        final = artifacts.get("final_adjudication", {}) or {}
         risk = artifacts.get("risk_boundary_report", {}) or {}
         boundary = risk.get("boundary_status", {}) if isinstance(risk.get("boundary_status"), dict) else {}
+        invalidations = _as_list(final.get("invalidation_conditions"))
+        upside_conditions = [item for item in invalidations if _split_invalidation_item(item)[0] == "转多"]
+        upside_html = "".join(f"<li>{_render_invalidation_item(item)}</li>" for item in upside_conditions[:6]) or "<li>本轮未产出结构化的上行触发条件。</li>"
         boundary_cards = "".join(
             f"""
 <article class="boundary-card {_severity_class(status)}">
@@ -3254,12 +3283,18 @@ class VNextReportGenerator:
   <p class="section-note">风险不是附录。这里不写泛泛提示，只列当前判断最需要被反驳、复核或降级的条件。</p>
   <div class="risk-board">
     <div>
-      <h3>边界状态</h3>
-      <div class="boundary-grid">{boundary_cards or '<p>无边界状态。</p>'}</div>
+      <h3>临界观察</h3>
+      <div class="boundary-grid">{boundary_cards or '<p>无临界观察。</p>'}</div>
     </div>
-    <div class="risk-list">
-      <h3>必须保留</h3>
-      <ul>{must or '<li>无</li>'}</ul>
+    <div class="risk-board">
+      <div class="risk-list">
+        <h3>不能忽视的风险</h3>
+        <ul>{must or '<li>无</li>'}</ul>
+      </div>
+      <div class="risk-list">
+        <h3>上行触发（哪些情况会让判断转向机会）</h3>
+        <ul>{upside_html}</ul>
+      </div>
     </div>
   </div>
   <div class="trigger-grid">{''.join(failures) or '<p>无触发条件。</p>'}</div>

@@ -10,6 +10,7 @@ from agent_analysis.vnext_reporter import (
     INDICATOR_CHARTS,
     VNextReportGenerator,
     _label,
+    _render_invalidation_item,
     _slug,
 )
 from agent_analysis.prompt_inspector import PromptInspectorGenerator
@@ -18,6 +19,91 @@ from agent_analysis.prompt_inspector import PromptInspectorGenerator
 def _write_json(path: Path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def test_invalidation_item_direction_badges_and_legacy_text():
+    assert '<span class="pill good">转多</span> 盈利预期上修' == _render_invalidation_item("【转多】盈利预期上修")
+    assert '<span class="pill bad">转空</span> 信用利差扩大' == _render_invalidation_item("【转空】信用利差扩大")
+    assert "【转多】" not in _render_invalidation_item("【转多】盈利预期上修")
+    assert "实际利率回落" == _render_invalidation_item("实际利率回落")
+
+
+def test_brief_hero_labels_primary_break_condition():
+    reporter = VNextReportGenerator()
+    html = reporter._hero(
+        {
+            "final_stance": "中性",
+            "state_diagnosis": "等待确认。",
+            "confidence": "medium",
+            "invalidation_conditions": ["实际利率回落至 2.0% 以下"],
+        },
+        {},
+        Path("run"),
+        "brief",
+        {},
+    )
+    assert "什么情况下我会改判：" in html
+    assert "实际利率回落至 2.0% 以下" in html
+
+
+def test_reader_exit_renames_run_comparison_and_explains_claim_items():
+    reporter = VNextReportGenerator()
+    html = reporter._reader_exit_section(
+        {
+            "final_adjudication": {
+                "final_stance": "中性",
+                "confidence": "medium",
+                "price_reflection_map": [
+                    {"reflected_state": "partially_reflected", "category": "估值", "rationale": "部分反映。"}
+                ],
+            },
+            "golden_pit_checklist": {
+                "entries": [
+                    {
+                        "discipline_side": "claim",
+                        "current_status": "insufficient_evidence",
+                        "condition": "盈利预期需要继续观察。",
+                        "evidence_refs": [],
+                    }
+                ]
+            },
+        }
+    )
+    assert "和上次判断比，什么变了" in html
+    assert "观察确认项" in html
+    assert "这类条目不直接触发买卖，只是判断成立与否的观察哨。" in html
+    assert "以下是推断而非事实——每条都附证据与反证，欢迎质疑。" in html
+
+
+def test_risks_section_shows_upside_triggers_or_honest_placeholder():
+    reporter = VNextReportGenerator()
+    base = {
+        "final_adjudication": {"invalidation_conditions": ["信用利差扩大"]},
+        "risk_boundary_report": {},
+    }
+    assert "本轮未产出结构化的上行触发条件。" in reporter._risks_section(base)
+
+    base["final_adjudication"]["invalidation_conditions"] = ["【转多】盈利预期上修并广度改善"]
+    html = reporter._risks_section(base)
+    assert "上行触发（哪些情况会让判断转向机会）" in html
+    assert '<span class="pill good">转多</span> 盈利预期上修并广度改善' in html
+
+
+def test_risks_section_uses_plain_language_labels():
+    reporter = VNextReportGenerator()
+    html = reporter._risks_section(
+        {
+            "final_adjudication": {},
+            "risk_boundary_report": {
+                "boundary_status": {"valuation_compression": "warning"},
+                "must_preserve_risks": ["valuation_compression"],
+            },
+        }
+    )
+    assert "临界观察" in html
+    assert "不能忽视的风险" in html
+    assert "边界状态" not in html
+    assert "必须保留" not in html
 
 
 def test_vnext_reporter_news_section_shows_event_data_links():
