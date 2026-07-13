@@ -16,31 +16,6 @@ try:
     from .tools_L3 import *
     from .tools_L4 import *
     from .tools_L5 import *
-    from .tools_finnhub import (
-        get_stock_quote,
-        get_stock_candles,
-        get_company_profile,
-        get_basic_financials,
-        get_financials_reported,
-        get_analyst_recommendations,
-        get_price_target,
-        get_earnings_estimates,
-        get_news_sentiment,
-        get_insider_transactions,
-        get_stock_full_analysis,
-        get_m7_finnhub_analysis,
-    )
-    from .tools_simfin import (
-        get_company_info,
-        get_financial_statements,
-        get_all_financials,
-        get_derived_signals,
-        get_key_metrics,
-        get_current_valuation,
-        get_share_prices,
-        get_m7_simfin_analysis,
-        get_m7_fundamentals_simfin,
-    )
 except ImportError:
     from tools_common import *
     from tools_L1 import *
@@ -48,31 +23,6 @@ except ImportError:
     from tools_L3 import *
     from tools_L4 import *
     from tools_L5 import *
-    from tools_finnhub import (
-        get_stock_quote,
-        get_stock_candles,
-        get_company_profile,
-        get_basic_financials,
-        get_financials_reported,
-        get_analyst_recommendations,
-        get_price_target,
-        get_earnings_estimates,
-        get_news_sentiment,
-        get_insider_transactions,
-        get_stock_full_analysis,
-        get_m7_finnhub_analysis,
-    )
-    from tools_simfin import (
-        get_company_info,
-        get_financial_statements,
-        get_all_financials,
-        get_derived_signals,
-        get_key_metrics,
-        get_current_valuation,
-        get_share_prices,
-        get_m7_simfin_analysis,
-        get_m7_fundamentals_simfin,
-    )
 
 
 TOOLS_REGISTRY = {
@@ -135,31 +85,6 @@ TOOLS_REGISTRY = {
     "get_price_volume_quality_qqq": get_price_volume_quality_qqq,
     "get_donchian_channels_qqq": get_donchian_channels_qqq,
     "get_multi_scale_ma_position": get_multi_scale_ma_position,
-
-    # Finnhub 数据（L4 个股深度分析）
-    "get_stock_quote": get_stock_quote,
-    "get_stock_candles": get_stock_candles,
-    "get_company_profile": get_company_profile,
-    "get_basic_financials": get_basic_financials,
-    "get_financials_reported": get_financials_reported,
-    "get_analyst_recommendations": get_analyst_recommendations,
-    "get_price_target": get_price_target,
-    "get_earnings_estimates": get_earnings_estimates,
-    "get_news_sentiment": get_news_sentiment,
-    "get_insider_transactions": get_insider_transactions,
-    "get_stock_full_analysis": get_stock_full_analysis,
-    "get_m7_finnhub_analysis": get_m7_finnhub_analysis,
-
-    # Simfin 数据（L4 财务基本面）
-    "get_company_info": get_company_info,
-    "get_financial_statements": get_financial_statements,
-    "get_all_financials": get_all_financials,
-    "get_derived_signals": get_derived_signals,
-    "get_key_metrics": get_key_metrics,
-    "get_current_valuation": get_current_valuation,
-    "get_share_prices": get_share_prices,
-    "get_m7_simfin_analysis": get_m7_simfin_analysis,
-    "get_m7_fundamentals_simfin": get_m7_fundamentals_simfin,
 
     # 概念键
     "masters_perspective": None,

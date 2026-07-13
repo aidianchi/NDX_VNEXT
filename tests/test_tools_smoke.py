@@ -121,26 +121,8 @@ def test_registry_functions_accept_end_date():
             missing_end_date.append(name)
     # Functions that legitimately do not accept end_date:
     # - get_ndx_valuation_third_party_checks: no-arg helper
-    # - Finnhub / Simfin functions: use ticker/symbol params, not end_date
     expected_exceptions = {
         "get_ndx_valuation_third_party_checks",
-        "get_stock_quote",
-        "get_stock_candles",
-        "get_company_profile",
-        "get_basic_financials",
-        "get_financials_reported",
-        "get_analyst_recommendations",
-        "get_price_target",
-        "get_earnings_estimates",
-        "get_news_sentiment",
-        "get_insider_transactions",
-        "get_stock_full_analysis",
-        "get_m7_finnhub_analysis",
-        "get_company_info",
-        "get_key_metrics",
-        "get_current_valuation",
-        "get_m7_simfin_analysis",
-        "get_m7_fundamentals_simfin",
     }
     unexpected = [name for name in missing_end_date if name not in expected_exceptions]
     assert not unexpected, f"Functions missing end_date param: {unexpected}"
