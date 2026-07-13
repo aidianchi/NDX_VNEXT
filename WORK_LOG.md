@@ -4,6 +4,29 @@
 
 ---
 
+## 2026-07-13
+
+### 个人决策画像接线（工单 #17）
+
+完成内容：
+
+- 权威来源 = 用户个人投资政策书（`2026-06-29.个人投资政策书.md`）。真实参数（净资产约数、流动性下限、月支出估计等）落盘 `config/user_decision_profile.local.json`——已被 `.gitignore` 的 `config/*local*.json` 规则覆盖，`git check-ignore` 验证生效；`config/user_decision_profile.json`（git 跟踪）改写为纯 schema 占位，不含任何真实金额。
+- `vnext_reporter.py` 的"个人决策翻译"区改为确定性模板（`_personal_policy_translation`，无 LLM 调用，结构上不读取 profile 里任何金额字段）：按 `_classify_investor_stance` 关键词分类出防御/乐观/中性三支固定文案，说明本轮判断对"部署规则"实际能不能构成暂停/加速理由；再列出带【转多】标签的失效条件（无则诚实占位，不脑补点位）；再列风险条件并固定追加"市场涨跌不构成修改政策的理由"；固定免责尾注。
+- 13 个新测试覆盖三分支文案、转多标签有/无、风险条件回退链、画像未配置时的隔离占位、金额永不渲染断言（含假数字 fixture）、`.gitignore` 生效验证；顺带清理因卡片重设计变成孤儿的 `.profile-list` CSS 规则。611 全绿（Fable 亲跑复核，非仅采信施工报告）。
+- 用真实 run `20260712_221916` 重生成 brief，逐字核对渲染文本与模板一致；对全部 git 跟踪文件和重生成的 HTML 做金额扫描（`git grep`/word-boundary grep），确认 100000/300000/3787 等真实数字零泄漏。
+
+验证结果：
+
+- 全量测试 611 通过（598 基线 + 13 新增）。
+- Fable 独立复核：`git check-ignore -v` 确认真实数据文件被排除；`git grep` 扫描全部 git 跟踪文件确认零金额泄漏；亲自重跑测试与全链验证，未仅采信施工报告。
+
+剩余边界：
+
+- `config/user_decision_profile.json`（git 跟踪版）被清空后，golden-pit-checklist 依赖的 `buy_disciplines`/`sell_disciplines` metric_predicates 阈值随之降级为空条目——这些阈值本来就是未经用户逐条确认的草案（见 `NEXT_STEPS.md` P1"用户确认个人决策档案阈值"），不算真实回退，但待用户确认后需要重新决定阈值该落 tracked 占位文件还是并入 local overlay。
+- 投资者姿态三分类（防御/乐观/中性）为施工方设计选择，工单原文只要求两个方向；如需改回两档可另提小单。
+
+---
+
 ## 2026-07-12
 
 ### 独立重算校验带、M7 资本开支周期、VIX 期限结构（当日追加）
