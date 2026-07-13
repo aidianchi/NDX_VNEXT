@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from agent_analysis.vnext_reporter import (
     INDICATOR_CHARTS,
     VNextReportGenerator,
     _label,
+    _load_local_decision_profile,
     _render_invalidation_item,
     _slug,
 )
@@ -1004,12 +1006,15 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert "确认指标" in html
     assert "本页读法" in html
     assert "优先复核" in html
-    assert "分批试探" in html
     assert "这不是低风险环境，但可能是高风险高赔率候选。" in html
     assert "价格已反映部分坏消息。" in html
     assert "高风险高赔率候选。" in html
+    # "战术仓" comes from time_horizon_views.action_implication ("战术仓分批。"), not
+    # from portfolio_actions — the brief template's 个人决策翻译 card was redesigned
+    # to a deterministic IPS translation (see _personal_policy_translation) and no
+    # longer echoes final_adjudication.portfolio_actions, so "分批试探" is gone from
+    # this template's output.
     assert "战术仓" in html
-    assert "分批试探。" in html
     assert "优先复核" in html
     assert "回测数据边界" in html
     assert "get_ndx_forward_earnings_quality" in html
@@ -1961,3 +1966,161 @@ def test_timestamp_chip_appears_in_brief_html(tmp_path: Path):
     assert "数据时间：未记录" in html
     assert "来源：未记录" in html
     assert "证据合约" in html
+
+
+# --- 个人决策翻译 (personal policy translation) ---
+# Fixture profile uses obviously-fake, clearly-synthetic amounts (never the
+# real IPS numbers, which only live in config/user_decision_profile.local.json
+# and must never appear in a git-tracked test file).
+_FAKE_DECISION_PROFILE = {
+    "schema_version": "user_decision_profile_ips_v1",
+    "net_worth_snapshot": {"approx_total_cny": 777777, "as_of": "2099-01-01"},
+    "buckets": {
+        "liquidity": {"floor_cny": 555555, "monthly_expense_estimate_cny": [111, 222]},
+        "long_term_layer": {"growth_bucket_pct_of_long_term_layer": 80, "diversification_bucket_pct_of_long_term_layer": 20},
+    },
+}
+
+
+def test_personal_policy_translation_defensive_stance_uses_defensive_copy():
+    reporter = VNextReportGenerator()
+    html = reporter._personal_policy_translation(
+        {"final_stance": "市场宜防御减仓，等待信号确认", "state_diagnosis": "风险高于机会"},
+        _FAKE_DECISION_PROFILE,
+    )
+    assert "本轮判断不改变战略权益（纳指/标普/红利低波）的常规定投节奏" in html
+    assert "本轮偏乐观的判断不改变战略权益的常规节奏" not in html
+    assert "本轮系统判断在多空之间没有明确倾向" not in html
+
+
+def test_personal_policy_translation_constructive_stance_uses_constructive_copy():
+    reporter = VNextReportGenerator()
+    html = reporter._personal_policy_translation(
+        {"final_stance": "机会大于风险，可以加仓，价值明确", "state_diagnosis": "偏多"},
+        _FAKE_DECISION_PROFILE,
+    )
+    assert "本轮偏乐观的判断不改变战略权益的常规节奏" in html
+    assert "本轮判断不改变战略权益（纳指/标普/红利低波）的常规定投节奏" not in html
+    assert "本轮系统判断在多空之间没有明确倾向" not in html
+
+
+def test_personal_policy_translation_neutral_stance_uses_neutral_copy():
+    reporter = VNextReportGenerator()
+    html = reporter._personal_policy_translation(
+        {"final_stance": "多空力量大致平衡，暂无明确方向", "state_diagnosis": ""},
+        _FAKE_DECISION_PROFILE,
+    )
+    assert "本轮系统判断在多空之间没有明确倾向" in html
+    assert "本轮判断不改变战略权益（纳指/标普/红利低波）的常规定投节奏" not in html
+    assert "本轮偏乐观的判断不改变战略权益的常规节奏" not in html
+
+
+def test_personal_policy_translation_renders_bullish_tagged_invalidation_body():
+    reporter = VNextReportGenerator()
+    html = reporter._personal_policy_translation(
+        {
+            "final_stance": "中性",
+            "invalidation_conditions": ["【转多】盈利预期上修并广度改善", "【转空】信用利差扩大"],
+        },
+        _FAKE_DECISION_PROFILE,
+    )
+    assert "你在等的'价值买入'，系统当前的具名观察条件" in html
+    assert "盈利预期上修并广度改善" in html
+    assert "【转多】" not in html
+
+
+def test_personal_policy_translation_no_bullish_tags_shows_honest_placeholder():
+    reporter = VNextReportGenerator()
+    html = reporter._personal_policy_translation(
+        {"final_stance": "中性", "invalidation_conditions": ["【转空】信用利差扩大"]},
+        _FAKE_DECISION_PROFILE,
+    )
+    assert "本轮系统输出没有标注具名的【转多】转折条件" in html
+
+
+def test_personal_policy_translation_risk_block_falls_back_to_must_preserve_risks():
+    reporter = VNextReportGenerator()
+    html = reporter._personal_policy_translation(
+        {"final_stance": "中性", "invalidation_conditions": [], "must_preserve_risks": ["估值压缩风险"]},
+        _FAKE_DECISION_PROFILE,
+    )
+    assert "估值压缩风险" in html
+    assert "按你的政策书，'市场涨跌'不构成修改政策的理由" in html
+
+
+def test_personal_policy_translation_risk_block_honest_placeholder_when_both_empty():
+    reporter = VNextReportGenerator()
+    html = reporter._personal_policy_translation(
+        {"final_stance": "中性", "invalidation_conditions": [], "must_preserve_risks": []},
+        _FAKE_DECISION_PROFILE,
+    )
+    assert "本轮未记录具名的风险触发条件" in html
+
+
+def test_personal_policy_translation_empty_profile_shows_only_unconfigured_placeholder():
+    reporter = VNextReportGenerator()
+    html = reporter._personal_policy_translation(
+        {"final_stance": "市场宜防御减仓", "invalidation_conditions": ["【转多】盈利预期上修"]},
+        {},
+    )
+    assert "个人决策画像未配置" in html
+    assert "config/user_decision_profile.local.json 不存在" in html
+    # Nothing from parts (a)-(d) should leak in when the profile is unconfigured.
+    assert "本轮判断不改变战略权益" not in html
+    assert "价值买入" not in html
+    assert "本区只是把系统判断对照你自己的政策书" not in html
+
+
+def test_personal_policy_translation_footnote_present_when_profile_configured():
+    reporter = VNextReportGenerator()
+    html = reporter._personal_policy_translation({"final_stance": "中性"}, _FAKE_DECISION_PROFILE)
+    assert "本区只是把系统判断对照你自己的政策书（2026-06-29 草案）做的机械翻译，不构成投资建议。" in html
+
+
+def test_personal_policy_translation_never_leaks_profile_amounts():
+    reporter = VNextReportGenerator()
+    html = reporter._personal_policy_translation(
+        {"final_stance": "市场宜防御减仓", "invalidation_conditions": ["【转多】盈利预期上修"]},
+        _FAKE_DECISION_PROFILE,
+    )
+    assert "555555" not in html
+    assert "777777" not in html
+    assert "111" not in html
+    assert "222" not in html
+
+
+def test_load_local_decision_profile_missing_file_returns_empty_dict(tmp_path: Path):
+    missing = tmp_path / "nope" / "user_decision_profile.local.json"
+    assert _load_local_decision_profile(missing) == {}
+
+
+def test_load_local_decision_profile_reads_override_path(tmp_path: Path):
+    fixture_path = tmp_path / "user_decision_profile.local.json"
+    _write_json(fixture_path, _FAKE_DECISION_PROFILE)
+    loaded = _load_local_decision_profile(fixture_path)
+    assert loaded == _FAKE_DECISION_PROFILE
+
+
+def test_user_decision_profile_local_json_is_gitignored():
+    repo_root = Path(__file__).resolve().parents[1]
+    git_binary = None
+    for candidate in ("git",):
+        try:
+            subprocess.run([candidate, "--version"], capture_output=True, check=True)
+            git_binary = candidate
+        except (OSError, subprocess.CalledProcessError):
+            git_binary = None
+    if git_binary is None:
+        import pytest
+
+        pytest.skip("git binary not available in this environment")
+    result = subprocess.run(
+        [git_binary, "check-ignore", "config/user_decision_profile.local.json"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        "config/user_decision_profile.local.json must be covered by .gitignore; "
+        f"git check-ignore stdout={result.stdout!r} stderr={result.stderr!r}"
+    )

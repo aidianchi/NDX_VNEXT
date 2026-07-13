@@ -243,6 +243,44 @@ def _load_json(path: Path, default: Any) -> Any:
         return json.load(handle)
 
 
+def _load_local_decision_profile(path: Optional[Path] = None) -> Dict[str, Any]:
+    """Load the reader's local (gitignored) investment policy profile.
+
+    This deliberately never raises: missing file just means the profile is
+    unconfigured, which the caller renders as an honest placeholder.
+    """
+    target = path or (Path(__file__).resolve().parents[2] / "config" / "user_decision_profile.local.json")
+    if not target.exists():
+        return {}
+    try:
+        with target.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+_BEARISH_STANCE_KEYWORDS = ["防御", "减仓", "降低", "做空", "谨慎", "偏空", "观望", "等待信号", "风险高于机会", "压缩风险"]
+_BULLISH_STANCE_KEYWORDS = ["加仓", "增持", "做多", "偏多", "进取", "乐观", "机会大于风险", "逢低买入", "价值明确"]
+
+
+def _classify_investor_stance(final_stance: str, state_diagnosis: str = "") -> str:
+    """Classify the system's final stance into defensive/constructive/neutral.
+
+    Keyword-based and deterministic. Ties (including 0-0) resolve to neutral.
+    Real final_stance text can be genuinely mixed, so this is a 3-way
+    classifier rather than a strict bull/bear split.
+    """
+    text = f"{final_stance or ''} {state_diagnosis or ''}"
+    bearish_hits = sum(text.count(keyword) for keyword in _BEARISH_STANCE_KEYWORDS)
+    bullish_hits = sum(text.count(keyword) for keyword in _BULLISH_STANCE_KEYWORDS)
+    if bearish_hits > bullish_hits:
+        return "defensive"
+    if bullish_hits > bearish_hits:
+        return "constructive"
+    return "neutral"
+
+
 def _escape(value: Any) -> str:
     if value is None:
         return ""
@@ -1862,10 +1900,83 @@ class VNextReportGenerator:
             distance = f"{met_count} 项条件均已满足；仍需复核反证和发布闸门。"
         return {"change": _sentence(change, 110), "distance": _sentence(distance, 120)}
 
+    _STANCE_PARAGRAPHS = {
+        "defensive": (
+            "你的政策书没有'因为系统判断偏防御，就暂停战略定投'这一条（部署规则：安全层以上现金不等待完美买点，"
+            "每次只投低于目标的桶）。所以本轮判断不改变战略权益（纳指/标普/红利低波）的常规定投节奏。它真正能影响的，"
+            "是两件本来就悬而未决的事：你在等待的'价值买入'加码时点，以及本就已经冻结新增的主动仓——本轮偏防御的信号，"
+            "不构成额外理由让这两者提前或延后。"
+        ),
+        "constructive": (
+            "你的政策书同样没有'系统判断偏乐观，就可以加速部署或突破仓位上限'这一条（部署规则：不等待完美买点，"
+            "只投低于目标的桶——这条规则从一开始就不需要乐观信号来触发）。所以本轮偏乐观的判断不改变战略权益的常规节奏，"
+            "也不构成把冻结中的主动仓解冻的理由。它唯一可能触发的动作，是促使你去补一份还没做的功课：如果你想借这类信号"
+            "把纳指仓位推高到超过战略权益 50% 的临时上限，政策书要求你先完成'纳指集中度'的书面论证，而不是让判断信号替代论证。"
+        ),
+        "neutral": (
+            "本轮系统判断在多空之间没有明确倾向。你的政策书本来就不依赖判断方向来决定节奏——部署规则是'安全层以上现金不等待"
+            "完美买点，每次只投低于目标的桶'，这条规则在偏多、偏空、中性的判断下都一样生效。这类中性判断通常不改变任何既定动作，"
+            "只提醒你：下一次半年再平衡检查点到了的话，按既定比例检查桶内偏离，而不是现在因为这个判断临时调整。"
+        ),
+    }
+
+    def _personal_policy_translation(self, final: Dict[str, Any], profile: Dict[str, Any]) -> str:
+        """Deterministic (no-LLM) translation of the final judgment against the
+        reader's own investment policy statement (config/user_decision_profile.local.json).
+
+        Never reads/renders absolute money amounts from `profile` — see the
+        hard rule in the work order this implements.
+        """
+        if not profile:
+            return (
+                "<p>个人决策画像未配置（config/user_decision_profile.local.json 不存在）。"
+                "这里不做任何翻译或推测，请先补齐你的政策书画像文件。</p>"
+            )
+
+        stance = _classify_investor_stance(
+            str(final.get("final_stance", "") or ""),
+            str(final.get("state_diagnosis", "") or ""),
+        )
+        stance_paragraph = f"<p>{_escape(self._STANCE_PARAGRAPHS[stance])}</p>"
+
+        invalidations = _as_list(final.get("invalidation_conditions"))
+        bullish_items = [
+            body
+            for direction, body in (_split_invalidation_item(item) for item in invalidations)
+            if direction == "转多"
+        ]
+        if bullish_items:
+            bullish_rows = "".join(f"<li>{_escape(body)}</li>" for body in bullish_items)
+            bullish_block = f"<p><b>你在等的'价值买入'，系统当前的具名观察条件：</b></p><ul>{bullish_rows}</ul>"
+        else:
+            bullish_block = (
+                "<p>本轮系统输出没有标注具名的【转多】转折条件（这不代表市场没有转多可能，只是本轮判断未把它写成结构化条件）。"
+                "请把'风险边界'区列出的失效条件当作方向性参考，不要在没有具体数字支持时，自己脑补价格点位或概率。</p>"
+            )
+
+        bearish_items = [
+            body
+            for direction, body in (_split_invalidation_item(item) for item in invalidations)
+            if direction == "转空"
+        ]
+        if not bearish_items:
+            bearish_items = [str(item) for item in _as_list(final.get("must_preserve_risks"))]
+        if not bearish_items:
+            bearish_items = ["本轮未记录具名的风险触发条件"]
+        risk_rows = "".join(f"<li>{_escape(item)}</li>" for item in bearish_items)
+        risk_block = (
+            f"<p><b>即使以下情况发生：</b></p><ul>{risk_rows}</ul>"
+            "<p>按你的政策书，'市场涨跌'不构成修改政策的理由；需要重审的是加码计划而非整体配置。</p>"
+        )
+
+        footnote = "<p><small>本区只是把系统判断对照你自己的政策书（2026-06-29 草案）做的机械翻译，不构成投资建议。</small></p>"
+
+        return stance_paragraph + bullish_block + risk_block + footnote
+
     def _reader_exit_section(self, artifacts: Dict[str, Any]) -> str:
         final = artifacts.get("final_adjudication", {}) or {}
         checklist = artifacts.get("golden_pit_checklist", {}) if isinstance(artifacts.get("golden_pit_checklist"), dict) else {}
-        profile = artifacts.get("user_decision_profile", {}) if isinstance(artifacts.get("user_decision_profile"), dict) else {}
+        local_profile = _load_local_decision_profile()
         reader = self._reader_final(final)
         state = checklist.get("current_state") or final.get("state_diagnosis") or reader.get("one_liner") or final.get("final_stance") or "未记录"
         changes = _as_list(checklist.get("changed_since_last_run_summary"))
@@ -1986,20 +2097,6 @@ class VNextReportGenerator:
             else "<p>暂无黄金坑清单条目。</p>"
         )
 
-        action_rows = "".join(
-            f"<li><b>{_escape(_display_label(item.get('bucket', 'position')))}</b><span>{_escape(_sentence(item.get('action') or item.get('rationale') or '', 90))}</span></li>"
-            for item in _as_list(final.get("portfolio_actions"))[:3]
-            if isinstance(item, dict) and (item.get("action") or item.get("rationale"))
-        )
-        profile_rows = "".join(
-            f"<li><b>{_escape(label)}</b><span>{_escape(_display_label(value))}</span></li>"
-            for label, value in [
-                ("持仓状态", profile.get("holding_status")),
-                ("目标", profile.get("objective")),
-                ("决策频率", profile.get("decision_frequency")),
-            ]
-            if value
-        )
         return f"""
 <section class="panel decision-panel" id="decision">
   <div class="section-kicker">01 · 读者出口</div>
@@ -2016,7 +2113,7 @@ class VNextReportGenerator:
     </article>
     <article>
       <h3>个人决策翻译</h3>
-      <ul class="profile-list">{profile_rows or '<li><span>个人决策档案未记录。</span></li>'}{action_rows}</ul>
+      {self._personal_policy_translation(final, local_profile)}
       <small>个人档案只在读者出口使用，不进入上游分析 prompt。</small>
     </article>
   </div>

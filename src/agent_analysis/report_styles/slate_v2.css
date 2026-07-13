@@ -2886,28 +2886,6 @@ body { line-height: 1.75; }
   text-transform: none;
 }
 
-.profile-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.profile-list li {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  padding: 5px 0;
-  border-bottom: 1px solid color-mix(in oklch, var(--rule) 55%, transparent);
-  font-size: 14px;
-}
-.profile-list li:last-child { border-bottom: 0; }
-.profile-list li b {
-  flex: 0 0 auto;
-  font: 600 12px/1.6 var(--sans);
-  color: var(--muted);
-  letter-spacing: 0.04em;
-}
-.profile-list li span { color: var(--ink-soft); }
-
 .reader-odds-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
