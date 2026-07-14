@@ -254,6 +254,24 @@ TICKER_REPLACEMENTS = {
     'WBA': None,
 }
 
+
+class HistoricalUniverseUnavailable(RuntimeError):
+    """Raised when a backtest/snapshot request for NDX100 constituents cannot be
+    served from the historical ticker-history library.
+
+    Callers must NOT fall back to any "current" constituent source (Nasdaq API,
+    Wikipedia, GitHub library live lookup, or the static fallback snapshot) when
+    this is raised for a dated request — doing so silently introduces survivorship
+    bias into a backtest. The caller should surface an honest unavailable payload
+    instead.
+    """
+
+    def __init__(self, reason: str, end_date: Optional[str] = None):
+        self.reason = reason
+        self.end_date = end_date
+        message = f"Historical NDX100 universe unavailable for end_date={end_date!r}: {reason}"
+        super().__init__(message)
+
 # =====================================================
 # 通用辅助函数
 # =====================================================

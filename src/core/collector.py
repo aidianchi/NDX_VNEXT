@@ -59,6 +59,76 @@ except ImportError:
     except ImportError:
         reset_ndx100_price_panel_run_cache = None
 
+# --- 手工数据新鲜度与来源声明校验（只标注、不阻断） ---
+MANUAL_DATA_STALENESS_THRESHOLD_DAYS = 120
+
+
+def _extract_manual_data_date(manual_metric: Dict[str, Any]) -> Optional[str]:
+    """Best-effort extraction of a manual slot's declared data date.
+
+    Prefers data_quality.data_date; falls back to a same-named field inside
+    value (some slots, e.g. QQQ Top10, carry an effective_date in value).
+    """
+    if not isinstance(manual_metric, dict):
+        return None
+    data_quality = manual_metric.get("data_quality") if isinstance(manual_metric.get("data_quality"), dict) else {}
+    candidate = data_quality.get("data_date")
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate.strip()
+    value = manual_metric.get("value") if isinstance(manual_metric.get("value"), dict) else {}
+    for key in ("data_date", "effective_date", "date"):
+        candidate = value.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
+def _manual_data_staleness_check(manual_metric: Dict[str, Any], backtest_date: Optional[str]):
+    """Compare a manual slot's declared date against this run's reference date.
+
+    Returns (anomaly_code, human_readable_note); (None, None) when the date
+    parses and is within the freshness threshold. This only annotates --
+    callers never block publish on this signal alone.
+    """
+    reference_date_str = backtest_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    try:
+        reference_date = datetime.strptime(reference_date_str, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        reference_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        reference_date = datetime.strptime(reference_date_str, "%Y-%m-%d")
+
+    raw_date = _extract_manual_data_date(manual_metric)
+    if not raw_date:
+        return "manual_data_date_missing", "人工数据未标注 data_date（或 value 内日期字段），无法核实新鲜度。"
+    try:
+        manual_date = datetime.strptime(raw_date, "%Y-%m-%d")
+    except ValueError:
+        return "manual_data_date_missing", f"人工数据 data_date='{raw_date}' 无法解析为日期，无法核实新鲜度。"
+
+    age_days = (reference_date - manual_date).days
+    if age_days > MANUAL_DATA_STALENESS_THRESHOLD_DAYS:
+        return (
+            "manual_data_stale",
+            f"人工数据日期 {raw_date} 距本次运行参考日期 {reference_date_str} 已 {age_days} 天，超过 "
+            f"{MANUAL_DATA_STALENESS_THRESHOLD_DAYS} 天新鲜度阈值，请核实是否需要更新。",
+        )
+    return None, None
+
+
+def _append_manual_data_quality_anomaly(data_quality: Dict[str, Any], code: str) -> None:
+    anomalies = list(data_quality.get("anomalies") or [])
+    if code not in anomalies:
+        anomalies.append(code)
+    data_quality["anomalies"] = anomalies
+
+
+def _append_manual_override_note(result: Dict[str, Any], note: Optional[str]) -> None:
+    if not note:
+        return
+    existing = result.get("manual_override_note")
+    result["manual_override_note"] = f"{existing} {note}" if existing else note
+
+
 class DataCollector:
     """负责从tools.py收集、缓存和格式化所有市场数据。"""
     def __init__(self):
@@ -69,6 +139,7 @@ class DataCollector:
             1: [
                 "get_10y2y_spread_bp",
                 "get_fed_funds_rate",
+                "get_fed_funds_rate_path",
                 "get_m2_yoy",                 # 传统货币存量（M2 YoY）
                 "get_net_liquidity_momentum", # 美元净流动性动量（WALCL - TGA - RRP）
                 "get_copper_gold_ratio",
@@ -419,6 +490,35 @@ class DataCollector:
                         result["value"] = merged_value
                         result["manual_override_used"] = True
                         result["manual_override_note"] = "Manual ERP values merged into Damodaran monthly data; series is filtered by target_date when supplied"
+
+                        # Design point 1 (work order #7): the Damodaran slot is meant to be an
+                        # independent third ERP voice alongside the Wind PE-based simple yield
+                        # gap and the constituent self-calculated ERP. A manual value that is not
+                        # declared as Damodaran's own official number silently collapses that
+                        # independence, so flag (not block) it.
+                        result_data_quality = result.get("data_quality") if isinstance(result.get("data_quality"), dict) else {}
+                        result["data_quality"] = result_data_quality
+                        manual_source_type = manual_value.get("manual_source_type")
+                        if manual_source_type == "damodaran_official":
+                            pass
+                        elif manual_source_type in ("wind_derived", "other"):
+                            _append_manual_data_quality_anomaly(
+                                result_data_quality, "erp_independence_compromised_manual_source_not_damodaran"
+                            )
+                            _append_manual_override_note(
+                                result, "该值未声明为 Damodaran 官方口径，不能作为独立于 Wind 的第三声部。"
+                            )
+                        else:
+                            _append_manual_data_quality_anomaly(result_data_quality, "manual_erp_provenance_undeclared")
+                            _append_manual_override_note(
+                                result, "该值未声明为 Damodaran 官方口径，不能作为独立于 Wind 的第三声部。"
+                            )
+
+                        staleness_code, staleness_note = _manual_data_staleness_check(manual_metric, backtest_date)
+                        if staleness_code:
+                            _append_manual_data_quality_anomaly(result_data_quality, staleness_code)
+                            _append_manual_override_note(result, staleness_note)
+
                         logging.info(f"  - 调用 {func_name}... ✔ (Damodaran monthly data merged with manual ERP overrides)")
                     else:
                         logging.info(f"  - 调用 {func_name}... ✔ (Damodaran monthly data)")
@@ -443,6 +543,17 @@ class DataCollector:
                             logging.info(f"  - 调用 {func_name}... ✔ (manual valuation used; live third-party checks skipped in backtest)")
                         else:
                             logging.info(f"  - 调用 {func_name}... ✔ (manual valuation merged with live third-party checks)")
+                    # primary_fields is classification metadata used to decide manual_active;
+                    # it is not an evidence field and must not ride into the indicator payload.
+                    raw_data.pop("primary_fields", None)
+
+                    raw_data_quality = raw_data.get("data_quality") if isinstance(raw_data.get("data_quality"), dict) else {}
+                    raw_data["data_quality"] = raw_data_quality
+                    staleness_code, staleness_note = _manual_data_staleness_check(manual_metric, backtest_date)
+                    if staleness_code:
+                        _append_manual_data_quality_anomaly(raw_data_quality, staleness_code)
+                        _append_manual_override_note(raw_data, staleness_note)
+
                     collection_timestamp = datetime.now(timezone.utc).isoformat()
                     raw_data["function_id"] = func_name
                     raw_data["collection_timestamp_utc"] = collection_timestamp

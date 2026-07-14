@@ -157,3 +157,182 @@ def test_backtest_manual_ndx_valuation_still_overrides_skip(tmp_path, monkeypatc
     assert raw["data_quality"]["source_disagreement"] == {}
     assert "live third-party checks are skipped in backtest" in raw["manual_override_note"]
     assert not data["backtest_data_boundaries"]
+
+
+# --- Work order #7: Damodaran manual ERP provenance (three branches) ---
+
+
+def test_damodaran_manual_official_source_has_no_provenance_anomaly(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.collector.path_config.data_dir", str(tmp_path))
+    monkeypatch.setattr(
+        manual_data,
+        "load_manual_data",
+        lambda: {
+            "active": True,
+            "metrics": {
+                "get_damodaran_us_implied_erp": {
+                    "name": "Manual/Wind ERP Reference",
+                    "primary_fields": ["manual_erp", "implied_erp_fcfe", "implied_erp_ddm"],
+                    "value": {"manual_erp": 4.5, "manual_source_type": "damodaran_official"},
+                    "data_quality": {"data_date": "2025-12-20"},
+                }
+            },
+        },
+    )
+    monkeypatch.setitem(
+        collector_module.TOOLS_REGISTRY,
+        "get_damodaran_us_implied_erp",
+        lambda end_date=None: {"name": "Damodaran", "value": {}, "data_quality": {}},
+    )
+
+    collector = DataCollector()
+    collector.LAYER_FUNCTIONS = {4: ["get_damodaran_us_implied_erp"]}
+
+    data = collector.run(backtest_date="2026-01-01")
+    raw = data["indicators"][0]["raw_data"]
+
+    assert raw["value"]["manual_erp"] == 4.5
+    anomalies = raw["data_quality"]["anomalies"]
+    assert "manual_erp_provenance_undeclared" not in anomalies
+    assert "erp_independence_compromised_manual_source_not_damodaran" not in anomalies
+    assert "manual_data_stale" not in anomalies
+
+
+def test_damodaran_manual_wind_derived_source_flags_independence_compromised(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.collector.path_config.data_dir", str(tmp_path))
+    monkeypatch.setattr(
+        manual_data,
+        "load_manual_data",
+        lambda: {
+            "active": True,
+            "metrics": {
+                "get_damodaran_us_implied_erp": {
+                    "name": "Manual/Wind ERP Reference",
+                    "primary_fields": ["manual_erp", "implied_erp_fcfe", "implied_erp_ddm"],
+                    "value": {"manual_erp": 4.5, "manual_source_type": "wind_derived"},
+                    "data_quality": {"data_date": "2025-12-20"},
+                }
+            },
+        },
+    )
+    monkeypatch.setitem(
+        collector_module.TOOLS_REGISTRY,
+        "get_damodaran_us_implied_erp",
+        lambda end_date=None: {"name": "Damodaran", "value": {}, "data_quality": {}},
+    )
+
+    collector = DataCollector()
+    collector.LAYER_FUNCTIONS = {4: ["get_damodaran_us_implied_erp"]}
+
+    data = collector.run(backtest_date="2026-01-01")
+    raw = data["indicators"][0]["raw_data"]
+
+    anomalies = raw["data_quality"]["anomalies"]
+    assert "erp_independence_compromised_manual_source_not_damodaran" in anomalies
+    assert "manual_erp_provenance_undeclared" not in anomalies
+    assert "该值未声明为 Damodaran 官方口径" in raw["manual_override_note"]
+
+
+def test_damodaran_manual_undeclared_source_flags_provenance_undeclared(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.collector.path_config.data_dir", str(tmp_path))
+    monkeypatch.setattr(
+        manual_data,
+        "load_manual_data",
+        lambda: {
+            "active": True,
+            "metrics": {
+                "get_damodaran_us_implied_erp": {
+                    "name": "Manual/Wind ERP Reference",
+                    "primary_fields": ["manual_erp", "implied_erp_fcfe", "implied_erp_ddm"],
+                    # manual_source_type deliberately absent (undeclared provenance).
+                    "value": {"manual_erp": 4.5},
+                    "data_quality": {"data_date": "2025-12-20"},
+                }
+            },
+        },
+    )
+    monkeypatch.setitem(
+        collector_module.TOOLS_REGISTRY,
+        "get_damodaran_us_implied_erp",
+        lambda end_date=None: {"name": "Damodaran", "value": {}, "data_quality": {}},
+    )
+
+    collector = DataCollector()
+    collector.LAYER_FUNCTIONS = {4: ["get_damodaran_us_implied_erp"]}
+
+    data = collector.run(backtest_date="2026-01-01")
+    raw = data["indicators"][0]["raw_data"]
+
+    anomalies = raw["data_quality"]["anomalies"]
+    assert "manual_erp_provenance_undeclared" in anomalies
+    assert "erp_independence_compromised_manual_source_not_damodaran" not in anomalies
+    assert "该值未声明为 Damodaran 官方口径" in raw["manual_override_note"]
+
+
+# --- Work order #7: manual data staleness annotation (two branches) ---
+
+
+def test_damodaran_manual_stale_date_flags_anomaly(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.collector.path_config.data_dir", str(tmp_path))
+    monkeypatch.setattr(
+        manual_data,
+        "load_manual_data",
+        lambda: {
+            "active": True,
+            "metrics": {
+                "get_damodaran_us_implied_erp": {
+                    "name": "Manual/Wind ERP Reference",
+                    "primary_fields": ["manual_erp", "implied_erp_fcfe", "implied_erp_ddm"],
+                    "value": {"manual_erp": 4.5, "manual_source_type": "damodaran_official"},
+                    "data_quality": {"data_date": "2020-01-01"},
+                }
+            },
+        },
+    )
+    monkeypatch.setitem(
+        collector_module.TOOLS_REGISTRY,
+        "get_damodaran_us_implied_erp",
+        lambda end_date=None: {"name": "Damodaran", "value": {}, "data_quality": {}},
+    )
+
+    collector = DataCollector()
+    collector.LAYER_FUNCTIONS = {4: ["get_damodaran_us_implied_erp"]}
+
+    data = collector.run(backtest_date="2026-01-01")
+    raw = data["indicators"][0]["raw_data"]
+
+    anomalies = raw["data_quality"]["anomalies"]
+    assert "manual_data_stale" in anomalies
+    assert "manual_data_date_missing" not in anomalies
+    assert "2020-01-01" in raw["manual_override_note"]
+    assert "超过" in raw["manual_override_note"]
+
+
+def test_manual_value_missing_date_flags_date_missing_anomaly(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.collector.path_config.data_dir", str(tmp_path))
+    monkeypatch.setattr(
+        manual_data,
+        "load_manual_data",
+        lambda: {
+            "active": True,
+            "metrics": {
+                "get_qqq_top10_concentration": {
+                    "name": "QQQ Top10 Concentration (Manual)",
+                    "primary_fields": ["top10_weight_pct", "top5_weight_pct", "m7_weight_pct"],
+                    "value": {"top10_weight_pct": 50.1},
+                    "data_quality": {},
+                }
+            },
+        },
+    )
+
+    collector = DataCollector()
+    collector.LAYER_FUNCTIONS = {3: ["get_qqq_top10_concentration"]}
+
+    data = collector.run(backtest_date="2026-01-01")
+    raw = data["indicators"][0]["raw_data"]
+
+    assert "manual_data_date_missing" in raw["data_quality"]["anomalies"]
+    assert "manual_data_stale" not in raw["data_quality"]["anomalies"]
+    # Classification metadata must not leak into the evidence payload.
+    assert "primary_fields" not in raw

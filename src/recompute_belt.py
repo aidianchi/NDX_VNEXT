@@ -71,6 +71,12 @@ independently observed data (Wind's own tie-handling/rounding is unknown), so
 the tolerance is intentionally loose and the finding is informational, never
 gate-eligible."""
 
+FED_FUNDS_PATH_NEGLIGIBLE_VOLUME = 5.0
+FED_FUNDS_PATH_THIN_VOLUME = 100.0
+"""Frozen canon thresholds repeated deliberately in the independent book.
+They must not be imported from pipeline code or trusted from the payload,
+otherwise a coordinated threshold/path mutation could fool both books."""
+
 MAGNITUDE_SENTINEL_NOTE = (
     "order-of-magnitude plausibility band, not a precise value check; a "
     "billion/million unit mixup is a ~1e3 factor, so bands are set wide "
@@ -486,6 +492,190 @@ def check_vix_term_structure_percentile(data_json: Dict[str, Any], handled: Set[
             field, pipeline_val, canonical, EPSILON_EXACT, "percentile", CRITICALITY_INFO,
             "duplicate top-level convenience field vs nested percentile_context.windows.*.percentile internal consistency",
         ))
+    return findings
+
+
+def check_fed_funds_rate_path(data_json: Dict[str, Any], handled: Set[str]) -> List[Dict[str, Any]]:
+    """Independently rebuild the reduced ZQ curve from embedded raw rows.
+
+    Standard-library only by design: the audit book selects the last close
+    on/before effective_date, recomputes 10-row average volume and liquidity
+    exclusion, then derives implied rates, slope and priced cuts without
+    importing any pipeline helper.
+    """
+    findings: List[Dict[str, Any]] = []
+    fid = "get_fed_funds_rate_path"
+    value = _indicator_value(_get_indicator(data_json, fid))
+    base_field = f"{fid}.raw_series"
+    if not isinstance(value, dict):
+        handled.add(base_field)
+        findings.append(_missing(base_field, "rate_path", CRITICALITY_STANDARD, "indicator/value absent"))
+        return findings
+
+    raw_series = value.get("raw_series")
+    effective_date = str(value.get("effective_date") or "")
+    thresholds = value.get("liquidity_thresholds") if isinstance(value.get("liquidity_thresholds"), dict) else {}
+    if not isinstance(raw_series, list):
+        handled.add(base_field)
+        findings.append(_missing(
+            base_field,
+            "rate_path",
+            CRITICALITY_STANDARD,
+            "raw_series absent from snapshot",
+        ))
+        return findings
+
+    for key, frozen_value in (
+        ("negligible_below_avg_volume_10d", FED_FUNDS_PATH_NEGLIGIBLE_VOLUME),
+        ("thin_below_avg_volume_10d", FED_FUNDS_PATH_THIN_VOLUME),
+    ):
+        field = f"{fid}.liquidity_thresholds.{key}"
+        handled.add(field)
+        findings.append(_compare(
+            field,
+            thresholds.get(key),
+            frozen_value,
+            EPSILON_EXACT,
+            "rate_path",
+            CRITICALITY_STANDARD,
+            "payload declaration checked against the frozen independent-book threshold",
+        ))
+
+    rebuilt: List[Dict[str, Any]] = []
+    for contract_entry in raw_series:
+        if not isinstance(contract_entry, dict):
+            continue
+        contract = contract_entry.get("contract")
+        months_ahead = contract_entry.get("months_ahead")
+        observations = contract_entry.get("observations")
+        if not contract or not _is_number(months_ahead) or not isinstance(observations, list):
+            continue
+        eligible_observations = [
+            item for item in observations
+            if isinstance(item, dict)
+            and _is_number(item.get("close"))
+            and (not effective_date or str(item.get("data_date") or "") <= effective_date)
+        ]
+        eligible_observations.sort(key=lambda item: str(item.get("data_date") or ""))
+        eligible_observations = eligible_observations[-10:]
+        if not eligible_observations:
+            continue
+        volumes = [item.get("volume") for item in eligible_observations if _is_number(item.get("volume"))]
+        avg_volume = sum(volumes) / len(volumes) if volumes else None
+        if avg_volume is None or avg_volume < FED_FUNDS_PATH_NEGLIGIBLE_VOLUME:
+            continue
+        latest = eligible_observations[-1]
+        rebuilt.append({
+            "contract": contract,
+            "months_ahead": int(months_ahead),
+            "implied_rate": 100.0 - float(latest["close"]),
+            "avg_volume_10d": avg_volume,
+            "liquidity_tier": "thin" if avg_volume < FED_FUNDS_PATH_THIN_VOLUME else "adequate",
+        })
+    rebuilt.sort(key=lambda item: item["months_ahead"])
+
+    pipeline_path = value.get("path") if isinstance(value.get("path"), list) else []
+    pipeline_by_contract = {
+        item.get("contract"): item for item in pipeline_path
+        if isinstance(item, dict) and item.get("contract")
+    }
+    rebuilt_contracts = [item["contract"] for item in rebuilt]
+    pipeline_contracts = [
+        item.get("contract") for item in pipeline_path
+        if isinstance(item, dict) and item.get("contract")
+    ]
+    membership_field = f"{fid}.path_membership"
+    handled.add(membership_field)
+    findings.append(_finding(
+        membership_field,
+        pipeline_contracts,
+        rebuilt_contracts,
+        None,
+        STATUS_MATCH if pipeline_contracts == rebuilt_contracts else STATUS_DEVIATION,
+        "rate_path",
+        CRITICALITY_STANDARD,
+        "formal path must contain exactly the independently rebuilt non-negligible contracts in months_ahead order",
+    ))
+
+    for rebuilt_item in rebuilt:
+        contract = rebuilt_item["contract"]
+        field = f"{fid}.path.{contract}.implied_rate"
+        handled.add(field)
+        pipeline_item = pipeline_by_contract.get(contract) if isinstance(pipeline_by_contract.get(contract), dict) else {}
+        findings.append(_compare(
+            field,
+            pipeline_item.get("implied_rate"),
+            rebuilt_item["implied_rate"],
+            TOLERANCE_ROUNDED_4DP,
+            "rate_path",
+            CRITICALITY_STANDARD,
+            "formula=100-latest raw close on/before effective_date after independent liquidity filtering",
+        ))
+
+    recomputed_status = "available" if len(rebuilt) >= 4 else "insufficient_curve"
+    status_field = f"{fid}.status"
+    handled.add(status_field)
+    pipeline_status = value.get("status")
+    findings.append(_finding(
+        status_field,
+        pipeline_status,
+        recomputed_status,
+        None,
+        STATUS_MATCH if pipeline_status == recomputed_status else STATUS_DEVIATION,
+        "rate_path",
+        CRITICALITY_STANDARD,
+        f"qualified_contracts={len(rebuilt)}; minimum_required=4",
+    ))
+
+    if recomputed_status == "insufficient_curve":
+        for field_name in ("slope_12m", "cuts_priced_bps"):
+            field = f"{fid}.{field_name}"
+            handled.add(field)
+            pipeline_value = value.get(field_name)
+            findings.append(_finding(
+                field,
+                pipeline_value,
+                None,
+                None,
+                STATUS_MATCH if pipeline_value is None else STATUS_DEVIATION,
+                "rate_path",
+                CRITICALITY_STANDARD,
+                "both books must withhold the numeric curve conclusion when fewer than four contracts qualify",
+            ))
+        return findings
+
+    front = rebuilt[0]
+    far = rebuilt[-1]
+    recomputed_slope = far["implied_rate"] - front["implied_rate"]
+    recomputed_cuts = round(-recomputed_slope * 100)
+    for field_name, recomputed_value, tolerance in (
+        ("slope_12m", recomputed_slope, TOLERANCE_ROUNDED_4DP),
+        ("cuts_priced_bps", recomputed_cuts, EPSILON_EXACT),
+    ):
+        field = f"{fid}.{field_name}"
+        handled.add(field)
+        findings.append(_compare(
+            field,
+            value.get(field_name),
+            recomputed_value,
+            tolerance,
+            "rate_path",
+            CRITICALITY_STANDARD,
+            f"front={front['contract']}({front['implied_rate']}); far={far['contract']}({far['implied_rate']})",
+        ))
+
+    horizon = value.get("horizon_used") if isinstance(value.get("horizon_used"), dict) else {}
+    horizon_field = f"{fid}.horizon_used.actual_months_ahead"
+    handled.add(horizon_field)
+    findings.append(_compare(
+        horizon_field,
+        horizon.get("actual_months_ahead"),
+        far["months_ahead"] - front["months_ahead"],
+        EPSILON_EXACT,
+        "rate_path",
+        CRITICALITY_STANDARD,
+        "actual horizon must equal farthest qualified months_ahead minus front qualified months_ahead",
+    ))
     return findings
 
 
@@ -1018,6 +1208,7 @@ def run(data_json: Dict[str, Any]) -> Dict[str, Any]:
     findings.extend(check_wind_pe_percentile(data_json, handled))
     findings.extend(check_wind_rank_percentile_consistency(data_json, handled))
     findings.extend(check_vix_term_structure_percentile(data_json, handled))
+    findings.extend(check_fed_funds_rate_path(data_json, handled))
     findings.extend(check_net_liquidity(data_json, handled))
     findings.extend(check_m7_capex_cycle_magnitude(data_json, handled))
     findings.extend(check_cross_indicator_ratios(data_json, handled))

@@ -3004,7 +3004,29 @@ def get_ndx_component_fundamentals_snapshot(end_date: str = None) -> Tuple[pd.Da
         effective_date = datetime.strptime(end_date, "%Y-%m-%d")
     else:
         effective_date = datetime.now()
-    ndx100_components = get_ndx100_components(end_date=end_date)
+    try:
+        ndx100_components = get_ndx100_components(end_date=end_date)
+    except HistoricalUniverseUnavailable as e:
+        return pd.DataFrame(), {
+            "successful": 0,
+            "total_tickers": 0,
+            "failed": 0,
+            "coverage": 0,
+            "availability": "unavailable",
+            "unavailable_reason": "historical_universe_unavailable",
+            "data_quality": {
+                "fallback_reason": "historical_universe_unavailable",
+                "anomalies": ["historical_universe_unavailable", "current_universe_not_used"],
+            },
+            "data_date": effective_date.strftime("%Y-%m-%d"),
+            "backtest_mode": bool(end_date),
+            "cache_hit": False,
+            "notes": (
+                f"Historical NDX100 universe unavailable for {e.end_date}: {e.reason}. "
+                "Current-universe sources were deliberately not used to avoid injecting "
+                "survivorship bias into this backtest."
+            ),
+        }
     data_list: List[Dict[str, Any]] = []
     failed_tickers: List[str] = []
     source_disagreements: List[Dict[str, Any]] = []

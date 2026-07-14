@@ -328,6 +328,116 @@ def test_vix_term_structure_ratio_cross_check_catches_tampered_level():
 
 
 # ---------------------------------------------------------------------------
+# 4c. Fed funds futures reduced path: implied rates, slope and priced cuts
+# independently rebuilt from embedded per-contract close/volume observations.
+# ---------------------------------------------------------------------------
+
+def _fed_funds_rate_path_indicator(qualified_months=5):
+    raw_series = []
+    path = []
+    for months_ahead in range(qualified_months):
+        contract = f"ZQ_TEST_{months_ahead}"
+        close = round(96.0 + months_ahead * 0.1, 4)
+        raw_series.append({
+            "months_ahead": months_ahead,
+            "contract": contract,
+            "observations": [
+                {"data_date": "2026-07-09", "close": close - 0.01, "volume": 200.0},
+                {"data_date": "2026-07-10", "close": close, "volume": 200.0},
+            ],
+        })
+        path.append({
+            "months_ahead": months_ahead,
+            "contract": contract,
+            "implied_rate": round(100.0 - close, 4),
+        })
+    status = "available" if qualified_months >= 4 else "insufficient_curve"
+    slope = round(path[-1]["implied_rate"] - path[0]["implied_rate"], 4) if status == "available" else None
+    cuts = round(-slope * 100) if slope is not None else None
+    return {
+        "layer": 1,
+        "function_id": "get_fed_funds_rate_path",
+        "metric_name": "Fed Funds Futures Implied Rate Path",
+        "raw_data": {
+            "value": {
+                "effective_date": "2026-07-10",
+                "status": status,
+                "path": path,
+                "slope_12m": slope,
+                "cuts_priced_bps": cuts,
+                "horizon_used": {
+                    "actual_months_ahead": path[-1]["months_ahead"],
+                },
+                "liquidity_thresholds": {
+                    "negligible_below_avg_volume_10d": 5.0,
+                    "thin_below_avg_volume_10d": 100.0,
+                },
+                "raw_series": raw_series,
+            }
+        },
+    }
+
+
+def test_fed_funds_rate_path_recompute_matches_implied_slope_and_cuts():
+    report = rb.run({"indicators": [_fed_funds_rate_path_indicator()]})
+    findings = {finding["field"]: finding for finding in report["findings"]}
+
+    assert findings["get_fed_funds_rate_path.path.ZQ_TEST_2.implied_rate"]["status"] == "match"
+    assert round(findings["get_fed_funds_rate_path.path.ZQ_TEST_2.implied_rate"]["recomputed_value"], 4) == 3.8
+    assert findings["get_fed_funds_rate_path.slope_12m"]["status"] == "match"
+    assert round(findings["get_fed_funds_rate_path.slope_12m"]["recomputed_value"], 4) == -0.4
+    assert findings["get_fed_funds_rate_path.cuts_priced_bps"]["status"] == "match"
+    assert findings["get_fed_funds_rate_path.cuts_priced_bps"]["recomputed_value"] == 40
+
+
+def test_fed_funds_rate_path_recompute_catches_tampered_slope():
+    fixture = _fed_funds_rate_path_indicator()
+    fixture["raw_data"]["value"]["slope_12m"] = 9.99
+    report = rb.run({"indicators": [fixture]})
+    finding = {item["field"]: item for item in report["findings"]}["get_fed_funds_rate_path.slope_12m"]
+
+    assert finding["status"] == "deviation"
+    assert finding["pipeline_value"] == 9.99
+    assert round(finding["recomputed_value"], 4) == -0.4
+
+
+def test_fed_funds_rate_path_recompute_catches_tampered_month_implied_rate():
+    fixture = _fed_funds_rate_path_indicator()
+    fixture["raw_data"]["value"]["path"][2]["implied_rate"] = 8.88
+    report = rb.run({"indicators": [fixture]})
+    finding = {item["field"]: item for item in report["findings"]}[
+        "get_fed_funds_rate_path.path.ZQ_TEST_2.implied_rate"
+    ]
+
+    assert finding["status"] == "deviation"
+    assert finding["pipeline_value"] == 8.88
+    assert round(finding["recomputed_value"], 4) == 3.8
+
+
+def test_fed_funds_rate_path_recompute_catches_tampered_liquidity_threshold():
+    fixture = _fed_funds_rate_path_indicator()
+    fixture["raw_data"]["value"]["liquidity_thresholds"]["negligible_below_avg_volume_10d"] = 999.0
+    report = rb.run({"indicators": [fixture]})
+    finding = {item["field"]: item for item in report["findings"]}[
+        "get_fed_funds_rate_path.liquidity_thresholds.negligible_below_avg_volume_10d"
+    ]
+
+    assert finding["status"] == "deviation"
+    assert finding["pipeline_value"] == 999.0
+    assert finding["recomputed_value"] == 5.0
+
+
+def test_fed_funds_rate_path_insufficient_curve_agreement_is_match():
+    report = rb.run({"indicators": [_fed_funds_rate_path_indicator(qualified_months=3)]})
+    findings = {finding["field"]: finding for finding in report["findings"]}
+
+    assert findings["get_fed_funds_rate_path.status"]["status"] == "match"
+    assert findings["get_fed_funds_rate_path.status"]["recomputed_value"] == "insufficient_curve"
+    assert findings["get_fed_funds_rate_path.slope_12m"]["status"] == "match"
+    assert findings["get_fed_funds_rate_path.cuts_priced_bps"]["status"] == "match"
+
+
+# ---------------------------------------------------------------------------
 # 5. checker.py hard-gate integration: critical deviations block publish,
 #    non-critical ones do not (criticality tiering avoids over-blocking)
 # ---------------------------------------------------------------------------

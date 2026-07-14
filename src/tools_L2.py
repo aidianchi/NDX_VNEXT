@@ -13,9 +13,9 @@ from datetime import timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:
-    from .tools_L3 import get_ndx100_components
+    from .tools_L3 import get_ndx100_components, get_ndx100_components_with_provenance
 except ImportError:
-    from tools_L3 import get_ndx100_components
+    from tools_L3 import get_ndx100_components, get_ndx100_components_with_provenance
 
 _NDX100_PRICE_PANEL_RUN_CACHE: Dict[str, Tuple[List[str], pd.DataFrame]] = {}
 NDX100_ARCHIVE_DOWNLOAD_BATCH_SIZE = 20
@@ -316,7 +316,7 @@ def _get_ndx100_common_price_data(
     鐩爣鏄 L2 鐨?breadth 鎸囨爣鍏变韩涓€娆′笅杞斤紝
     浣嗗悇鑷殑璁＄畻绐楀彛浠嶇劧鎸夊師鐗堥€昏緫鍒囩墖锛屼笉鏀瑰彉杈撳嚭鍙ｅ緞銆?
     """
-    ndx100_components = get_ndx100_components(end_date=historical_date)
+    ndx100_components, universe_provenance = get_ndx100_components_with_provenance(end_date=historical_date)
     common_start = effective_date - timedelta(days=lookback_days)
     target_date = _archive_target_date(effective_date, historical_date)
     cache_key = ":".join(
@@ -368,6 +368,7 @@ def _get_ndx100_common_price_data(
     else:
         result = pd.DataFrame()
     result = _filter_daily_frame_to_effective_date(result, effective_date)
+    result.attrs["universe_provenance"] = dict(universe_provenance)
     _NDX100_PRICE_PANEL_RUN_CACHE[cache_key] = (list(ndx100_components), result.copy())
     return ndx100_components, result
 
@@ -622,6 +623,15 @@ def _archive_repair_metadata(frame: pd.DataFrame) -> Dict[str, Any]:
     return dict(metadata) if isinstance(metadata, dict) else {}
 
 
+def _ndx100_universe_provenance(frame: pd.DataFrame) -> Dict[str, Any]:
+    """Read the get_ndx100_components_with_provenance() result stashed on the
+    price panel by _get_ndx100_common_price_data, if present."""
+    if not isinstance(frame, pd.DataFrame):
+        return {}
+    metadata = frame.attrs.get("universe_provenance")
+    return dict(metadata) if isinstance(metadata, dict) else {}
+
+
 def _breadth_sparse_anomalies(
     data: pd.DataFrame,
     close_prices: pd.DataFrame,
@@ -674,6 +684,7 @@ def _breadth_quality(
     total_constituents: int,
     anomalies: Optional[List[str]] = None,
     coverage_extra: Optional[Dict[str, Any]] = None,
+    universe_provenance: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     coverage = {
         "constituents_used": constituents_used,
@@ -681,7 +692,7 @@ def _breadth_quality(
         "constituent_coverage_pct": round(constituents_used / total_constituents * 100, 2) if total_constituents else 0.0,
     }
     coverage.update(coverage_extra or {})
-    return {
+    quality = {
         "source_tier": "component_model",
         "data_date": data_date,
         "collected_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
@@ -691,6 +702,33 @@ def _breadth_quality(
         "anomalies": anomalies or [],
         "fallback_chain": ["component_model", "proxy", "unavailable"],
         "source_disagreement": {},
+    }
+    if universe_provenance:
+        quality["universe_provenance"] = dict(universe_provenance)
+    return quality
+
+
+def _breadth_historical_universe_unavailable_payload(
+    name: str, exc: HistoricalUniverseUnavailable
+) -> Dict[str, Any]:
+    """Honest unavailable payload for backtest requests where the historical
+    NDX100 universe could not be resolved. Must never be paired with a value
+    computed against the current constituent list."""
+    return {
+        "name": name,
+        "value": {"level": None, "date": None, "momentum": None, "relativity": None},
+        "source_tier": "unavailable",
+        "availability": "unavailable",
+        "unavailable_reason": "historical_universe_unavailable",
+        "data_quality": {
+            "fallback_reason": "historical_universe_unavailable",
+            "anomalies": ["historical_universe_unavailable", "current_universe_not_used"],
+        },
+        "notes": (
+            f"Historical NDX100 universe unavailable for {exc.end_date}: {exc.reason}. "
+            "Current-universe sources (Nasdaq API/Wikipedia/GitHub live/static fallback) "
+            "were deliberately not used to avoid injecting survivorship bias into this backtest."
+        ),
     }
 
 
@@ -822,12 +860,15 @@ def get_advance_decline_line(end_date: str = None) -> Dict[str, Any]:
                     latest_daily_coverage_pct=latest_coverage_pct,
                     excluded_dates_count=int((~qualified).sum()),
                 ),
+                universe_provenance=_ndx100_universe_provenance(data),
             ),
             "notes": (
                 f"基于{len(ndx100_components)}只成分股、仅保留有效价格对覆盖率至少80%的{len(daily_ad_values)}个交易日。"
                 f"最新合格日{latest_date_val}覆盖{latest_valid_count}只({latest_coverage_pct}%)：上涨{latest_advances}只，下跌{latest_declines}只。"
             )
         }
+    except HistoricalUniverseUnavailable as e:
+        return _breadth_historical_universe_unavailable_payload("Advance/Decline Line (NDX100)", e)
     except Exception as e:
         return {
             "name": "Advance/Decline Line (NDX100)",
@@ -928,6 +969,7 @@ def get_percent_above_ma(end_date: str = None) -> Dict[str, Any]:
                     latest_daily_coverage_pct=latest_coverage_pct,
                     excluded_dates_count=int((~qualified).sum()),
                 ),
+                universe_provenance=_ndx100_universe_provenance(data),
             ),
             "notes": (
                 f"最新合格日{latest_date_val}使用{total_stocks}/{len(ndx100_components)}只成分股，"
@@ -935,6 +977,8 @@ def get_percent_above_ma(end_date: str = None) -> Dict[str, Any]:
                 f" archive repair={repair.get('status') or 'not_reported'}。"
             )
         }
+    except HistoricalUniverseUnavailable as e:
+        return _breadth_historical_universe_unavailable_payload("% Stocks Above MA (NDX100)", e)
     except Exception as e:
         return {
             "name": "% Stocks Above MA (NDX100)",
@@ -1032,6 +1076,7 @@ def get_new_highs_lows(end_date: str = None) -> Dict[str, Any]:
                     latest_daily_coverage_pct=latest_coverage_pct,
                     excluded_dates_count=int((~qualified).sum()),
                 ),
+                universe_provenance=_ndx100_universe_provenance(data),
             ),
             "notes": (
                 f"52周新高{new_highs}只，新低{new_lows}只；最新合格日{latest_date_val}"
@@ -1039,6 +1084,8 @@ def get_new_highs_lows(end_date: str = None) -> Dict[str, Any]:
                 f" archive repair={repair.get('status') or 'not_reported'}。"
             )
         }
+    except HistoricalUniverseUnavailable as e:
+        return _breadth_historical_universe_unavailable_payload("New Highs-Lows Index", e)
     except Exception as e:
         return {
             "name": "New Highs-Lows Index",
@@ -1126,6 +1173,7 @@ def get_mcclellan_oscillator_nasdaq_or_nyse(end_date: str = None) -> Dict[str, A
                     latest_daily_coverage_pct=latest_coverage_pct,
                     excluded_dates_count=int((~qualified).sum()),
                 ),
+                universe_provenance=_ndx100_universe_provenance(data),
             ),
             "notes": (
                 f"基于NDX100成分股每日涨跌家数序列；最新合格日{latest_date_val}"
@@ -1133,6 +1181,8 @@ def get_mcclellan_oscillator_nasdaq_or_nyse(end_date: str = None) -> Dict[str, A
                 f" archive repair={repair.get('status') or 'not_reported'}。"
             )
         }
+    except HistoricalUniverseUnavailable as e:
+        return _breadth_historical_universe_unavailable_payload("McClellan Oscillator", e)
     except Exception as e:
         return {
             "name": "McClellan Oscillator",

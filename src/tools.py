@@ -42,6 +42,7 @@ TOOLS_REGISTRY = {
     "get_10y_treasury": get_10y_treasury,
     "get_10y_breakeven": get_10y_breakeven,
     "get_fed_funds_rate": get_fed_funds_rate,
+    "get_fed_funds_rate_path": get_fed_funds_rate_path,
     "get_m2_yoy": get_m2_yoy,
     "get_hyg_momentum": get_hyg_momentum,
     "get_net_liquidity_momentum": get_net_liquidity_momentum,

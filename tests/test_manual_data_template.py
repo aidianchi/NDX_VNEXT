@@ -76,3 +76,72 @@ def test_manual_confidence_metadata_does_not_trigger_override():
     metric["source_name"] = "Wind"
 
     assert manual_data.has_meaningful_manual_override(metric) is False
+
+
+# --- Work order #7: primary_fields-based meaningful-override classification ---
+
+
+def test_primary_fields_declared_on_all_known_manual_slots():
+    for function_id, metric in manual_data.DEFAULT_MANUAL_DATA["metrics"].items():
+        assert "primary_fields" in metric, function_id
+        assert isinstance(metric["primary_fields"], list) and metric["primary_fields"], function_id
+
+
+def test_ndx_valuation_percentile_only_fill_is_not_meaningful_override():
+    """Filling only a percentile/context field (1 of 17 value fields) must not
+    flip the whole slot to manual_override_used=True; only the 8 primary
+    valuation fields count."""
+    metric = json.loads(json.dumps(manual_data.DEFAULT_MANUAL_DATA["metrics"]["get_ndx_pe_and_earnings_yield"]))
+    metric["value"]["PE_TTM_percentile_5y"] = 42.0
+    metric["value"]["PE_TTM_percentile_10y"] = 55.0
+
+    assert manual_data.has_meaningful_manual_override(metric) is False
+
+
+def test_ndx_valuation_primary_field_fill_is_meaningful_override():
+    metric = json.loads(json.dumps(manual_data.DEFAULT_MANUAL_DATA["metrics"]["get_ndx_pe_and_earnings_yield"]))
+    metric["value"]["PE_TTM"] = 35.4
+
+    assert manual_data.has_meaningful_manual_override(metric) is True
+
+
+def test_damodaran_manual_source_type_alone_is_not_meaningful_override():
+    """manual_source_type is provenance metadata, not one of the three ERP
+    primary_fields; declaring it without a number must not trigger override."""
+    metric = json.loads(json.dumps(manual_data.DEFAULT_MANUAL_DATA["metrics"]["get_damodaran_us_implied_erp"]))
+    metric["value"]["manual_source_type"] = "wind_derived"
+
+    assert manual_data.has_meaningful_manual_override(metric) is False
+
+
+def test_damodaran_template_documents_manual_source_type_field():
+    metric = manual_data.DEFAULT_MANUAL_DATA["metrics"]["get_damodaran_us_implied_erp"]
+
+    assert "manual_source_type" in metric["value"]
+    assert metric["value"]["manual_source_type"] is None
+    assert "damodaran_official" in metric["notes"]
+    assert "not NDX simple yield gap" in metric["notes"]
+    assert "manual ERP reference" in metric["notes"]
+
+
+def test_nested_forward_earnings_primary_field_is_meaningful_override():
+    """get_ndx_forward_earnings_quality nests its primary field inside
+    value.m7.eps_revisions; primary_fields matching must reach that depth."""
+    metric = json.loads(json.dumps(manual_data.DEFAULT_MANUAL_DATA["metrics"]["get_ndx_forward_earnings_quality"]))
+    metric["value"]["m7"]["eps_revisions"]["revision_direction_30d"] = "up"
+
+    assert manual_data.has_meaningful_manual_override(metric) is False
+
+    metric["value"]["m7"]["eps_revisions"]["weighted_next_year_eps_revision_30d_pct"] = 1.5
+
+    assert manual_data.has_meaningful_manual_override(metric) is True
+
+
+def test_primary_fields_absent_falls_back_to_legacy_ignored_key_behavior():
+    """Custom/ad-hoc manual metrics with no template (no primary_fields
+    declared) keep the pre-work-order-7 ignored-key filtering behavior."""
+    metric_metadata_only = {"value": {"method": "custom"}}
+    assert manual_data.has_meaningful_manual_override(metric_metadata_only) is False
+
+    metric_with_number = {"value": {"method": "custom", "custom_number": 3.2}}
+    assert manual_data.has_meaningful_manual_override(metric_with_number) is True

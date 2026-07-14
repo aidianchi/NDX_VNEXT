@@ -16,77 +16,94 @@ from typing import Any, Dict, List, Optional, Tuple
 # 第3层函数
 # =====================================================
 
-def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
+def get_ndx100_components_with_provenance(end_date: Optional[str] = None) -> Tuple[List[str], Dict[str, Any]]:
     """
-    多源混合策略获取纳斯达克100成分股列表 (V6.1 历史回测优化版)
+    多源混合策略获取纳斯达克100成分股列表，并返回来源溯源信息 (V7.0 幸存者偏差硬防线版)
 
     优先级顺序：
     - 回测模式（有end_date）：
-        1. nasdaq-100-ticker-history（历史数据库，最优先）
-        2. 纳斯达克官网API（备用）
-        3. Wikipedia（备用）
-        4. 静态后备列表（兜底）
+        只信任 nasdaq-100-ticker-history（历史数据库）。一旦该数据库不可用
+        （未安装 / 查询失败 / 返回空），立即抛出 HistoricalUniverseUnavailable，
+        绝不落回任何"当前"成分股来源——落回会把幸存者偏差静默注入回测。
 
     - 实时模式（无end_date）：
         1. 纳斯达克官网API（最权威、最准确）
         2. Wikipedia实时爬取（实时更新）
-        3. nasdaq-100-ticker-history（备用）
+        3. nasdaq-100-ticker-history（备用，取当前日期）
         4. 静态后备列表（兜底）
 
     参数:
         end_date: 指定日期（YYYY-MM-DD），用于历史回测
 
     返回:
-        成分股代码列表
+        (成分股代码列表, provenance字典)
+        provenance 至少包含 universe_source / as_of / retrieved_at / count
+
+    异常:
+        HistoricalUniverseUnavailable: 回测模式下历史数据库不可用时抛出
     """
+    retrieved_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     # ========================================
-    # 回测模式：优先使用历史数据库
+    # 回测模式：只信任历史数据库，失败即硬失败（不落回当前名单）
     # ========================================
     if end_date:
         logging.info(f"回测模式：正在获取 {end_date} 的历史成分股...")
 
-        # 策略1: nasdaq-100-ticker-history（历史数据库，最优先）
         try:
             from nasdaq_100_ticker_history import tickers_as_of
-
-            effective_date = datetime.strptime(end_date, "%Y-%m-%d")
-            req_year, req_month, req_day = effective_date.year, effective_date.month, effective_date.day
-
-            try:
-                components = tickers_as_of(year=req_year, month=req_month, day=req_day)
-                tickers = [str(ticker).upper() for ticker in components]
-                logging.info(f"✅ 成功从历史数据库获取 {len(tickers)} 只成分股（{end_date}）")
-                return tickers
-            except Exception as e:
-                # 当请求年份尚未有数据时，尝试回退到最近可用年份
-                err_str = str(e).lower()
-                if "cant find resource" in err_str or "n100-ticker-changes" in err_str:
-                    logging.warning(f"历史数据库无 {end_date} 数据，尝试回退到最近可用年份...")
-                    for fallback_year in range(effective_date.year - 1, effective_date.year - 6, -1):
-                        if fallback_year < 2000:
-                            break
-                        try:
-                            components = tickers_as_of(year=fallback_year, month=12, day=31)
-                            if components:
-                                tickers = [str(ticker).upper() for ticker in components]
-                                logging.warning(f"使用 {fallback_year} 年末成分股（{len(tickers)} 只）作为近似")
-                                return tickers
-                        except Exception:
-                            continue
-                raise
-
         except ImportError:
-            logging.warning("nasdaq_100_ticker_history 未安装，回测模式降级到实时数据源")
+            raise HistoricalUniverseUnavailable("nasdaq_100_ticker_history_not_installed", end_date) from None
+
+        effective_date = datetime.strptime(end_date, "%Y-%m-%d")
+        req_year, req_month, req_day = effective_date.year, effective_date.month, effective_date.day
+
+        def _historical_provenance(tickers: List[str]) -> Dict[str, Any]:
+            return {
+                "universe_source": "historical_library",
+                "as_of": end_date,
+                "retrieved_at": retrieved_at,
+                "count": len(tickers),
+            }
+
+        try:
+            components = tickers_as_of(year=req_year, month=req_month, day=req_day)
+            tickers = [str(ticker).upper() for ticker in components]
+            if not tickers:
+                raise HistoricalUniverseUnavailable("historical_library_empty_result", end_date)
+            logging.info(f"✅ 成功从历史数据库获取 {len(tickers)} 只成分股（{end_date}）")
+            return tickers, _historical_provenance(tickers)
+        except HistoricalUniverseUnavailable:
+            raise
         except Exception as e:
-            logging.warning(f"从历史数据库获取失败: {str(e)[:100]}，尝试备用方案")
-
-        # 回测模式下，如果历史数据库失败，继续尝试其他方案
-        logging.warning(f"⚠️ 历史数据不可用，使用最新成分股（可能存在幸存者偏差）")
+            # 当请求年份尚未有数据时，尝试回退到最近可用年份
+            err_str = str(e).lower()
+            if "cant find resource" in err_str or "n100-ticker-changes" in err_str:
+                logging.warning(f"历史数据库无 {end_date} 数据，尝试回退到最近可用年份...")
+                for fallback_year in range(effective_date.year - 1, effective_date.year - 6, -1):
+                    if fallback_year < 2000:
+                        break
+                    try:
+                        components = tickers_as_of(year=fallback_year, month=12, day=31)
+                        if components:
+                            tickers = [str(ticker).upper() for ticker in components]
+                            logging.warning(f"使用 {fallback_year} 年末成分股（{len(tickers)} 只）作为近似")
+                            provenance = _historical_provenance(tickers)
+                            # 近似分支必须如实声明实际名单日期，不得冒充请求日期的历史名单
+                            provenance["as_of"] = f"{fallback_year}-12-31"
+                            provenance["approximation_of"] = end_date
+                            provenance["approximation_note"] = (
+                                f"历史库无 {end_date} 数据，使用 {fallback_year} 年末名单作为近似（早于请求日期，无未来信息泄漏）"
+                            )
+                            return tickers, provenance
+                    except Exception:
+                        continue
+            raise HistoricalUniverseUnavailable(f"historical_library_query_failed: {str(e)[:160]}", end_date) from e
 
     # ========================================
-    # 策略1: 纳斯达克官网API（最优先）
+    # 实时模式 策略1: 纳斯达克官网API（最优先）
     # ========================================
+    live_as_of = datetime.now().strftime("%Y-%m-%d")
     try:
         logging.info("正在从纳斯达克官网API获取成分股...")
         url = "https://api.nasdaq.com/api/quote/list-type/nasdaq100"
@@ -105,7 +122,12 @@ def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
 
             if len(tickers) >= 90:  # 合理性检查
                 logging.info(f"✅ 成功从纳斯达克官网API获取 {len(tickers)} 只成分股")
-                return tickers
+                return tickers, {
+                    "universe_source": "nasdaq_api",
+                    "as_of": live_as_of,
+                    "retrieved_at": retrieved_at,
+                    "count": len(tickers),
+                }
             else:
                 logging.warning(f"纳斯达克API返回数量异常: {len(tickers)} 只（预期≥90）")
         else:
@@ -115,7 +137,7 @@ def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
         logging.warning(f"纳斯达克官网API获取失败: {str(e)[:100]}")
 
     # ========================================
-    # 策略2: Wikipedia爬取（次优先）
+    # 实时模式 策略2: Wikipedia爬取（次优先）
     # ========================================
     try:
         logging.info("正在从Wikipedia爬取成分股...")
@@ -164,7 +186,12 @@ def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
 
             if len(tickers) >= 90:
                 logging.info(f"✅ 成功从Wikipedia获取 {len(tickers)} 只成分股")
-                return tickers
+                return tickers, {
+                    "universe_source": "wikipedia",
+                    "as_of": live_as_of,
+                    "retrieved_at": retrieved_at,
+                    "count": len(tickers),
+                }
 
         logging.warning("Wikipedia未找到有效的成分股表格")
 
@@ -172,26 +199,26 @@ def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
         logging.warning(f"从Wikipedia获取失败: {str(e)[:100]}")
 
     # ========================================
-    # 策略3: GitHub项目 nasdaq-100-ticker-history
+    # 实时模式 策略3: GitHub项目 nasdaq-100-ticker-history
     # ========================================
     try:
         from nasdaq_100_ticker_history import tickers_as_of
 
         logging.info("正在从GitHub项目获取成分股...")
 
-        # 尝试获取当前年份数据
-        if end_date:
-            effective_date = datetime.strptime(end_date, "%Y-%m-%d")
-        else:
-            effective_date = datetime.now()
-
+        effective_date = datetime.now()
         req_year, req_month, req_day = effective_date.year, effective_date.month, effective_date.day
 
         try:
             components = tickers_as_of(year=req_year, month=req_month, day=req_day)
             tickers = [str(ticker).upper() for ticker in components]
             logging.info(f"✅ 成功从GitHub项目获取 {len(tickers)} 只成分股（数据日期：{req_year}-{req_month:02d}-{req_day:02d}）")
-            return tickers
+            return tickers, {
+                "universe_source": "github_library",
+                "as_of": live_as_of,
+                "retrieved_at": retrieved_at,
+                "count": len(tickers),
+            }
         except Exception as e:
             # 当请求年份尚未有数据时，尝试回退到最近可用年份
             err_str = str(e).lower()
@@ -204,7 +231,12 @@ def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
                         if components:
                             tickers = [str(ticker).upper() for ticker in components]
                             logging.warning(f"GitHub项目无 {effective_date.year} 年数据，使用 {fallback_year} 年末成分股（{len(tickers)} 只）")
-                            return tickers
+                            return tickers, {
+                                "universe_source": "github_library",
+                                "as_of": live_as_of,
+                                "retrieved_at": retrieved_at,
+                                "count": len(tickers),
+                            }
                     except Exception:
                         continue
             raise
@@ -215,11 +247,36 @@ def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
         logging.warning(f"从GitHub项目获取失败: {str(e)[:100]}")
 
     # ========================================
-    # 策略4: 静态后备列表（兜底）
+    # 实时模式 策略4: 静态后备列表（兜底）
     # ========================================
     logging.warning("⚠️ 所有动态获取方式失败，使用静态后备列表（基于纳斯达克官网API 2026-02-06）")
     logging.info(f"静态后备列表包含 {len(NDX100_COMPONENTS_FALLBACK)} 只成分股")
-    return NDX100_COMPONENTS_FALLBACK
+    return NDX100_COMPONENTS_FALLBACK, {
+        "universe_source": "static_fallback",
+        "as_of": live_as_of,
+        "retrieved_at": retrieved_at,
+        "count": len(NDX100_COMPONENTS_FALLBACK),
+    }
+
+
+def get_ndx100_components(end_date: Optional[str] = None) -> List[str]:
+    """
+    多源混合策略获取纳斯达克100成分股列表 (薄封装，见 get_ndx100_components_with_provenance)。
+
+    保持既有签名与返回类型不变；调用方若需要来源溯源信息，请改用
+    get_ndx100_components_with_provenance。
+
+    参数:
+        end_date: 指定日期（YYYY-MM-DD），用于历史回测
+
+    返回:
+        成分股代码列表
+
+    异常:
+        HistoricalUniverseUnavailable: 回测模式下历史数据库不可用时抛出
+    """
+    tickers, _provenance = get_ndx100_components_with_provenance(end_date=end_date)
+    return tickers
 
 
 INVESCO_QQQ_HOLDINGS_URL = (

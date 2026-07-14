@@ -205,7 +205,14 @@ def test_internal_single_day_hole_does_not_delete_entire_component_column(monkey
 def test_archive_sparse_rows_trigger_targeted_repair_and_merge(tmp_path, monkeypatch):
     tools_L2._NDX100_PRICE_PANEL_RUN_CACHE.clear()
     monkeypatch.setattr(tools_L2.path_config, "cache_dir", str(tmp_path))
-    monkeypatch.setattr(tools_L2, "get_ndx100_components", lambda end_date=None: ["AAA", "BBB", "CCC"])
+    monkeypatch.setattr(
+        tools_L2,
+        "get_ndx100_components_with_provenance",
+        lambda end_date=None: (
+            ["AAA", "BBB", "CCC"],
+            {"universe_source": "test_fixture", "as_of": end_date, "retrieved_at": "2025-12-31T00:00:00Z", "count": 3},
+        ),
+    )
     sparse = _price_panel()
     sparse.loc[sparse.index[-1], ("Close", "BBB")] = float("nan")
     sparse.loc[sparse.index[-1], ("Close", "CCC")] = float("nan")
@@ -236,7 +243,14 @@ def test_archive_sparse_rows_trigger_targeted_repair_and_merge(tmp_path, monkeyp
 def test_archive_repair_failure_is_explicit_and_does_not_fabricate_rows(tmp_path, monkeypatch):
     tools_L2._NDX100_PRICE_PANEL_RUN_CACHE.clear()
     monkeypatch.setattr(tools_L2.path_config, "cache_dir", str(tmp_path))
-    monkeypatch.setattr(tools_L2, "get_ndx100_components", lambda end_date=None: ["AAA", "BBB", "CCC"])
+    monkeypatch.setattr(
+        tools_L2,
+        "get_ndx100_components_with_provenance",
+        lambda end_date=None: (
+            ["AAA", "BBB", "CCC"],
+            {"universe_source": "test_fixture", "as_of": end_date, "retrieved_at": "2025-12-31T00:00:00Z", "count": 3},
+        ),
+    )
     sparse = _price_panel()
     sparse.loc[sparse.index[-1], ("Close", "BBB")] = float("nan")
     sparse.loc[sparse.index[-1], ("Close", "CCC")] = float("nan")
@@ -309,9 +323,14 @@ def test_realtime_breadth_does_not_request_historical_constituents(monkeypatch):
 
     def fake_components(end_date=None):
         requested["end_date"] = end_date
-        return ["AAA", "BBB", "CCC"]
+        return ["AAA", "BBB", "CCC"], {
+            "universe_source": "test_fixture",
+            "as_of": end_date,
+            "retrieved_at": "2026-05-10T00:00:00Z",
+            "count": 3,
+        }
 
-    monkeypatch.setattr(tools_L2, "get_ndx100_components", fake_components)
+    monkeypatch.setattr(tools_L2, "get_ndx100_components_with_provenance", fake_components)
     monkeypatch.setattr(tools_L2, "cached_yf_download", lambda *args, **kwargs: _price_panel())
 
     components, data = tools_L2._get_ndx100_common_price_data(datetime(2026, 5, 10))
@@ -324,7 +343,14 @@ def test_realtime_breadth_does_not_request_historical_constituents(monkeypatch):
 def test_ndx100_common_price_data_uses_local_archive_when_yfinance_fails(tmp_path, monkeypatch):
     tools_L2._NDX100_PRICE_PANEL_RUN_CACHE.clear()
     monkeypatch.setattr(tools_L2.path_config, "cache_dir", str(tmp_path))
-    monkeypatch.setattr(tools_L2, "get_ndx100_components", lambda end_date=None: ["AAA", "BBB", "CCC"])
+    monkeypatch.setattr(
+        tools_L2,
+        "get_ndx100_components_with_provenance",
+        lambda end_date=None: (
+            ["AAA", "BBB", "CCC"],
+            {"universe_source": "test_fixture", "as_of": end_date, "retrieved_at": "2025-12-31T00:00:00Z", "count": 3},
+        ),
+    )
     monkeypatch.setattr(tools_L2, "cached_yf_download", lambda *args, **kwargs: _price_panel())
 
     components, first = tools_L2._get_ndx100_common_price_data(datetime(2025, 12, 31), historical_date="2025-12-31")
@@ -347,7 +373,14 @@ def test_ndx100_common_price_data_uses_local_archive_when_yfinance_fails(tmp_pat
 def test_ndx100_common_price_data_caches_failed_window_within_run(tmp_path, monkeypatch):
     tools_L2._NDX100_PRICE_PANEL_RUN_CACHE.clear()
     monkeypatch.setattr(tools_L2.path_config, "cache_dir", str(tmp_path))
-    monkeypatch.setattr(tools_L2, "get_ndx100_components", lambda end_date=None: ["AAA", "BBB", "CCC"])
+    monkeypatch.setattr(
+        tools_L2,
+        "get_ndx100_components_with_provenance",
+        lambda end_date=None: (
+            ["AAA", "BBB", "CCC"],
+            {"universe_source": "test_fixture", "as_of": end_date, "retrieved_at": "2025-12-31T00:00:00Z", "count": 3},
+        ),
+    )
     calls = {"count": 0}
 
     def empty_download(*args, **kwargs):

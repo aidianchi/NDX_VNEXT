@@ -705,6 +705,382 @@ def get_vix_term_structure(end_date: str = None) -> Dict[str, Any]:
         return _unavailable(f"vix_term_structure_exception: {str(exc)[:150]}")
 
 
+FED_FUNDS_FUTURES_MONTH_CODES = {
+    1: "F", 2: "G", 3: "H", 4: "J", 5: "K", 6: "M",
+    7: "N", 8: "Q", 9: "U", 10: "V", 11: "X", 12: "Z",
+}
+FED_FUNDS_PATH_MONTHS = 13
+FED_FUNDS_PATH_MINIMUM_CURVE_MONTHS = 4
+FED_FUNDS_PATH_FLAT_BAND_PP = 0.125
+FED_FUNDS_PATH_LIQUIDITY_THRESHOLDS = {
+    "negligible_below_avg_volume_10d": 5.0,
+    "thin_below_avg_volume_10d": 100.0,
+}
+
+
+def _fed_funds_contract_for_month(year: int, month: int) -> str:
+    return f"ZQ{FED_FUNDS_FUTURES_MONTH_CODES[month]}{year % 100:02d}.CBT"
+
+
+def _fed_funds_month_at_offset(anchor: datetime, months_ahead: int) -> tuple:
+    absolute_month = anchor.year * 12 + (anchor.month - 1) + months_ahead
+    return absolute_month // 12, absolute_month % 12 + 1
+
+
+def _fed_funds_path_state(slope_pp: Optional[float]) -> str:
+    """Classify the implied-rate curve with the canon's ±12.5bp buffer."""
+    if slope_pp is None:
+        return "unavailable"
+    if slope_pp <= -FED_FUNDS_PATH_FLAT_BAND_PP:
+        return "easing_priced"
+    if slope_pp >= FED_FUNDS_PATH_FLAT_BAND_PP:
+        return "tightening_priced"
+    return "flat_path"
+
+
+def _fed_funds_liquidity_tier(avg_volume_10d: Optional[float]) -> str:
+    if avg_volume_10d is None or avg_volume_10d < FED_FUNDS_PATH_LIQUIDITY_THRESHOLDS["negligible_below_avg_volume_10d"]:
+        return "negligible"
+    if avg_volume_10d < FED_FUNDS_PATH_LIQUIDITY_THRESHOLDS["thin_below_avg_volume_10d"]:
+        return "thin"
+    return "adequate"
+
+
+def get_fed_funds_rate_path(end_date: str = None) -> Dict[str, Any]:
+    """Return a compact Fed funds futures implied-rate path for L1.
+
+    This is the deliberately reduced implementation from
+    investigation_reports/20260711_first_principles/WORK_ORDERS.md item 4
+    (fed funds 缩水版): 13 monthly ZQ contracts, an implied average-rate
+    slope/state, and an EFFR/DFF reference anchor. It does not attempt CME
+    FedWatch meeting probabilities or stitched historical percentiles.
+
+    Point-in-time contract: the contract set is generated from the month of
+    ``end_date`` and every contract's history is explicitly truncated to
+    observations on or before ``end_date``. Futures settlement closes are
+    non-revisable market facts and therefore backtest-eligible, but Yahoo's
+    relay is marked ``third_party_unofficial`` because it is not verified
+    against the official CME settlement file.
+    """
+    effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
+    effective_date_str = effective_date.strftime("%Y-%m-%d")
+    request_start = effective_date - timedelta(days=35)
+    request_end = effective_date + timedelta(days=1)
+    source_name = "yfinance (Yahoo Finance ZQ monthly futures) + FRED (EFFR/DFF anchor)"
+    source_url = "https://finance.yahoo.com/quote/ZQ%3DF/"
+
+    state_thresholds = {
+        "easing_priced_at_or_below_slope_pp": -FED_FUNDS_PATH_FLAT_BAND_PP,
+        "tightening_priced_at_or_above_slope_pp": FED_FUNDS_PATH_FLAT_BAND_PP,
+        "flat_path_abs_slope_below_pp": FED_FUNDS_PATH_FLAT_BAND_PP,
+        "note": "斜率绝对值小于0.125个百分点（12.5bp）视为 flat；边界值归入 easing/tightening。",
+    }
+    liquidity_thresholds = {
+        **FED_FUNDS_PATH_LIQUIDITY_THRESHOLDS,
+        "negligible_action": "exclude_from_formal_path_and_curve_calculation",
+        "thin_action": "retain_with_field_authority_downgrade",
+        "far_month_rule": "months_ahead > 6 is always low_liquidity_far_month",
+    }
+
+    def _metric_authority() -> Dict[str, Any]:
+        return {
+            "path_0_6m": {
+                "source": "third_party_unofficial",
+                "usage": "supporting_only",
+                "authority": "supporting",
+                "reason": "近端月度结算价可支持市场定价观察；thin 月按单项 field_authority 继续降级，不能视为 Fed 承诺。",
+                "reference_sources": [],
+            },
+            "path_7_12m": {
+                "source": "third_party_unofficial",
+                "usage": "supporting_only",
+                "authority": "low_liquidity_far_month",
+                "reason": "7-12月合约无论当日成交量如何均属远月低置信观察，不能单独支撑方向结论。",
+                "reference_sources": [],
+            },
+            "state": {
+                "source": "third_party_unofficial",
+                "usage": "supporting_only",
+                "authority": "supporting",
+                "reason": (
+                    "easing_priced 不是流动性利多，须与 HY OAS 和增长数据交叉验证；"
+                    "tightening_priced 只作贴现率逆风风险确认。"
+                ),
+                "reference_sources": ["get_hy_oas_bp"],
+            },
+            "slope_12m_and_cuts_priced_bps": {
+                "source": "third_party_unofficial",
+                "usage": "supporting_only",
+                "authority": "derived_curve_summary",
+                "reason": "由首个合格月和最远合格月推导；horizon_used 若短于12月必须按实际期限解释。",
+                "reference_sources": [],
+            },
+            "effr_anchor": {
+                "source": "official_fred_reference_when_available",
+                "usage": "cross_check_only",
+                "authority": "non_blocking_anchor",
+                "reason": "EFFR/DFF 是时点实施利率，而期货合约隐含整月平均利率；偏差只标注 anomaly，不阻断曲线判读。",
+                "reference_sources": ["FRED EFFR", "FRED DFF"],
+            },
+        }
+
+    def _unavailable(reason: str, raw_series: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        quality = build_data_quality(
+            provider="yfinance",
+            source_name=source_name,
+            source_url=source_url,
+            source_tier="third_party_unofficial",
+            data_date="not_available",
+            as_of_date=effective_date_str,
+            effective_date=effective_date_str,
+            vintage_date="not_available",
+            availability="unavailable",
+            fallback_reason=reason,
+            fallback_chain=["third_party_unofficial", "unavailable"],
+            license_note="public_endpoint_review_required",
+            coverage={"contracts_requested": FED_FUNDS_PATH_MONTHS, "contracts_observed": 0},
+            methodology="implied_rate = 100 - ZQ monthly futures close; curve requires at least four non-negligible months",
+            formula="implied_rate = 100 - close",
+            anomalies=[reason],
+        )
+        quality["metric_authority"] = _metric_authority()
+        return {
+            "name": "Fed Funds Futures Implied Rate Path",
+            "series_id": "ZQ_MONTHLY_PATH",
+            "value": None,
+            "unit": "percent",
+            "date": effective_date_str,
+            "source_tier": "third_party_unofficial",
+            "source_name": source_name,
+            "source_url": source_url,
+            "availability": "unavailable",
+            "unavailable_reason": reason,
+            "data_quality": quality,
+            "notes": f"Fed funds futures rate path unavailable: {reason}",
+        }
+
+    raw_series: List[Dict[str, Any]] = []
+    path: List[Dict[str, Any]] = []
+    try:
+        for months_ahead in range(FED_FUNDS_PATH_MONTHS):
+            contract_year, contract_month = _fed_funds_month_at_offset(effective_date, months_ahead)
+            contract = _fed_funds_contract_for_month(contract_year, contract_month)
+            observations: List[Dict[str, Any]] = []
+            try:
+                frame = cached_yf_download(
+                    contract,
+                    start=request_start.strftime("%Y-%m-%d"),
+                    end=request_end.strftime("%Y-%m-%d"),
+                    progress=False,
+                    auto_adjust=False,
+                )
+                frame = clean_yfinance_dataframe(frame)
+                if frame is not None and not frame.empty and "close" in frame.columns:
+                    frame = frame.copy()
+                    frame.index = pd.to_datetime(frame.index)
+                    if getattr(frame.index, "tz", None) is not None:
+                        frame.index = frame.index.tz_localize(None)
+                    frame = frame[frame.index <= pd.Timestamp(effective_date)].sort_index().tail(10)
+                    for data_date, row in frame.iterrows():
+                        close_value = row.get("close")
+                        volume_value = row.get("volume")
+                        if pd.isna(close_value):
+                            continue
+                        observations.append({
+                            "data_date": pd.Timestamp(data_date).strftime("%Y-%m-%d"),
+                            "close": round(float(close_value), 4),
+                            "volume": None if pd.isna(volume_value) else round(float(volume_value), 2),
+                        })
+            except Exception as contract_exc:
+                logging.warning("Fed funds contract %s unavailable: %s", contract, contract_exc)
+
+            volumes = [item["volume"] for item in observations if isinstance(item.get("volume"), (int, float))]
+            avg_volume = (sum(volumes) / len(volumes)) if volumes else None
+            liquidity_tier = _fed_funds_liquidity_tier(avg_volume)
+            raw_entry = {
+                "months_ahead": months_ahead,
+                "contract": contract,
+                "contract_year": contract_year,
+                "contract_month": contract_month,
+                "observations": observations,
+                "avg_volume_10d": None if avg_volume is None else round(avg_volume, 2),
+                "liquidity_tier": liquidity_tier if observations else "unavailable",
+                "included_in_path": bool(observations and liquidity_tier != "negligible"),
+            }
+            raw_series.append(raw_entry)
+            if not observations or liquidity_tier == "negligible":
+                continue
+
+            latest = observations[-1]
+            item_authority = (
+                "low_liquidity_far_month" if months_ahead > 6
+                else "supporting_thin_liquidity" if liquidity_tier == "thin"
+                else "supporting"
+            )
+            path.append({
+                "months_ahead": months_ahead,
+                "contract": contract,
+                "implied_rate": round(100.0 - float(latest["close"]), 4),
+                "close": latest["close"],
+                "last_trade_date": latest["data_date"],
+                "avg_volume_10d": round(float(avg_volume), 2),
+                "liquidity_tier": liquidity_tier,
+                "field_authority": item_authority,
+            })
+
+        observed_contracts = sum(1 for entry in raw_series if entry["observations"])
+        if observed_contracts == 0:
+            return _unavailable("no_zq_contract_observations_on_or_before_effective_date", raw_series)
+
+        curve_status = "available" if len(path) >= FED_FUNDS_PATH_MINIMUM_CURVE_MONTHS else "insufficient_curve"
+        front_month = deepcopy(path[0]) if path else None
+        far_month = deepcopy(path[-1]) if path else None
+        slope_12m: Optional[float] = None
+        cuts_priced_bps: Optional[int] = None
+        state: Optional[str] = None
+        horizon_used: Optional[Dict[str, Any]] = None
+        if front_month and far_month:
+            actual_curve_months = far_month["months_ahead"] - front_month["months_ahead"]
+            horizon_used = {
+                "requested_months_ahead": 12,
+                "front_months_ahead": front_month["months_ahead"],
+                "far_months_ahead": far_month["months_ahead"],
+                "actual_months_ahead": actual_curve_months,
+                "contract": far_month["contract"],
+                "fallback_used": actual_curve_months != 12,
+                "reason": (
+                    "front_or_requested_12m_contract_excluded_or_unavailable_used_actual_qualified_span"
+                    if actual_curve_months != 12 else "requested_12m_curve_span_qualified"
+                ),
+            }
+        if curve_status == "available" and front_month and far_month:
+            slope_raw = float(far_month["implied_rate"]) - float(front_month["implied_rate"])
+            slope_12m = round(slope_raw, 4)
+            cuts_priced_bps = round(-slope_raw * 100)
+            state = _fed_funds_path_state(slope_raw)
+
+        anomalies: List[str] = []
+        effr_anchor: Optional[Dict[str, Any]] = None
+        for anchor_series_id in ("EFFR", "DFF"):
+            try:
+                anchor_series = get_fred_series(anchor_series_id, days=60, end_date=end_date)
+                if anchor_series is None or anchor_series.empty or not {"date", "value"}.issubset(anchor_series.columns):
+                    continue
+                anchor_frame = anchor_series.copy()
+                anchor_frame["date"] = pd.to_datetime(anchor_frame["date"], errors="coerce")
+                anchor_frame["value"] = pd.to_numeric(anchor_frame["value"], errors="coerce")
+                anchor_frame = anchor_frame[
+                    anchor_frame["date"].notna()
+                    & (anchor_frame["date"] <= pd.Timestamp(effective_date))
+                ].dropna(subset=["value"])
+                if anchor_frame.empty:
+                    continue
+                anchor_row = anchor_frame.sort_values("date").iloc[-1]
+                anchor_rate = float(anchor_row["value"])
+                front_gap = None if front_month is None else round(float(front_month["implied_rate"]) - anchor_rate, 4)
+                effr_anchor = {
+                    "series_id": anchor_series_id,
+                    "rate": round(anchor_rate, 4),
+                    "data_date": anchor_row["date"].strftime("%Y-%m-%d"),
+                    "front_month_minus_anchor_pp": front_gap,
+                    "availability": "available",
+                    "usage": "non_blocking_cross_check",
+                }
+                if front_gap is not None and abs(front_gap) > 0.35:
+                    anomalies.append(f"front_month_vs_{anchor_series_id.lower()}_gap_gt_0.35pp:{front_gap:+.4f}pp")
+                break
+            except Exception as anchor_exc:
+                logging.warning("Optional FRED anchor %s ignored: %s", anchor_series_id, anchor_exc)
+                continue
+        if effr_anchor is None:
+            anomalies.append("effr_anchor_unavailable_non_blocking")
+
+        data_dates = [entry["observations"][-1]["data_date"] for entry in raw_series if entry["observations"]]
+        latest_data_date = max(data_dates) if data_dates else effective_date_str
+        value = {
+            "effective_date": effective_date_str,
+            "status": curve_status,
+            "front_month": front_month,
+            "path": path,
+            "slope_12m": slope_12m,
+            "horizon_used": horizon_used,
+            "cuts_priced_bps": cuts_priced_bps,
+            "state": state,
+            "state_thresholds": state_thresholds,
+            "liquidity_thresholds": liquidity_thresholds,
+            "effr_anchor": effr_anchor,
+            "raw_series": raw_series,
+            "state_usage_boundary": {
+                "easing_priced": {
+                    "usage": "supporting_only",
+                    "reason": "深度降息定价可能反映衰退恐惧；必须与 HY OAS 和增长数据交叉验证后才能讨论方向，禁止单独作为流动性利多。",
+                },
+                "tightening_priced": {
+                    "usage": "supporting_only",
+                    "reason": "只可作为贴现率逆风的风险确认，不能单独推出 NDX 方向。",
+                },
+                "flat_path": {
+                    "usage": "supporting_only",
+                    "reason": "缓冲带内没有足够曲线斜率信号，不携带方向性结论。",
+                },
+            },
+            "source_boundary": (
+                "ZQ 结算价反映市场对合约月份平均联邦基金利率的定价，不是 Fed 承诺；Yahoo 为未经 CME 官方核验的第三方转发。"
+                "本缩水版不拼接历史合约、不计算历史分位，也不输出会议概率；升级路径是在官方 CME/FedWatch 可达后核验结算价并增加会议级概率与严格 PIT 合约档案。"
+            ),
+        }
+        quality = build_data_quality(
+            provider="yfinance",
+            source_name=source_name,
+            source_url=source_url,
+            source_tier="third_party_unofficial",
+            data_date=latest_data_date,
+            as_of_date=latest_data_date,
+            effective_date=effective_date_str,
+            vintage_date=latest_data_date,
+            availability="available",
+            fallback_reason=("none" if curve_status == "available" else "fewer_than_four_non_negligible_contract_months"),
+            fallback_chain=["third_party_unofficial", "unavailable"],
+            license_note="public_endpoint_review_required",
+            coverage={
+                "contracts_requested": FED_FUNDS_PATH_MONTHS,
+                "contracts_observed": observed_contracts,
+                "contracts_in_formal_path": len(path),
+                "negligible_contracts_excluded": sum(1 for entry in raw_series if entry["liquidity_tier"] == "negligible"),
+                "curve_status": curve_status,
+                "minimum_curve_months_required": FED_FUNDS_PATH_MINIMUM_CURVE_MONTHS,
+                "horizon_used": horizon_used,
+            },
+            methodology=(
+                "For each of 13 monthly ZQ contracts from the effective-date month: select the latest close on/before effective_date, "
+                "implied_rate=100-close, average the available last 10 daily volumes, exclude avg_volume<5, retain 5<=volume<100 as thin, "
+                "then slope=farthest qualified implied rate-front qualified implied rate."
+            ),
+            formula="implied_rate = 100 - close; slope_12m = farthest_qualified_rate - front_qualified_rate; cuts_priced_bps = round(-slope_12m * 100)",
+            anomalies=anomalies,
+            point_in_time_note="Contract set and every observation are truncated to effective_date; settlement closes are non-revisable market facts.",
+        )
+        quality["metric_authority"] = _metric_authority()
+        return {
+            "name": "Fed Funds Futures Implied Rate Path",
+            "series_id": "ZQ_MONTHLY_PATH",
+            "value": value,
+            "unit": "percent",
+            "date": latest_data_date,
+            "source_tier": "third_party_unofficial",
+            "source_name": source_name,
+            "source_url": source_url,
+            "availability": "available",
+            "data_quality": quality,
+            "notes": (
+                "ZQ 月合约隐含的是整月平均利率，而 EFFR/DFF 锚是最近时点实施利率；二者超过0.35个百分点只记异常、不阻断。"
+                + (" 合格月份不足4个，曲线结论已诚实降级。" if curve_status == "insufficient_curve" else "")
+            ),
+        }
+    except Exception as exc:
+        return _unavailable(f"fed_funds_rate_path_exception:{str(exc)[:150]}", raw_series)
+
+
 def get_10y2y_spread_bp(end_date: str = None) -> Dict[str, Any]:
     """获取10年-2年期美债利差。分层降噪：用 MA20 乖离率替代日度动量。"""
     series = get_fred_series("T10Y2Y", end_date=end_date)

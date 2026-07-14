@@ -124,6 +124,32 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
         "核心框架指标，影响无风险收益率和流动性条件。",
         "政策利率说明资金价格，不直接给出 NDX 买卖点。",
     ),
+    "get_fed_funds_rate_path": _indicator(
+        "get_fed_funds_rate_path",
+        "Fed Funds Futures Implied Rate Path",
+        Layer.L1,
+        PermissionType.COMPOSITE,
+        "Fed funds futures 正在给未来12个月的平均政策利率定价怎样的路径，曲线斜率是在隐含宽松、平坦还是进一步收紧？",
+        [
+            "先看首个合格月到最远合格月的隐含利率斜率与实际 horizon_used，再看 easing_priced / flat_path / tightening_priced 状态。",
+            "easing_priced 可能是软着陆宽松，也可能是衰退恐惧；只有 HY OAS 未恶化且增长数据不坍塌时，才可讨论其方向含义。",
+            "tightening_priced 只作为贴现率逆风的风险确认；所有状态和路径均为 supporting_only。",
+        ],
+        [
+            "市场定价不是 Fed 承诺，不能把 cuts_priced_bps 当成未来会议决定或概率预测。",
+            "7-12月字段一律是 low_liquidity_far_month 低置信观察；avg_volume_10d<5 的 negligible 月不得进入正式路径。",
+            "easing_priced 不得单独作为流动性利多；本指标不做历史分位，也不提供 CME FedWatch 会议概率。",
+        ],
+        ["get_hy_oas_bp", "get_fed_funds_rate", "get_10y_treasury", "get_10y_real_rate"],
+        [
+            "降息定价加深但 HY OAS 同时显著走阔或增长数据快速恶化，说明宽松预期更可能是衰退风险而非利多。",
+            "远月成交量降至 negligible、合格曲线少于4个月，或首月相对 EFFR/DFF 偏差无法由月均口径解释时，曲线结论应降级。",
+        ],
+        "L1 支持性贴现率路径指标；用于解释政策预期与风险约束，核心仓和战术仓都不得因该路径单独改变方向。",
+        "期货路径是市场报价，不是 Fed 承诺；降息定价要先过信用与增长验证，远月只作低置信参考。",
+        source_hint="yfinance ZQ monthly futures + FRED EFFR/DFF anchor",
+        frequency_hint="daily settlements; 13 monthly contracts",
+    ),
     "get_10y_treasury": _indicator(
         "get_10y_treasury",
         "10Y Treasury Yield",

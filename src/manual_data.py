@@ -32,6 +32,16 @@ DEFAULT_MANUAL_DATA: ManualData = {
         "get_ndx_pe_and_earnings_yield": {
             "name": "NDX Valuation (Manual)",
             "series_id": "NDX_MANUAL",
+            "primary_fields": [
+                "PE_TTM",
+                "ForwardPE",
+                "EarningsYield",
+                "ForwardEarningsYield",
+                "FCFYield",
+                "PB",
+                "PS_TTM",
+                "PCF_TTM",
+            ],
             "value": {
                 "PE_TTM": None,
                 "ForwardPE": None,
@@ -70,6 +80,7 @@ DEFAULT_MANUAL_DATA: ManualData = {
         "get_equity_risk_premium": {
             "name": "NDX Simple Yield Gap (Manual)",
             "series_id": "SIMPLE_YIELD_GAP_MANUAL",
+            "primary_fields": ["level"],
             "value": {
                 "level": None,
                 "method": "earnings_yield_minus_10y_or_fcf_yield_minus_10y",
@@ -99,6 +110,7 @@ DEFAULT_MANUAL_DATA: ManualData = {
         "get_damodaran_us_implied_erp": {
             "name": "Manual/Wind ERP Reference",
             "series_id": "MANUAL_ERP_REFERENCE",
+            "primary_fields": ["manual_erp", "implied_erp_fcfe", "implied_erp_ddm"],
             "value": {
                 "manual_erp": None,
                 "manual_erp_percentile_5y": None,
@@ -106,6 +118,7 @@ DEFAULT_MANUAL_DATA: ManualData = {
                 "implied_erp_fcfe": None,
                 "implied_erp_ddm": None,
                 "tbond_rate": None,
+                "manual_source_type": None,
                 "scope": "manual/Wind ERP reference; specify US market, NDX, or other scope when used",
                 "not_ndx_valuation_warning": "Manual ERP reference is not NDX PE/Forward PE/PB historical percentile.",
             },
@@ -123,11 +136,18 @@ DEFAULT_MANUAL_DATA: ManualData = {
                 "fallback_chain": ["licensed_manual/Wind", "official", "unavailable"],
                 "source_disagreement": {},
             },
-            "notes": "Optional manual ERP reference; not NDX simple yield gap and not a substitute for NDX PE/Forward PE/PB percentile.",
+            "notes": (
+                "Optional manual ERP reference; not NDX simple yield gap and not a substitute for NDX PE/Forward PE/PB percentile. "
+                "Set value.manual_source_type to 'damodaran_official' only when this number is genuinely Damodaran's published "
+                "implied ERP; 'wind_derived' or 'other' (or leaving it unset) means this slot no longer stands as an independent "
+                "third voice alongside the Wind PE-based simple yield gap and the constituent self-calculated ERP, and will be "
+                "flagged with a provenance anomaly instead of silently collapsing the three ERP voices into one."
+            ),
         },
         "get_qqq_top10_concentration": {
             "name": "QQQ Top10 Concentration (Manual)",
             "series_id": "QQQ_TOP10_MANUAL",
+            "primary_fields": ["top10_weight_pct", "top5_weight_pct", "m7_weight_pct"],
             "value": {
                 "effective_date": "",
                 "top10_weight_pct": None,
@@ -155,6 +175,14 @@ DEFAULT_MANUAL_DATA: ManualData = {
         "get_ndx_forward_earnings_quality": {
             "name": "NDX Forward Earnings Quality (Manual)",
             "series_id": "NDX_FORWARD_EARNINGS_MANUAL",
+            "primary_fields": [
+                "weighted_forward_pe",
+                "forward_earnings_yield_pct",
+                "forward_eps_growth_proxy_pct",
+                "weighted_profit_margin_pct",
+                "weighted_operating_margin_pct",
+                "weighted_next_year_eps_revision_30d_pct",
+            ],
             "value": {
                 "ndx": {
                     "weighted_forward_pe": None,
@@ -189,6 +217,7 @@ DEFAULT_MANUAL_DATA: ManualData = {
         "get_crowdedness_dashboard": {
             "name": "Crowdedness Dashboard (Manual)",
             "series_id": "CROWDEDNESS_MANUAL",
+            "primary_fields": ["positioning_z_score", "sentiment_index", "flow_data_mm"],
             "value": {
                 "positioning_z_score": None,
                 "sentiment_index": None,
@@ -325,10 +354,36 @@ _MEANINGFUL_VALUE_IGNORED_KEYS = {
 }
 
 
+def _collect_fields_by_key(value: Any, field_names: set) -> list:
+    """Recursively collect sub-values whose dict key is in field_names.
+
+    primary_fields entries are leaf key names; some manual metrics (e.g.
+    get_ndx_forward_earnings_quality) nest them inside grouped sub-dicts, so
+    matching walks the full value tree rather than only the top level.
+    """
+    matches: list = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in field_names:
+                matches.append(item)
+            else:
+                matches.extend(_collect_fields_by_key(item, field_names))
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            matches.extend(_collect_fields_by_key(item, field_names))
+    return matches
+
+
 def has_meaningful_manual_override(metric: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(metric, dict):
         return False
     value = metric.get("value")
+    primary_fields = metric.get("primary_fields")
+    if isinstance(primary_fields, (list, tuple)) and primary_fields:
+        # Template declares which fields count as the meaningful override signal;
+        # filling only metadata/percentile/context fields must not flip this to True.
+        matched_values = _collect_fields_by_key(value, set(primary_fields))
+        return any(_has_meaningful_value(item) for item in matched_values)
     if isinstance(value, dict):
         value = {
             key: item

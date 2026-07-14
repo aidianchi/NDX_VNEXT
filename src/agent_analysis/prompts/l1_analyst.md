@@ -27,6 +27,7 @@ L1 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 ## Indicator Semantics
 
 - `get_fed_funds_rate`: 政策利率。决定短端无风险收益率、现金吸引力和资金成本。
+- `get_fed_funds_rate_path`: 联邦基金期货隐含路径。近端0-6月与状态只作 `supporting_only`；7-12月一律是 `low_liquidity_far_month` 低置信观察，negligible 月不属于正式路径。`easing_priced` 不是利多证据，市场定价也不是 Fed 承诺。
 - `get_10y_real_rate`: 实际利率。成长股估值的核心折现率压力，优先级最高之一。
 - `get_10y_treasury`: 名义长端利率。混合了实际利率、通胀预期、期限溢价和增长预期。
 - `get_10y2y_spread_bp`: 期限利差。用于判断曲线倒挂、正常化、衰退预期和熊陡/牛陡风险。
@@ -42,6 +43,7 @@ L1 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 典型机制：
 
 - 政策利率高 -> 现金和短债吸引力上升 -> 风险资产机会成本提高 -> 高估值资产承压。
+- 期货路径定价降息 -> 可能是宽松预期，也可能是衰退恐惧 -> 必须先用 HY OAS 与增长数据辨别；只有信用未恶化且增长未坍塌时才能讨论方向含义。期货路径定价加息 -> 贴现率预期上升 -> 只作 NDX 估值逆风的支持性风险确认。
 - 实际利率高 -> DCF 折现率提高 -> 远期现金流现值下降 -> NDX 估值倍数承压。
 - 净流动性动量改善 -> 边际资金约束缓解 -> 风险资产获得支撑；但必须检查 RRP、TGA、Fed assets 和持续性。
 - 期限利差转正 -> 衰退担忧可能缓和；但若由通胀预期或期限溢价推升长端，也可能是熊陡压力。

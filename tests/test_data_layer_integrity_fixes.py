@@ -8,10 +8,11 @@ import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import tools_L1
+import tools_L2
 import tools_L3
 from agent_analysis.packet_builder import AnalysisPacketBuilder
 from data_manager import calculate_long_term_stats
-from tools_common import TICKER_REPLACEMENTS
+from tools_common import TICKER_REPLACEMENTS, HistoricalUniverseUnavailable
 
 
 def test_long_term_stats_anchors_to_as_of_date_and_drops_future_rows():
@@ -138,3 +139,121 @@ def test_l2_fear_greed_cannot_set_layer_state_without_hard_confirmation():
     assert fearful.facts_by_layer["L2"].state == "neutral"
     assert confirmed_stress.facts_by_layer["L2"].state == "risk_off"
     assert calm_confirmed.facts_by_layer["L2"].state == "risk_on"
+
+
+def test_ndx100_components_backtest_raises_and_never_touches_current_universe_strategies(monkeypatch):
+    """Backtest mode must only trust the historical ticker-history library. If that
+    library fails, get_ndx100_components must raise HistoricalUniverseUnavailable and
+    must never fall through to the Nasdaq API / Wikipedia / GitHub-live / static
+    fallback strategies, since any of those would silently inject the *current*
+    NDX100 roster into a historical calculation (survivorship bias)."""
+    import nasdaq_100_ticker_history
+
+    def boom(year, month, day):
+        raise RuntimeError("synthetic historical library failure")
+
+    monkeypatch.setattr(nasdaq_100_ticker_history, "tickers_as_of", boom)
+    monkeypatch.setattr(
+        tools_L3.requests,
+        "get",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("current-universe network strategy should not run for a backtest request")
+        ),
+    )
+
+    try:
+        tools_L3.get_ndx100_components_with_provenance(end_date="2025-04-09")
+        assert False, "expected HistoricalUniverseUnavailable to be raised"
+    except HistoricalUniverseUnavailable as exc:
+        assert exc.end_date == "2025-04-09"
+
+    # The thin get_ndx100_components() wrapper must propagate the same exception.
+    try:
+        tools_L3.get_ndx100_components(end_date="2025-04-09")
+        assert False, "expected HistoricalUniverseUnavailable to be raised"
+    except HistoricalUniverseUnavailable:
+        pass
+
+
+def test_ndx100_components_historical_success_path_is_unchanged(monkeypatch):
+    import nasdaq_100_ticker_history
+
+    def fake_tickers_as_of(year, month, day):
+        return ["AAA", "BBB", "CCC"]
+
+    monkeypatch.setattr(nasdaq_100_ticker_history, "tickers_as_of", fake_tickers_as_of)
+
+    tickers, provenance = tools_L3.get_ndx100_components_with_provenance(end_date="2025-04-09")
+
+    assert tickers == ["AAA", "BBB", "CCC"]
+    assert provenance["universe_source"] == "historical_library"
+    assert provenance["as_of"] == "2025-04-09"
+    assert provenance["count"] == 3
+
+    # get_ndx100_components() keeps its original signature/return type (a plain list).
+    assert tools_L3.get_ndx100_components(end_date="2025-04-09") == ["AAA", "BBB", "CCC"]
+
+
+def test_ndx100_components_live_mode_reports_nasdaq_api_provenance(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": {"data": {"rows": [{"symbol": f"TCK{i}"} for i in range(95)]}}}
+
+    monkeypatch.setattr(tools_L3.requests, "get", lambda *a, **kw: FakeResponse())
+
+    tickers, provenance = tools_L3.get_ndx100_components_with_provenance(end_date=None)
+
+    assert provenance["universe_source"] == "nasdaq_api"
+    assert provenance["count"] == len(tickers) == 95
+
+
+def test_advance_decline_line_reports_honest_unavailable_when_historical_universe_fails(monkeypatch):
+    monkeypatch.setattr(tools_L2, "YF_AVAILABLE", True)
+
+    def raise_unavailable(effective_date, historical_date=None, **kwargs):
+        raise HistoricalUniverseUnavailable("synthetic_failure", historical_date)
+
+    monkeypatch.setattr(tools_L2, "_get_ndx100_common_price_data", raise_unavailable)
+
+    result = tools_L2.get_advance_decline_line("2025-04-09")
+
+    assert result["availability"] == "unavailable"
+    assert result["unavailable_reason"] == "historical_universe_unavailable"
+    assert "historical_universe_unavailable" in result["data_quality"]["anomalies"]
+    assert "current_universe_not_used" in result["data_quality"]["anomalies"]
+
+
+def test_advance_decline_line_surfaces_universe_provenance_in_data_quality(monkeypatch):
+    monkeypatch.setattr(tools_L2, "YF_AVAILABLE", True)
+
+    dates = pd.date_range("2025-01-01", periods=260, freq="B")
+    close = pd.DataFrame(
+        {
+            "AAA": range(100, 360),
+            "BBB": range(200, 460),
+            "CCC": list(range(360, 100, -1)),
+        },
+        index=dates,
+        dtype=float,
+    )
+    panel = pd.concat({"Close": close}, axis=1)
+    panel.attrs["universe_provenance"] = {
+        "universe_source": "nasdaq_api",
+        "as_of": "2025-12-31",
+        "retrieved_at": "2025-12-31T00:00:00Z",
+        "count": 3,
+    }
+
+    monkeypatch.setattr(
+        tools_L2,
+        "_get_ndx100_common_price_data",
+        lambda effective_date, **kwargs: (["AAA", "BBB", "CCC"], panel),
+    )
+
+    result = tools_L2.get_advance_decline_line("2025-12-31")
+
+    assert result["availability"] == "available"
+    assert result["data_quality"]["universe_provenance"]["universe_source"] == "nasdaq_api"

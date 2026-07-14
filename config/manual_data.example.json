@@ -88,6 +88,7 @@
         "implied_erp_fcfe": null,
         "implied_erp_ddm": null,
         "tbond_rate": null,
+        "manual_source_type": null,
         "scope": "manual/Wind ERP reference; specify US market, NDX, or other scope when used",
         "not_ndx_valuation_warning": "Manual ERP reference is not NDX PE/Forward PE/PB historical percentile."
       },
@@ -111,7 +112,7 @@
         ],
         "source_disagreement": {}
       },
-      "notes": "Optional manual ERP reference; not NDX simple yield gap and not a substitute for NDX PE/Forward PE/PB percentile."
+      "notes": "Optional manual ERP reference; not NDX simple yield gap and not a substitute for NDX PE/Forward PE/PB percentile. Set value.manual_source_type to 'damodaran_official' only when this is genuinely Damodaran's published implied ERP; 'wind_derived'/'other'/unset means it can no longer stand as an independent third voice and will be flagged with a provenance anomaly."
     },
     "get_crowdedness_dashboard": {
       "name": "Crowdedness Dashboard (Manual)",
