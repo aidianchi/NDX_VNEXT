@@ -849,6 +849,335 @@ def check_m7_capex_cycle_magnitude(data_json: Dict[str, Any], handled: Set[str])
 
 
 # ---------------------------------------------------------------------------
+# Category E: M7 earnings-blackout calendar and actual buyback flow
+# ---------------------------------------------------------------------------
+
+def _exact_equality(
+    field: str,
+    pipeline_value: Any,
+    recomputed_value: Any,
+    category: str,
+    criticality: str,
+    note: str,
+) -> Dict[str, Any]:
+    status = STATUS_MATCH if pipeline_value == recomputed_value else STATUS_DEVIATION
+    return _finding(field, pipeline_value, recomputed_value, 0.0, status, category, criticality, note)
+
+
+def _compare_when_recomputed(
+    field: str,
+    pipeline_value: Any,
+    recomputed_value: float,
+    tolerance: float,
+    category: str,
+    criticality: str,
+    note: str,
+) -> Dict[str, Any]:
+    """A missing/non-numeric pipeline value is a deviation when raw recompute succeeded."""
+    if not _is_number(pipeline_value):
+        return _finding(
+            field, pipeline_value, recomputed_value, tolerance, STATUS_DEVIATION,
+            category, criticality, note + "; raw recompute succeeded but pipeline value is missing/non-numeric",
+        )
+    return _compare(field, pipeline_value, recomputed_value, tolerance, category, criticality, note)
+
+
+def _raw_earnings_date_texts(rows: Any) -> List[str]:
+    result: List[str] = []
+    if not isinstance(rows, list):
+        return result
+    for row in rows:
+        raw = row.get("date") if isinstance(row, dict) else row
+        try:
+            text = str(raw)[:10]
+            datetime.strptime(text, "%Y-%m-%d")
+            result.append(text)
+        except Exception:
+            continue
+    return sorted(set(result))
+
+
+def check_m7_earnings_blackout_calendar(data_json: Dict[str, Any], handled: Set[str]) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    fid = "get_m7_earnings_blackout_calendar"
+    value = _indicator_value(_get_indicator(data_json, fid))
+    if not isinstance(value, dict):
+        field = f"{fid}.raw_earnings_dates"
+        handled.add(field)
+        return [_missing(field, "date_rule_recompute", CRITICALITY_CRITICAL, "indicator/value absent")]
+    raw_by_ticker = value.get("raw_earnings_dates")
+    rule = value.get("blackout_rule")
+    rows = value.get("per_ticker")
+    as_of_text = value.get("as_of_date")
+    if not isinstance(raw_by_ticker, dict) or not isinstance(rule, dict) or not isinstance(rows, list):
+        field = f"{fid}.raw_earnings_dates"
+        handled.add(field)
+        return [_missing(field, "date_rule_recompute", CRITICALITY_CRITICAL, "raw dates/rule/per_ticker missing")]
+    try:
+        as_of = datetime.strptime(str(as_of_text)[:10], "%Y-%m-%d").date()
+        before = int(rule["days_before_earnings"])
+        after = int(rule["days_after_earnings"])
+        lookahead = int(rule["lookahead_days"])
+    except Exception:
+        field = f"{fid}.blackout_rule"
+        handled.add(field)
+        return [_missing(field, "date_rule_recompute", CRITICALITY_CRITICAL, "invalid as_of date or rule parameters")]
+
+    recomputed_bools: Dict[str, bool] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("ticker"):
+            continue
+        ticker = str(row["ticker"])
+        parsed = [datetime.strptime(text, "%Y-%m-%d").date() for text in _raw_earnings_date_texts(raw_by_ticker.get(ticker))]
+        recent = sorted((item for item in parsed if 0 <= (as_of - item).days <= after), reverse=True)
+        upcoming = sorted(item for item in parsed if 0 <= (item - as_of).days <= lookahead)
+        selected = recent[0] if recent else (upcoming[0] if upcoming else None)
+        if selected is None:
+            continue
+        recomputed = selected.toordinal() - before <= as_of.toordinal() <= selected.toordinal() + after
+        recomputed_bools[ticker] = recomputed
+        field = f"{fid}.per_ticker.{ticker}.in_estimated_blackout"
+        handled.add(field)
+        findings.append(_exact_equality(
+            field, row.get("in_estimated_blackout"), recomputed,
+            "date_rule_recompute", CRITICALITY_CRITICAL,
+            f"raw selected earnings_date={selected.isoformat()}; inclusive days_before={before}, days_after={after}",
+        ))
+
+    recomputed_count = sum(1 for state in recomputed_bools.values() if state)
+    count_field = f"{fid}.m7_in_blackout_count"
+    handled.add(count_field)
+    findings.append(_compare_when_recomputed(
+        count_field, value.get("m7_in_blackout_count"), recomputed_count, EPSILON_EXACT,
+        "date_rule_recompute", CRITICALITY_CRITICAL, "count of independently recomputed true ticker states",
+    ))
+    share_field = f"{fid}.m7_in_blackout_share_equal_weight"
+    handled.add(share_field)
+    recomputed_share = round(recomputed_count / 7, 4) if len(recomputed_bools) == 7 else None
+    if recomputed_share is None:
+        findings.append(_missing(share_field, "date_rule_recompute", CRITICALITY_CRITICAL, "fewer than 7 recomputable M7 dates"))
+    else:
+        findings.append(_compare_when_recomputed(
+            share_field, value.get("m7_in_blackout_share_equal_weight"), recomputed_share, TOLERANCE_ROUNDED_4DP,
+            "date_rule_recompute", CRITICALITY_CRITICAL, "equal-weight share=count/7; requires full M7 coverage",
+        ))
+    return findings
+
+
+M7_BUYBACK_SINGLE_QUARTER_MAX_USD_BN = 100.0
+M7_BUYBACK_AGGREGATE_TTM_MAX_USD_BN = 1000.0
+
+
+def _belt_calendar_quarter_ordinal(label: Any) -> Optional[int]:
+    try:
+        year_text, quarter_text = str(label).split("Q", 1)
+        quarter = int(quarter_text)
+        if quarter not in {1, 2, 3, 4}:
+            return None
+        return int(year_text) * 4 + quarter - 1
+    except (TypeError, ValueError):
+        return None
+
+
+def _belt_calendar_quarter_from_period_end(period_end: Any) -> Optional[str]:
+    try:
+        parsed = datetime.strptime(str(period_end)[:10], "%Y-%m-%d")
+        return f"{parsed.year}Q{(parsed.month - 1) // 3 + 1}"
+    except Exception:
+        return None
+
+
+def _belt_last_four_consecutive(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    by_label: Dict[str, Dict[str, Any]] = {}
+    for row in sorted(rows, key=lambda item: str(item.get("period_end") or "")):
+        label = row.get("calendar_quarter")
+        if label and _belt_calendar_quarter_ordinal(label) is not None:
+            by_label[str(label)] = row
+    ordered = sorted(by_label.values(), key=lambda item: _belt_calendar_quarter_ordinal(item.get("calendar_quarter")) or -1)
+    latest_four = ordered[-4:]
+    ordinals = [_belt_calendar_quarter_ordinal(row.get("calendar_quarter")) for row in latest_four]
+    if len(latest_four) != 4 or any(item is None for item in ordinals):
+        return []
+    return latest_four if all(ordinals[idx] - ordinals[idx - 1] == 1 for idx in range(1, 4)) else []
+
+
+def check_m7_buyback_flow(data_json: Dict[str, Any], handled: Set[str]) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    fid = "get_m7_buyback_flow"
+    value = _indicator_value(_get_indicator(data_json, fid))
+    if not isinstance(value, dict):
+        field = f"{fid}.raw_quarterly_series"
+        handled.add(field)
+        return [_missing(field, "quarterly_sum_growth", CRITICALITY_CRITICAL, "indicator/value absent")]
+    raw = value.get("raw_quarterly_series")
+    per_company = value.get("per_company")
+    context = value.get("aggregate_context")
+    if not isinstance(raw, dict) or not isinstance(per_company, dict) or not isinstance(context, dict):
+        field = f"{fid}.raw_quarterly_series"
+        handled.add(field)
+        return [_missing(field, "quarterly_sum_growth", CRITICALITY_CRITICAL, "raw series/per_company/context missing")]
+
+    normalized: Dict[str, List[Dict[str, Any]]] = {}
+    company_ttm_bn: Dict[str, float] = {}
+    for ticker, rows in raw.items():
+        clean = [
+            dict(row) for row in rows if isinstance(row, dict)
+            and _is_number(row.get("value_usd")) and row.get("period_end")
+        ] if isinstance(rows, list) else []
+        for row in clean:
+            pipeline_label = row.get("calendar_quarter")
+            recomputed_label = _belt_calendar_quarter_from_period_end(row.get("period_end"))
+            field = f"{fid}.raw_quarterly_series.{ticker}.{row.get('period_end')}.calendar_quarter"
+            handled.add(field)
+            findings.append(_exact_equality(
+                field, pipeline_label, recomputed_label,
+                "date_rule_recompute", CRITICALITY_CRITICAL, "calendar quarter derived independently from period_end",
+            ))
+            row["calendar_quarter"] = recomputed_label
+        clean = sorted(clean, key=lambda row: str(row["period_end"]))
+        normalized[str(ticker)] = clean
+        company = per_company.get(ticker) if isinstance(per_company.get(ticker), dict) else {}
+        ttm_rows = _belt_last_four_consecutive(clean)
+        if len(ttm_rows) == 4:
+            recomputed_ttm = round(sum(float(row["value_usd"]) for row in ttm_rows) / 1e9, 3)
+            company_ttm_bn[str(ticker)] = recomputed_ttm
+            field = f"{fid}.per_company.{ticker}.ttm_buyback_usd_bn"
+            handled.add(field)
+            findings.append(_compare_when_recomputed(
+                field, company.get("ttm_buyback_usd_bn"), recomputed_ttm, 0.001 + EPSILON_EXACT,
+                "quarterly_sum_growth", CRITICALITY_CRITICAL, "sum of last four raw normalized quarterly values",
+            ))
+        elif company.get("availability") == "available":
+            field = f"{fid}.per_company.{ticker}.ttm_buyback_usd_bn"
+            handled.add(field)
+            findings.append(_exact_equality(
+                field, company.get("ttm_buyback_usd_bn"), None,
+                "quarterly_sum_growth", CRITICALITY_CRITICAL,
+                "fewer than four distinct consecutive raw calendar quarters; TTM must be withheld",
+            ))
+        if clean:
+            latest_bn = float(clean[-1]["value_usd"]) / 1e9
+            field = f"{fid}.magnitude_sentinel.{ticker}.latest_quarter"
+            handled.add(field)
+            in_band = 0.0 <= latest_bn <= M7_BUYBACK_SINGLE_QUARTER_MAX_USD_BN
+            findings.append(_finding(
+                field, latest_bn, None, None, STATUS_MATCH if in_band else STATUS_DEVIATION,
+                "unit_sentinel", CRITICALITY_STANDARD,
+                f"normalized buyback must be non-negative and <= {M7_BUYBACK_SINGLE_QUARTER_MAX_USD_BN} USD bn; {MAGNITUDE_SENTINEL_NOTE}",
+            ))
+
+    by_label: Dict[str, Dict[str, float]] = {}
+    for ticker, rows in normalized.items():
+        for row in rows:
+            label = row.get("calendar_quarter")
+            if label and _belt_calendar_quarter_ordinal(label) is not None:
+                by_label.setdefault(str(label), {})[ticker] = float(row["value_usd"])
+    eligible_labels = sorted(
+        (label for label, members in by_label.items() if len(members) >= 5),
+        key=lambda label: _belt_calendar_quarter_ordinal(label) or -1,
+    )
+    latest_label = eligible_labels[-1] if eligible_labels else None
+    latest_members = by_label.get(latest_label, {}) if latest_label else {}
+    latest_companies = sorted(latest_members)
+    if latest_label:
+        try:
+            year_text, quarter_text = latest_label.split("Q", 1)
+            prior_label = f"{int(year_text) - 1}Q{quarter_text}"
+        except (TypeError, ValueError):
+            prior_label = None
+    else:
+        prior_label = None
+    prior_members = by_label.get(prior_label, {}) if prior_label else {}
+    comparable = sorted(set(latest_members) & set(prior_members))
+    aligned = sorted(
+        ticker for ticker, ttm in company_ttm_bn.items()
+        if normalized.get(ticker) and normalized[ticker][-1].get("calendar_quarter") == latest_label
+    )
+    excluded = sorted(
+        ticker for ticker, rows in normalized.items()
+        if rows and rows[-1].get("calendar_quarter") != latest_label
+    )
+
+    context_checks = {
+        "latest_calendar_quarter": latest_label,
+        "prior_year_calendar_quarter": prior_label,
+        "latest_quarter_companies": latest_companies,
+        "yoy_comparable_companies": comparable,
+        "ttm_aligned_companies": aligned,
+        "excluded_for_fiscal_calendar_misalignment": excluded,
+    }
+    for key, recomputed_context_value in context_checks.items():
+        field = f"{fid}.aggregate_context.{key}"
+        handled.add(field)
+        pipeline_context_value = context.get(key)
+        if isinstance(recomputed_context_value, list) and isinstance(pipeline_context_value, list):
+            pipeline_context_value = sorted(str(item) for item in pipeline_context_value)
+        findings.append(_exact_equality(
+            field, pipeline_context_value, recomputed_context_value,
+            "quarterly_sum_growth", CRITICALITY_CRITICAL, "aggregate context independently derived from raw quarterly series",
+        ))
+
+    latest_values = list(latest_members.values())
+    quarterly_total = round(sum(latest_values) / 1e9, 3) if latest_values else None
+    quarterly_field = f"{fid}.m7_quarterly_total"
+    handled.add(quarterly_field)
+    if quarterly_total is None:
+        findings.append(_missing(quarterly_field, "quarterly_sum_growth", CRITICALITY_CRITICAL, "latest aggregate rows missing"))
+    else:
+        findings.append(_compare_when_recomputed(
+            quarterly_field, value.get("m7_quarterly_total"), quarterly_total, 0.001 + EPSILON_EXACT,
+            "quarterly_sum_growth", CRITICALITY_CRITICAL, "sum raw values for latest eligible calendar-quarter members",
+        ))
+
+    ttm_values = [company_ttm_bn[str(ticker)] for ticker in aligned if str(ticker) in company_ttm_bn]
+    ttm_total = round(sum(ttm_values), 3) if len(ttm_values) >= 5 else None
+    ttm_field = f"{fid}.m7_ttm_total"
+    handled.add(ttm_field)
+    if ttm_total is None:
+        findings.append(_exact_equality(
+            ttm_field, value.get("m7_ttm_total"), None,
+            "quarterly_sum_growth", CRITICALITY_CRITICAL, "fewer than five aligned company TTM values; aggregate withheld",
+        ))
+    else:
+        findings.append(_compare_when_recomputed(
+            ttm_field, value.get("m7_ttm_total"), ttm_total, 0.001 + EPSILON_EXACT,
+            "quarterly_sum_growth", CRITICALITY_CRITICAL, "sum independently recomputed aligned company TTM values",
+        ))
+        field = f"{fid}.magnitude_sentinel.m7_ttm_total"
+        handled.add(field)
+        in_band = 0.0 <= ttm_total <= M7_BUYBACK_AGGREGATE_TTM_MAX_USD_BN
+        findings.append(_finding(
+            field, ttm_total, None, None, STATUS_MATCH if in_band else STATUS_DEVIATION,
+            "unit_sentinel", CRITICALITY_STANDARD,
+            f"aggregate TTM must be non-negative and <= {M7_BUYBACK_AGGREGATE_TTM_MAX_USD_BN} USD bn; {MAGNITUDE_SENTINEL_NOTE}",
+        ))
+
+    current_sum = 0.0
+    prior_sum = 0.0
+    comparable_found = 0
+    for ticker in comparable:
+        by_label = {row.get("calendar_quarter"): float(row["value_usd"]) for row in normalized.get(str(ticker), [])}
+        if latest_label in by_label and prior_label in by_label:
+            current_sum += by_label[latest_label]
+            prior_sum += by_label[prior_label]
+            comparable_found += 1
+    recomputed_yoy = round((current_sum / prior_sum - 1.0) * 100.0, 2) if comparable_found >= 5 and prior_sum else None
+    yoy_field = f"{fid}.yoy_pct"
+    handled.add(yoy_field)
+    if recomputed_yoy is None:
+        findings.append(_exact_equality(
+            yoy_field, value.get("yoy_pct"), None,
+            "quarterly_sum_growth", CRITICALITY_CRITICAL, "fewer than five raw comparable companies or zero prior sum",
+        ))
+    else:
+        findings.append(_compare_when_recomputed(
+            yoy_field, value.get("yoy_pct"), recomputed_yoy, TOLERANCE_ROUNDED_2DP,
+            "quarterly_sum_growth", CRITICALITY_CRITICAL, "latest/prior-year same-calendar-quarter comparable subset",
+        ))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Category C: cross-indicator and intra-payload ratio/diff checks
 # ---------------------------------------------------------------------------
 
@@ -1211,6 +1540,8 @@ def run(data_json: Dict[str, Any]) -> Dict[str, Any]:
     findings.extend(check_fed_funds_rate_path(data_json, handled))
     findings.extend(check_net_liquidity(data_json, handled))
     findings.extend(check_m7_capex_cycle_magnitude(data_json, handled))
+    findings.extend(check_m7_earnings_blackout_calendar(data_json, handled))
+    findings.extend(check_m7_buyback_flow(data_json, handled))
     findings.extend(check_cross_indicator_ratios(data_json, handled))
     findings.extend(check_ma_deviation_family(data_json, handled))
     findings.extend(check_l5_moving_averages(data_json, handled))

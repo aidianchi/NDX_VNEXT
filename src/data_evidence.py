@@ -67,6 +67,8 @@ CORE_EVIDENCE_FUNCTIONS = {
     "get_ndx_forward_earnings_quality",
     "get_equity_risk_premium",
     "get_m7_capex_cycle",
+    "get_m7_earnings_blackout_calendar",
+    "get_m7_buyback_flow",
     "get_damodaran_us_implied_erp",
     "get_l5_deterministic_snapshot",
     "get_qqq_technical_indicators",
@@ -98,6 +100,8 @@ COVERAGE_REQUIRED_FUNCTIONS = {
     "get_ndx_pe_and_earnings_yield",
     "get_ndx_forward_earnings_quality",
     "get_m7_capex_cycle",
+    "get_m7_earnings_blackout_calendar",
+    "get_m7_buyback_flow",
 }
 
 # A first-vintage requirement matters in a historical replay only for series
@@ -110,6 +114,7 @@ BACKTEST_VINTAGE_REQUIRED_FUNCTIONS = {
     "get_ndx_wind_point_in_time_earnings_expectations",
     "get_ndx_forward_earnings_quality",
     "get_m7_capex_cycle",
+    "get_m7_buyback_flow",
 }
 
 CONDITIONAL_OR_REFERENCE_ONLY_METADATA_FIELDS = {
@@ -272,6 +277,8 @@ def _source_tier_from_name(text: str) -> str:
 def normalize_source_tier_for_evidence_passport(value: Any) -> str:
     """Normalize legacy data_quality source_tier values to the Stage 4 authority model."""
     text = str(value or "").lower()
+    if "mixed" in text and any(token in text for token in ("third_party", "proxy", "estimate")):
+        return "proxy"
     if "licensed_provider" in text or ("wind" in text and "manual" not in text):
         return "licensed_provider"
     if "licensed_manual" in text or "manual" in text:

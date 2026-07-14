@@ -222,6 +222,136 @@ def test_m7_capex_magnitude_sentinel_missing_indicator_is_honestly_missing():
     assert findings["get_m7_capex_cycle.companies"]["status"] == "unrecomputable_missing_raw"
 
 
+def _blackout_indicator(*, share=2 / 7, mutate_aapl=False):
+    tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
+    rows = []
+    raw = {}
+    for idx, ticker in enumerate(tickers):
+        earnings_date = "2026-07-20" if idx < 2 else "2026-08-20"
+        expected = idx < 2
+        if ticker == "AAPL" and mutate_aapl:
+            expected = not expected
+        rows.append({"ticker": ticker, "in_estimated_blackout": expected})
+        raw[ticker] = [{"date": earnings_date, "endpoint": "mock"}]
+    return {
+        "layer": 4,
+        "function_id": "get_m7_earnings_blackout_calendar",
+        "raw_data": {
+            "value": {
+                "as_of_date": "2026-07-10",
+                "per_ticker": rows,
+                "m7_in_blackout_count": 2,
+                "m7_in_blackout_share_equal_weight": round(share, 4),
+                "blackout_rule": {
+                    "days_before_earnings": 21,
+                    "days_after_earnings": 2,
+                    "lookahead_days": 90,
+                },
+                "raw_earnings_dates": raw,
+            }
+        },
+    }
+
+
+def test_blackout_recompute_matches_dates_booleans_and_share():
+    report = rb.run({"indicators": [_blackout_indicator()]})
+    findings = {item["field"]: item for item in report["findings"]}
+    assert findings["get_m7_earnings_blackout_calendar.per_ticker.AAPL.in_estimated_blackout"]["status"] == "match"
+    assert findings["get_m7_earnings_blackout_calendar.m7_in_blackout_share_equal_weight"]["status"] == "match"
+
+
+def test_blackout_recompute_catches_share_and_ticker_boolean_tampering():
+    indicator = _blackout_indicator(share=0.9, mutate_aapl=True)
+    report = rb.run({"indicators": [indicator]})
+    findings = {item["field"]: item for item in report["findings"]}
+    assert findings["get_m7_earnings_blackout_calendar.per_ticker.AAPL.in_estimated_blackout"]["status"] == "deviation"
+    assert findings["get_m7_earnings_blackout_calendar.m7_in_blackout_share_equal_weight"]["status"] == "deviation"
+
+
+def _buyback_indicator(*, ttm_total=70.0, yoy_pct=25.0):
+    tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
+    raw = {}
+    companies = {}
+    for ticker in tickers:
+        rows = [
+            {"period_end": "2024-12-31", "calendar_quarter": "2024Q4", "value_usd": 4_000_000_000.0},
+            {"period_end": "2025-03-31", "calendar_quarter": "2025Q1", "value_usd": 2_000_000_000.0},
+            {"period_end": "2025-06-30", "calendar_quarter": "2025Q2", "value_usd": 3_000_000_000.0},
+            {"period_end": "2025-09-30", "calendar_quarter": "2025Q3", "value_usd": 4_000_000_000.0},
+            {"period_end": "2025-12-31", "calendar_quarter": "2025Q4", "value_usd": 5_000_000_000.0},
+        ]
+        raw[ticker] = rows
+        companies[ticker] = {"availability": "available", "ttm_buyback_usd_bn": 14.0}
+    return {
+        "layer": 4,
+        "function_id": "get_m7_buyback_flow",
+        "raw_data": {
+            "value": {
+                "per_company": companies,
+                "m7_quarterly_total": 25.0,
+                "m7_ttm_total": ttm_total,
+                "yoy_pct": yoy_pct,
+                "raw_quarterly_series": raw,
+                "aggregate_context": {
+                    "latest_calendar_quarter": "2025Q4",
+                    "prior_year_calendar_quarter": "2024Q4",
+                    "latest_quarter_companies": tickers,
+                    "yoy_comparable_companies": tickers,
+                    "ttm_aligned_companies": tickers,
+                    "excluded_for_fiscal_calendar_misalignment": [],
+                },
+            }
+        },
+    }
+
+
+def test_buyback_recompute_matches_ttm_total_yoy_and_sentinel():
+    report = rb.run({"indicators": [_buyback_indicator()]})
+    findings = {item["field"]: item for item in report["findings"]}
+    assert findings["get_m7_buyback_flow.m7_ttm_total"]["status"] == "match"
+    assert findings["get_m7_buyback_flow.yoy_pct"]["status"] == "match"
+    assert findings["get_m7_buyback_flow.magnitude_sentinel.m7_ttm_total"]["status"] == "match"
+
+
+def test_buyback_recompute_catches_ttm_and_yoy_tampering():
+    report = rb.run({"indicators": [_buyback_indicator(ttm_total=999.0, yoy_pct=-50.0)]})
+    findings = {item["field"]: item for item in report["findings"]}
+    assert findings["get_m7_buyback_flow.m7_ttm_total"]["status"] == "deviation"
+    assert findings["get_m7_buyback_flow.yoy_pct"]["status"] == "deviation"
+
+
+def test_buyback_recompute_catches_context_and_totals_joint_tampering():
+    indicator = _buyback_indicator()
+    value = indicator["raw_data"]["value"]
+    value["aggregate_context"]["ttm_aligned_companies"] = []
+    value["aggregate_context"]["yoy_comparable_companies"] = []
+    value["m7_ttm_total"] = None
+    value["yoy_pct"] = None
+
+    report = rb.run({"indicators": [indicator]})
+    findings = {item["field"]: item for item in report["findings"]}
+
+    assert findings["get_m7_buyback_flow.aggregate_context.ttm_aligned_companies"]["status"] == "deviation"
+    assert findings["get_m7_buyback_flow.aggregate_context.yoy_comparable_companies"]["status"] == "deviation"
+    assert findings["get_m7_buyback_flow.m7_ttm_total"]["status"] == "deviation"
+    assert findings["get_m7_buyback_flow.yoy_pct"]["status"] == "deviation"
+
+
+def test_buyback_recompute_derives_calendar_quarter_from_period_end():
+    indicator = _buyback_indicator()
+    value = indicator["raw_data"]["value"]
+    for rows in value["raw_quarterly_series"].values():
+        rows[-1]["calendar_quarter"] = "2099Q4"
+    value["aggregate_context"]["latest_calendar_quarter"] = "2099Q4"
+    value["m7_quarterly_total"] = 25.0
+
+    report = rb.run({"indicators": [indicator]})
+    findings = {item["field"]: item for item in report["findings"]}
+
+    assert findings["get_m7_buyback_flow.raw_quarterly_series.AAPL.2025-12-31.calendar_quarter"]["status"] == "deviation"
+    assert findings["get_m7_buyback_flow.aggregate_context.latest_calendar_quarter"]["status"] == "deviation"
+
+
 # ---------------------------------------------------------------------------
 # 4b. VIX term structure (get_vix_term_structure): percentile recompute from
 # the embedded raw ratio series, plus an intra-payload ratio consistency

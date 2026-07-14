@@ -20,6 +20,11 @@ try:
 except ImportError:
     from recompute_belt import critical_deviation_findings, run as run_recompute_belt
 
+try:
+    from .evidence_families import family_of
+except ImportError:
+    from evidence_families import family_of
+
 
 class DataIntegrity:
     """Generate a compact reliability report from collector output."""
@@ -164,6 +169,10 @@ class DataIntegrity:
             normalized.append({"indicator": label, **issue})
         return normalized
 
+    def _function_id(self, item: Dict[str, Any]) -> str:
+        raw = self._raw_data(item)
+        return str(item.get("function_id") or raw.get("function_id") or item.get("metric_name") or "unknown_metric")
+
     def run(self, data_json: Dict[str, Any]) -> Dict[str, Any]:
         indicators = data_json.get("indicators", [])
         total = len(indicators)
@@ -187,7 +196,7 @@ class DataIntegrity:
         data_evidence_contract_issues = []
         for item in indicators:
             raw = self._raw_data(item)
-            function_id = str(item.get("function_id") or raw.get("function_id") or item.get("metric_name") or "unknown_metric")
+            function_id = self._function_id(item)
             issue_groups = data_evidence_issues(raw, function_id=function_id, backtest_date=backtest_date)
             for issue in flatten_issue_groups(issue_groups):
                 issue["metric_name"] = item.get("metric_name")
@@ -224,9 +233,64 @@ class DataIntegrity:
             weighted_success = max(0.0, weighted_success - 0.5 * len(quality_issues))
         if blocking_quality_issues:
             weighted_success = max(0.0, weighted_success - len(blocking_quality_issues))
-        confidence = round((weighted_success / total) * 100, 1) if total else 0.0
+        # Legacy per-function availability number, unchanged formula. Kept alongside the
+        # family-weighted confidence_percent below (investigation_reports/20260711_first_principles
+        # finding GOV-04): function-level counting alone over/under-counts evidence diversity whenever
+        # several functions share one underlying data feed (all 11 L5 QQQ technicals) or one
+        # function quietly bundles several independent series (get_net_liquidity_momentum).
+        function_availability_percent = round((weighted_success / total) * 100, 1) if total else 0.0
 
-        # Layer-level breakdown
+        # --- Evidence-family scoring (core.evidence_families.EVIDENCE_FAMILIES) ---
+        # Group every indicator that appeared in this run by its evidence family, then score
+        # each family as (successful coverage among its present members) / (members present),
+        # so N functions sharing one underlying feed contribute at most one full point instead
+        # of N. The same penalty totals used above are then subtracted once from the aggregate
+        # family sum (not redistributed per-family), so a smaller family-count denominator makes
+        # each penalty unit bite harder than it did under function-level scoring -- the tightening
+        # direction the project's edit discipline requires (只紧不松).
+        family_members: Dict[str, List[Dict[str, Any]]] = {}
+        for item in indicators:
+            family_members.setdefault(family_of(self._function_id(item)), []).append(item)
+
+        per_family: Dict[str, Dict[str, Any]] = {}
+        family_raw_sum = 0.0
+        for family_id, members in family_members.items():
+            member_functions = sorted({self._function_id(member) for member in members})
+            succeeded = sum(1 for member in members if id(member) in coverage_factors)
+            coverage_sum = sum(coverage_factors.get(id(member), 0.0) for member in members)
+            family_score = coverage_sum / len(members) if members else 0.0
+            family_raw_sum += family_score
+            per_family[family_id] = {
+                "functions": member_functions,
+                "members": len(members),
+                "succeeded": succeeded,
+                "score": round(family_score, 4),
+            }
+
+        n_families = len(family_members)
+        family_weighted_sum = family_raw_sum
+        if future_violations:
+            family_weighted_sum = max(0.0, family_weighted_sum - len(future_violations))
+        if hard_evidence_issues:
+            family_weighted_sum = max(0.0, family_weighted_sum - len(hard_evidence_issues))
+        if quality_issues:
+            family_weighted_sum = max(0.0, family_weighted_sum - 0.5 * len(quality_issues))
+        if blocking_quality_issues:
+            family_weighted_sum = max(0.0, family_weighted_sum - len(blocking_quality_issues))
+        confidence = round((family_weighted_sum / n_families) * 100, 1) if n_families else 0.0
+
+        families_available = sum(1 for detail in per_family.values() if detail["succeeded"] >= 1)
+        family_coverage_pct = round((families_available / n_families) * 100, 1) if n_families else 0.0
+        family_coverage = {
+            "families_total": n_families,
+            "families_available": families_available,
+            "family_coverage_pct": family_coverage_pct,
+            "per_family": per_family,
+        }
+
+        # Layer-level breakdown intentionally stays function-level, not family-level: the formal
+        # layer publish-floor gate (MIN_FORMAL_LAYER_CONFIDENCE_PERCENT) is a separately-accepted
+        # work order's product and its per-layer semantics are out of scope for this ticket.
         layer_stats: Dict[str, Dict[str, int]] = {}
         for item in indicators:
             layer = str(item.get("layer", "unknown"))
@@ -399,6 +463,8 @@ class DataIntegrity:
 
         report = {
             "confidence_percent": confidence,
+            "function_availability_percent": function_availability_percent,
+            "family_coverage": family_coverage,
             "notes": "；".join(notes),
             "blocked": bool(blocking_reasons),
             "unpublishable": bool(blocking_reasons),

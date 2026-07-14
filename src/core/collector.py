@@ -165,6 +165,8 @@ class DataCollector:
                 "get_ndx_forward_earnings_quality",
                 "get_equity_risk_premium",
                 "get_m7_capex_cycle",
+                "get_m7_earnings_blackout_calendar",
+                "get_m7_buyback_flow",
                 "get_damodaran_us_implied_erp",
             ],
             

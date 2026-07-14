@@ -183,6 +183,30 @@ YFINANCE_CAPEX_CONSERVATIVE_VISIBILITY_LAG_DAYS = 75
 40-day 10-Q deadline and 60-day 10-K deadline for large accelerated filers
 with headroom; used to flag whether a fallback quarter is old enough that a
 real filing very likely already exists, without claiming to know when."""
+
+# M7 buyback flow deliberately mirrors the capex two-channel design. SEC is
+# the PIT-safe primary source; Yahoo's normalized quarterly cash-flow table is
+# a live-only fallback because it does not expose an auditable filing date.
+M7_BUYBACK_XBRL_TAG_CANDIDATES = list(SEC_L4_METRIC_ALIASES["share_repurchase"])
+M7_BUYBACK_MIN_QUARTERS = 4
+M7_BUYBACK_MAX_QUARTERS_RETURNED = 12
+M7_BUYBACK_TOTAL_BUDGET_SECONDS = 45
+MIN_M7_BUYBACK_COMPANIES_FOR_AGGREGATE = 5
+YFINANCE_BUYBACK_ROW_CANDIDATES = [
+    "Repurchase Of Capital Stock",
+    "Repurchase Of Stock",
+    "Common Stock Repurchase",
+    "Repurchase Of Common Stock",
+]
+YFINANCE_BUYBACK_CONSERVATIVE_VISIBILITY_LAG_DAYS = 75
+
+# Estimated earnings-blackout calendar. These are frozen rule parameters,
+# not company-disclosed blackout policies. They are also written into every
+# payload so the independent recompute belt can use its own date arithmetic.
+M7_BLACKOUT_DAYS_BEFORE = 21
+M7_BLACKOUT_DAYS_AFTER = 2
+M7_BLACKOUT_LOOKAHEAD_DAYS = 90
+M7_BLACKOUT_UPCOMING_CALENDAR_DAYS = 28
 YAHOO_QUOTE_SUMMARY_WAIT_SECONDS = 6
 L4_COMPONENT_LIVE_SOURCE_TOTAL_BUDGET_SECONDS = 60
 MIN_FORWARD_PE_STOCKS = 50
@@ -2608,8 +2632,11 @@ def _sec_xbrl_duration_facts_before(units: Dict[str, Any], *, end_date: Optional
         if not start or not end:
             continue
         filed = item.get("filed")
-        if end_date and filed and str(filed) > end_date:
-            continue
+        if end_date:
+            filed_dt = _parse_valuation_date(filed)
+            cutoff_dt = _parse_valuation_date(end_date)
+            if filed_dt is None or cutoff_dt is None or filed_dt.date() > cutoff_dt.date():
+                continue
         key = (str(start), str(end))
         existing = by_period.get(key)
         if existing is None or str(item.get("filed") or "") > str(existing.get("filed") or ""):
@@ -2774,6 +2801,197 @@ def _fetch_yfinance_capex_quarterly(ticker: str) -> Tuple[List[Dict[str, Any]], 
         return sorted(quarters, key=lambda item: item["period_end"]), None
     except Exception as exc:
         return [], str(exc)[:160]
+
+
+def _fetch_yfinance_buyback_quarterly(ticker: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """Live-only fallback for actual cash spent repurchasing shares.
+
+    Yahoo reports cash-flow outlays as negative numbers. The returned
+    ``value`` is always the positive magnitude of repurchase spending, while
+    ``raw_value`` preserves the provider sign for auditability.
+    """
+    if not YF_AVAILABLE:
+        return [], "yfinance_unavailable"
+    try:
+        cashflow = yf.Ticker(ticker).quarterly_cashflow
+        if cashflow is None or cashflow.empty:
+            return [], "yfinance_quarterly_cashflow_empty"
+        row = None
+        used_row_label = None
+        for label in YFINANCE_BUYBACK_ROW_CANDIDATES:
+            if label in cashflow.index:
+                row = cashflow.loc[label]
+                used_row_label = label
+                break
+        if row is None:
+            return [], "yfinance_buyback_row_not_found"
+        quarters: List[Dict[str, Any]] = []
+        for column, raw_value in row.items():
+            value = _safe_float(raw_value)
+            if value is None:
+                continue
+            try:
+                period_end = column.date().isoformat() if hasattr(column, "date") else str(column)[:10]
+            except Exception:
+                continue
+            quarters.append(
+                {
+                    "period_end": period_end,
+                    "raw_value": value,
+                    "value": abs(value),
+                    "yfinance_row_label": used_row_label,
+                }
+            )
+        if not quarters:
+            return [], "yfinance_buyback_row_all_values_missing"
+        return sorted(quarters, key=lambda item: item["period_end"]), None
+    except Exception as exc:
+        return [], str(exc)[:160]
+
+
+def _earnings_date_iso(value: Any) -> Optional[str]:
+    """Normalize yfinance Timestamp/date/string values without UTC shifting."""
+    if value is None:
+        return None
+    try:
+        if hasattr(value, "date"):
+            parsed_date = value.date()
+            if hasattr(parsed_date, "isoformat"):
+                return parsed_date.isoformat()
+        text = str(value)[:10]
+        datetime.strptime(text, "%Y-%m-%d")
+        return text
+    except Exception:
+        return None
+
+
+def _fetch_yfinance_earnings_dates(ticker: str) -> Tuple[List[Dict[str, str]], Dict[str, Any], Optional[str]]:
+    """Fetch M7 earnings dates, using history first and calendar as next-date check.
+
+    ``get_earnings_dates`` is the only tested endpoint that provides enough
+    history for explicit ``end_date`` calls. ``calendar`` is used to replace a
+    near-duplicate future estimate because the live smoke test showed that
+    its explicit next date can differ by one day from the scrape endpoint.
+    """
+    if not YF_AVAILABLE:
+        return [], {"attempted_endpoints": []}, "yfinance_unavailable"
+    errors: List[str] = []
+    observations: List[Dict[str, str]] = []
+    stock = yf.Ticker(ticker)
+    try:
+        frame = stock.get_earnings_dates(limit=100)
+        if frame is not None and not frame.empty:
+            for item in frame.index:
+                date_text = _earnings_date_iso(item)
+                if date_text:
+                    observations.append({"date": date_text, "endpoint": "get_earnings_dates"})
+        else:
+            errors.append("get_earnings_dates_empty")
+    except Exception as exc:
+        errors.append(f"get_earnings_dates:{str(exc)[:100]}")
+
+    calendar_dates: List[str] = []
+    try:
+        calendar = stock.calendar
+        raw_calendar_dates: Any = None
+        if isinstance(calendar, dict):
+            raw_calendar_dates = calendar.get("Earnings Date")
+        elif hasattr(calendar, "loc"):
+            try:
+                raw_calendar_dates = calendar.loc["Earnings Date"]
+            except Exception:
+                raw_calendar_dates = None
+        if not isinstance(raw_calendar_dates, (list, tuple, set)):
+            raw_calendar_dates = [raw_calendar_dates] if raw_calendar_dates is not None else []
+        for item in raw_calendar_dates:
+            date_text = _earnings_date_iso(item)
+            if date_text:
+                calendar_dates.append(date_text)
+    except Exception as exc:
+        errors.append(f"calendar:{str(exc)[:100]}")
+
+    today = datetime.now().date()
+    for calendar_date in calendar_dates:
+        cal_dt = datetime.strptime(calendar_date, "%Y-%m-%d").date()
+        if cal_dt >= today:
+            observations = [
+                row
+                for row in observations
+                if not (
+                    datetime.strptime(row["date"], "%Y-%m-%d").date() >= today
+                    and abs((datetime.strptime(row["date"], "%Y-%m-%d").date() - cal_dt).days) <= 2
+                )
+            ]
+        observations.append({"date": calendar_date, "endpoint": "calendar"})
+
+    deduped: Dict[str, Dict[str, str]] = {}
+    for row in sorted(observations, key=lambda item: item["date"]):
+        deduped[row["date"]] = row
+    metadata = {
+        "attempted_endpoints": ["Ticker.get_earnings_dates(limit=100)", "Ticker.calendar"],
+        "endpoint_observation": (
+            "get_earnings_dates supplies historical and future rows; calendar supplies the explicit next scheduled date "
+            "and overrides a future scrape date when the two differ by at most two days"
+        ),
+    }
+    if not deduped:
+        return [], metadata, "; ".join(errors) if errors else "no_earnings_dates_returned"
+    return list(deduped.values()), metadata, ("; ".join(errors) if errors else None)
+
+
+def _select_blackout_earnings_date(raw_dates: List[Any], as_of_date: str) -> Optional[str]:
+    """Select the earnings date relevant to the estimated blackout window.
+
+    Normally this is the first date on/after ``as_of_date`` within 90 days.
+    For the inclusive two-day post-earnings tail, the just-reported date is
+    retained so the [earnings-21, earnings+2] boundary remains computable.
+    """
+    as_of = datetime.strptime(as_of_date, "%Y-%m-%d").date()
+    parsed: List[Any] = []
+    for item in raw_dates:
+        raw = item.get("date") if isinstance(item, dict) else item
+        date_text = _earnings_date_iso(raw)
+        if date_text:
+            parsed.append(datetime.strptime(date_text, "%Y-%m-%d").date())
+    recent = sorted((item for item in parsed if 0 <= (as_of - item).days <= M7_BLACKOUT_DAYS_AFTER), reverse=True)
+    if recent:
+        return recent[0].isoformat()
+    upcoming = sorted(item for item in parsed if 0 <= (item - as_of).days <= M7_BLACKOUT_LOOKAHEAD_DAYS)
+    return upcoming[0].isoformat() if upcoming else None
+
+
+def _estimated_blackout_window(earnings_date: str) -> Tuple[str, str]:
+    earnings = datetime.strptime(earnings_date, "%Y-%m-%d").date()
+    return (
+        (earnings - timedelta(days=M7_BLACKOUT_DAYS_BEFORE)).isoformat(),
+        (earnings + timedelta(days=M7_BLACKOUT_DAYS_AFTER)).isoformat(),
+    )
+
+
+def _calendar_quarter_ordinal(label: Any) -> Optional[int]:
+    try:
+        year_text, quarter_text = str(label).split("Q", 1)
+        quarter = int(quarter_text)
+        if quarter not in {1, 2, 3, 4}:
+            return None
+        return int(year_text) * 4 + quarter - 1
+    except (TypeError, ValueError):
+        return None
+
+
+def _last_four_consecutive_quarters(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return the latest four distinct consecutive calendar quarters or []."""
+    by_label: Dict[str, Dict[str, Any]] = {}
+    for row in sorted(rows, key=lambda item: str(item.get("period_end") or "")):
+        label = row.get("calendar_quarter")
+        if label and _calendar_quarter_ordinal(label) is not None:
+            by_label[str(label)] = row
+    ordered = sorted(by_label.values(), key=lambda item: _calendar_quarter_ordinal(item.get("calendar_quarter")) or -1)
+    latest_four = ordered[-4:]
+    ordinals = [_calendar_quarter_ordinal(row.get("calendar_quarter")) for row in latest_four]
+    if len(latest_four) != 4 or any(item is None for item in ordinals):
+        return []
+    return latest_four if all(ordinals[idx] - ordinals[idx - 1] == 1 for idx in range(1, 4)) else []
 
 
 def _fetch_eastmoney_gmain_indicator(secucode: str) -> Tuple[Dict[str, Any], Optional[str]]:
@@ -5181,6 +5399,213 @@ def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
         }
 
 
+def get_m7_earnings_blackout_calendar(end_date: str = None) -> Dict[str, Any]:
+    """Estimated M7 earnings blackout windows from auditable calendar rules.
+
+    The window is not a company-disclosed policy. For historical calls, the
+    realized earnings date is used as a proxy for the schedule known at that
+    time; revisions to the announced date are not modeled.
+    """
+    effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
+    date_str = effective_date.strftime("%Y-%m-%d")
+    is_historical = bool(end_date and effective_date.date() < datetime.now().date())
+    blackout_rule = {
+        "days_before_earnings": M7_BLACKOUT_DAYS_BEFORE,
+        "days_after_earnings": M7_BLACKOUT_DAYS_AFTER,
+        "calendar_days": True,
+        "inclusive_start": True,
+        "inclusive_end": True,
+        "lookahead_days": M7_BLACKOUT_LOOKAHEAD_DAYS,
+        "upcoming_calendar_days": M7_BLACKOUT_UPCOMING_CALENDAR_DAYS,
+    }
+    per_ticker: List[Dict[str, Any]] = []
+    raw_earnings_dates: Dict[str, List[Dict[str, str]]] = {}
+    upcoming_28d_calendar: List[Dict[str, Any]] = []
+    errors: Dict[str, str] = {}
+    endpoint_metadata: Dict[str, Any] = {}
+
+    try:
+        for ticker in M7_TICKERS:
+            fetched, metadata, fetch_error = _fetch_yfinance_earnings_dates(ticker)
+            endpoint_metadata[ticker] = metadata
+            runtime_today = datetime.now().date()
+            eligible_raw = []
+            for row in fetched:
+                if is_historical and row.get("endpoint") == "calendar":
+                    continue
+                row_date_text = _earnings_date_iso(row.get("date"))
+                if not row_date_text:
+                    continue
+                row_date = datetime.strptime(row_date_text, "%Y-%m-%d").date()
+                if is_historical and row_date > runtime_today:
+                    continue
+                eligible_raw.append(row)
+            raw_earnings_dates[ticker] = eligible_raw
+            selected = _select_blackout_earnings_date(eligible_raw, date_str)
+            if not selected:
+                reason = "no_earnings_date_within_effective_date_plus_90_days"
+                if fetch_error:
+                    reason = f"{reason}; {fetch_error}"
+                errors[ticker] = reason
+                per_ticker.append(
+                    {
+                        "ticker": ticker,
+                        "availability": "unavailable",
+                        "next_earnings_date": None,
+                        "days_to_earnings": None,
+                        "in_estimated_blackout": None,
+                        "window_start": None,
+                        "window_end": None,
+                        "unavailable_reason": reason,
+                    }
+                )
+                continue
+
+            earnings_dt = datetime.strptime(selected, "%Y-%m-%d").date()
+            as_of = effective_date.date()
+            days_to_earnings = (earnings_dt - as_of).days
+            window_start, window_end = _estimated_blackout_window(selected)
+            in_blackout = window_start <= date_str <= window_end
+            row = {
+                "ticker": ticker,
+                "availability": "available",
+                "next_earnings_date": selected,
+                "days_to_earnings": days_to_earnings,
+                "in_estimated_blackout": in_blackout,
+                "window_start": window_start,
+                "window_end": window_end,
+            }
+            per_ticker.append(row)
+            if 0 <= days_to_earnings <= M7_BLACKOUT_UPCOMING_CALENDAR_DAYS:
+                upcoming_28d_calendar.append(
+                    {
+                        "ticker": ticker,
+                        "earnings_date": selected,
+                        "days_to_earnings": days_to_earnings,
+                        "estimated_window_start": window_start,
+                        "estimated_window_end": window_end,
+                    }
+                )
+
+        available_rows = [row for row in per_ticker if row["availability"] == "available"]
+        blackout_count = sum(1 for row in available_rows if row["in_estimated_blackout"] is True)
+        share = _round_or_none(blackout_count / len(M7_TICKERS), 4) if len(available_rows) == len(M7_TICKERS) else None
+        availability = "available" if len(available_rows) == len(M7_TICKERS) else ("degraded" if available_rows else "unavailable")
+        coverage = {
+            "companies_available": len(available_rows),
+            "companies_total": len(M7_TICKERS),
+            "companies_missing": sorted(set(M7_TICKERS) - {row["ticker"] for row in available_rows}),
+            "equal_weight_share_denominator": len(M7_TICKERS),
+            "share_withheld_if_any_member_missing": True,
+        }
+        state_usage_boundary = (
+            "Estimated blackout is timing context for potentially weaker buyback support only. Being in the window does "
+            "not imply a price decline; leaving it is an observation point for possible support resumption, not bullish "
+            "proof. usage=supporting_only; prohibited for precise market timing."
+        )
+        source_boundary = (
+            "M7 is an honest reduced universe representing roughly 40%+ of NDX weight, not the full index. Dates come "
+            "from Yahoo Finance. The blackout window is a fixed rule estimate, not an official company-disclosed policy. "
+            "For explicit historical dates, realized earnings dates are used as scheduled proxies and schedule-change risk "
+            "is not modeled. Upgrade path: a top-15 NDX weighted calendar with archived announcement vintages and official "
+            "company blackout policies where disclosed."
+        )
+        value = {
+            "as_of_date": date_str,
+            "per_ticker": per_ticker,
+            "m7_in_blackout_count": blackout_count,
+            "m7_in_blackout_share_equal_weight": share,
+            "upcoming_28d_calendar": sorted(upcoming_28d_calendar, key=lambda row: (row["earnings_date"], row["ticker"])),
+            "blackout_rule": blackout_rule,
+            "raw_earnings_dates": raw_earnings_dates,
+            "state_usage_boundary": state_usage_boundary,
+            "source_boundary": source_boundary,
+        }
+        result = {
+            "name": "M7 Estimated Earnings Blackout Calendar",
+            "series_id": "M7_EARNINGS_BLACKOUT_CALENDAR",
+            "value": value,
+            "unit": "calendar/count/equal-weight share",
+            "date": date_str,
+            "source_tier": SOURCE_TIER_THIRD_PARTY,
+            "source_name": "Yahoo Finance earnings dates + deterministic estimated blackout rule",
+            "source_url": "https://finance.yahoo.com/calendar/earnings/",
+            "availability": availability,
+            "data_quality": build_data_quality(
+                provider="Yahoo Finance via yfinance",
+                source_name="Ticker.get_earnings_dates / Ticker.calendar",
+                source_url="https://finance.yahoo.com/calendar/earnings/",
+                source_tier=SOURCE_TIER_THIRD_PARTY,
+                as_of_date=date_str,
+                effective_date=date_str,
+                data_date=date_str,
+                vintage_date="not_available",
+                collected_at_utc=_utc_timestamp(),
+                availability=availability,
+                fallback_reason="none" if not errors else "some_m7_earnings_dates_unavailable_within_90_day_window",
+                fallback_chain=[SOURCE_TIER_THIRD_PARTY, SOURCE_TIER_UNAVAILABLE],
+                license_note="third_party_unofficial_public_web_endpoint",
+                coverage=coverage,
+                methodology="For each M7 member, apply an inclusive [earnings date - 21 calendar days, earnings date + 2 calendar days] estimated window.",
+                formula="in_estimated_blackout = window_start <= effective_date <= window_end; equal_weight_share = in_blackout_count / 7 only when all 7 dates are available",
+                anomalies=(["partial_m7_calendar_coverage_share_withheld"] if errors else []),
+                update_frequency="event-driven; refreshed on each call",
+                pit_approximation="realized_earnings_date_used_as_scheduled_proxy",
+                endpoint_metadata=endpoint_metadata,
+                unavailable_by_ticker=errors,
+            ),
+        }
+        result["data_quality"]["metric_authority"] = {
+            "estimated_blackout_state": _component_metric_authority(
+                usage="supporting_only",
+                authority="rule_based_timing_context_not_company_disclosure",
+                reason=(
+                    "The estimated window may contextualize temporary buyback-support changes only. It cannot prove a "
+                    "decline, a rally after the window, or a precise trading date."
+                ),
+                source=SOURCE_TIER_THIRD_PARTY,
+            )
+        }
+        return result
+    except Exception as exc:
+        reason = f"m7_earnings_blackout_calendar_unavailable: {str(exc)[:150]}"
+        return {
+            "name": "M7 Estimated Earnings Blackout Calendar",
+            "series_id": "M7_EARNINGS_BLACKOUT_CALENDAR",
+            "value": None,
+            "unit": "calendar/count/equal-weight share",
+            "date": date_str,
+            "source_tier": SOURCE_TIER_UNAVAILABLE,
+            "source_name": "Yahoo Finance earnings dates + deterministic estimated blackout rule",
+            "availability": "unavailable",
+            "unavailable_reason": reason,
+            "data_quality": build_data_quality(
+                provider="Yahoo Finance via yfinance",
+                source_name="Ticker.get_earnings_dates / Ticker.calendar",
+                source_url="https://finance.yahoo.com/calendar/earnings/",
+                source_tier=SOURCE_TIER_UNAVAILABLE,
+                as_of_date=date_str,
+                effective_date=date_str,
+                data_date=date_str,
+                availability="unavailable",
+                fallback_reason=reason,
+                fallback_chain=[SOURCE_TIER_THIRD_PARTY, SOURCE_TIER_UNAVAILABLE],
+                coverage={"companies_available": 0, "companies_total": len(M7_TICKERS)},
+                formula="inclusive [earnings-21 calendar days, earnings+2 calendar days]",
+                anomalies=[reason],
+                pit_approximation="realized_earnings_date_used_as_scheduled_proxy",
+                metric_authority={
+                    "estimated_blackout_state": _component_metric_authority(
+                        usage="supporting_only",
+                        authority="rule_based_timing_context_not_company_disclosure",
+                        reason="Unavailable estimated context; no trading inference is permitted.",
+                        source=SOURCE_TIER_UNAVAILABLE,
+                    )
+                },
+            ),
+        }
+
+
 def get_m7_capex_cycle(end_date: str = None) -> Dict[str, Any]:
     """M7 / hyperscaler quarterly capital expenditure cycle, two channels.
 
@@ -5584,6 +6009,367 @@ def get_m7_capex_cycle(end_date: str = None) -> Dict[str, Any]:
             "unavailable_reason": f"m7_capex_cycle_unavailable: {str(exc)[:150]}",
         }
 
+
+def get_m7_buyback_flow(end_date: str = None) -> Dict[str, Any]:
+    """Actual M7 share-repurchase spending, SEC-primary and PIT disciplined."""
+    effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
+    date_str = effective_date.strftime("%Y-%m-%d")
+    is_live_context = (end_date is None) or (effective_date.date() >= datetime.now().date())
+    formula = (
+        "SEC path: discrete_quarter = cumulative share-repurchase cash-flow fact[t] - prior cumulative fact within "
+        "the same fiscal-year chain; Yahoo fallback: use its normalized discrete quarterly cash-flow row. In both "
+        "paths, repurchase_spending_usd = abs(reported_cash_flow_value), because cash outflows are commonly negative. "
+        "Company TTM is emitted only with at least four quarters. M7 quarterly YoY uses only companies present in "
+        "both the latest eligible calendar quarter and the same quarter one year earlier; at least five companies are required."
+    )
+    try:
+        cik_map = _sec_cik_map()
+        per_company: Dict[str, Any] = {}
+        raw_quarterly_series: Dict[str, List[Dict[str, Any]]] = {}
+        series_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
+        started_at = time.monotonic()
+
+        for ticker in M7_TICKERS:
+            cik = cik_map.get(ticker)
+            sec_series: List[Dict[str, Any]] = []
+            sec_reason: Optional[str] = None
+            selected_tag: Optional[str] = None
+            if not cik:
+                sec_reason = "missing_cik"
+            elif time.monotonic() - started_at >= M7_BUYBACK_TOTAL_BUDGET_SECONDS:
+                sec_reason = "sec_total_budget_exhausted"
+            else:
+                payload: Optional[Dict[str, Any]] = None
+                tag_error: Optional[str] = None
+                for tag in M7_BUYBACK_XBRL_TAG_CANDIDATES:
+                    candidate_payload, error = _fetch_sec_xbrl_companyconcept(cik, tag)
+                    units = candidate_payload.get("units") if isinstance(candidate_payload, dict) else None
+                    if isinstance(units, dict) and units.get("USD"):
+                        payload = candidate_payload
+                        selected_tag = tag
+                        break
+                    tag_error = error or tag_error
+                if payload is None:
+                    sec_reason = tag_error or "no_candidate_xbrl_tag_reported"
+                else:
+                    facts = _sec_xbrl_duration_facts_before(payload.get("units", {}), end_date=date_str)
+                    derived = _derive_discrete_quarters_from_cumulative(facts)
+                    for row in derived:
+                        row["reported_value_before_sign_normalization"] = row.get("value")
+                        if isinstance(row.get("value"), (int, float)):
+                            row["value"] = abs(row["value"])
+                        row["source"] = "sec_xbrl"
+                        row["pit_safe"] = True
+                    sec_series = _attach_calendar_quarter_and_yoy(derived) if derived else []
+                    if not sec_series:
+                        sec_reason = "no_discrete_quarters_derivable_from_available_facts"
+
+            fallback_series: List[Dict[str, Any]] = []
+            fallback_reason: Optional[str] = None
+            if not sec_series:
+                if is_live_context:
+                    quarters, yf_error = _fetch_yfinance_buyback_quarterly(ticker)
+                    if quarters:
+                        filtered = [row for row in quarters if row.get("period_end") and row["period_end"] <= date_str]
+                        for row in filtered:
+                            row["reported_value_before_sign_normalization"] = row.get("raw_value")
+                            row["source"] = "yfinance_fallback"
+                            row["pit_safe"] = False
+                            end_dt = _parse_valuation_date(row.get("period_end"))
+                            row["conservative_visible_after_date"] = (
+                                (end_dt + timedelta(days=YFINANCE_BUYBACK_CONSERVATIVE_VISIBILITY_LAG_DAYS)).date().isoformat()
+                                if end_dt is not None else None
+                            )
+                        fallback_series = _attach_calendar_quarter_and_yoy(filtered) if filtered else []
+                        if not fallback_series:
+                            fallback_reason = "yfinance_fallback_produced_no_quarters_at_or_before_as_of_date"
+                    else:
+                        fallback_reason = yf_error
+                else:
+                    fallback_reason = "yfinance_fallback_disabled_not_live_context_pit_unsafe"
+
+            series = sec_series or fallback_series
+            primary_source = "sec_xbrl" if sec_series else ("yfinance_fallback" if fallback_series else None)
+            if not series:
+                reasons = []
+                if sec_reason:
+                    reasons.append(f"sec_xbrl:{sec_reason}")
+                if fallback_reason:
+                    reasons.append(f"yfinance_fallback:{fallback_reason}")
+                per_company[ticker] = {
+                    "availability": "unavailable",
+                    "primary_source": None,
+                    "latest_quarter_buyback_usd_bn": None,
+                    "ttm_buyback_usd_bn": None,
+                    "unavailable_reason": "; ".join(reasons) if reasons else "no_data_from_any_channel",
+                }
+                raw_quarterly_series[ticker] = []
+                continue
+
+            series = sorted(series, key=lambda row: str(row.get("period_end") or ""))[-M7_BUYBACK_MAX_QUARTERS_RETURNED:]
+            series_by_ticker[ticker] = series
+            raw_rows = []
+            for row in series:
+                raw_rows.append(
+                    {
+                        "period_end": row.get("period_end"),
+                        "calendar_quarter": row.get("calendar_quarter"),
+                        "value_usd": row.get("value"),
+                        "reported_value_before_sign_normalization": row.get("reported_value_before_sign_normalization"),
+                        "filed_date": row.get("filed_date"),
+                        "source": row.get("source"),
+                        "pit_safe": row.get("pit_safe"),
+                    }
+                )
+            raw_quarterly_series[ticker] = raw_rows
+            latest = series[-1]
+            ttm_rows = _last_four_consecutive_quarters(series)
+            ttm_value = sum(row["value"] for row in ttm_rows) if len(ttm_rows) == 4 else None
+            company = {
+                "availability": "available",
+                "primary_source": primary_source,
+                "source_tier": SOURCE_TIER_OFFICIAL if primary_source == "sec_xbrl" else SOURCE_TIER_THIRD_PARTY,
+                "pit_safe": primary_source == "sec_xbrl",
+                "cik": cik,
+                "coverage_quarters": len(series),
+                "latest_period_end": latest.get("period_end"),
+                "latest_calendar_quarter": latest.get("calendar_quarter"),
+                "latest_quarter_buyback_usd_bn": _round_or_none(latest["value"] / 1e9, 3),
+                "ttm_buyback_usd_bn": _round_or_none(ttm_value / 1e9, 3) if ttm_value is not None else None,
+                "ttm_quarters_used": [row.get("period_end") for row in ttm_rows],
+                "quarters": [_display_quarter(row) for row in series],
+            }
+            if primary_source == "sec_xbrl":
+                company["xbrl_tag"] = selected_tag
+            else:
+                company["fallback_reason"] = f"sec_xbrl_unavailable: {sec_reason}"
+                company["fallback_note"] = (
+                    "Yahoo normalized quarterly cash-flow row; no verifiable filing date, pit_safe=false, live-only, "
+                    "third-party unofficial and supporting_only."
+                )
+            if ttm_value is None:
+                company["ttm_unavailable_reason"] = "fewer_than_4_distinct_consecutive_calendar_quarters"
+            per_company[ticker] = company
+
+        by_label: Dict[str, Dict[str, float]] = {}
+        sources_by_label: Dict[str, Dict[str, str]] = {}
+        for ticker, series in series_by_ticker.items():
+            for row in series:
+                label = row.get("calendar_quarter")
+                if label and isinstance(row.get("value"), (int, float)):
+                    by_label.setdefault(label, {})[ticker] = row["value"]
+                    sources_by_label.setdefault(label, {})[ticker] = row.get("source")
+
+        eligible_labels = sorted(
+            label for label, members in by_label.items()
+            if len(members) >= MIN_M7_BUYBACK_COMPANIES_FOR_AGGREGATE
+        )
+        latest_label = eligible_labels[-1] if eligible_labels else None
+        latest_members = by_label.get(latest_label, {}) if latest_label else {}
+        prior_label = _prior_year_calendar_quarter_label(latest_label)
+        prior_members = by_label.get(prior_label, {}) if prior_label else {}
+        comparable = sorted(set(latest_members) & set(prior_members))
+        yoy_pct = None
+        if len(comparable) >= MIN_M7_BUYBACK_COMPANIES_FOR_AGGREGATE:
+            latest_common = sum(latest_members[ticker] for ticker in comparable)
+            prior_common = sum(prior_members[ticker] for ticker in comparable)
+            if prior_common:
+                yoy_pct = _round_or_none((latest_common / prior_common - 1.0) * 100.0)
+
+        aligned_ttm_companies = sorted(
+            ticker for ticker, company in per_company.items()
+            if company.get("availability") == "available"
+            and company.get("latest_calendar_quarter") == latest_label
+            and isinstance(company.get("ttm_buyback_usd_bn"), (int, float))
+        )
+        excluded_for_fiscal_misalignment = sorted(
+            ticker for ticker, company in per_company.items()
+            if company.get("availability") == "available" and company.get("latest_calendar_quarter") != latest_label
+        )
+        m7_quarterly_total = (
+            _round_or_none(sum(latest_members.values()) / 1e9, 3) if latest_members else None
+        )
+        m7_ttm_total = (
+            _round_or_none(sum(per_company[t]["ttm_buyback_usd_bn"] for t in aligned_ttm_companies), 3)
+            if len(aligned_ttm_companies) >= MIN_M7_BUYBACK_COMPANIES_FOR_AGGREGATE else None
+        )
+        available_companies = sorted(t for t, row in per_company.items() if row.get("availability") == "available")
+        via_sec = sorted(t for t, row in per_company.items() if row.get("primary_source") == "sec_xbrl")
+        via_yahoo = sorted(t for t, row in per_company.items() if row.get("primary_source") == "yfinance_fallback")
+        all_filed_dates = [
+            str(row.get("filed_date"))
+            for rows in raw_quarterly_series.values()
+            for row in rows if row.get("filed_date")
+        ]
+        vintage_date = max(all_filed_dates) if all_filed_dates else "not_available"
+        if via_sec and via_yahoo:
+            source_tier = SOURCE_TIER_MIXED_OFFICIAL_AND_THIRD_PARTY
+        elif via_sec:
+            source_tier = SOURCE_TIER_OFFICIAL
+        elif via_yahoo:
+            source_tier = SOURCE_TIER_THIRD_PARTY
+        else:
+            source_tier = SOURCE_TIER_UNAVAILABLE
+        availability = "available" if available_companies else "unavailable"
+        coverage = {
+            "companies_available": len(available_companies),
+            "companies_total": len(M7_TICKERS),
+            "companies_missing": sorted(set(M7_TICKERS) - set(available_companies)),
+            "companies_via_sec_xbrl": via_sec,
+            "companies_via_yfinance_fallback": via_yahoo,
+            "latest_aggregate_calendar_quarter": latest_label,
+            "latest_quarter_companies": sorted(latest_members),
+            "yoy_comparable_companies": comparable,
+            "yoy_comparable_company_count": len(comparable),
+            "ttm_aligned_companies": aligned_ttm_companies,
+            "excluded_for_fiscal_calendar_misalignment": excluded_for_fiscal_misalignment,
+            "minimum_companies_for_aggregate": MIN_M7_BUYBACK_COMPANIES_FOR_AGGREGATE,
+        }
+        state_usage_boundary = (
+            "Actual repurchase spending is long-horizon balance-sheet/EPS support evidence only (usage=supporting_only); "
+            "it cannot prove a short-term price bottom. Contraction or suspension is likewise supporting_only risk context. "
+            "Authorization is not execution, high buybacks do not waive valuation risk, and the estimated blackout calendar "
+            "should be used only to cross-check timing-related support changes."
+        )
+        source_boundary = (
+            "SEC XBRL filed-date-gated facts are the PIT-safe primary channel. Yahoo normalized quarterly cash flow is a "
+            "live-only fallback with no auditable filing date (pit_safe=false), never used for explicit historical calls. "
+            "M7 is a reduced head-stock universe rather than the full NDX; calendar-quarter and TTM aggregates list excluded "
+            "members when fiscal reporting dates do not align."
+        )
+        value = {
+            "as_of_date": date_str,
+            "per_company": per_company,
+            "m7_quarterly_total": m7_quarterly_total,
+            "m7_ttm_total": m7_ttm_total,
+            "yoy_pct": yoy_pct,
+            "aggregate_context": {
+                "latest_calendar_quarter": latest_label,
+                "prior_year_calendar_quarter": prior_label,
+                "latest_quarter_companies": sorted(latest_members),
+                "yoy_comparable_companies": comparable,
+                "ttm_aligned_companies": aligned_ttm_companies,
+                "excluded_for_fiscal_calendar_misalignment": excluded_for_fiscal_misalignment,
+                "unit": "USD billions",
+            },
+            "raw_quarterly_series": raw_quarterly_series,
+            "formula": formula,
+            "state_usage_boundary": state_usage_boundary,
+            "source_boundary": source_boundary,
+        }
+        result = {
+            "name": "M7 Actual Buyback Flow",
+            "series_id": "M7_BUYBACK_FLOW",
+            "value": value,
+            "unit": "USD billions, quarterly/TTM",
+            "date": date_str,
+            "source_tier": source_tier,
+            "source_name": "SEC XBRL companyconcept (primary) + Yahoo Finance normalized quarterly cash flow (fallback)",
+            "source_url": "https://data.sec.gov/api/xbrl/companyconcept/",
+            "availability": availability,
+            "data_quality": build_data_quality(
+                provider="SEC / Yahoo Finance via yfinance",
+                source_name="SEC XBRL share repurchase facts + Yahoo quarterly cash flow fallback",
+                source_url="https://data.sec.gov/api/xbrl/companyconcept/",
+                source_tier=source_tier,
+                as_of_date=date_str,
+                effective_date=date_str,
+                data_date=date_str,
+                vintage_date=vintage_date,
+                collected_at_utc=_utc_timestamp(),
+                availability=availability,
+                fallback_reason=(
+                    "primary_sec_xbrl_channel_succeeded_no_fallback_used"
+                    if via_sec and not via_yahoo and len(available_companies) == len(M7_TICKERS)
+                    else (
+                        f"sec_xbrl_available_for_{len(via_sec)}_companies_no_fallback_used_{len(M7_TICKERS) - len(available_companies)}_missing"
+                        if via_sec and not via_yahoo
+                        else (
+                            f"sec_xbrl_unavailable_for_{len(via_yahoo)}_companies_used_live_only_yfinance_fallback"
+                            if via_yahoo
+                            else "no_m7_company_buyback_facts_available_from_sec_xbrl_or_yfinance_fallback"
+                        )
+                    )
+                ),
+                fallback_chain=[SOURCE_TIER_OFFICIAL, SOURCE_TIER_THIRD_PARTY, SOURCE_TIER_UNAVAILABLE],
+                license_note="SEC public filing facts; Yahoo third-party unofficial fallback",
+                coverage=coverage,
+                methodology=formula,
+                formula=formula,
+                anomalies=(
+                    (["yfinance_fallback_used_pit_unsafe"] if via_yahoo else [])
+                    + (["ttm_total_withheld_below_5_aligned_companies"] if m7_ttm_total is None else [])
+                    + (["yoy_withheld_below_5_comparable_companies_or_zero_prior"] if yoy_pct is None else [])
+                ),
+                update_frequency="quarterly (10-Q/10-K; Yahoo fallback refreshed on live calls)",
+                pit_safe_summary={
+                    "sec_xbrl_companies_pit_safe": via_sec,
+                    "yfinance_fallback_companies_not_pit_safe": via_yahoo,
+                    "is_live_context": is_live_context,
+                    "fallback_allowed_in_this_call": is_live_context,
+                },
+            ),
+        }
+        result["data_quality"]["metric_authority"] = {
+            "actual_buyback_spending": _component_metric_authority(
+                usage="supporting_only",
+                authority=("mixed_actual_cashflow_facts_and_third_party_normalization" if via_yahoo else "sec_xbrl_actual_cashflow_facts"),
+                reason=(
+                    "Actual spending can support a long-horizon capital-return/EPS narrative, but cannot establish a short-term "
+                    "bottom. Yahoo fallback rows are third-party unofficial and pit_safe=false."
+                ),
+                source=source_tier,
+            ),
+            "m7_aggregate_and_yoy": _component_metric_authority(
+                usage="supporting_only",
+                authority="derived_comparable_subset",
+                reason=(
+                    "Aggregates and YoY are deterministic derivatives over the disclosed comparable subset. Buyback contraction "
+                    "or expansion remains supporting context and does not override valuation risk."
+                ),
+                source=source_tier,
+            ),
+        }
+        if not available_companies:
+            result["unavailable_reason"] = "no_m7_company_buyback_facts_available_from_sec_xbrl_or_yfinance_fallback"
+        return result
+    except Exception as exc:
+        reason = f"m7_buyback_flow_unavailable: {str(exc)[:150]}"
+        return {
+            "name": "M7 Actual Buyback Flow",
+            "series_id": "M7_BUYBACK_FLOW",
+            "value": None,
+            "unit": "USD billions, quarterly/TTM",
+            "date": date_str,
+            "source_tier": SOURCE_TIER_UNAVAILABLE,
+            "source_name": "SEC XBRL companyconcept (primary) + Yahoo Finance normalized quarterly cash flow (fallback)",
+            "availability": "unavailable",
+            "unavailable_reason": reason,
+            "data_quality": build_data_quality(
+                provider="SEC / Yahoo Finance via yfinance",
+                source_name="SEC XBRL share repurchase facts + Yahoo quarterly cash flow fallback",
+                source_url="https://data.sec.gov/api/xbrl/companyconcept/",
+                source_tier=SOURCE_TIER_UNAVAILABLE,
+                as_of_date=date_str,
+                effective_date=date_str,
+                data_date=date_str,
+                availability="unavailable",
+                fallback_reason=reason,
+                fallback_chain=[SOURCE_TIER_OFFICIAL, SOURCE_TIER_THIRD_PARTY, SOURCE_TIER_UNAVAILABLE],
+                coverage={"companies_available": 0, "companies_total": len(M7_TICKERS)},
+                methodology=formula,
+                formula=formula,
+                anomalies=[reason],
+                metric_authority={
+                    "actual_buyback_spending": _component_metric_authority(
+                        usage="supporting_only",
+                        authority="unavailable",
+                        reason="No usable actual-spending evidence; no inference is permitted.",
+                        source=SOURCE_TIER_UNAVAILABLE,
+                    )
+                },
+            ),
+        }
 
 
 def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:

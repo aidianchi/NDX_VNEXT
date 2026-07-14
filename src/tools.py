@@ -70,6 +70,8 @@ TOOLS_REGISTRY = {
     "get_ndx_forward_earnings_quality": get_ndx_forward_earnings_quality,
     "get_equity_risk_premium": get_equity_risk_premium,
     "get_m7_capex_cycle": get_m7_capex_cycle,
+    "get_m7_earnings_blackout_calendar": get_m7_earnings_blackout_calendar,
+    "get_m7_buyback_flow": get_m7_buyback_flow,
     "get_damodaran_us_implied_erp": get_damodaran_us_implied_erp,
     "get_ndx_valuation_history_of_market": get_ndx_valuation_history_of_market,
     "get_crowdedness_dashboard": get_crowdedness_dashboard,
