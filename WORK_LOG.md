@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-07-14
+
+### 数据基础三连修 + 证据菜单再平衡收官 + DataIntegrity 家族计分 + 对称性审计（Fable 编排，两轮并行施工）
+
+完成内容（提交 `922acc6` 波次一、`aa71398` 波次二、本批文档与对称性补丁）：
+
+- **幸存者偏差硬防线（红线修复，新工单 #19）**：调查证实 `get_ndx100_components` 在回测模式历史库失败时会静默穿透到四条"当前名单"策略（只留一条不进审计流的日志）。修复：回测分支只信任 `nasdaq_100_ticker_history`，失败即抛 `HistoricalUniverseUnavailable`（tools_common 定义），绝不落回；广度四件套与 L4 成分股快照捕获后返回诚实 unavailable（照 `get_qqq_top10_concentration` 样板）；全路径（历史库/官网API/Wikipedia/GitHub库/静态兜底）返回 `universe_provenance`（来源/as_of/数量），随共享面板缓存透传进 payload data_quality；"回退往年年末"近似分支如实声明实际名单日期与近似性质（Fable 补）。6 个新测试含"策略被调用即炸"的反向断言。
+- **手工数据槽位边界收紧（工单 #7 完成）**：Damodaran ERP 槽位新增 `manual_source_type` 来源声明（非 `damodaran_official` → anomaly `erp_independence_compromised_manual_source_not_damodaran`/`manual_erp_provenance_undeclared`，防三 ERP 声部静默塌缩）；六槽位模板声明 `primary_fields`，`has_meaningful_manual_override` 只认主字段（填 1 个元数据字段不再整条冒充人工覆盖）；人工数据超 120 天/无日期 → `manual_data_stale`/`manual_data_date_missing` 标注。全部只标注不阻断。12 个新测试。
+- **利率预期路径缩水版上线（工单 #4，新指标 `get_fed_funds_rate_path`，L1，Codex sol 施工）**：13 个月 ZQ 单月合约（ticker 实测 `ZQ<月码><年>.CBT`，+18 月未挂牌 404 证实缩水到 12 个月合理）；隐含利率=100−价、路径+斜率+三态分类（±12.5bp 缓冲带）、流动性三级分级（<5 剔除/<100 降级标注）、EFFR 锚偏差>0.35pp 标注；PIT 逐合约截断；easing_priced 明文禁止单独作流动性利多（须与 HY OAS/增长交叉验证）。belt 独立重算 implied/slope/cuts 并防协调篡改。live 实跑：`tightening_priced`，未来 12 个月定价约 51bp 收紧。
+- **回购与财报静默期日历上线（工单 #4 收官，两个 L4 新指标，Codex sol 施工）**：`get_m7_earnings_blackout_calendar`（财报日−21/+2 天规则窗，规则参数入 payload 可重算；PIT 用已实现财报日作当时日程近似并如实标注；live：6/7 家在窗、等权占比 85.7%，与 7 月底财报季完全吻合）；`get_m7_buyback_flow`（镜像 capex 双通道：SEC XBRL 主路+Yahoo 备胎 pit_safe=false；live：2026Q1 可覆盖 5/7 家合计 $20.73B，TTM 因覆盖不足诚实留空不冒充 M7 全量）。belt 重算窗口/季度标签/TTM/可比集合。
+- **DataIntegrity 证据家族计分（GOV-04/P0，新工单 #20，Sonnet 施工）**：新建 `src/core/evidence_families.py`（46 函数全量映射+分组理由行内注释；未映射 id 单例兜底=老合成测试期望值零改动）；`confidence_percent` 改家族计权（同源函数共享家族权重，L5 11 个技术函数从 11 票并成 1 票），惩罚量不变但分母变小=只紧不松；新增 `function_availability_percent`（旧公式保留）与 `family_coverage` 块；层级及格线保持函数口径（他单产物，边界注释写明）。真实 run 重算：函数口径 95.3% vs 家族口径 92.6%，publishable 不翻转。Fable 裁决：HoM 估值与成分股自算拆为两个家族（生产默认路径不同源，20260712 run 一活一死实证两条流）。
+- **多空证据源对称性审计（工单 #4 尾项，Explore 枚举 + Fable 裁决）**：46 函数三处编码（canon/payload/prompt）逐一核对。**裁决：证据菜单不再先天偏空**——31/46 双向、0 个只准乐观、8 个只准风险，其中 5 个不对称是认识论正确（IG 稳定≠股票安全、拥挤度低≠买入信号、正挂常态无利多信息等）；3 个真缺口已当场补齐（%Above MA 修复方向获得与 A/D 同等的削弱风险许可、HYG 修复+OAS 收窄可作确认证据、实际利率高位回落可作估值承受力改善证据但须区分衰退式回落）；VIX 期限结构 payload 的倒挂 reason 补上法典已授权的"战术仓逢恐慌分批确认"用途说明，消除 payload/canon 文本失调。系统性遗留（8 个弱权限指标缺 payload 级 metric_authority，canon 纪律无法运行时强制）立新工单 #21。
+- **L3 广度 + History of Market live 验收（Fable 亲跑 `--collect-only`）**：广度四件套 4/4 available、成分覆盖率 98.06-100%、universe_provenance=nasdaq_api/103 只；HoM trailing 分位 45 点/64 天正确撤回（`insufficient_history`，双门槛 200 点/270 天），forward 分位 298 点正常给出 68.5 并独立标注 `stale_for_decision`；三个新指标 live 全活。4 个 Wind 依赖指标因 Wind 终端未开诚实降级（upstream None），fresh 快照家族口径 86.6%/函数口径 91.2%，闸门未阻断。
+
+验证结果：
+
+- 全量测试 611 → **670** 全绿（波次一 641、波次二 670，每波 Fable 亲跑复核，非仅采信施工报告）。
+- 施工方关键结论全部主对话二次核实：幸存者防线 diff 逐段审读、家族映射表逐行验收并当场改判一处、codex 两单均有独立 reviewer 两轮复核 + Fable 抽查边界编码。
+- live 冒烟与 collect-only 数字均与外部现实交叉吻合（M7 静默窗与 7 月底财报季一致、NVDA 8 月底财报不在窗内）。
+
+剩余边界：
+
+- 8 个弱权限指标（get_vix 等）缺 payload 级 metric_authority/downgrade_rules → 工单 #21 待开工。
+- 回购 TTM/YoY 在 Yahoo 免费层对 AMZN/TSLA 无回购行时诚实留空；SEC 复活后主路可补全。
+- Wind 四指标本次 live 降级是终端未开所致，非代码回归。
+- 旧快照回放兼容（#11）与 61 个 belt 缺原料字段未动，仍是数据基础最大的两块遗留。
+
+---
+
 ## 2026-07-13
 
 ### 个人决策画像接线（工单 #17）

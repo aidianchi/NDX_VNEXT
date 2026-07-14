@@ -615,6 +615,8 @@ def get_vix_term_structure(end_date: str = None) -> Dict[str, Any]:
                     "reason": (
                         "期限结构倒挂（VIX3M<VIX）是恐慌/风险信号，可作为 L2 风险确认或预警证据之一，"
                         "仍须与 HY OAS/A-D/ATR 等交叉验证，不能单独触发结论。"
+                        "按法典 core_vs_tactical_boundary，倒挂可作为战术仓逢恐慌分批布局的确认条件之一"
+                        "（仍为 supporting_only，核心仓不因期限结构单独变动仓位）。"
                     ),
                 },
                 "contango": {
