@@ -18,6 +18,7 @@ try:
     from .core import DataCollector, DataIntegrity, ReportGenerator
     from .data_evidence import normalize_data_evidence
     from .event_narrative_ledger import write_event_narrative_ledger
+    from .expectation_ledger import write_expectation_ledger, write_expectation_ledger_failure
     from .integrated_synthesis_report import build_pure_data_report_manifest, write_integrated_synthesis_report
     from .news_event_data_linker import write_news_event_data_links
     from .news_event_ledger import NewsEventLedgerBuilder
@@ -33,6 +34,7 @@ except ImportError:
     from core import DataCollector, DataIntegrity, ReportGenerator
     from data_evidence import normalize_data_evidence
     from event_narrative_ledger import write_event_narrative_ledger
+    from expectation_ledger import write_expectation_ledger, write_expectation_ledger_failure
     from integrated_synthesis_report import build_pure_data_report_manifest, write_integrated_synthesis_report
     from news_event_data_linker import write_news_event_data_links
     from news_event_ledger import NewsEventLedgerBuilder
@@ -390,6 +392,23 @@ def _data_quality_summary(data_json: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _write_expectation_ledger_non_blocking(run_dir: str, effective_date: Optional[str]) -> str:
+    """Write the supporting ledger without turning an auxiliary failure into a run blocker."""
+    resolved_date = effective_date or datetime.now().date().isoformat()
+    try:
+        return write_expectation_ledger(run_dir, effective_date=resolved_date)
+    except Exception as exc:
+        logging.warning("Expectation ledger generation failed without blocking the run: %s", exc)
+        try:
+            return write_expectation_ledger_failure(run_dir, effective_date=resolved_date, error=exc)
+        except Exception as fallback_exc:
+            logging.error(
+                "Expectation ledger failure note could not be written; main run continues: %s",
+                fallback_exc,
+            )
+            return ""
+
+
 def run_collect_only(args: argparse.Namespace) -> Dict[str, Any]:
     backtest_date = validate_date(args.date)
     if args.data_json:
@@ -564,6 +583,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
             data_integrity_report=integrity_report,
             output_path=pure_data_report_path,
         )
+        expectation_ledger_path = _write_expectation_ledger_non_blocking(run_dir, backtest_date)
         integrated_synthesis_report_path = write_integrated_synthesis_report(
             run_dir,
             pure_data_report=pure_data_report_payload,
@@ -589,6 +609,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
             "cross_layer_questions": os.path.join(run_dir, "cross_layer_questions.json") if event_narrative_ledger_path else "",
             "event_mechanism_cards": os.path.join(run_dir, "event_mechanism_cards.json") if event_narrative_ledger_path else "",
             "integrated_synthesis_report": integrated_synthesis_report_path,
+            "expectation_vs_realized": expectation_ledger_path,
             "report_path": "",
             "chart_time_series": "",
             "final_stance": "",
@@ -615,6 +636,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         analysis_packet=packet,
         effective_date=backtest_date,
     )
+    expectation_ledger_path = _write_expectation_ledger_non_blocking(run_dir, backtest_date)
     news_event_data_links_path = ""
     news_layer_analysis_path = ""
     event_narrative_ledger_path = ""
@@ -735,6 +757,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "event_mechanism_cards": os.path.join(run_dir, "event_mechanism_cards.json") if event_narrative_ledger_path else "",
         "pure_data_report": pure_data_report_path,
         "integrated_synthesis_report": integrated_synthesis_report_path,
+        "expectation_vs_realized": expectation_ledger_path,
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
         "approval_status": _enum_value(getattr(artifacts["final_adjudication"], "approval_status", "")),
         "run_review_report": os.path.join(run_dir, "run_review_report.json"),

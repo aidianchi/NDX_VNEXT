@@ -4145,6 +4145,8 @@ class VNextOrchestrator:
             _model_dump(item) for item in getattr(synthesis_packet, "principal_contradictions", []) or []
         ]
 
+        pricing_expectation_ledger = self._pricing_expectation_ledger_summary(synthesis_packet)
+
         return GovernanceInputPacket(
             thesis_main=thesis.main_thesis or "",
             thesis_environment=thesis.environment_assessment or "",
@@ -4180,6 +4182,7 @@ class VNextOrchestrator:
             key_evidence_refs=key_evidence_refs,
             key_event_refs=key_event_refs,
             evidence_registry_summary=dict(getattr(synthesis_packet, "evidence_registry_summary", {}) or {}),
+            pricing_expectation_ledger=pricing_expectation_ledger,
             known_data_gaps=list(dict.fromkeys(known_data_gaps)),  # 去重
             unresolved_questions=list(dict.fromkeys(unresolved_questions)),  # 去重
             synthesis_guidance=list(synthesis_packet.synthesis_guidance) if synthesis_packet.synthesis_guidance else [],
@@ -4187,6 +4190,96 @@ class VNextOrchestrator:
             critique_cross_layer_issues=list(critique_cross_layer),
             revision_summary=revision_summary,
         )
+
+    def _pricing_expectation_ledger_summary(self, synthesis_packet: SynthesisPacket) -> Dict[str, Any]:
+        """Expose a compact PIT-matched supporting ledger only to governance stages."""
+        ledger = self._load_local_json(self.output_dir / "expectation_vs_realized.json", {})
+        if not isinstance(ledger, dict) or not ledger:
+            return {}
+        authority = str(ledger.get("metric_authority") or "")
+        effective_date = str(ledger.get("effective_date") or "")[:10]
+        packet_date = str(
+            synthesis_packet.packet_meta.get("data_date")
+            or synthesis_packet.packet_meta.get("backtest_date")
+            or synthesis_packet.packet_meta.get("effective_date")
+            or ""
+        )[:10]
+        boundary = {
+            "artifact_ref": "expectation_vs_realized.json",
+            "metric_authority": authority or "missing",
+            "effective_date": effective_date or None,
+            "packet_effective_date": packet_date or None,
+            "downgrade_rules": list(ledger.get("downgrade_rules") or []),
+            "usage_rule": "pricing_narrative_support_only; forbidden_as_core_ref",
+        }
+        try:
+            ledger_day = datetime.strptime(effective_date, "%Y-%m-%d").date()
+        except ValueError:
+            return {**boundary, "status": "audit_only_invalid_effective_date"}
+        if authority != "supporting_only":
+            return {**boundary, "status": "rejected_authority_mismatch"}
+        if packet_date and effective_date != packet_date:
+            return {**boundary, "status": "audit_only_effective_date_mismatch"}
+
+        earnings = ledger.get("earnings_expectations") if isinstance(ledger.get("earnings_expectations"), dict) else {}
+        earnings_windows = []
+        for window in _as_list(earnings.get("windows")):
+            if not isinstance(window, dict):
+                continue
+            earnings_windows.append({
+                key: window.get(key)
+                for key in (
+                    "window_days",
+                    "status",
+                    "target_date",
+                    "prior_snapshot_date",
+                    "actual_elapsed_days",
+                    "intersection_ticker_count",
+                    "average_change_pct",
+                    "note",
+                )
+            })
+        rate = ledger.get("rate_path") if isinstance(ledger.get("rate_path"), dict) else {}
+        current_path = rate.get("current_path") if isinstance(rate.get("current_path"), dict) else None
+        current_path_date = str((current_path or {}).get("effective_date") or "")[:10]
+        if current_path:
+            try:
+                current_path_day = datetime.strptime(current_path_date, "%Y-%m-%d").date()
+            except ValueError:
+                current_path_day = None
+            if current_path_day is None or current_path_day > ledger_day:
+                return {
+                    **boundary,
+                    "status": "audit_only_nested_rate_path_date_mismatch",
+                    "rate_path_effective_date": current_path_date or None,
+                }
+        volatility = ledger.get("volatility_premium") if isinstance(ledger.get("volatility_premium"), dict) else {}
+        return {
+            **boundary,
+            "status": str(ledger.get("status") or "available_for_supporting_use"),
+            "earnings_expectations": {
+                "status": earnings.get("status"),
+                "current_snapshot_date": earnings.get("current_snapshot_date"),
+                "current_ticker_count": earnings.get("current_ticker_count"),
+                "windows": earnings_windows,
+            },
+            "rate_path": {
+                "status": rate.get("status"),
+                "current_path": current_path,
+                "current_path_status": rate.get("current_path_status"),
+                "historical_path_count_eligible": rate.get("historical_path_count_eligible"),
+                "comparisons": _as_list(rate.get("comparisons"))[-12:],
+                "note": rate.get("note"),
+            },
+            "volatility_premium": {
+                "status": volatility.get("status"),
+                "window_trading_days": volatility.get("window_trading_days"),
+                "sample_count": volatility.get("sample_count"),
+                "recent_premium_pct_points": volatility.get("recent_premium_pct_points"),
+                "recent_percentile": volatility.get("recent_percentile"),
+                "note": volatility.get("note"),
+            },
+        }
 
     def _build_context_brief(self, packet: AnalysisPacket) -> ContextBrief:
         layer_highlights: Dict[str, List[str]] = {}

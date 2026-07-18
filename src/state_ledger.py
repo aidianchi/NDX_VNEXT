@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,8 +22,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LEDGER_PATH = ROOT / "output" / "state_ledger" / "state_ledger.jsonl"
+DEFAULT_METHOD_REVISION_LEDGER_PATH = ROOT / "output" / "state_ledger" / "method_revision_ledger.jsonl"
 
 STATE_LEDGER_SCHEMA_VERSION = "state_ledger_v1"
+METHOD_REVISION_ELEMENT_TYPES = {"prompt", "contract", "authority", "threshold"}
 
 # 提取表：稳定状态键 -> 来源、字段路径、单位和允许比较方式。
 # 路径取不到时记 None 并写入 missing_variables，不视为错误；单位元数据供
@@ -220,6 +223,76 @@ def append_state_ledger_entry(
     with target.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
     return {"status": "appended", "run_id": entry["run_id"], "ledger_path": str(target), "official": entry["official"]}
+
+
+def _validate_method_revision_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    required = {"date", "error_pattern", "affected_element", "change_ref", "expected_effect", "review_after"}
+    missing = sorted(required - set(entry))
+    if missing:
+        raise ValueError(f"method revision entry missing fields: {missing}")
+    normalized = {key: entry[key] for key in required}
+    try:
+        change_date = datetime.strptime(str(normalized["date"]), "%Y-%m-%d").date()
+        review_after = datetime.strptime(str(normalized["review_after"]), "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError("date and review_after must be YYYY-MM-DD") from exc
+    if review_after < change_date:
+        raise ValueError("review_after must be on or after date")
+    affected = normalized["affected_element"]
+    if not isinstance(affected, dict):
+        raise ValueError("affected_element must be an object with type and path")
+    element_type = str(affected.get("type") or "")
+    element_path = str(affected.get("path") or "").strip()
+    if element_type not in METHOD_REVISION_ELEMENT_TYPES or not element_path:
+        raise ValueError("affected_element.type must be prompt|contract|authority|threshold and path must be non-empty")
+    change_ref = str(normalized["change_ref"] or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", change_ref):
+        raise ValueError("change_ref must be a 7-40 character git commit hash")
+    commit_check = subprocess.run(
+        ["git", "cat-file", "-e", f"{change_ref}^{{commit}}"],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    if commit_check.returncode != 0:
+        raise ValueError("change_ref must resolve to an existing git commit")
+    for key in ("error_pattern", "expected_effect"):
+        normalized[key] = str(normalized[key] or "").strip()
+        if not normalized[key]:
+            raise ValueError(f"{key} must be non-empty")
+    normalized["date"] = change_date.isoformat()
+    normalized["review_after"] = review_after.isoformat()
+    normalized["change_ref"] = change_ref
+    normalized["affected_element"] = {"type": element_type, "path": element_path}
+    return normalized
+
+
+def append_method_revision_entry(
+    entry: Dict[str, Any],
+    *,
+    ledger_path: str | Path | None = None,
+) -> Dict[str, Any]:
+    """Append one user-approved method revision; exact duplicates are idempotent."""
+    target = Path(ledger_path) if ledger_path else DEFAULT_METHOD_REVISION_LEDGER_PATH
+    normalized = _validate_method_revision_entry(entry)
+    existing: List[Dict[str, Any]] = []
+    if target.exists():
+        for line in target.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict):
+                existing.append(row)
+    if normalized in existing:
+        return {"status": "skipped_exact_duplicate", "ledger_path": str(target)}
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(normalized, ensure_ascii=False, sort_keys=True) + "\n")
+    return {"status": "appended", "ledger_path": str(target)}
 
 
 def main() -> int:

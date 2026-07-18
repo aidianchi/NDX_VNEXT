@@ -17,6 +17,7 @@ NDX Agent vNext SubAgent 架构 - 数据契约模块
 
 from datetime import datetime, timezone
 from enum import Enum
+import re
 from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import uuid4
 
@@ -1469,6 +1470,25 @@ class PortfolioAction(BaseModel):
     evidence_refs: List[str] = Field(default_factory=list, description="支撑该动作的证据")
 
 
+class LongTermAssessment(BaseModel):
+    """Assessment of the asset over 3-5+ years, separate from cyclical views."""
+    model_config = {"extra": "allow"}
+
+    object_quality: str = Field("", description="长期结构质量")
+    earnings_compounding: str = Field("", description="盈利与自由现金流复利证据")
+    valuation_implied_return: str = Field("", description="当前估值隐含的长期回报边界")
+    permanent_loss_hypotheses: List[str] = Field(default_factory=list, description="永久性资本损失假说")
+    evidence_refs: List[str] = Field(default_factory=list, description="长期评估所用证据")
+    uncertainty_notes: List[str] = Field(default_factory=list, description="长期评估的不确定性与缺口")
+
+    @model_validator(mode="after")
+    def _require_refs_for_numeric_percent_return(self) -> "LongTermAssessment":
+        has_concrete_ref = any(str(ref or "").strip() for ref in self.evidence_refs)
+        if re.search(r"[-+]?\d+(?:\.\d+)?\s*%", self.valuation_implied_return) and not has_concrete_ref:
+            raise ValueError("valuation_implied_return with a numeric percent requires evidence_refs")
+        return self
+
+
 class ReaderFinal(BaseModel):
     """Reader-facing final answer, separated from internal quality gate notes."""
     model_config = {"extra": "allow"}
@@ -1830,6 +1850,11 @@ class GovernanceInputPacket(BaseModel):
         description="阶段 4：统一证据注册摘要，用于治理阶段检查证据权限和降级规则",
     )
 
+    pricing_expectation_ledger: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="预期与兑现台账的精简摘要；仅供定价叙事核对，supporting_only，不能进入核心 evidence_refs",
+    )
+
     # ── 已知数据缺口（尤其是 L3 广度缺失） ──
     known_data_gaps: List[str] = Field(default_factory=list, description="已知数据缺口")
 
@@ -1970,6 +1995,10 @@ class FinalAdjudication(BaseModel):
     payoff_assessment: str = Field("", description="最终赔率判断")
     time_horizon_views: List[TimeHorizonView] = Field(default_factory=list, description="最终分时间尺度判断")
     portfolio_actions: List[PortfolioAction] = Field(default_factory=list, description="最终组合动作含义")
+    long_term_assessment: Optional[LongTermAssessment] = Field(
+        default=None,
+        description="3-5 年以上的长期资产评估；独立于周期姿态",
+    )
     confirmation_cost: str = Field("", description="最终确认成本")
     invalidation_conditions: List[str] = Field(default_factory=list, description="最终失效条件")
     principal_contradiction: Optional[PrincipalContradiction] = Field(
@@ -1996,6 +2025,31 @@ class FinalAdjudication(BaseModel):
         if text and not 300 <= len(text) <= 1300:
             raise ValueError("reasoned_verdict must be empty or contain 300-1300 characters")
         return text
+
+    @field_validator("long_term_assessment", mode="before")
+    @classmethod
+    def _empty_long_term_assessment_is_none(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, LongTermAssessment):
+            substantive = (
+                value.object_quality,
+                value.earnings_compounding,
+                value.valuation_implied_return,
+                value.permanent_loss_hypotheses,
+            )
+        elif isinstance(value, dict):
+            substantive = (
+                value.get("object_quality"),
+                value.get("earnings_compounding"),
+                value.get("valuation_implied_return"),
+                value.get("permanent_loss_hypotheses"),
+            )
+        else:
+            return value
+        has_text = any(str(item or "").strip() for item in substantive[:3])
+        has_hypotheses = any(str(item or "").strip() for item in (substantive[3] or []))
+        return value if has_text or has_hypotheses else None
 
     @model_validator(mode="after")
     def _note_missing_reasoned_verdict(self) -> "FinalAdjudication":

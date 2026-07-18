@@ -19,6 +19,7 @@ FINAL_STANCE = "实际利率历史极高压制高估值，防守等待。"
 
 def _final_adjudication() -> dict:
     return {
+        "generated_at": "2026-07-18T00:00:00Z",
         "final_stance": FINAL_STANCE,
         "approval_status": "approved_with_reservations",
         "confidence": "medium",
@@ -30,7 +31,7 @@ def _final_adjudication() -> dict:
 
 
 def _cards() -> dict:
-    return {"cards": [{
+    return {"effective_date": "2026-07-18", "cards": [{
         "event_id": "event_abc12345",
         "fact_summary": "报道称某巨头资本开支加速。",
         "interpretation": "可能支持盈利叙事。",
@@ -90,14 +91,16 @@ def _build(llm_response, **kwargs):
         return llm_response
 
     builder = IntegratedSynthesisReportBuilder()
+    investigation_reports = kwargs.pop("investigation_reports", [])
     payload = builder.build(
         pure_data_report={"principal_contradictions": []},
+        analysis_packet={"meta": {"data_date": "2026-07-18"}},
         data_integrity_report={"publish_status": "publishable"},
         event_narrative_ledger={"events": [{"claims": []}]},
         event_interpretation_cards=_cards(),
         final_adjudication=_final_adjudication(),
         cross_layer_questions=_questions(),
-        investigation_reports=[],
+        investigation_reports=investigation_reports,
         llm_caller=caller,
         **kwargs,
     )
@@ -181,6 +184,15 @@ def test_facade_holds_layer1_verdict_and_block_renders_integrated_body():
             "integrated_adjudication": IntegratedAdjudication.model_validate(
                 json.loads(_valid_response())
             ).model_dump(mode="json"),
+            "recollection_requests": {
+                "requests": [{
+                    "source_type": "question",
+                    "source_id": "q1",
+                    "missing": "缺盈利修正数据",
+                    "candidate_function_ids": ["L4.get_forward_earnings"],
+                    "trigger_reason": "partially_answered",
+                }],
+            },
         },
     }
     html = generator._brief_facade_section(Path("/tmp"), artifacts)
@@ -192,6 +204,81 @@ def test_facade_holds_layer1_verdict_and_block_renders_integrated_body():
     assert "当前不可检验" in block
     assert "综合判决正文" in block  # 第三层正文在此呈现
     assert 'href="#world"' in block  # 红队 M2：card chip 锚点指向真实存在的 #world
+    assert "下轮建议补采清单" in block
+    assert "缺盈利修正数据" in block
+
+
+def test_recollection_requests_copy_only_whitelisted_gap_fields():
+    data = json.loads(_valid_response())
+    data["integrated_verdict"] = ("VERDICT_SENTINEL " * 40) + "[L1.get_10y_real_rate]"
+    data["question_answers"][0].update({
+        "answer_status": "cannot_answer_yet",
+        "answer": "ANSWER_SENTINEL",
+        "missing_evidence": ["逐字缺口 L4.get_forward_earnings"],
+    })
+    data["conflict_matrix"][0]["note"] = "逐字冲突缺口"
+    payload, _ = _build(
+        json.dumps(data, ensure_ascii=False),
+        evidence_registry={
+            "passports": {
+                "L1.get_10y_real_rate": {},
+                "L4.get_forward_earnings#revision": {},
+            },
+        },
+        investigation_reports=[{
+            "investigation_id": "inv_gap",
+            "effective_date": "2026-07-18",
+            "finding": "FINDING_SENTINEL",
+            "cannot_establish": ["CANNOT_ESTABLISH_SENTINEL"],
+            "limits": ["LIMITS_SENTINEL"],
+            "missing_data": ["逐字调查缺口"],
+        }],
+    )
+
+    requests = payload["recollection_requests"]["requests"]
+    assert [request["missing"] for request in requests] == [
+        "逐字缺口 L4.get_forward_earnings",
+        "逐字冲突缺口",
+        "逐字调查缺口",
+    ]
+    assert requests[0]["candidate_function_ids"] == ["L4.get_forward_earnings"]
+    serialized = json.dumps(payload["recollection_requests"], ensure_ascii=False)
+    for sentinel in (
+        "VERDICT_SENTINEL",
+        "ANSWER_SENTINEL",
+        "FINDING_SENTINEL",
+        "CANNOT_ESTABLISH_SENTINEL",
+        "LIMITS_SENTINEL",
+    ):
+        assert sentinel not in serialized
+    assert payload["recollection_requests"]["policy"]["no_stance_rule"] == (
+        "requests carry only missing-data descriptions; verdict text must never be copied here"
+    )
+
+
+def test_unknown_candidate_is_not_guessed_and_list_renders_without_adjudication():
+    recollection = IntegratedSynthesisReportBuilder()._build_recollection_requests(
+        question_answers=[{
+            "question_id": "q_unknown",
+            "answer_status": "cannot_answer_yet",
+            "missing_evidence": ["需要 L5.get_unknown_metric <script>alert(1)</script>"],
+        }],
+        conflict_rows=[],
+        investigation_reports=[],
+        evidence_registry={"passports": {}},
+    )
+    assert recollection["requests"][0]["candidate_function_ids"] == []
+
+    html = VNextReportGenerator(reports_dir="/tmp/w2_recollection")._integrated_adjudication_block({
+        "integrated_synthesis_report": {
+            "integrated_adjudication": None,
+            "recollection_requests": recollection,
+        },
+    })
+    assert "下轮建议补采清单" in html
+    assert "L5.get_unknown_metric" in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "<script>alert(1)</script>" not in html
 
 
 def test_fake_refs_are_hard_rejected_everywhere():
@@ -242,6 +329,7 @@ def test_caller_exception_degrades_instead_of_crashing():
     builder = IntegratedSynthesisReportBuilder()
     payload = builder.build(
         pure_data_report={"principal_contradictions": []},
+        analysis_packet={"meta": {"data_date": "2026-07-18"}},
         data_integrity_report={"publish_status": "publishable"},
         event_narrative_ledger={"events": [{"claims": []}]},
         event_interpretation_cards=_cards(),
@@ -267,6 +355,7 @@ def test_audit_only_ref_is_demoted_from_data_support():
     builder = IntegratedSynthesisReportBuilder()
     payload = builder.build(
         pure_data_report={"principal_contradictions": []},
+        analysis_packet={"meta": {"data_date": "2026-07-18"}},
         data_integrity_report={"publish_status": "publishable"},
         event_narrative_ledger={"events": [{"claims": []}]},
         event_interpretation_cards=_cards(),

@@ -66,6 +66,30 @@ NO_BACKFLOW_RULE = (
     "L1-L5, Bridge, Thesis, Risk, Reviser, or Final prompts."
 )
 
+ERROR_TAXONOMY_VALUES = {
+    "direction_wrong",
+    "magnitude_wrong",
+    "condition_never_triggered",
+    "correct",
+    "not_scorable",
+}
+
+
+def map_error_taxonomy(score: Dict[str, Any]) -> str:
+    """Map only determinations the existing scorer has already made.
+
+    The current scorer can establish correct direction, wrong direction, or
+    inability to score. It cannot yet distinguish magnitude error from an
+    untriggered condition, so those reserved taxonomy values are never guessed.
+    """
+    verdict = str(score.get("verdict") or "not_scorable")
+    reason = str((score.get("scoring_evidence") or {}).get("reason") or "")
+    if verdict == "consistent":
+        return "correct"
+    if verdict == "falsifier_triggered" and reason == "price_follow_through_moved_against_claim_stance":
+        return "direction_wrong"
+    return "not_scorable"
+
 
 def _load_json(path: Path, default: Any) -> Any:
     if not path.exists():
@@ -222,6 +246,7 @@ def score_run(
     scores_out: List[Dict[str, Any]] = []
     for score in claim_scores_payload.get("scores", []):
         annotated_score = dict(score)
+        annotated_score["error_taxonomy"] = map_error_taxonomy(annotated_score)
         annotated_score["data_quality_caveat"] = DATA_QUALITY_CAVEAT
         scoring_evidence = dict(annotated_score.get("scoring_evidence") or {})
         scoring_evidence["windows"] = [_annotate_pending(w) for w in scoring_evidence.get("windows", [])]
@@ -233,6 +258,10 @@ def score_run(
     scorable_claim_count = verdict_totals.get("consistent", 0) + verdict_totals.get("falsifier_triggered", 0)
     not_scorable_claim_count = verdict_totals.get("not_scorable", 0)
     pending_window_labels = sorted({w["window"] for w in windows_out if w.get("pending")})
+    taxonomy_totals = {value: 0 for value in sorted(ERROR_TAXONOMY_VALUES)}
+    for score in scores_out:
+        taxonomy = str(score.get("error_taxonomy") or "not_scorable")
+        taxonomy_totals[taxonomy] = taxonomy_totals.get(taxonomy, 0) + 1
 
     claim_outcome_scores_doc: Dict[str, Any] = {
         "schema_version": CLAIM_OUTCOME_SCORES_SCHEMA_VERSION,
@@ -250,6 +279,7 @@ def score_run(
         "scores": scores_out,
         "summary": claim_scores_payload.get("summary", {}),
         "verdict_totals": verdict_totals,
+        "error_taxonomy_totals": taxonomy_totals,
         "scorable_claim_count": scorable_claim_count,
         "not_scorable_claim_count": not_scorable_claim_count,
         "total_claim_count": len(entries),

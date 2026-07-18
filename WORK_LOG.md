@@ -4,7 +4,20 @@
 
 ---
 
-## 2026-07-18
+## 2026-07-19
+
+### 第一性原理工单包 W1-W7 全部完工验收（Codex 施工约 2 小时不间断，Fable 逐单亲验，统一提交）
+
+- 施工方式沿用既定分工：Codex 按 `investigation_reports/20260718_first_principles_debate/WORK_ORDERS.md` 逐单顺序施工、逐单更新状态行、全程不提交；Fable 定时验收（监视器盯完工信号），逐单读关键改动、核状态行、亲跑全量测试后统一提交。**868 测试全绿**（基线 800 + 新增 68），与 Codex 自报一致。
+- **W1 时点契约硬闸门（骨架级）**：综合报告所有输入必须同一 as_of 日历日；`_check_time_consistency` 收集五类日期，"≥2 且全等"才放行，缺日期/无效日期/错配一律 fail-closed 为 audit_only 并在 blocking_reasons 写明具体日期；时点不一致时 LLM 裁决直接跳过；报告页警示条上线。DEBATE.md 终审抓到的"7-14 数据 + 7-18 事件卡照常盖章"漏洞正式堵死。
+- **W2 缺口受控反馈**：run 落盘 `recollection_requests.json`，只从三处结构化缺口字段复制文本（代码结构保证够不到判决正文），候选函数经 Evidence Registry 核验不猜；报告审计区新增"下轮建议补采清单"。
+- **W3 长期资产评估层**：`LongTermAssessment` 合约上线（3-5 年以上判断与 6-12 月周期姿态分离，% 回报数字无 refs 拒收）；Fable 亲笔提示词逐字入 final_adjudicator；核心仓动作展示层强制带"须经个人投资政策书与再平衡带确认"。
+- **W4 预期-兑现台账**："已定价"从断言变测量：`expectation_vs_realized.json` 三分册（自建 vintage 盈利修正、利率路径定价 vs FRED 实际兑现、VIX 隐含-实现溢价），全程 PIT、`supporting_only`、主链失败不阻断；priced_narrative 强制带分歧声明。
+- **W5 评分归因台账**：已评分 claim 带保守 `error_taxonomy`；`method_revision_ledger.jsonl` 空台账 + 严格写入校验（commit 必须真实存在）建成，7-27 首批成熟评分的复盘流程写入 RUN_REVIEW_CHECKLIST（Fable/用户主持，系统不自动改方法）。
+- **W6 类比数据史审计**：独立脚本审计 DFII10/HY OAS/NDX 估值谱系/VIX 的干净 PIT 历史，结论 **`rejected_insufficient_clean_pit_history`——不准入任何类比引擎**（合格产出：诚实回答"样本不够"）；顺带查明 FRED 自 2026-04 起对 HY OAS 只开放三年访问窗。
+- **W7 官方仓位数据**：CFTC COT（NQ Legacy，周二快照+3 天可见）与 FINRA 融资余额（月末+21 天可见）两条官方源上线，field-level `supporting_only` 全套权限/判读卡/升级路径；ETF 申赎资金流无官方免费源，诚实不做记入数据边界。
+- **W8 事件研究**：维持冻结，验收确认无越界实现。
+- 剩余低风险如实保留：W3/W4 未做真实 LLM/FRED 在线抽样，W7 本机 CFTC API TLS 失败（诚实 unavailable），均留待下次 live run 自然覆盖。逐单验收细节见工单包"验收记录区"。
 
 ### 三层架构第一性原理对辩：Fable 立场书 + Codex 质证 + Fable 终审（纯审查，零代码改动）
 

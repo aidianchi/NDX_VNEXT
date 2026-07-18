@@ -3,9 +3,13 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from state_ledger import (
+    _git_sha,
+    append_method_revision_entry,
     STATE_VARIABLE_SPEC_BY_KEY,
     append_state_ledger_entry,
     build_state_ledger_entry,
@@ -142,3 +146,40 @@ def test_append_state_ledger_entry_appends_once_per_run_id(tmp_path: Path):
     stored = json.loads(lines[0])
     assert stored["run_id"] == run_dir.name
     assert stored["official"] is False
+
+
+def test_method_revision_ledger_exact_duplicate_is_idempotent_and_distinct_change_appends(tmp_path: Path):
+    ledger_path = tmp_path / "method_revision_ledger.jsonl"
+    real_commit = _git_sha()
+    entry = {
+        "date": "2026-07-27",
+        "error_pattern": "direction_wrong clustered in timing claims",
+        "affected_element": {"type": "prompt", "path": "src/agent_analysis/prompts/final_adjudicator.md"},
+        "change_ref": real_commit,
+        "expected_effect": "reduce unsupported directional timing claims",
+        "review_after": "2026-08-27",
+    }
+    first = append_method_revision_entry(entry, ledger_path=ledger_path)
+    duplicate = append_method_revision_entry(dict(entry), ledger_path=ledger_path)
+    changed = dict(entry, error_pattern="direction_wrong clustered in valuation claims", review_after="2026-09-27")
+    third = append_method_revision_entry(changed, ledger_path=ledger_path)
+    assert [first["status"], duplicate["status"], third["status"]] == [
+        "appended",
+        "skipped_exact_duplicate",
+        "appended",
+    ]
+    rows = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
+    assert rows == [entry, changed]
+
+
+def test_method_revision_ledger_rejects_uncommitted_or_malformed_entries(tmp_path: Path):
+    entry = {
+        "date": "2026-07-27",
+        "error_pattern": "direction_wrong",
+        "affected_element": {"type": "prompt", "path": "prompt.md"},
+        "change_ref": "deadbee",
+        "expected_effect": "improve calibration",
+        "review_after": "2026-08-27",
+    }
+    with pytest.raises(ValueError, match="existing git commit"):
+        append_method_revision_entry(entry, ledger_path=tmp_path / "ledger.jsonl")

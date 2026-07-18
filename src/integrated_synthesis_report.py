@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -104,6 +104,7 @@ class IntegratedSynthesisReportBuilder:
         self,
         *,
         pure_data_report: Dict[str, Any],
+        analysis_packet: Optional[Dict[str, Any]] = None,
         event_narrative_ledger: Optional[Dict[str, Any]] = None,
         event_layer_summary: Optional[Dict[str, Any]] = None,
         event_mechanism_report: Optional[Dict[str, Any]] = None,
@@ -126,11 +127,19 @@ class IntegratedSynthesisReportBuilder:
         event_interpretation_cards = event_interpretation_cards or {}
         evidence_registry = evidence_registry or {}
         final_claim_ledger = final_claim_ledger or {}
+        time_consistency = self._check_time_consistency(
+            analysis_packet=analysis_packet or {},
+            final_adjudication=final_adjudication or {},
+            event_interpretation_cards=event_interpretation_cards,
+            cross_layer_questions=cross_layer_questions or {},
+            investigation_reports=[r for r in (investigation_reports or []) if isinstance(r, dict)],
+        )
         publish_gate = self._publish_gate(
             data_integrity_report,
             event_narrative_ledger,
             final_claim_ledger=final_claim_ledger,
             final_adjudication=final_adjudication,
+            time_consistency=time_consistency,
         )
         events = _as_list(event_narrative_ledger.get("events"))
         claims = [
@@ -144,18 +153,31 @@ class IntegratedSynthesisReportBuilder:
         adjudication, llm_note = self._llm_adjudication(
             final_adjudication=final_adjudication or {},
             cards=[card for card in _as_list((event_interpretation_cards or {}).get("cards"))[:10] if isinstance(card, dict)],
-            investigation_reports=[r for r in (investigation_reports or []) if isinstance(r, dict)][:3],
+            investigation_reports=[
+                r for r in (investigation_reports or [])
+                if isinstance(r, dict) and not r.get("is_deterministic_stub", True)
+            ][:3],
             cross_layer_questions=cross_layer_questions or {},
             publish_gate=publish_gate,
             evidence_registry=evidence_registry,
             llm_caller=llm_caller,
             audit_dir=audit_dir,
         )
+        recollection_requests = self._build_recollection_requests(
+            question_answers=(
+                _as_list(adjudication.get("question_answers")) if isinstance(adjudication, dict) else []
+            ),
+            conflict_rows=(
+                _as_list(adjudication.get("conflict_matrix")) if isinstance(adjudication, dict) else []
+            ),
+            investigation_reports=[r for r in (investigation_reports or []) if isinstance(r, dict)],
+            evidence_registry=evidence_registry,
+        )
         payload = {
             "schema_version": "integrated_synthesis_report_v1",
             "generated_at_utc": _utc_now_iso(),
             "policy": {
-                "inputs": ["pure_data_report", "event_mechanism_report", "event_interpretation_cards", "event_layer_summary", "event_narrative_ledger", "evidence_registry", "final_claim_ledger", "final_adjudication", "investigation_reports", "cross_layer_questions"],
+                "inputs": ["analysis_packet", "pure_data_report", "event_mechanism_report", "event_interpretation_cards", "event_layer_summary", "event_narrative_ledger", "evidence_registry", "final_claim_ledger", "final_adjudication", "investigation_reports", "cross_layer_questions"],
                 "no_backflow_rule": "This report must not feed back into L1-L5, Bridge, Thesis, Risk, Reviser, or Final.",
                 "evidence_rule": "Event claims can support explanation grades, not L1-L5 evidence_refs.",
                 "stance_anchor_rule": "The layer-3 adjudication may not deviate from the layer-1 final_stance; tensions are recorded, never re-adjudicated.",
@@ -181,6 +203,8 @@ class IntegratedSynthesisReportBuilder:
             ],
             "unexplained_items": self._unexplained_items(claims, publish_gate),
             "downgraded_claims": self._downgraded_claims(claims),
+            "time_consistency": time_consistency,
+            "recollection_requests": recollection_requests,
             "publish_gate": publish_gate,
         }
         if output_path:
@@ -204,6 +228,11 @@ class IntegratedSynthesisReportBuilder:
         llm_caller: Optional[Callable[..., Optional[str]]],
         audit_dir: Optional[str | Path],
     ) -> tuple[Optional[Dict[str, Any]], str]:
+        if any(
+            str(reason).startswith("time_inconsistency:")
+            for reason in _as_list(publish_gate.get("blocking_reasons"))
+        ):
+            return None, "time_inconsistency_publish_gate_audit_only"
         if os.environ.get("INTEGRATED_ADJUDICATION_LLM_ENABLED", "1").strip().lower() in {"0", "false", "off", "no"}:
             return None, "disabled_by_env"
         if llm_caller is None:
@@ -616,45 +645,158 @@ class IntegratedSynthesisReportBuilder:
         event_ledger: Dict[str, Any],
         final_claim_ledger: Optional[Dict[str, Any]] = None,
         final_adjudication: Optional[Dict[str, Any]] = None,
+        time_consistency: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         status = data_integrity.get("publish_status") or ("blocked" if data_integrity.get("blocked") else "publishable")
         blocking_reasons = _as_list(data_integrity.get("blocking_reasons"))
         if status in {"blocked", "unpublishable"} or data_integrity.get("blocked"):
-            return {
+            gate = {
                 "status": "audit_only",
                 "reason": "DataIntegrity blocked or marked the pure data report unpublishable.",
                 "blocking_reasons": blocking_reasons,
                 "formal_investment_conclusion_allowed": False,
             }
-        claim_gate = (final_claim_ledger or {}).get("publish_gate") if isinstance((final_claim_ledger or {}).get("publish_gate"), dict) else {}
-        if str(claim_gate.get("status") or "").lower() in {"blocked", "unpublishable"}:
-            return {
-                "status": "audit_only",
-                "reason": "final_claim_ledger publish gate is blocked; layer-3 must not issue a formal conclusion.",
-                "blocking_reasons": _as_list(claim_gate.get("blocking_reasons")),
-                "formal_investment_conclusion_allowed": False,
-            }
-        final_approval = str((final_adjudication or {}).get("approval_status") or "").lower()
-        if final_approval in {"rejected", "blocked", "unpublishable"}:
-            return {
-                "status": "audit_only",
-                "reason": f"Final adjudication approval_status={final_approval}; layer-3 must not issue a formal conclusion.",
-                "blocking_reasons": [],
-                "formal_investment_conclusion_allowed": False,
-            }
-        if not _as_list(event_ledger.get("events")):
-            return {
-                "status": "publishable_with_caveats",
-                "reason": "No layer-2 event ledger was available; integrated report is data-led with limited external context.",
-                "blocking_reasons": [],
-                "formal_investment_conclusion_allowed": True,
-            }
+        else:
+            claim_gate = (final_claim_ledger or {}).get("publish_gate") if isinstance((final_claim_ledger or {}).get("publish_gate"), dict) else {}
+            if str(claim_gate.get("status") or "").lower() in {"blocked", "unpublishable"}:
+                gate = {
+                    "status": "audit_only",
+                    "reason": "final_claim_ledger publish gate is blocked; layer-3 must not issue a formal conclusion.",
+                    "blocking_reasons": _as_list(claim_gate.get("blocking_reasons")),
+                    "formal_investment_conclusion_allowed": False,
+                }
+            else:
+                final_approval = str((final_adjudication or {}).get("approval_status") or "").lower()
+                if final_approval in {"rejected", "blocked", "unpublishable"}:
+                    gate = {
+                        "status": "audit_only",
+                        "reason": f"Final adjudication approval_status={final_approval}; layer-3 must not issue a formal conclusion.",
+                        "blocking_reasons": [],
+                        "formal_investment_conclusion_allowed": False,
+                    }
+                elif not _as_list(event_ledger.get("events")):
+                    gate = {
+                        "status": "publishable_with_caveats",
+                        "reason": "No layer-2 event ledger was available; integrated report is data-led with limited external context.",
+                        "blocking_reasons": [],
+                        "formal_investment_conclusion_allowed": True,
+                    }
+                else:
+                    gate = {
+                        "status": "publishable_integrated_report",
+                        "reason": "Pure data report is publishable and layer-2 event ledger is available.",
+                        "blocking_reasons": [],
+                        "formal_investment_conclusion_allowed": True,
+                    }
+
+        if isinstance(time_consistency, dict) and not time_consistency.get("consistent", False):
+            members = ", ".join(
+                f"{member.get('artifact')}={member.get('date')}"
+                for member in _as_list(time_consistency.get("members"))
+                if isinstance(member, dict)
+            )
+            missing = "missing_as_of" in _as_list(time_consistency.get("notes"))
+            invalid = [
+                str(note) for note in _as_list(time_consistency.get("notes"))
+                if str(note).startswith("invalid_as_of:")
+            ]
+            if invalid:
+                detail = "; ".join(invalid + ([members] if members else []))
+            else:
+                detail = f"missing_as_of; {members}" if missing else members
+            time_reason = f"time_inconsistency: {detail}".rstrip("; ")
+            gate["status"] = "audit_only"
+            gate["formal_investment_conclusion_allowed"] = False
+            gate["blocking_reasons"] = list(gate.get("blocking_reasons") or []) + [time_reason]
+            gate["reason"] = str(gate.get("reason") or "") + " Input artifacts have inconsistent as-of dates."
+        return gate
+
+    def _check_time_consistency(
+        self,
+        *,
+        analysis_packet: Dict[str, Any],
+        final_adjudication: Dict[str, Any],
+        event_interpretation_cards: Dict[str, Any],
+        cross_layer_questions: Dict[str, Any],
+        investigation_reports: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Collect the layer-3 inputs' calendar dates and fail closed on gaps or drift."""
+        members: List[Dict[str, str]] = []
+        notes: List[str] = []
+
+        def add(artifact: str, raw_value: Any) -> None:
+            if raw_value in (None, ""):
+                return
+            normalized = self._calendar_date(raw_value)
+            if normalized is None:
+                notes.append(f"invalid_as_of:{artifact}={raw_value}")
+                return
+            members.append({"artifact": artifact, "date": normalized})
+
+        meta = analysis_packet.get("meta") if isinstance(analysis_packet.get("meta"), dict) else {}
+        add("analysis_packet", meta.get("data_date"))
+        add("final_adjudication", final_adjudication.get("generated_at"))
+        add("event_cards", event_interpretation_cards.get("effective_date"))
+        add("cross_layer_questions", cross_layer_questions.get("effective_date"))
+        for index, report in enumerate(investigation_reports):
+            artifact = f"investigation:{report.get('investigation_id') or index + 1}"
+            raw_value = self._investigation_as_of(report)
+            add(artifact, raw_value)
+
+        tolerance_raw = os.environ.get("NDX_INTEGRATED_TIME_TOLERANCE_DAYS", "0").strip()
+        try:
+            tolerance_days = max(0, int(tolerance_raw))
+        except ValueError:
+            tolerance_days = 0
+            notes.append(f"invalid_tolerance_days:{tolerance_raw}")
+
+        if any(note.startswith("invalid_as_of:") for note in notes):
+            if len(members) < 2:
+                notes.append("missing_as_of")
+            return {"as_of": None, "members": members, "consistent": False, "notes": notes}
+
+        if len(members) < 2:
+            notes.append("missing_as_of")
+            return {"as_of": None, "members": members, "consistent": False, "notes": notes}
+
+        parsed_dates = [date.fromisoformat(member["date"]) for member in members]
+        span_days = (max(parsed_dates) - min(parsed_dates)).days
+        consistent = span_days == 0 or (tolerance_days > 0 and span_days <= tolerance_days)
+        if consistent and span_days > 0:
+            notes.append(
+                f"容差放行: 日期跨度 {span_days} 天，NDX_INTEGRATED_TIME_TOLERANCE_DAYS={tolerance_days}"
+            )
+        elif not consistent:
+            notes.append(f"date_mismatch: span_days={span_days}, tolerance_days={tolerance_days}")
         return {
-            "status": "publishable_integrated_report",
-            "reason": "Pure data report is publishable and layer-2 event ledger is available.",
-            "blocking_reasons": [],
-            "formal_investment_conclusion_allowed": True,
-            }
+            "as_of": max(parsed_dates).isoformat() if consistent else None,
+            "members": members,
+            "consistent": consistent,
+            "notes": notes,
+        }
+
+    @staticmethod
+    def _calendar_date(value: Any) -> Optional[str]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+                return date.fromisoformat(text).isoformat()
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _investigation_as_of(report: Dict[str, Any]) -> Any:
+        for field in ("effective_date", "as_of", "as_of_date", "data_date", "date_boundary"):
+            if report.get(field) not in (None, ""):
+                return report.get(field)
+        meta = report.get("meta") if isinstance(report.get("meta"), dict) else {}
+        for field in ("effective_date", "as_of", "as_of_date", "data_date", "date_boundary"):
+            if meta.get(field) not in (None, ""):
+                return meta.get(field)
+        return None
 
     def _compact_event_summary(self, summary: Dict[str, Any]) -> Dict[str, Any]:
         if not summary:
@@ -666,6 +808,99 @@ class IntegratedSynthesisReportBuilder:
             "financial_links_most_related_to_layer_1": _as_list(summary.get("financial_links_most_related_to_layer_1")),
             "forbidden_for_l1_l5_statement": summary.get("forbidden_for_l1_l5_statement", ""),
         }
+
+    def _build_recollection_requests(
+        self,
+        *,
+        question_answers: List[Dict[str, Any]],
+        conflict_rows: List[Dict[str, Any]],
+        investigation_reports: List[Dict[str, Any]],
+        evidence_registry: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Build a stance-free list of missing data for a future run.
+
+        The deliberately narrow arguments keep verdict prose and event/news material
+        outside this function. Investigation prose is also excluded by an explicit
+        field allowlist.
+        """
+        requests: List[Dict[str, Any]] = []
+        registry_functions = self._registry_function_ids(evidence_registry)
+
+        def add(source_type: str, source_id: Any, missing: Any, trigger_reason: str) -> None:
+            if not isinstance(missing, str) or not missing.strip():
+                return
+            requests.append({
+                "source_type": source_type,
+                "source_id": str(source_id or ""),
+                "missing": missing,
+                "candidate_function_ids": self._candidate_function_ids(missing, registry_functions),
+                "trigger_reason": trigger_reason,
+            })
+
+        for answer in question_answers:
+            if not isinstance(answer, dict):
+                continue
+            status = str(answer.get("answer_status") or "")
+            if status not in {"partially_answered", "cannot_answer_yet"}:
+                continue
+            for missing in _as_list(answer.get("missing_evidence")):
+                add("question", answer.get("question_id") or answer.get("id"), missing, status)
+
+        for row in conflict_rows:
+            if not isinstance(row, dict) or str(row.get("relation") or "") != "not_yet_testable":
+                continue
+            add("conflict_card", row.get("card_id") or row.get("conflict_id"), row.get("note"), "not_yet_testable")
+
+        investigation_gap_fields = (
+            "missing_evidence",
+            "missing_data",
+            "data_gaps",
+            "required_data",
+        )
+        for report in investigation_reports:
+            if not isinstance(report, dict):
+                continue
+            source_id = report.get("investigation_id")
+            for field in investigation_gap_fields:
+                value = report.get(field)
+                values = value if isinstance(value, list) else [value]
+                for missing in values:
+                    add("investigation", source_id, missing, field)
+
+        return {
+            "schema_version": "recollection_requests_v1",
+            "generated_at_utc": _utc_now_iso(),
+            "policy": {
+                "no_stance_rule": "requests carry only missing-data descriptions; verdict text must never be copied here",
+            },
+            "requests": requests,
+        }
+
+    @staticmethod
+    def _registry_function_ids(evidence_registry: Dict[str, Any]) -> set[str]:
+        passports = evidence_registry.get("passports") if isinstance(evidence_registry.get("passports"), dict) else {}
+        function_ids: set[str] = set()
+        for key, passport in passports.items():
+            candidates = [key]
+            if isinstance(passport, dict):
+                candidates.append(passport.get("evidence_id"))
+            for candidate in candidates:
+                match = re.match(r"^(L[1-5]\.get_[A-Za-z0-9_]+)", str(candidate or ""))
+                if match:
+                    function_ids.add(match.group(1))
+        return function_ids
+
+    @staticmethod
+    def _candidate_function_ids(missing: str, registry_functions: set[str]) -> List[str]:
+        candidates: List[str] = []
+        for match in re.finditer(
+            r"(?<![A-Za-z0-9_])(L[1-5]\.get_[A-Za-z0-9_]+)(?:#[A-Za-z0-9_.-]+)?",
+            missing,
+        ):
+            function_id = match.group(1)
+            if function_id in registry_functions and function_id not in candidates:
+                candidates.append(function_id)
+        return candidates
 
     def _compact_evidence_registry(self, registry: Dict[str, Any]) -> Dict[str, Any]:
         passports = registry.get("passports") if isinstance(registry.get("passports"), dict) else {}
@@ -854,10 +1089,11 @@ def write_integrated_synthesis_report(
     if reports_dir.is_dir():
         for report_file in sorted(reports_dir.glob("*.json")):
             report = _load_json(report_file, {})
-            if isinstance(report, dict) and not report.get("is_deterministic_stub", True):
+            if isinstance(report, dict):
                 investigation_reports.append(report)
-    IntegratedSynthesisReportBuilder().build(
+    payload = IntegratedSynthesisReportBuilder().build(
         pure_data_report=pure_data_report if pure_data_report is not None else _load_json(pure_path, {}),
+        analysis_packet=_load_json(run_path / "analysis_packet.json", {}),
         event_narrative_ledger=event_narrative_ledger if event_narrative_ledger is not None else _load_json(event_path, {}),
         event_layer_summary=event_layer_summary if event_layer_summary is not None else _load_json(summary_path, {}),
         event_mechanism_report=event_mechanism_report if event_mechanism_report is not None else _load_json(mechanism_path, {}),
@@ -873,6 +1109,7 @@ def write_integrated_synthesis_report(
         output_path=output_path,
         source_paths={
             "pure_data_report": str(pure_path),
+            "analysis_packet": str(run_path / "analysis_packet.json"),
             "event_mechanism_report": str(mechanism_path),
             "event_interpretation_cards": str(interpretation_cards_path),
             "event_layer_summary": str(summary_path),
@@ -885,4 +1122,5 @@ def write_integrated_synthesis_report(
             "investigation_reports_dir": str(reports_dir),
         },
     )
+    _write_json(run_path / "recollection_requests.json", payload["recollection_requests"])
     return str(output_path)

@@ -9,7 +9,9 @@ try:
 except ImportError:
     from tools_common import *
 
-from datetime import timezone
+from datetime import date, datetime, timedelta, timezone
+from io import BytesIO
+import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:
@@ -1218,6 +1220,430 @@ def get_mcclellan_oscillator_nasdaq_or_nyse(end_date: str = None) -> Dict[str, A
             "unavailable_reason": "insufficient_valid_pair_coverage_or_history",
             "notes": f"Failed to calculate: {str(e)}"
         }
+
+
+# =====================================================
+# L2 official positioning / leverage context (supporting only)
+# =====================================================
+
+CFTC_LEGACY_FUTURES_ONLY_API = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
+CFTC_NQ_CONSOLIDATED_CODE = "20974+"
+FINRA_MARGIN_STATISTICS_PAGE = "https://www.finra.org/rules-guidance/key-topics/margin-accounts/margin-statistics"
+FINRA_MARGIN_STATISTICS_XLSX = "https://www.finra.org/sites/default/files/2021-03/margin-statistics.xlsx"
+OFFICIAL_POSITIONING_RECENT_WINDOW_DAYS = 120
+
+
+def _official_supporting_rule(reason: str, requires: Optional[List[str]] = None) -> Dict[str, Any]:
+    return {
+        "usage": "supporting_only",
+        "authority": "official_positioning_fact",
+        "reason": reason,
+        "requires_confirmation": list(requires or []),
+    }
+
+
+CFTC_NQ_METRIC_AUTHORITY = {
+    "noncommercial_long_contracts": _official_supporting_rule(
+        "Official Legacy futures-only long positions remain partial-market positioning context only."
+    ),
+    "noncommercial_short_contracts": _official_supporting_rule(
+        "Official Legacy futures-only short positions remain partial-market positioning context only."
+    ),
+    "noncommercial_net_contracts": _official_supporting_rule(
+        "Official CFTC Legacy futures-only fact, but it covers only reported Nasdaq-100 futures positions.",
+        ["get_crowdedness_dashboard", "get_vxn", "get_advance_decline_line"],
+    ),
+    "weekly_change_net_contracts": _official_supporting_rule(
+        "Week-to-week change in a partial futures universe is not a direction or timing signal.",
+        ["get_vxn", "get_advance_decline_line"],
+    ),
+    "open_interest_contracts": _official_supporting_rule(
+        "Official contract open interest provides scale context only."
+    ),
+    "historical_percentile": _official_supporting_rule(
+        "No percentile may be reported before a point-in-time history archive is connected."
+    ),
+    "leveraged_funds_net_contracts": _official_supporting_rule(
+        "Legacy COT has no TFF leveraged-funds category; it must remain unavailable rather than aliasing non-commercial positions."
+    ),
+}
+CFTC_NQ_DOWNGRADE_RULES = [
+    "cftc_futures_cover_only_one_part_of_total_market_positioning",
+    "legacy_noncommercial_must_not_be_relabelled_as_tff_leveraged_funds",
+    "positioning_extreme_cannot_independently_drive_direction_or_timing",
+    "historical_percentile_requires_point_in_time_archive",
+]
+
+FINRA_MARGIN_METRIC_AUTHORITY = {
+    "margin_debt_millions": _official_supporting_rule(
+        "Official aggregate FINRA margin debit balance is broad-market, monthly, and lagging.",
+        ["get_hy_oas_bp", "get_net_liquidity_momentum", "get_advance_decline_line"],
+    ),
+    "month_over_month_pct": _official_supporting_rule(
+        "One-month change is noisy and publication-lagged; it must not be used for timing."
+    ),
+    "year_over_year_pct": _official_supporting_rule(
+        "Year-over-year direction is leverage-cycle context only.",
+        ["get_hy_oas_bp", "get_advance_decline_line"],
+    ),
+    "cash_account_free_credit_millions": _official_supporting_rule(
+        "Official broad-market free-credit balance used only as context."
+    ),
+    "margin_account_free_credit_millions": _official_supporting_rule(
+        "Official broad-market free-credit balance used only as context."
+    ),
+}
+FINRA_MARGIN_DOWNGRADE_RULES = [
+    "finra_margin_debt_is_broad_market_not_ndx_specific",
+    "monthly_publication_lag_precludes_short_term_timing",
+    "nominal_level_high_cannot_be_interpreted_as_market_top",
+    "historical_backtest_requires_retained_finra_publication_vintages",
+]
+
+FINRA_MARGIN_COLUMNS = {
+    "reference_month": "Year-Month",
+    "margin_debt": "Debit Balances in Customers' Securities Margin Accounts",
+    "cash_credit": "Free Credit Balances in Customers' Cash Accounts",
+    "margin_credit": "Free Credit Balances in Customers' Securities Margin Accounts",
+}
+
+
+def _positioning_data_quality(
+    *, provider: str, source_name: str, source_url: str, effective_date: str,
+    data_date: Optional[str], visible_date: Optional[str], availability: str,
+    methodology: str, coverage: Dict[str, Any], metric_authority: Dict[str, Dict[str, Any]],
+    downgrade_rules: List[str], anomalies: Optional[List[str]] = None, fallback_reason: str = "",
+) -> Dict[str, Any]:
+    return {
+        "provider": provider,
+        "source_name": source_name,
+        "source_url": source_url,
+        "source_tier": "official",
+        "as_of_date": effective_date,
+        "effective_date": effective_date,
+        "data_date": data_date or "not_available",
+        "vintage_date": visible_date,
+        "collected_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "availability": availability,
+        "fallback_reason": fallback_reason,
+        "fallback_chain": [source_name, "unavailable"],
+        "license_note": "Official public data; source terms and attribution remain applicable.",
+        "coverage": coverage,
+        "methodology": methodology,
+        "formula": methodology,
+        "anomalies": list(anomalies or []),
+        "metric_authority": metric_authority,
+        "downgrade_rules": downgrade_rules,
+    }
+
+
+def _parse_positioning_effective_date(end_date: Optional[str]) -> Tuple[Optional[date], Optional[str]]:
+    text = end_date or date.today().isoformat()
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date(), None
+    except (TypeError, ValueError):
+        return None, f"invalid_effective_date:{text}"
+
+
+def _recent_positioning_date_error(effective: date) -> Optional[str]:
+    today = date.today()
+    if effective > today:
+        return "effective_date_is_in_the_future"
+    if effective < today - timedelta(days=OFFICIAL_POSITIONING_RECENT_WINDOW_DAYS):
+        return "historical_pit_archive_not_connected"
+    return None
+
+
+def _cftc_unavailable(effective_date: str, reason: str) -> Dict[str, Any]:
+    return {
+        "name": "CFTC Nasdaq-100 Futures Positioning",
+        "series_id": "CFTC_LEGACY_FUTURES_ONLY_20974+",
+        "value": None,
+        "unit": "contracts",
+        "source_name": "U.S. Commodity Futures Trading Commission",
+        "source_tier": "official",
+        "source_url": CFTC_LEGACY_FUTURES_ONLY_API,
+        "availability": "unavailable",
+        "unavailable_reason": reason,
+        "data_quality": _positioning_data_quality(
+            provider="CFTC Public Reporting Environment", source_name="CFTC Legacy Futures Only",
+            source_url=CFTC_LEGACY_FUTURES_ONLY_API, effective_date=effective_date,
+            data_date=None, visible_date=None, availability="unavailable",
+            methodology="Legacy futures-only non-commercial long minus short for code 20974+; Tuesday snapshot visible no earlier than Friday.",
+            coverage={"contract_market_code": CFTC_NQ_CONSOLIDATED_CODE, "scope": "Nasdaq-100 consolidated futures only"},
+            metric_authority=CFTC_NQ_METRIC_AUTHORITY, downgrade_rules=CFTC_NQ_DOWNGRADE_RULES,
+            anomalies=[reason], fallback_reason=reason,
+        ),
+        "notes": "Unavailable is retained as a data boundary; no positioning value or percentile is estimated.",
+    }
+
+
+def _fetch_cftc_nq_legacy_rows() -> List[Dict[str, Any]]:
+    response = requests.get(
+        CFTC_LEGACY_FUTURES_ONLY_API,
+        params={
+            "$limit": 20,
+            "$order": "report_date_as_yyyy_mm_dd DESC",
+            "$where": f"cftc_contract_market_code='{CFTC_NQ_CONSOLIDATED_CODE}'",
+        },
+        headers={"User-Agent": "ndx-vnext/1.0"}, timeout=20, proxies=get_requests_proxies(),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise ValueError("cftc_response_not_list")
+    return [row for row in payload if isinstance(row, dict)]
+
+
+def _cftc_visible_rows(rows: Iterable[Dict[str, Any]], effective: date) -> List[Dict[str, Any]]:
+    parsed: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            report_date = pd.to_datetime(row.get("report_date_as_yyyy_mm_dd"), errors="raise").date()
+            market_code = str(row.get("cftc_contract_market_code") or "").strip()
+            long_positions = float(row.get("noncomm_positions_long_all"))
+            short_positions = float(row.get("noncomm_positions_short_all"))
+            open_interest = float(row.get("open_interest_all"))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if not all(
+            np.isfinite(value) and value >= 0
+            for value in (long_positions, short_positions, open_interest)
+        ):
+            continue
+        if market_code != CFTC_NQ_CONSOLIDATED_CODE:
+            continue
+        visible_date = report_date + timedelta(days=3)
+        if visible_date > effective:
+            continue
+        parsed.append({
+            "report_date": report_date,
+            "visible_date": visible_date,
+            "market_name": str(row.get("market_and_exchange_names") or row.get("contract_market_name") or ""),
+            "open_interest": open_interest,
+            "noncommercial_long": long_positions,
+            "noncommercial_short": short_positions,
+            "noncommercial_net": long_positions - short_positions,
+        })
+    return sorted(parsed, key=lambda item: item["report_date"], reverse=True)
+
+
+def get_cftc_nq_positioning(end_date: str = None) -> Dict[str, Any]:
+    """CFTC Legacy Futures-Only Nasdaq-100 non-commercial positioning."""
+    effective, error = _parse_positioning_effective_date(end_date)
+    effective_text = end_date or date.today().isoformat()
+    if error or effective is None:
+        return _cftc_unavailable(effective_text, error or "invalid_effective_date")
+    recency_error = _recent_positioning_date_error(effective)
+    if recency_error:
+        return _cftc_unavailable(effective.isoformat(), recency_error)
+    try:
+        visible_rows = _cftc_visible_rows(_fetch_cftc_nq_legacy_rows(), effective)
+    except Exception as exc:
+        return _cftc_unavailable(effective.isoformat(), f"official_source_unavailable:{type(exc).__name__}:{str(exc)[:120]}")
+    if not visible_rows:
+        return _cftc_unavailable(effective.isoformat(), "no_cftc_snapshot_visible_by_effective_date")
+    latest = visible_rows[0]
+    previous = visible_rows[1] if len(visible_rows) > 1 else None
+    exact_previous_week = bool(
+        previous and (latest["report_date"] - previous["report_date"]).days == 7
+    )
+    weekly_change = (
+        latest["noncommercial_net"] - previous["noncommercial_net"]
+        if exact_previous_week
+        else None
+    )
+    value = {
+        "report_date": latest["report_date"].isoformat(),
+        "visible_date": latest["visible_date"].isoformat(),
+        "market_name": latest["market_name"],
+        "contract_market_code": CFTC_NQ_CONSOLIDATED_CODE,
+        "open_interest_contracts": int(latest["open_interest"]),
+        "noncommercial_long_contracts": int(latest["noncommercial_long"]),
+        "noncommercial_short_contracts": int(latest["noncommercial_short"]),
+        "noncommercial_net_contracts": int(latest["noncommercial_net"]),
+        "weekly_change_net_contracts": int(weekly_change) if weekly_change is not None else None,
+        "weekly_change_status": "available" if exact_previous_week else "unavailable_missing_exact_prior_week",
+        "previous_report_date": previous["report_date"].isoformat() if previous else None,
+        "leveraged_funds_net_contracts": None,
+        "historical_percentile": None,
+        "historical_percentile_status": "not_computed_recent_only_no_pit_archive",
+        "pit_archive_status": "current_official_api_rows_only_no_retained_publication_vintages",
+        "classification_boundary": "Legacy Futures Only reports non-commercial positions; TFF leveraged-funds positions are not present and are not inferred.",
+    }
+    return {
+        "name": "CFTC Nasdaq-100 Futures Positioning",
+        "series_id": "CFTC_LEGACY_FUTURES_ONLY_20974+",
+        "value": value,
+        "unit": "contracts",
+        "source_name": "U.S. Commodity Futures Trading Commission",
+        "source_tier": "official",
+        "source_url": CFTC_LEGACY_FUTURES_ONLY_API,
+        "availability": "available",
+        "data_quality": _positioning_data_quality(
+            provider="CFTC Public Reporting Environment", source_name="CFTC Legacy Futures Only",
+            source_url=CFTC_LEGACY_FUTURES_ONLY_API, effective_date=effective.isoformat(),
+            data_date=value["report_date"], visible_date=value["visible_date"], availability="available",
+            methodology="Legacy futures-only non-commercial long minus short for code 20974+; Tuesday snapshot visible no earlier than Friday.",
+            coverage={"contract_market_code": CFTC_NQ_CONSOLIDATED_CODE, "scope": "Nasdaq-100 consolidated futures only", "visible_recent_rows": len(visible_rows), "historical_pit_archive_connected": False},
+            metric_authority=CFTC_NQ_METRIC_AUTHORITY, downgrade_rules=CFTC_NQ_DOWNGRADE_RULES,
+            anomalies=([] if exact_previous_week else ["exact_prior_week_missing_weekly_change_unavailable"])
+            + ["current_api_rows_not_retained_as_publication_vintages"],
+        ),
+        "notes": "Official weekly futures-position fact with a three-day publication lag; supporting only, partial-market scope, no historical percentile.",
+    }
+
+
+def _finra_unavailable(effective_date: str, reason: str) -> Dict[str, Any]:
+    return {
+        "name": "FINRA Margin Debt",
+        "series_id": "FINRA_CUSTOMER_MARGIN_BALANCES",
+        "value": None,
+        "unit": "USD millions",
+        "source_name": "Financial Industry Regulatory Authority",
+        "source_tier": "official",
+        "source_url": FINRA_MARGIN_STATISTICS_PAGE,
+        "availability": "unavailable",
+        "unavailable_reason": reason,
+        "data_quality": _positioning_data_quality(
+            provider="FINRA", source_name="FINRA Margin Statistics",
+            source_url=FINRA_MARGIN_STATISTICS_PAGE, effective_date=effective_date,
+            data_date=None, visible_date=None, availability="unavailable",
+            methodology="Monthly customer margin balances; conservative estimated visibility is month-end plus 21 calendar days.",
+            coverage={"scope": "aggregate FINRA member-firm customer balances", "historical_pit_archive_connected": False},
+            metric_authority=FINRA_MARGIN_METRIC_AUTHORITY, downgrade_rules=FINRA_MARGIN_DOWNGRADE_RULES,
+            anomalies=[reason], fallback_reason=reason,
+        ),
+        "notes": "Unavailable is retained as a data boundary; no monthly balance or change is estimated.",
+    }
+
+
+def _fetch_finra_margin_frame() -> pd.DataFrame:
+    response = requests.get(
+        FINRA_MARGIN_STATISTICS_XLSX,
+        headers={"User-Agent": "ndx-vnext/1.0"}, timeout=20, proxies=get_requests_proxies(),
+    )
+    response.raise_for_status()
+    return pd.read_excel(BytesIO(response.content), sheet_name="Customer Margin Balances")
+
+
+def _finra_reference_month_end(value: Any) -> date:
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        parsed = pd.Timestamp(value)
+        year, month = int(parsed.year), int(parsed.month)
+    elif isinstance(value, str) and re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value.strip()):
+        year, month = (int(part) for part in value.strip().split("-"))
+    else:
+        raise ValueError("finra_reference_month_must_be_yyyy_mm_or_date")
+    if year < 1997:
+        raise ValueError("finra_reference_month_before_official_coverage")
+    return pd.Period(f"{year:04d}-{month:02d}", freq="M").end_time.date()
+
+
+def _finra_visible_rows(frame: pd.DataFrame, effective: date) -> List[Dict[str, Any]]:
+    if frame is None or frame.empty:
+        return []
+    columns = [str(column) for column in frame.columns]
+    required_columns = list(FINRA_MARGIN_COLUMNS.values())
+    if any(columns.count(column) != 1 for column in required_columns):
+        return []
+    parsed: List[Dict[str, Any]] = []
+    for _, raw in frame.iterrows():
+        try:
+            reference_month_end = _finra_reference_month_end(raw[FINRA_MARGIN_COLUMNS["reference_month"]])
+            margin_debt = float(raw[FINRA_MARGIN_COLUMNS["margin_debt"]])
+            cash_credit = float(raw[FINRA_MARGIN_COLUMNS["cash_credit"]])
+            margin_credit = float(raw[FINRA_MARGIN_COLUMNS["margin_credit"]])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if not all(
+            np.isfinite(value) and value >= 0
+            for value in (margin_debt, cash_credit, margin_credit)
+        ):
+            continue
+        if reference_month_end > effective:
+            continue
+        visible_date = reference_month_end + timedelta(days=21)
+        if visible_date > effective:
+            continue
+        parsed.append({
+            "reference_month": reference_month_end.strftime("%Y-%m"),
+            "reference_month_end": reference_month_end,
+            "visible_date": visible_date,
+            "margin_debt": margin_debt,
+            "cash_credit": cash_credit,
+            "margin_credit": margin_credit,
+        })
+    return sorted(parsed, key=lambda item: item["reference_month_end"], reverse=True)
+
+
+def _pct_change(current: float, prior: Optional[float]) -> Optional[float]:
+    if prior is None or prior == 0:
+        return None
+    return round((current / prior - 1.0) * 100.0, 2)
+
+
+def get_finra_margin_debt(end_date: str = None) -> Dict[str, Any]:
+    """FINRA monthly aggregate margin debt with a conservative PIT gate."""
+    effective, error = _parse_positioning_effective_date(end_date)
+    effective_text = end_date or date.today().isoformat()
+    if error or effective is None:
+        return _finra_unavailable(effective_text, error or "invalid_effective_date")
+    recency_error = _recent_positioning_date_error(effective)
+    if recency_error:
+        return _finra_unavailable(effective.isoformat(), recency_error)
+    try:
+        visible_rows = _finra_visible_rows(_fetch_finra_margin_frame(), effective)
+    except Exception as exc:
+        return _finra_unavailable(effective.isoformat(), f"official_source_unavailable:{type(exc).__name__}:{str(exc)[:120]}")
+    if not visible_rows:
+        return _finra_unavailable(effective.isoformat(), "no_finra_month_visible_by_conservative_release_gate")
+
+    latest = visible_rows[0]
+    by_month = {row["reference_month"]: row for row in visible_rows}
+    previous_period = (pd.Period(latest["reference_month"], freq="M") - 1).strftime("%Y-%m")
+    year_ago_period = (pd.Period(latest["reference_month"], freq="M") - 12).strftime("%Y-%m")
+    previous = by_month.get(previous_period)
+    year_ago = by_month.get(year_ago_period)
+    value = {
+        "reference_month": latest["reference_month"],
+        "reference_month_end": latest["reference_month_end"].isoformat(),
+        "estimated_visible_date": latest["visible_date"].isoformat(),
+        "visibility_rule": "reference_month_end_plus_21_calendar_days_conservative_estimate",
+        "margin_debt_millions": int(latest["margin_debt"]),
+        "month_over_month_pct": _pct_change(latest["margin_debt"], previous["margin_debt"] if previous else None),
+        "year_over_year_pct": _pct_change(latest["margin_debt"], year_ago["margin_debt"] if year_ago else None),
+        "cash_account_free_credit_millions": int(latest["cash_credit"]),
+        "margin_account_free_credit_millions": int(latest["margin_credit"]),
+        "historical_pit_archive_status": "not_connected_current_official_workbook_only",
+    }
+    anomalies = []
+    anomalies.append("current_workbook_not_retained_as_publication_vintage")
+    if previous is None:
+        anomalies.append("previous_month_missing_month_over_month_unavailable")
+    if year_ago is None:
+        anomalies.append("year_ago_month_missing_year_over_year_unavailable")
+    return {
+        "name": "FINRA Margin Debt",
+        "series_id": "FINRA_CUSTOMER_MARGIN_BALANCES",
+        "value": value,
+        "unit": "USD millions",
+        "source_name": "Financial Industry Regulatory Authority",
+        "source_tier": "official",
+        "source_url": FINRA_MARGIN_STATISTICS_PAGE,
+        "download_url": FINRA_MARGIN_STATISTICS_XLSX,
+        "availability": "available",
+        "data_quality": _positioning_data_quality(
+            provider="FINRA", source_name="FINRA Margin Statistics",
+            source_url=FINRA_MARGIN_STATISTICS_PAGE, effective_date=effective.isoformat(),
+            data_date=value["reference_month_end"], visible_date=value["estimated_visible_date"], availability="available",
+            methodology="Monthly customer margin balances; conservative estimated visibility is month-end plus 21 calendar days.",
+            coverage={"scope": "aggregate FINRA member-firm customer balances", "visible_rows_in_current_workbook": len(visible_rows), "historical_pit_archive_connected": False},
+            metric_authority=FINRA_MARGIN_METRIC_AUTHORITY, downgrade_rules=FINRA_MARGIN_DOWNGRADE_RULES,
+            anomalies=anomalies,
+        ),
+        "notes": "Official monthly broad-market leverage context; supporting only, approximately three-week lag, not a short-term timing signal.",
+    }
 
 
 CNN_FGI_BASE_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"

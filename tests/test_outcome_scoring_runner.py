@@ -96,6 +96,8 @@ def test_score_run_marks_unrealized_windows_pending_and_scores_available_window(
     assert verdicts["claim:final:buy"] == "falsifier_triggered"
     assert verdicts["claim:final:risk"] == "consistent"
     assert doc["verdict_totals"] == {"consistent": 1, "falsifier_triggered": 1, "not_scorable": 0}
+    taxonomies = {s["claim_id"]: s["error_taxonomy"] for s in doc["scores"]}
+    assert taxonomies == {"claim:final:buy": "direction_wrong", "claim:final:risk": "correct"}
 
     # Honesty requirement B: every score carries a data-quality caveat, no fabricated confidence.
     for score in doc["scores"]:
@@ -219,3 +221,15 @@ def test_score_run_skips_empty_claim_ledger(tmp_path, monkeypatch):
     result = osr.score_run(run_dir, min_age_days=20, as_of=date(2025, 2, 5))
 
     assert result["status"] == "skipped_empty_claim_ledger"
+
+
+@pytest.mark.parametrize(
+    ("score", "expected"),
+    [
+        ({"verdict": "consistent", "scoring_evidence": {"reason": "price_follow_through_consistent_with_claim_stance"}}, "correct"),
+        ({"verdict": "falsifier_triggered", "scoring_evidence": {"reason": "price_follow_through_moved_against_claim_stance"}}, "direction_wrong"),
+        ({"verdict": "not_scorable", "scoring_evidence": {"reason": "price_path_mixed_or_below_scoring_threshold"}}, "not_scorable"),
+    ],
+)
+def test_error_taxonomy_maps_only_existing_determinations(score, expected):
+    assert osr.map_error_taxonomy(score) == expected

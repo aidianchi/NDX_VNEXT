@@ -563,6 +563,12 @@ def test_integrated_synthesis_report_downgrades_event_claims_without_data_confir
     pure_path = run_dir / "pure_data_report.json"
     event_path = run_dir / "event_narrative_ledger.json"
     integrity_path = run_dir / "data_integrity_report.json"
+    (run_dir / "analysis_packet.json").write_text(
+        json.dumps({"meta": {"data_date": "2026-05-08"}}), encoding="utf-8"
+    )
+    (run_dir / "final_adjudication.json").write_text(
+        json.dumps({"generated_at": "2026-05-08T00:00:00Z"}), encoding="utf-8"
+    )
     pure_path.write_text(
         json.dumps(
             {
@@ -587,6 +593,57 @@ def test_integrated_synthesis_report_downgrades_event_claims_without_data_confir
         "L4.get_ndx_wind_valuation_snapshot",
     ]
     assert payload["downgraded_claims"][0]["downgraded_to"] == "plausible_hypothesis"
+
+
+def test_integrated_write_always_emits_empty_recollection_file(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "analysis_packet.json").write_text(
+        json.dumps({"meta": {"data_date": "2026-05-08"}}), encoding="utf-8"
+    )
+    (run_dir / "final_adjudication.json").write_text(
+        json.dumps({"generated_at": "2026-05-08T00:00:00Z"}), encoding="utf-8"
+    )
+    (run_dir / "data_integrity_report.json").write_text(
+        json.dumps({"publish_status": "publishable"}), encoding="utf-8"
+    )
+
+    write_integrated_synthesis_report(run_dir)
+
+    recollection = json.loads((run_dir / "recollection_requests.json").read_text(encoding="utf-8"))
+    assert recollection["schema_version"] == "recollection_requests_v1"
+    assert recollection["requests"] == []
+
+
+def test_integrated_write_collects_gaps_from_all_investigations_including_stubs(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    reports_dir = run_dir / "investigation_reports"
+    reports_dir.mkdir(parents=True)
+    (run_dir / "analysis_packet.json").write_text(
+        json.dumps({"meta": {"data_date": "2026-05-08"}}), encoding="utf-8"
+    )
+    (run_dir / "final_adjudication.json").write_text(
+        json.dumps({"generated_at": "2026-05-08T00:00:00Z"}), encoding="utf-8"
+    )
+    (run_dir / "data_integrity_report.json").write_text(
+        json.dumps({"publish_status": "publishable"}), encoding="utf-8"
+    )
+    for index in range(4):
+        report = {
+            "investigation_id": f"inv_{index}",
+            "effective_date": "2026-05-08",
+            "missing_data": [f"缺口 {index}"],
+        }
+        if index % 2 == 0:
+            report["is_deterministic_stub"] = True
+        (reports_dir / f"inv_{index}.json").write_text(json.dumps(report), encoding="utf-8")
+
+    write_integrated_synthesis_report(run_dir)
+
+    recollection = json.loads((run_dir / "recollection_requests.json").read_text(encoding="utf-8"))
+    assert [request["source_id"] for request in recollection["requests"]] == [
+        "inv_0", "inv_1", "inv_2", "inv_3",
+    ]
 
 
 def test_integrated_synthesis_report_reads_event_mechanism_report():

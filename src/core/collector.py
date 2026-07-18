@@ -151,7 +151,7 @@ class DataCollector:
             
             # 第二层：市场风险偏好 (Market Risk Appetite)
             # 核心问题：市场参与者的主观情绪是倾向风险还是规避风险？
-            2: ["get_vix", "get_vxn", "get_hy_oas_bp", "get_ig_oas_bp", "get_hy_quality_spread_bp", "get_hyg_momentum", "get_xly_xlp_ratio", "get_crowdedness_dashboard", "get_vxn_vix_ratio", "get_vix_term_structure", "get_cnn_fear_greed_index"],
+            2: ["get_vix", "get_vxn", "get_hy_oas_bp", "get_ig_oas_bp", "get_hy_quality_spread_bp", "get_hyg_momentum", "get_xly_xlp_ratio", "get_crowdedness_dashboard", "get_cftc_nq_positioning", "get_finra_margin_debt", "get_vxn_vix_ratio", "get_vix_term_structure", "get_cnn_fear_greed_index"],
             
             # 第三层：指数内部健康度 (Index Internal Health)
             # 核心问题：趋势是由广泛参与驱动还是由少数领导者支撑？

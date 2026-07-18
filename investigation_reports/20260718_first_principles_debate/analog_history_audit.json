@@ -1,0 +1,2794 @@
+{
+  "schema_version": "analog_history_audit_v1",
+  "generated_at": "2026-07-19T01:01:06+08:00",
+  "as_of": "2026-07-19",
+  "purpose": "data_history_audit_only",
+  "metric_authority": "audit_only",
+  "policy": {
+    "forbidden_outputs": [
+      "state_to_forward_return_distribution",
+      "conditional_return",
+      "win_rate",
+      "return_estimate",
+      "analogy_signal"
+    ],
+    "point_in_time_rule": "An observation history without retained publication vintages is not treated as proven PIT history.",
+    "cluster_rule": "Same-direction accepted observations must be at least 63 cleaned trading-day positions apart.",
+    "cluster_limit": "Counts are mechanical coverage diagnostics, not evidence of comparable economic regimes."
+  },
+  "candidates": [
+    {
+      "candidate": "dfii10",
+      "label": "10Y real rate (DFII10)",
+      "source_name": "Federal Reserve Bank of St. Louis (FRED)",
+      "source_tier": "official_relay",
+      "frequency": "daily_business_day",
+      "history": {
+        "availability": "available",
+        "usable_start": "2003-01-02",
+        "usable_end": "2026-07-16",
+        "observation_count": 5888,
+        "calendar_span_days": 8596
+      },
+      "as_of_filter": {
+        "cutoff": "2026-07-19",
+        "rule": "date <= as_of",
+        "excluded_after_as_of_count": 0
+      },
+      "history_semantics": "candidate level observations",
+      "coverage_limit": null,
+      "coverage_limit_source": null,
+      "known_revision_risks": [
+        "No ALFRED vintage was collected, so historical publication vintages are not proven point-in-time.",
+        "Source corrections, holiday gaps, and metadata changes may alter the downloaded history."
+      ],
+      "source_migration_breaks": [],
+      "lineages": [],
+      "independent_directional_cluster_audit": {
+        "method": "same_direction_observations_separated_by_cleaned_trading_day_positions",
+        "minimum_gap_trading_days": 63,
+        "classification": "provided up/down state; otherwise sign of one-step value change",
+        "interpretation_limit": "mechanical data-density upper bound only; not an economic regime definition",
+        "count_total": 184,
+        "count_by_direction": {
+          "up": 92,
+          "down": 92
+        },
+        "accepted_observations": [
+          {
+            "index": 2,
+            "date": "2003-01-06",
+            "state": "up"
+          },
+          {
+            "index": 3,
+            "date": "2003-01-07",
+            "state": "down"
+          },
+          {
+            "index": 65,
+            "date": "2003-04-07",
+            "state": "up"
+          },
+          {
+            "index": 66,
+            "date": "2003-04-08",
+            "state": "down"
+          },
+          {
+            "index": 129,
+            "date": "2003-07-09",
+            "state": "down"
+          },
+          {
+            "index": 132,
+            "date": "2003-07-14",
+            "state": "up"
+          },
+          {
+            "index": 195,
+            "date": "2003-10-10",
+            "state": "down"
+          },
+          {
+            "index": 196,
+            "date": "2003-10-14",
+            "state": "up"
+          },
+          {
+            "index": 259,
+            "date": "2004-01-15",
+            "state": "down"
+          },
+          {
+            "index": 260,
+            "date": "2004-01-16",
+            "state": "up"
+          },
+          {
+            "index": 322,
+            "date": "2004-04-16",
+            "state": "down"
+          },
+          {
+            "index": 324,
+            "date": "2004-04-20",
+            "state": "up"
+          },
+          {
+            "index": 388,
+            "date": "2004-07-22",
+            "state": "down"
+          },
+          {
+            "index": 390,
+            "date": "2004-07-26",
+            "state": "up"
+          },
+          {
+            "index": 451,
+            "date": "2004-10-21",
+            "state": "down"
+          },
+          {
+            "index": 455,
+            "date": "2004-10-27",
+            "state": "up"
+          },
+          {
+            "index": 514,
+            "date": "2005-01-24",
+            "state": "down"
+          },
+          {
+            "index": 520,
+            "date": "2005-02-01",
+            "state": "up"
+          },
+          {
+            "index": 579,
+            "date": "2005-04-27",
+            "state": "down"
+          },
+          {
+            "index": 583,
+            "date": "2005-05-03",
+            "state": "up"
+          },
+          {
+            "index": 643,
+            "date": "2005-07-28",
+            "state": "down"
+          },
+          {
+            "index": 646,
+            "date": "2005-08-02",
+            "state": "up"
+          },
+          {
+            "index": 706,
+            "date": "2005-10-27",
+            "state": "down"
+          },
+          {
+            "index": 710,
+            "date": "2005-11-02",
+            "state": "up"
+          },
+          {
+            "index": 769,
+            "date": "2006-01-31",
+            "state": "down"
+          },
+          {
+            "index": 774,
+            "date": "2006-02-07",
+            "state": "up"
+          },
+          {
+            "index": 835,
+            "date": "2006-05-05",
+            "state": "down"
+          },
+          {
+            "index": 840,
+            "date": "2006-05-12",
+            "state": "up"
+          },
+          {
+            "index": 898,
+            "date": "2006-08-04",
+            "state": "down"
+          },
+          {
+            "index": 903,
+            "date": "2006-08-11",
+            "state": "up"
+          },
+          {
+            "index": 962,
+            "date": "2006-11-06",
+            "state": "down"
+          },
+          {
+            "index": 967,
+            "date": "2006-11-13",
+            "state": "up"
+          },
+          {
+            "index": 1026,
+            "date": "2007-02-08",
+            "state": "down"
+          },
+          {
+            "index": 1035,
+            "date": "2007-02-22",
+            "state": "up"
+          },
+          {
+            "index": 1090,
+            "date": "2007-05-10",
+            "state": "down"
+          },
+          {
+            "index": 1098,
+            "date": "2007-05-22",
+            "state": "up"
+          },
+          {
+            "index": 1153,
+            "date": "2007-08-09",
+            "state": "down"
+          },
+          {
+            "index": 1162,
+            "date": "2007-08-22",
+            "state": "up"
+          },
+          {
+            "index": 1216,
+            "date": "2007-11-08",
+            "state": "down"
+          },
+          {
+            "index": 1225,
+            "date": "2007-11-23",
+            "state": "up"
+          },
+          {
+            "index": 1282,
+            "date": "2008-02-15",
+            "state": "down"
+          },
+          {
+            "index": 1293,
+            "date": "2008-03-04",
+            "state": "up"
+          },
+          {
+            "index": 1346,
+            "date": "2008-05-19",
+            "state": "down"
+          },
+          {
+            "index": 1357,
+            "date": "2008-06-04",
+            "state": "up"
+          },
+          {
+            "index": 1411,
+            "date": "2008-08-20",
+            "state": "down"
+          },
+          {
+            "index": 1420,
+            "date": "2008-09-03",
+            "state": "up"
+          },
+          {
+            "index": 1476,
+            "date": "2008-11-24",
+            "state": "down"
+          },
+          {
+            "index": 1484,
+            "date": "2008-12-05",
+            "state": "up"
+          },
+          {
+            "index": 1541,
+            "date": "2009-03-02",
+            "state": "down"
+          },
+          {
+            "index": 1547,
+            "date": "2009-03-10",
+            "state": "up"
+          },
+          {
+            "index": 1605,
+            "date": "2009-06-02",
+            "state": "down"
+          },
+          {
+            "index": 1611,
+            "date": "2009-06-10",
+            "state": "up"
+          },
+          {
+            "index": 1669,
+            "date": "2009-09-01",
+            "state": "down"
+          },
+          {
+            "index": 1677,
+            "date": "2009-09-14",
+            "state": "up"
+          },
+          {
+            "index": 1734,
+            "date": "2009-12-07",
+            "state": "down"
+          },
+          {
+            "index": 1743,
+            "date": "2009-12-18",
+            "state": "up"
+          },
+          {
+            "index": 1799,
+            "date": "2010-03-12",
+            "state": "down"
+          },
+          {
+            "index": 1806,
+            "date": "2010-03-23",
+            "state": "up"
+          },
+          {
+            "index": 1863,
+            "date": "2010-06-11",
+            "state": "down"
+          },
+          {
+            "index": 1872,
+            "date": "2010-06-24",
+            "state": "up"
+          },
+          {
+            "index": 1926,
+            "date": "2010-09-10",
+            "state": "down"
+          },
+          {
+            "index": 1935,
+            "date": "2010-09-23",
+            "state": "up"
+          },
+          {
+            "index": 1989,
+            "date": "2010-12-13",
+            "state": "down"
+          },
+          {
+            "index": 1999,
+            "date": "2010-12-28",
+            "state": "up"
+          },
+          {
+            "index": 2053,
+            "date": "2011-03-16",
+            "state": "down"
+          },
+          {
+            "index": 2062,
+            "date": "2011-03-29",
+            "state": "up"
+          },
+          {
+            "index": 2116,
+            "date": "2011-06-15",
+            "state": "down"
+          },
+          {
+            "index": 2125,
+            "date": "2011-06-28",
+            "state": "up"
+          },
+          {
+            "index": 2182,
+            "date": "2011-09-19",
+            "state": "down"
+          },
+          {
+            "index": 2189,
+            "date": "2011-09-28",
+            "state": "up"
+          },
+          {
+            "index": 2250,
+            "date": "2011-12-28",
+            "state": "down"
+          },
+          {
+            "index": 2253,
+            "date": "2012-01-03",
+            "state": "up"
+          },
+          {
+            "index": 2313,
+            "date": "2012-03-29",
+            "state": "down"
+          },
+          {
+            "index": 2316,
+            "date": "2012-04-03",
+            "state": "up"
+          },
+          {
+            "index": 2377,
+            "date": "2012-06-28",
+            "state": "down"
+          },
+          {
+            "index": 2380,
+            "date": "2012-07-03",
+            "state": "up"
+          },
+          {
+            "index": 2440,
+            "date": "2012-09-27",
+            "state": "down"
+          },
+          {
+            "index": 2446,
+            "date": "2012-10-05",
+            "state": "up"
+          },
+          {
+            "index": 2505,
+            "date": "2013-01-04",
+            "state": "down"
+          },
+          {
+            "index": 2509,
+            "date": "2013-01-10",
+            "state": "up"
+          },
+          {
+            "index": 2571,
+            "date": "2013-04-11",
+            "state": "down"
+          },
+          {
+            "index": 2574,
+            "date": "2013-04-16",
+            "state": "up"
+          },
+          {
+            "index": 2634,
+            "date": "2013-07-11",
+            "state": "down"
+          },
+          {
+            "index": 2642,
+            "date": "2013-07-23",
+            "state": "up"
+          },
+          {
+            "index": 2697,
+            "date": "2013-10-09",
+            "state": "down"
+          },
+          {
+            "index": 2709,
+            "date": "2013-10-28",
+            "state": "up"
+          },
+          {
+            "index": 2760,
+            "date": "2014-01-13",
+            "state": "down"
+          },
+          {
+            "index": 2772,
+            "date": "2014-01-30",
+            "state": "up"
+          },
+          {
+            "index": 2824,
+            "date": "2014-04-15",
+            "state": "down"
+          },
+          {
+            "index": 2837,
+            "date": "2014-05-05",
+            "state": "up"
+          },
+          {
+            "index": 2888,
+            "date": "2014-07-17",
+            "state": "down"
+          },
+          {
+            "index": 2900,
+            "date": "2014-08-04",
+            "state": "up"
+          },
+          {
+            "index": 2951,
+            "date": "2014-10-16",
+            "state": "down"
+          },
+          {
+            "index": 2966,
+            "date": "2014-11-06",
+            "state": "up"
+          },
+          {
+            "index": 3017,
+            "date": "2015-01-23",
+            "state": "down"
+          },
+          {
+            "index": 3029,
+            "date": "2015-02-10",
+            "state": "up"
+          },
+          {
+            "index": 3080,
+            "date": "2015-04-23",
+            "state": "down"
+          },
+          {
+            "index": 3092,
+            "date": "2015-05-11",
+            "state": "up"
+          },
+          {
+            "index": 3143,
+            "date": "2015-07-23",
+            "state": "down"
+          },
+          {
+            "index": 3155,
+            "date": "2015-08-10",
+            "state": "up"
+          },
+          {
+            "index": 3206,
+            "date": "2015-10-22",
+            "state": "down"
+          },
+          {
+            "index": 3218,
+            "date": "2015-11-09",
+            "state": "up"
+          },
+          {
+            "index": 3269,
+            "date": "2016-01-26",
+            "state": "down"
+          },
+          {
+            "index": 3282,
+            "date": "2016-02-12",
+            "state": "up"
+          },
+          {
+            "index": 3333,
+            "date": "2016-04-27",
+            "state": "down"
+          },
+          {
+            "index": 3346,
+            "date": "2016-05-16",
+            "state": "up"
+          },
+          {
+            "index": 3396,
+            "date": "2016-07-27",
+            "state": "down"
+          },
+          {
+            "index": 3409,
+            "date": "2016-08-15",
+            "state": "up"
+          },
+          {
+            "index": 3462,
+            "date": "2016-10-31",
+            "state": "down"
+          },
+          {
+            "index": 3472,
+            "date": "2016-11-15",
+            "state": "up"
+          },
+          {
+            "index": 3527,
+            "date": "2017-02-06",
+            "state": "down"
+          },
+          {
+            "index": 3541,
+            "date": "2017-02-27",
+            "state": "up"
+          },
+          {
+            "index": 3593,
+            "date": "2017-05-11",
+            "state": "down"
+          },
+          {
+            "index": 3609,
+            "date": "2017-06-05",
+            "state": "up"
+          },
+          {
+            "index": 3656,
+            "date": "2017-08-10",
+            "state": "down"
+          },
+          {
+            "index": 3672,
+            "date": "2017-09-01",
+            "state": "up"
+          },
+          {
+            "index": 3722,
+            "date": "2017-11-14",
+            "state": "down"
+          },
+          {
+            "index": 3738,
+            "date": "2017-12-07",
+            "state": "up"
+          },
+          {
+            "index": 3785,
+            "date": "2018-02-15",
+            "state": "down"
+          },
+          {
+            "index": 3805,
+            "date": "2018-03-16",
+            "state": "up"
+          },
+          {
+            "index": 3849,
+            "date": "2018-05-18",
+            "state": "down"
+          },
+          {
+            "index": 3871,
+            "date": "2018-06-20",
+            "state": "up"
+          },
+          {
+            "index": 3913,
+            "date": "2018-08-20",
+            "state": "down"
+          },
+          {
+            "index": 3934,
+            "date": "2018-09-19",
+            "state": "up"
+          },
+          {
+            "index": 3981,
+            "date": "2018-11-28",
+            "state": "down"
+          },
+          {
+            "index": 3999,
+            "date": "2018-12-26",
+            "state": "up"
+          },
+          {
+            "index": 4044,
+            "date": "2019-03-04",
+            "state": "down"
+          },
+          {
+            "index": 4062,
+            "date": "2019-03-28",
+            "state": "up"
+          },
+          {
+            "index": 4107,
+            "date": "2019-06-03",
+            "state": "down"
+          },
+          {
+            "index": 4127,
+            "date": "2019-07-01",
+            "state": "up"
+          },
+          {
+            "index": 4172,
+            "date": "2019-09-04",
+            "state": "down"
+          },
+          {
+            "index": 4195,
+            "date": "2019-10-07",
+            "state": "up"
+          },
+          {
+            "index": 4237,
+            "date": "2019-12-09",
+            "state": "down"
+          },
+          {
+            "index": 4260,
+            "date": "2020-01-13",
+            "state": "up"
+          },
+          {
+            "index": 4303,
+            "date": "2020-03-16",
+            "state": "down"
+          },
+          {
+            "index": 4325,
+            "date": "2020-04-16",
+            "state": "up"
+          },
+          {
+            "index": 4366,
+            "date": "2020-06-15",
+            "state": "down"
+          },
+          {
+            "index": 4395,
+            "date": "2020-07-27",
+            "state": "up"
+          },
+          {
+            "index": 4430,
+            "date": "2020-09-15",
+            "state": "down"
+          },
+          {
+            "index": 4460,
+            "date": "2020-10-28",
+            "state": "up"
+          },
+          {
+            "index": 4493,
+            "date": "2020-12-16",
+            "state": "down"
+          },
+          {
+            "index": 4526,
+            "date": "2021-02-04",
+            "state": "up"
+          },
+          {
+            "index": 4556,
+            "date": "2021-03-19",
+            "state": "down"
+          },
+          {
+            "index": 4590,
+            "date": "2021-05-06",
+            "state": "up"
+          },
+          {
+            "index": 4620,
+            "date": "2021-06-18",
+            "state": "down"
+          },
+          {
+            "index": 4653,
+            "date": "2021-08-05",
+            "state": "up"
+          },
+          {
+            "index": 4684,
+            "date": "2021-09-20",
+            "state": "down"
+          },
+          {
+            "index": 4720,
+            "date": "2021-11-10",
+            "state": "up"
+          },
+          {
+            "index": 4748,
+            "date": "2021-12-22",
+            "state": "down"
+          },
+          {
+            "index": 4784,
+            "date": "2022-02-14",
+            "state": "up"
+          },
+          {
+            "index": 4813,
+            "date": "2022-03-28",
+            "state": "down"
+          },
+          {
+            "index": 4848,
+            "date": "2022-05-17",
+            "state": "up"
+          },
+          {
+            "index": 4878,
+            "date": "2022-06-30",
+            "state": "down"
+          },
+          {
+            "index": 4911,
+            "date": "2022-08-17",
+            "state": "up"
+          },
+          {
+            "index": 4943,
+            "date": "2022-10-03",
+            "state": "down"
+          },
+          {
+            "index": 4974,
+            "date": "2022-11-17",
+            "state": "up"
+          },
+          {
+            "index": 5007,
+            "date": "2023-01-06",
+            "state": "down"
+          },
+          {
+            "index": 5037,
+            "date": "2023-02-21",
+            "state": "up"
+          },
+          {
+            "index": 5079,
+            "date": "2023-04-20",
+            "state": "down"
+          },
+          {
+            "index": 5100,
+            "date": "2023-05-19",
+            "state": "up"
+          },
+          {
+            "index": 5142,
+            "date": "2023-07-21",
+            "state": "down"
+          },
+          {
+            "index": 5163,
+            "date": "2023-08-21",
+            "state": "up"
+          },
+          {
+            "index": 5205,
+            "date": "2023-10-20",
+            "state": "down"
+          },
+          {
+            "index": 5227,
+            "date": "2023-11-21",
+            "state": "up"
+          },
+          {
+            "index": 5270,
+            "date": "2024-01-25",
+            "state": "down"
+          },
+          {
+            "index": 5291,
+            "date": "2024-02-26",
+            "state": "up"
+          },
+          {
+            "index": 5334,
+            "date": "2024-04-26",
+            "state": "down"
+          },
+          {
+            "index": 5355,
+            "date": "2024-05-28",
+            "state": "up"
+          },
+          {
+            "index": 5397,
+            "date": "2024-07-29",
+            "state": "down"
+          },
+          {
+            "index": 5418,
+            "date": "2024-08-27",
+            "state": "up"
+          },
+          {
+            "index": 5461,
+            "date": "2024-10-29",
+            "state": "down"
+          },
+          {
+            "index": 5483,
+            "date": "2024-12-02",
+            "state": "up"
+          },
+          {
+            "index": 5525,
+            "date": "2025-02-03",
+            "state": "down"
+          },
+          {
+            "index": 5546,
+            "date": "2025-03-05",
+            "state": "up"
+          },
+          {
+            "index": 5589,
+            "date": "2025-05-06",
+            "state": "down"
+          },
+          {
+            "index": 5610,
+            "date": "2025-06-05",
+            "state": "up"
+          },
+          {
+            "index": 5655,
+            "date": "2025-08-11",
+            "state": "down"
+          },
+          {
+            "index": 5675,
+            "date": "2025-09-09",
+            "state": "up"
+          },
+          {
+            "index": 5719,
+            "date": "2025-11-12",
+            "state": "down"
+          },
+          {
+            "index": 5739,
+            "date": "2025-12-11",
+            "state": "up"
+          },
+          {
+            "index": 5782,
+            "date": "2026-02-13",
+            "state": "down"
+          },
+          {
+            "index": 5804,
+            "date": "2026-03-18",
+            "state": "up"
+          },
+          {
+            "index": 5849,
+            "date": "2026-05-20",
+            "state": "down"
+          },
+          {
+            "index": 5868,
+            "date": "2026-06-17",
+            "state": "up"
+          }
+        ]
+      },
+      "loader_note": "{\"availability\": \"available\", \"fallback_chain\": [\"fred_api\"], \"source_tier\": \"official_api\", \"source_url\": \"https://api.stlouisfed.org/fred/series/observations\"}"
+    },
+    {
+      "candidate": "hy_oas",
+      "label": "ICE BofA US High Yield OAS (BAMLH0A0HYM2)",
+      "source_name": "ICE BofA via FRED",
+      "source_tier": "official_relay",
+      "frequency": "daily_business_day",
+      "history": {
+        "availability": "available",
+        "usable_start": "2023-07-18",
+        "usable_end": "2026-07-16",
+        "observation_count": 787,
+        "calendar_span_days": 1094
+      },
+      "as_of_filter": {
+        "cutoff": "2026-07-19",
+        "rule": "date <= as_of",
+        "excluded_after_as_of_count": 0
+      },
+      "history_semantics": "candidate level observations",
+      "coverage_limit": "Current FRED relay coverage is limited to three years starting in April 2026. The measured rows are the currently accessible window, not the complete history; older data requires the licensed source and a retained PIT archive.",
+      "coverage_limit_source": "https://fred.stlouisfed.org/series/BAMLH0A0HYM2",
+      "known_revision_risks": [
+        "No ALFRED vintage was collected, so historical publication vintages are not proven point-in-time.",
+        "Provider methodology, bond-universe composition, corrections, or backfills can change history.",
+        "Starting in April 2026, FRED only exposes three years of this copyrighted ICE series; the accessible start is not the original series inception."
+      ],
+      "source_migration_breaks": [
+        {
+          "date": "2026-04-01",
+          "from_source_id": "FRED_BAMLH0A0HYM2_fuller_access",
+          "to_source_id": "FRED_BAMLH0A0HYM2_three_year_window",
+          "reasons": [
+            "source_access_window_changed_to_three_years"
+          ],
+          "note": "FRED states that starting in April 2026 this copyrighted ICE series only includes three years of observations; the measured start is an access-window boundary, not series inception.",
+          "source_url": "https://fred.stlouisfed.org/series/BAMLH0A0HYM2"
+        }
+      ],
+      "lineages": [],
+      "independent_directional_cluster_audit": {
+        "method": "same_direction_observations_separated_by_cleaned_trading_day_positions",
+        "minimum_gap_trading_days": 63,
+        "classification": "provided up/down state; otherwise sign of one-step value change",
+        "interpretation_limit": "mechanical data-density upper bound only; not an economic regime definition",
+        "count_total": 26,
+        "count_by_direction": {
+          "up": 13,
+          "down": 13
+        },
+        "accepted_observations": [
+          {
+            "index": 1,
+            "date": "2023-07-19",
+            "state": "down"
+          },
+          {
+            "index": 2,
+            "date": "2023-07-20",
+            "state": "up"
+          },
+          {
+            "index": 65,
+            "date": "2023-10-16",
+            "state": "down"
+          },
+          {
+            "index": 67,
+            "date": "2023-10-18",
+            "state": "up"
+          },
+          {
+            "index": 129,
+            "date": "2024-01-15",
+            "state": "down"
+          },
+          {
+            "index": 130,
+            "date": "2024-01-16",
+            "state": "up"
+          },
+          {
+            "index": 193,
+            "date": "2024-04-12",
+            "state": "up"
+          },
+          {
+            "index": 197,
+            "date": "2024-04-18",
+            "state": "down"
+          },
+          {
+            "index": 256,
+            "date": "2024-07-09",
+            "state": "up"
+          },
+          {
+            "index": 260,
+            "date": "2024-07-15",
+            "state": "down"
+          },
+          {
+            "index": 321,
+            "date": "2024-10-07",
+            "state": "up"
+          },
+          {
+            "index": 323,
+            "date": "2024-10-09",
+            "state": "down"
+          },
+          {
+            "index": 386,
+            "date": "2025-01-07",
+            "state": "up"
+          },
+          {
+            "index": 388,
+            "date": "2025-01-09",
+            "state": "down"
+          },
+          {
+            "index": 449,
+            "date": "2025-04-04",
+            "state": "up"
+          },
+          {
+            "index": 451,
+            "date": "2025-04-08",
+            "state": "down"
+          },
+          {
+            "index": 515,
+            "date": "2025-07-07",
+            "state": "up"
+          },
+          {
+            "index": 518,
+            "date": "2025-07-10",
+            "state": "down"
+          },
+          {
+            "index": 578,
+            "date": "2025-10-01",
+            "state": "up"
+          },
+          {
+            "index": 581,
+            "date": "2025-10-06",
+            "state": "down"
+          },
+          {
+            "index": 641,
+            "date": "2025-12-29",
+            "state": "up"
+          },
+          {
+            "index": 645,
+            "date": "2026-01-05",
+            "state": "down"
+          },
+          {
+            "index": 705,
+            "date": "2026-03-26",
+            "state": "up"
+          },
+          {
+            "index": 708,
+            "date": "2026-03-31",
+            "state": "down"
+          },
+          {
+            "index": 769,
+            "date": "2026-06-23",
+            "state": "up"
+          },
+          {
+            "index": 773,
+            "date": "2026-06-29",
+            "state": "down"
+          }
+        ]
+      },
+      "loader_note": "{\"availability\": \"available\", \"fallback_chain\": [\"fred_api\"], \"source_tier\": \"official_api\", \"source_url\": \"https://api.stlouisfed.org/fred/series/observations\"}"
+    },
+    {
+      "candidate": "ndx_valuation_percentile",
+      "label": "NDX valuation percentile lineage (Wind / History of Market)",
+      "source_name": "Wind snapshots and History of Market histories",
+      "source_tier": "mixed_non_stitchable",
+      "frequency": "mixed",
+      "history": {
+        "availability": "available",
+        "usable_start": "2001-04-30",
+        "usable_end": "2026-05-18",
+        "observation_count": 298,
+        "calendar_span_days": 9149
+      },
+      "as_of_filter": {
+        "cutoff": "2026-07-19",
+        "rule": "date <= as_of",
+        "excluded_after_as_of_count": 0
+      },
+      "history_semantics": "Representative underlying History of Market PE observations used to assess the raw history available for percentile calculation; this is not a time series of historical percentile readings, and it is not joined to Wind snapshots.",
+      "coverage_limit": null,
+      "coverage_limit_source": null,
+      "known_revision_risks": [
+        "Wind is archived by this project as current/recent snapshots, not as a complete historical point-in-time series.",
+        "History of Market is a third-party API with no retained publication vintages; its Bloomberg BEst attribution is not independently verified.",
+        "Trailing PE is daily while forward PE is monthly, and neither History of Market series is the same field or methodology as Wind's percentile snapshot.",
+        "Index composition and valuation methodology can change through time."
+      ],
+      "source_migration_breaks": [
+        {
+          "date": null,
+          "from_source_id": "WIND_NDX_VALUATION_SNAPSHOT",
+          "to_source_id": "HOM_TRAILING_PE/HOM_FORWARD_PE",
+          "reasons": [
+            "non_stitchable_source_and_methodology_lineage"
+          ],
+          "note": "Wind percentile snapshots and History of Market PE histories are separate lineages; no splice is permitted."
+        }
+      ],
+      "lineages": [
+        {
+          "source_id": "HOM_TRAILING_PE",
+          "methodology": "trailing_pe",
+          "availability": "available",
+          "usable_start": "2026-05-11",
+          "usable_end": "2026-07-17",
+          "observation_count": 48,
+          "calendar_span_days": 67,
+          "pit_vintages_retained": false
+        },
+        {
+          "source_id": "HOM_FORWARD_PE",
+          "methodology": "forward_pe",
+          "availability": "available",
+          "usable_start": "2001-04-30",
+          "usable_end": "2026-05-18",
+          "observation_count": 298,
+          "calendar_span_days": 9149,
+          "pit_vintages_retained": false
+        },
+        {
+          "source_id": "WIND_NDX_VALUATION_SNAPSHOT",
+          "methodology": "Wind PEHistoricalPercentile point snapshots",
+          "availability": "unavailable",
+          "observation_count": 0,
+          "usable_start": null,
+          "usable_end": null,
+          "calendar_span_days": null,
+          "pit_vintages_retained": false,
+          "note": "Archive scan counts only; dates and values are not joined to the third-party series."
+        }
+      ],
+      "independent_directional_cluster_audit": {
+        "method": "same_direction_observations_separated_by_cleaned_trading_day_positions",
+        "minimum_gap_trading_days": 63,
+        "classification": "provided up/down state; otherwise sign of one-step value change",
+        "interpretation_limit": "mechanical data-density upper bound only; not an economic regime definition",
+        "count_total": 10,
+        "count_by_direction": {
+          "up": 5,
+          "down": 5
+        },
+        "accepted_observations": [
+          {
+            "index": 1,
+            "date": "2001-05-31",
+            "state": "down"
+          },
+          {
+            "index": 2,
+            "date": "2001-06-29",
+            "state": "up"
+          },
+          {
+            "index": 64,
+            "date": "2006-12-29",
+            "state": "down"
+          },
+          {
+            "index": 65,
+            "date": "2007-01-31",
+            "state": "up"
+          },
+          {
+            "index": 128,
+            "date": "2012-04-30",
+            "state": "down"
+          },
+          {
+            "index": 130,
+            "date": "2012-06-29",
+            "state": "up"
+          },
+          {
+            "index": 193,
+            "date": "2017-09-29",
+            "state": "down"
+          },
+          {
+            "index": 194,
+            "date": "2017-10-31",
+            "state": "up"
+          },
+          {
+            "index": 256,
+            "date": "2022-12-30",
+            "state": "down"
+          },
+          {
+            "index": 257,
+            "date": "2023-01-31",
+            "state": "up"
+          }
+        ]
+      },
+      "loader_note": "Wind archive scan found 0 percentile snapshot(s); they are counted as lineage evidence only and are not stitched into the History of Market value series. The longer History of Market component is used only for the mechanical density count; trailing and forward series remain separate in lineages."
+    },
+    {
+      "candidate": "vix",
+      "label": "CBOE Volatility Index (^VIX)",
+      "source_name": "Yahoo Finance relay for Cboe VIX",
+      "source_tier": "third_party_relay",
+      "frequency": "trading_day",
+      "history": {
+        "availability": "available",
+        "usable_start": "1990-01-02",
+        "usable_end": "2026-07-17",
+        "observation_count": 9203,
+        "calendar_span_days": 13345
+      },
+      "as_of_filter": {
+        "cutoff": "2026-07-19",
+        "rule": "date <= as_of",
+        "excluded_after_as_of_count": 0
+      },
+      "history_semantics": "candidate level observations",
+      "coverage_limit": null,
+      "coverage_limit_source": null,
+      "known_revision_risks": [
+        "Market closes are normally final, but the third-party relay can correct, omit, or remap observations.",
+        "This audit does not use an official Cboe historical archive and does not retain vendor vintages."
+      ],
+      "source_migration_breaks": [],
+      "lineages": [],
+      "independent_directional_cluster_audit": {
+        "method": "same_direction_observations_separated_by_cleaned_trading_day_positions",
+        "minimum_gap_trading_days": 63,
+        "classification": "provided up/down state; otherwise sign of one-step value change",
+        "interpretation_limit": "mechanical data-density upper bound only; not an economic regime definition",
+        "count_total": 288,
+        "count_by_direction": {
+          "up": 144,
+          "down": 144
+        },
+        "accepted_observations": [
+          {
+            "index": 1,
+            "date": "1990-01-03",
+            "state": "up"
+          },
+          {
+            "index": 7,
+            "date": "1990-01-11",
+            "state": "down"
+          },
+          {
+            "index": 65,
+            "date": "1990-04-04",
+            "state": "up"
+          },
+          {
+            "index": 70,
+            "date": "1990-04-11",
+            "state": "down"
+          },
+          {
+            "index": 128,
+            "date": "1990-07-05",
+            "state": "up"
+          },
+          {
+            "index": 135,
+            "date": "1990-07-16",
+            "state": "down"
+          },
+          {
+            "index": 191,
+            "date": "1990-10-03",
+            "state": "up"
+          },
+          {
+            "index": 198,
+            "date": "1990-10-12",
+            "state": "down"
+          },
+          {
+            "index": 254,
+            "date": "1991-01-03",
+            "state": "up"
+          },
+          {
+            "index": 262,
+            "date": "1991-01-15",
+            "state": "down"
+          },
+          {
+            "index": 317,
+            "date": "1991-04-04",
+            "state": "up"
+          },
+          {
+            "index": 325,
+            "date": "1991-04-16",
+            "state": "down"
+          },
+          {
+            "index": 380,
+            "date": "1991-07-03",
+            "state": "up"
+          },
+          {
+            "index": 388,
+            "date": "1991-07-16",
+            "state": "down"
+          },
+          {
+            "index": 443,
+            "date": "1991-10-02",
+            "state": "up"
+          },
+          {
+            "index": 451,
+            "date": "1991-10-14",
+            "state": "down"
+          },
+          {
+            "index": 508,
+            "date": "1992-01-06",
+            "state": "up"
+          },
+          {
+            "index": 514,
+            "date": "1992-01-14",
+            "state": "down"
+          },
+          {
+            "index": 573,
+            "date": "1992-04-07",
+            "state": "up"
+          },
+          {
+            "index": 578,
+            "date": "1992-04-14",
+            "state": "down"
+          },
+          {
+            "index": 639,
+            "date": "1992-07-13",
+            "state": "up"
+          },
+          {
+            "index": 641,
+            "date": "1992-07-15",
+            "state": "down"
+          },
+          {
+            "index": 702,
+            "date": "1992-10-09",
+            "state": "up"
+          },
+          {
+            "index": 704,
+            "date": "1992-10-13",
+            "state": "down"
+          },
+          {
+            "index": 767,
+            "date": "1993-01-13",
+            "state": "down"
+          },
+          {
+            "index": 771,
+            "date": "1993-01-19",
+            "state": "up"
+          },
+          {
+            "index": 831,
+            "date": "1993-04-15",
+            "state": "down"
+          },
+          {
+            "index": 835,
+            "date": "1993-04-21",
+            "state": "up"
+          },
+          {
+            "index": 894,
+            "date": "1993-07-15",
+            "state": "down"
+          },
+          {
+            "index": 898,
+            "date": "1993-07-21",
+            "state": "up"
+          },
+          {
+            "index": 957,
+            "date": "1993-10-13",
+            "state": "down"
+          },
+          {
+            "index": 961,
+            "date": "1993-10-19",
+            "state": "up"
+          },
+          {
+            "index": 1022,
+            "date": "1994-01-14",
+            "state": "down"
+          },
+          {
+            "index": 1025,
+            "date": "1994-01-19",
+            "state": "up"
+          },
+          {
+            "index": 1085,
+            "date": "1994-04-15",
+            "state": "down"
+          },
+          {
+            "index": 1088,
+            "date": "1994-04-20",
+            "state": "up"
+          },
+          {
+            "index": 1151,
+            "date": "1994-07-21",
+            "state": "down"
+          },
+          {
+            "index": 1153,
+            "date": "1994-07-25",
+            "state": "up"
+          },
+          {
+            "index": 1216,
+            "date": "1994-10-21",
+            "state": "down"
+          },
+          {
+            "index": 1217,
+            "date": "1994-10-24",
+            "state": "up"
+          },
+          {
+            "index": 1280,
+            "date": "1995-01-24",
+            "state": "down"
+          },
+          {
+            "index": 1284,
+            "date": "1995-01-30",
+            "state": "up"
+          },
+          {
+            "index": 1344,
+            "date": "1995-04-26",
+            "state": "down"
+          },
+          {
+            "index": 1347,
+            "date": "1995-05-01",
+            "state": "up"
+          },
+          {
+            "index": 1410,
+            "date": "1995-07-31",
+            "state": "up"
+          },
+          {
+            "index": 1414,
+            "date": "1995-08-04",
+            "state": "down"
+          },
+          {
+            "index": 1477,
+            "date": "1995-11-02",
+            "state": "down"
+          },
+          {
+            "index": 1479,
+            "date": "1995-11-06",
+            "state": "up"
+          },
+          {
+            "index": 1542,
+            "date": "1996-02-06",
+            "state": "up"
+          },
+          {
+            "index": 1543,
+            "date": "1996-02-07",
+            "state": "down"
+          },
+          {
+            "index": 1606,
+            "date": "1996-05-08",
+            "state": "down"
+          },
+          {
+            "index": 1607,
+            "date": "1996-05-09",
+            "state": "up"
+          },
+          {
+            "index": 1669,
+            "date": "1996-08-07",
+            "state": "down"
+          },
+          {
+            "index": 1673,
+            "date": "1996-08-13",
+            "state": "up"
+          },
+          {
+            "index": 1732,
+            "date": "1996-11-05",
+            "state": "down"
+          },
+          {
+            "index": 1737,
+            "date": "1996-11-12",
+            "state": "up"
+          },
+          {
+            "index": 1796,
+            "date": "1997-02-06",
+            "state": "down"
+          },
+          {
+            "index": 1803,
+            "date": "1997-02-18",
+            "state": "up"
+          },
+          {
+            "index": 1859,
+            "date": "1997-05-08",
+            "state": "down"
+          },
+          {
+            "index": 1868,
+            "date": "1997-05-21",
+            "state": "up"
+          },
+          {
+            "index": 1922,
+            "date": "1997-08-07",
+            "state": "down"
+          },
+          {
+            "index": 1932,
+            "date": "1997-08-21",
+            "state": "up"
+          },
+          {
+            "index": 1985,
+            "date": "1997-11-05",
+            "state": "down"
+          },
+          {
+            "index": 1998,
+            "date": "1997-11-24",
+            "state": "up"
+          },
+          {
+            "index": 2048,
+            "date": "1998-02-06",
+            "state": "down"
+          },
+          {
+            "index": 2061,
+            "date": "1998-02-26",
+            "state": "up"
+          },
+          {
+            "index": 2111,
+            "date": "1998-05-08",
+            "state": "down"
+          },
+          {
+            "index": 2125,
+            "date": "1998-05-29",
+            "state": "up"
+          },
+          {
+            "index": 2174,
+            "date": "1998-08-07",
+            "state": "down"
+          },
+          {
+            "index": 2188,
+            "date": "1998-08-27",
+            "state": "up"
+          },
+          {
+            "index": 2237,
+            "date": "1998-11-05",
+            "state": "down"
+          },
+          {
+            "index": 2253,
+            "date": "1998-11-30",
+            "state": "up"
+          },
+          {
+            "index": 2302,
+            "date": "1999-02-10",
+            "state": "down"
+          },
+          {
+            "index": 2319,
+            "date": "1999-03-08",
+            "state": "up"
+          },
+          {
+            "index": 2366,
+            "date": "1999-05-13",
+            "state": "down"
+          },
+          {
+            "index": 2382,
+            "date": "1999-06-07",
+            "state": "up"
+          },
+          {
+            "index": 2429,
+            "date": "1999-08-12",
+            "state": "down"
+          },
+          {
+            "index": 2446,
+            "date": "1999-09-07",
+            "state": "up"
+          },
+          {
+            "index": 2492,
+            "date": "1999-11-10",
+            "state": "down"
+          },
+          {
+            "index": 2509,
+            "date": "1999-12-06",
+            "state": "up"
+          },
+          {
+            "index": 2557,
+            "date": "2000-02-14",
+            "state": "down"
+          },
+          {
+            "index": 2572,
+            "date": "2000-03-07",
+            "state": "up"
+          },
+          {
+            "index": 2620,
+            "date": "2000-05-15",
+            "state": "down"
+          },
+          {
+            "index": 2635,
+            "date": "2000-06-06",
+            "state": "up"
+          },
+          {
+            "index": 2683,
+            "date": "2000-08-14",
+            "state": "down"
+          },
+          {
+            "index": 2698,
+            "date": "2000-09-05",
+            "state": "up"
+          },
+          {
+            "index": 2748,
+            "date": "2000-11-14",
+            "state": "down"
+          },
+          {
+            "index": 2761,
+            "date": "2000-12-04",
+            "state": "up"
+          },
+          {
+            "index": 2811,
+            "date": "2001-02-15",
+            "state": "down"
+          },
+          {
+            "index": 2825,
+            "date": "2001-03-08",
+            "state": "up"
+          },
+          {
+            "index": 2874,
+            "date": "2001-05-17",
+            "state": "down"
+          },
+          {
+            "index": 2889,
+            "date": "2001-06-08",
+            "state": "up"
+          },
+          {
+            "index": 2939,
+            "date": "2001-08-20",
+            "state": "down"
+          },
+          {
+            "index": 2952,
+            "date": "2001-09-07",
+            "state": "up"
+          },
+          {
+            "index": 3002,
+            "date": "2001-11-23",
+            "state": "down"
+          },
+          {
+            "index": 3016,
+            "date": "2001-12-13",
+            "state": "up"
+          },
+          {
+            "index": 3065,
+            "date": "2002-02-26",
+            "state": "down"
+          },
+          {
+            "index": 3079,
+            "date": "2002-03-18",
+            "state": "up"
+          },
+          {
+            "index": 3131,
+            "date": "2002-05-31",
+            "state": "down"
+          },
+          {
+            "index": 3144,
+            "date": "2002-06-19",
+            "state": "up"
+          },
+          {
+            "index": 3195,
+            "date": "2002-08-30",
+            "state": "down"
+          },
+          {
+            "index": 3208,
+            "date": "2002-09-19",
+            "state": "up"
+          },
+          {
+            "index": 3259,
+            "date": "2002-12-02",
+            "state": "down"
+          },
+          {
+            "index": 3271,
+            "date": "2002-12-18",
+            "state": "up"
+          },
+          {
+            "index": 3322,
+            "date": "2003-03-05",
+            "state": "down"
+          },
+          {
+            "index": 3335,
+            "date": "2003-03-24",
+            "state": "up"
+          },
+          {
+            "index": 3385,
+            "date": "2003-06-04",
+            "state": "down"
+          },
+          {
+            "index": 3398,
+            "date": "2003-06-23",
+            "state": "up"
+          },
+          {
+            "index": 3449,
+            "date": "2003-09-04",
+            "state": "down"
+          },
+          {
+            "index": 3461,
+            "date": "2003-09-22",
+            "state": "up"
+          },
+          {
+            "index": 3513,
+            "date": "2003-12-04",
+            "state": "down"
+          },
+          {
+            "index": 3524,
+            "date": "2003-12-19",
+            "state": "up"
+          },
+          {
+            "index": 3580,
+            "date": "2004-03-12",
+            "state": "down"
+          },
+          {
+            "index": 3593,
+            "date": "2004-03-31",
+            "state": "up"
+          },
+          {
+            "index": 3644,
+            "date": "2004-06-15",
+            "state": "down"
+          },
+          {
+            "index": 3656,
+            "date": "2004-07-01",
+            "state": "up"
+          },
+          {
+            "index": 3709,
+            "date": "2004-09-16",
+            "state": "down"
+          },
+          {
+            "index": 3719,
+            "date": "2004-09-30",
+            "state": "up"
+          },
+          {
+            "index": 3772,
+            "date": "2004-12-15",
+            "state": "down"
+          },
+          {
+            "index": 3782,
+            "date": "2004-12-30",
+            "state": "up"
+          },
+          {
+            "index": 3835,
+            "date": "2005-03-17",
+            "state": "down"
+          },
+          {
+            "index": 3845,
+            "date": "2005-04-01",
+            "state": "up"
+          },
+          {
+            "index": 3898,
+            "date": "2005-06-16",
+            "state": "down"
+          },
+          {
+            "index": 3908,
+            "date": "2005-06-30",
+            "state": "up"
+          },
+          {
+            "index": 3961,
+            "date": "2005-09-15",
+            "state": "down"
+          },
+          {
+            "index": 3973,
+            "date": "2005-10-03",
+            "state": "up"
+          },
+          {
+            "index": 4024,
+            "date": "2005-12-14",
+            "state": "down"
+          },
+          {
+            "index": 4037,
+            "date": "2006-01-04",
+            "state": "up"
+          },
+          {
+            "index": 4088,
+            "date": "2006-03-20",
+            "state": "down"
+          },
+          {
+            "index": 4101,
+            "date": "2006-04-06",
+            "state": "up"
+          },
+          {
+            "index": 4152,
+            "date": "2006-06-20",
+            "state": "down"
+          },
+          {
+            "index": 4164,
+            "date": "2006-07-07",
+            "state": "up"
+          },
+          {
+            "index": 4216,
+            "date": "2006-09-20",
+            "state": "down"
+          },
+          {
+            "index": 4227,
+            "date": "2006-10-05",
+            "state": "up"
+          },
+          {
+            "index": 4279,
+            "date": "2006-12-19",
+            "state": "down"
+          },
+          {
+            "index": 4295,
+            "date": "2007-01-16",
+            "state": "up"
+          },
+          {
+            "index": 4347,
+            "date": "2007-03-30",
+            "state": "down"
+          },
+          {
+            "index": 4358,
+            "date": "2007-04-17",
+            "state": "up"
+          },
+          {
+            "index": 4411,
+            "date": "2007-07-02",
+            "state": "down"
+          },
+          {
+            "index": 4421,
+            "date": "2007-07-17",
+            "state": "up"
+          },
+          {
+            "index": 4474,
+            "date": "2007-10-01",
+            "state": "down"
+          },
+          {
+            "index": 4484,
+            "date": "2007-10-15",
+            "state": "up"
+          },
+          {
+            "index": 4539,
+            "date": "2008-01-03",
+            "state": "down"
+          },
+          {
+            "index": 4547,
+            "date": "2008-01-15",
+            "state": "up"
+          },
+          {
+            "index": 4602,
+            "date": "2008-04-04",
+            "state": "down"
+          },
+          {
+            "index": 4613,
+            "date": "2008-04-21",
+            "state": "up"
+          },
+          {
+            "index": 4665,
+            "date": "2008-07-03",
+            "state": "down"
+          },
+          {
+            "index": 4678,
+            "date": "2008-07-23",
+            "state": "up"
+          },
+          {
+            "index": 4729,
+            "date": "2008-10-03",
+            "state": "down"
+          },
+          {
+            "index": 4741,
+            "date": "2008-10-21",
+            "state": "up"
+          },
+          {
+            "index": 4792,
+            "date": "2009-01-05",
+            "state": "down"
+          },
+          {
+            "index": 4804,
+            "date": "2009-01-22",
+            "state": "up"
+          },
+          {
+            "index": 4856,
+            "date": "2009-04-07",
+            "state": "down"
+          },
+          {
+            "index": 4869,
+            "date": "2009-04-27",
+            "state": "up"
+          },
+          {
+            "index": 4920,
+            "date": "2009-07-09",
+            "state": "down"
+          },
+          {
+            "index": 4932,
+            "date": "2009-07-27",
+            "state": "up"
+          },
+          {
+            "index": 4983,
+            "date": "2009-10-07",
+            "state": "down"
+          },
+          {
+            "index": 4995,
+            "date": "2009-10-23",
+            "state": "up"
+          },
+          {
+            "index": 5046,
+            "date": "2010-01-07",
+            "state": "down"
+          },
+          {
+            "index": 5060,
+            "date": "2010-01-28",
+            "state": "up"
+          },
+          {
+            "index": 5109,
+            "date": "2010-04-09",
+            "state": "down"
+          },
+          {
+            "index": 5124,
+            "date": "2010-04-30",
+            "state": "up"
+          },
+          {
+            "index": 5172,
+            "date": "2010-07-09",
+            "state": "down"
+          },
+          {
+            "index": 5189,
+            "date": "2010-08-03",
+            "state": "up"
+          },
+          {
+            "index": 5236,
+            "date": "2010-10-08",
+            "state": "down"
+          },
+          {
+            "index": 5252,
+            "date": "2010-11-01",
+            "state": "up"
+          },
+          {
+            "index": 5299,
+            "date": "2011-01-07",
+            "state": "down"
+          },
+          {
+            "index": 5319,
+            "date": "2011-02-07",
+            "state": "up"
+          },
+          {
+            "index": 5363,
+            "date": "2011-04-11",
+            "state": "down"
+          },
+          {
+            "index": 5384,
+            "date": "2011-05-11",
+            "state": "up"
+          },
+          {
+            "index": 5429,
+            "date": "2011-07-15",
+            "state": "down"
+          },
+          {
+            "index": 5447,
+            "date": "2011-08-10",
+            "state": "up"
+          },
+          {
+            "index": 5492,
+            "date": "2011-10-13",
+            "state": "down"
+          },
+          {
+            "index": 5511,
+            "date": "2011-11-09",
+            "state": "up"
+          },
+          {
+            "index": 5557,
+            "date": "2012-01-18",
+            "state": "down"
+          },
+          {
+            "index": 5574,
+            "date": "2012-02-10",
+            "state": "up"
+          },
+          {
+            "index": 5621,
+            "date": "2012-04-19",
+            "state": "down"
+          },
+          {
+            "index": 5637,
+            "date": "2012-05-11",
+            "state": "up"
+          },
+          {
+            "index": 5684,
+            "date": "2012-07-19",
+            "state": "down"
+          },
+          {
+            "index": 5702,
+            "date": "2012-08-14",
+            "state": "up"
+          },
+          {
+            "index": 5747,
+            "date": "2012-10-17",
+            "state": "down"
+          },
+          {
+            "index": 5765,
+            "date": "2012-11-14",
+            "state": "up"
+          },
+          {
+            "index": 5810,
+            "date": "2013-01-22",
+            "state": "down"
+          },
+          {
+            "index": 5830,
+            "date": "2013-02-20",
+            "state": "up"
+          },
+          {
+            "index": 5873,
+            "date": "2013-04-23",
+            "state": "down"
+          },
+          {
+            "index": 5893,
+            "date": "2013-05-21",
+            "state": "up"
+          },
+          {
+            "index": 5938,
+            "date": "2013-07-25",
+            "state": "down"
+          },
+          {
+            "index": 5957,
+            "date": "2013-08-21",
+            "state": "up"
+          },
+          {
+            "index": 6002,
+            "date": "2013-10-24",
+            "state": "down"
+          },
+          {
+            "index": 6020,
+            "date": "2013-11-19",
+            "state": "up"
+          },
+          {
+            "index": 6065,
+            "date": "2014-01-27",
+            "state": "down"
+          },
+          {
+            "index": 6086,
+            "date": "2014-02-26",
+            "state": "up"
+          },
+          {
+            "index": 6128,
+            "date": "2014-04-28",
+            "state": "down"
+          },
+          {
+            "index": 6149,
+            "date": "2014-05-28",
+            "state": "up"
+          },
+          {
+            "index": 6191,
+            "date": "2014-07-28",
+            "state": "down"
+          },
+          {
+            "index": 6213,
+            "date": "2014-08-27",
+            "state": "up"
+          },
+          {
+            "index": 6254,
+            "date": "2014-10-24",
+            "state": "down"
+          },
+          {
+            "index": 6278,
+            "date": "2014-11-28",
+            "state": "up"
+          },
+          {
+            "index": 6319,
+            "date": "2015-01-29",
+            "state": "down"
+          },
+          {
+            "index": 6341,
+            "date": "2015-03-03",
+            "state": "up"
+          },
+          {
+            "index": 6383,
+            "date": "2015-05-01",
+            "state": "down"
+          },
+          {
+            "index": 6404,
+            "date": "2015-06-02",
+            "state": "up"
+          },
+          {
+            "index": 6446,
+            "date": "2015-07-31",
+            "state": "down"
+          },
+          {
+            "index": 6467,
+            "date": "2015-08-31",
+            "state": "up"
+          },
+          {
+            "index": 6511,
+            "date": "2015-11-02",
+            "state": "down"
+          },
+          {
+            "index": 6530,
+            "date": "2015-11-30",
+            "state": "up"
+          },
+          {
+            "index": 6574,
+            "date": "2016-02-03",
+            "state": "down"
+          },
+          {
+            "index": 6595,
+            "date": "2016-03-04",
+            "state": "up"
+          },
+          {
+            "index": 6638,
+            "date": "2016-05-05",
+            "state": "down"
+          },
+          {
+            "index": 6659,
+            "date": "2016-06-06",
+            "state": "up"
+          },
+          {
+            "index": 6701,
+            "date": "2016-08-04",
+            "state": "down"
+          },
+          {
+            "index": 6723,
+            "date": "2016-09-06",
+            "state": "up"
+          },
+          {
+            "index": 6767,
+            "date": "2016-11-07",
+            "state": "down"
+          },
+          {
+            "index": 6788,
+            "date": "2016-12-07",
+            "state": "up"
+          },
+          {
+            "index": 6831,
+            "date": "2017-02-09",
+            "state": "down"
+          },
+          {
+            "index": 6853,
+            "date": "2017-03-14",
+            "state": "up"
+          },
+          {
+            "index": 6895,
+            "date": "2017-05-12",
+            "state": "down"
+          },
+          {
+            "index": 6917,
+            "date": "2017-06-14",
+            "state": "up"
+          },
+          {
+            "index": 6958,
+            "date": "2017-08-11",
+            "state": "down"
+          },
+          {
+            "index": 6984,
+            "date": "2017-09-19",
+            "state": "up"
+          },
+          {
+            "index": 7026,
+            "date": "2017-11-16",
+            "state": "down"
+          },
+          {
+            "index": 7047,
+            "date": "2017-12-18",
+            "state": "up"
+          },
+          {
+            "index": 7090,
+            "date": "2018-02-21",
+            "state": "down"
+          },
+          {
+            "index": 7111,
+            "date": "2018-03-22",
+            "state": "up"
+          },
+          {
+            "index": 7154,
+            "date": "2018-05-23",
+            "state": "down"
+          },
+          {
+            "index": 7174,
+            "date": "2018-06-21",
+            "state": "up"
+          },
+          {
+            "index": 7217,
+            "date": "2018-08-22",
+            "state": "down"
+          },
+          {
+            "index": 7237,
+            "date": "2018-09-20",
+            "state": "up"
+          },
+          {
+            "index": 7281,
+            "date": "2018-11-21",
+            "state": "down"
+          },
+          {
+            "index": 7300,
+            "date": "2018-12-20",
+            "state": "up"
+          },
+          {
+            "index": 7345,
+            "date": "2019-02-27",
+            "state": "down"
+          },
+          {
+            "index": 7365,
+            "date": "2019-03-27",
+            "state": "up"
+          },
+          {
+            "index": 7409,
+            "date": "2019-05-30",
+            "state": "down"
+          },
+          {
+            "index": 7434,
+            "date": "2019-07-05",
+            "state": "up"
+          },
+          {
+            "index": 7472,
+            "date": "2019-08-28",
+            "state": "down"
+          },
+          {
+            "index": 7499,
+            "date": "2019-10-07",
+            "state": "up"
+          },
+          {
+            "index": 7535,
+            "date": "2019-11-26",
+            "state": "down"
+          },
+          {
+            "index": 7565,
+            "date": "2020-01-10",
+            "state": "up"
+          },
+          {
+            "index": 7599,
+            "date": "2020-03-02",
+            "state": "down"
+          },
+          {
+            "index": 7630,
+            "date": "2020-04-15",
+            "state": "up"
+          },
+          {
+            "index": 7663,
+            "date": "2020-06-02",
+            "state": "down"
+          },
+          {
+            "index": 7694,
+            "date": "2020-07-16",
+            "state": "up"
+          },
+          {
+            "index": 7727,
+            "date": "2020-09-01",
+            "state": "down"
+          },
+          {
+            "index": 7757,
+            "date": "2020-10-14",
+            "state": "up"
+          },
+          {
+            "index": 7793,
+            "date": "2020-12-04",
+            "state": "down"
+          },
+          {
+            "index": 7820,
+            "date": "2021-01-14",
+            "state": "up"
+          },
+          {
+            "index": 7856,
+            "date": "2021-03-09",
+            "state": "down"
+          },
+          {
+            "index": 7884,
+            "date": "2021-04-19",
+            "state": "up"
+          },
+          {
+            "index": 7921,
+            "date": "2021-06-10",
+            "state": "down"
+          },
+          {
+            "index": 7947,
+            "date": "2021-07-19",
+            "state": "up"
+          },
+          {
+            "index": 7986,
+            "date": "2021-09-13",
+            "state": "down"
+          },
+          {
+            "index": 8011,
+            "date": "2021-10-18",
+            "state": "up"
+          },
+          {
+            "index": 8049,
+            "date": "2021-12-10",
+            "state": "down"
+          },
+          {
+            "index": 8074,
+            "date": "2022-01-18",
+            "state": "up"
+          },
+          {
+            "index": 8113,
+            "date": "2022-03-15",
+            "state": "down"
+          },
+          {
+            "index": 8139,
+            "date": "2022-04-21",
+            "state": "up"
+          },
+          {
+            "index": 8176,
+            "date": "2022-06-14",
+            "state": "down"
+          },
+          {
+            "index": 8203,
+            "date": "2022-07-25",
+            "state": "up"
+          },
+          {
+            "index": 8239,
+            "date": "2022-09-14",
+            "state": "down"
+          },
+          {
+            "index": 8267,
+            "date": "2022-10-24",
+            "state": "up"
+          },
+          {
+            "index": 8302,
+            "date": "2022-12-13",
+            "state": "down"
+          },
+          {
+            "index": 8333,
+            "date": "2023-01-30",
+            "state": "up"
+          },
+          {
+            "index": 8365,
+            "date": "2023-03-16",
+            "state": "down"
+          },
+          {
+            "index": 8396,
+            "date": "2023-05-01",
+            "state": "up"
+          },
+          {
+            "index": 8429,
+            "date": "2023-06-16",
+            "state": "down"
+          },
+          {
+            "index": 8459,
+            "date": "2023-08-01",
+            "state": "up"
+          },
+          {
+            "index": 8496,
+            "date": "2023-09-22",
+            "state": "down"
+          },
+          {
+            "index": 8530,
+            "date": "2023-11-09",
+            "state": "up"
+          },
+          {
+            "index": 8559,
+            "date": "2023-12-21",
+            "state": "down"
+          },
+          {
+            "index": 8593,
+            "date": "2024-02-12",
+            "state": "up"
+          },
+          {
+            "index": 8624,
+            "date": "2024-03-27",
+            "state": "down"
+          },
+          {
+            "index": 8656,
+            "date": "2024-05-13",
+            "state": "up"
+          },
+          {
+            "index": 8687,
+            "date": "2024-06-27",
+            "state": "down"
+          },
+          {
+            "index": 8724,
+            "date": "2024-08-20",
+            "state": "up"
+          },
+          {
+            "index": 8750,
+            "date": "2024-09-26",
+            "state": "down"
+          },
+          {
+            "index": 8788,
+            "date": "2024-11-19",
+            "state": "up"
+          },
+          {
+            "index": 8816,
+            "date": "2024-12-31",
+            "state": "down"
+          },
+          {
+            "index": 8851,
+            "date": "2025-02-24",
+            "state": "up"
+          },
+          {
+            "index": 8883,
+            "date": "2025-04-09",
+            "state": "down"
+          },
+          {
+            "index": 8914,
+            "date": "2025-05-23",
+            "state": "up"
+          },
+          {
+            "index": 8949,
+            "date": "2025-07-16",
+            "state": "down"
+          },
+          {
+            "index": 8977,
+            "date": "2025-08-25",
+            "state": "up"
+          },
+          {
+            "index": 9013,
+            "date": "2025-10-15",
+            "state": "down"
+          },
+          {
+            "index": 9045,
+            "date": "2025-12-01",
+            "state": "up"
+          },
+          {
+            "index": 9076,
+            "date": "2026-01-15",
+            "state": "down"
+          },
+          {
+            "index": 9109,
+            "date": "2026-03-05",
+            "state": "up"
+          },
+          {
+            "index": 9139,
+            "date": "2026-04-17",
+            "state": "down"
+          },
+          {
+            "index": 9172,
+            "date": "2026-06-03",
+            "state": "up"
+          }
+        ]
+      },
+      "loader_note": "project yfinance relay/cache"
+    }
+  ],
+  "admission": {
+    "analogy_engine": "rejected_insufficient_clean_pit_history",
+    "reasons": [
+      "No candidate has a retained full publication-vintage history proving point-in-time availability.",
+      "NDX valuation history has non-stitchable Wind and History of Market lineages.",
+      "Revision/PIT caveats remain for: dfii10, hy_oas, ndx_valuation_percentile, vix."
+    ],
+    "next_step": "Do not build or admit an analogy engine from this audit; first establish clean PIT archives and revise the frozen preregistration draft in a separate work order."
+  }
+}

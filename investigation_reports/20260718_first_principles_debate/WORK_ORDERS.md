@@ -41,7 +41,7 @@
 
 **明确不做**：不回改 `wo_r8_live_verify` 历史产物；不做"重大事件触发重跑"的调度器（那在 W2 之外另议）；不动 L1-L5。
 
-**状态**：⬜ 未开工
+**状态**：✅ 已完成（2026-07-18；新增综合报告时点一致性硬闸门、具体日期阻断原因、LLM 跳过说明及第三层页面警示；坏日期与日期不足均 fail-closed，非零容差放行会留痕；全量 808 passed、58 条既有 warning；reviewer 复核无阻断问题；未提交 git）
 
 ---
 
@@ -61,7 +61,7 @@
 
 **测试**：含 cannot_answer_yet 的 fixture → 清单生成且 `missing` 与源字段逐字一致；request 全文里不出现 stance/verdict 字符串（用 fixture 里埋的哨兵短语断言）；无缺口 run → 空清单文件照常落盘（`requests: []`）。
 
-**状态**：⬜ 未开工
+**状态**：✅ 已完成（2026-07-18；新增 `recollection_requests.json` 与报告“下轮建议补采清单”；仅复制问答缺口、不可检验冲突 note、调查报告明确缺数据字段，判决/问答/调查正文哨兵均未泄漏；候选函数只直接提取并经 Evidence Registry 核验，未知项留空；无缺口也落空文件；消费方式为下一轮 run 的人工或调度器参考输入，本单不自动执行、不回灌旧 run；全量 812 passed、58 条既有 warning；reviewer 复核无阻断问题；未提交 git）
 
 ---
 
@@ -92,7 +92,7 @@
 
 **测试**：合约 validator 两条（%无 refs 拒收、全空归 None）；prompt 含新块断言；reporter 渲染/缺席两态；existing final fixtures 不带新字段仍通过（向后兼容）。
 
-**状态**：⬜ 未开工
+**状态**：✅ 已完成（2026-07-18；新增 `LongTermAssessment` 合约并与 6-12 月周期判断分离，数字百分比回报无有效 refs 会拒收、四项正文全空归 None；Fable 提示词逐字追加；默认 brief 与其他报告入口均有长期评估折叠小节；core_position 展示层缺政策书说明时固定追加“核心仓动作须经个人投资政策书与再平衡带确认”，不改模型原始输出；全量 817 passed、58 条既有 warning；reviewer 复核无阻断问题；未做真实 LLM 在线抽样或浏览器视觉回归，属剩余低风险；未提交 git）
 
 ---
 
@@ -116,7 +116,7 @@
 
 **测试**：三分册各一条构造样本测试（含覆盖不足的诚实降级）；prompt 新纪律断言；supporting_only 权限断言（不得出现在核心结论支撑 refs——沿用既有权限测试模式）。
 
-**状态**：⬜ 未开工
+**状态**：✅ 已完成（2026-07-19；新增 `expectation_vs_realized.json` 三分册：盈利只比较 PIT 自建 vintage 的 `+1y current`，30/90 天覆盖不足不借供应商回看字段冒充；利率只接纳 DataIntegrity 可发布且 packet/path/旧台账日期一致的历史 run，实际兑现使用 FRED EFFR、异常时回退 DFF，并按美国联邦营业日、发布可见日和整月应有观察完整性 fail-closed；波动溢价使用 VIX 与后续 21 个 QQQ 交易日实现波动，样本少于 20 不报分位。台账为 `supporting_only`，不进 L1-L5，只有同日且权限匹配的精简摘要可进入治理阶段定价叙事，错日/越权均降级或拒绝；主流程及失败说明双重失败也不阻断；Fable 分歧声明逐字加入提示词，报告外部对照与审计区展示三分册摘要。全量 832 passed、58 条既有 warning；reviewer 最终复核 no findings；未做真实 FRED 在线抽样，属剩余低风险；未提交 git）
 
 ---
 
@@ -132,7 +132,7 @@
 
 **测试**：taxonomy 映射三样例；ledger append 幂等/追加语义。
 
-**状态**：⬜ 未开工
+**状态**：✅ 已完成（2026-07-19；每条已评分 claim 新增 `error_taxonomy`，只把既有评分已明确判定的 `consistent → correct`、反向走势触发 falsifier → `direction_wrong`，其余归 `not_scorable`；当前规则不能区分 `magnitude_wrong` / `condition_never_triggered`，故保留合法枚举但不猜测填充。`src/state_ledger.py` 新增方法修正台账写入与严格 schema 校验，`change_ref` 必须同时满足哈希格式并真实解析到仓库 commit；精确重复幂等跳过、不同记录追加。`output/state_ledger/method_revision_ledger.jsonl` 已建立且为 0 字节，无虚构条目；该路径被 `output/` 忽略，未来 Fable 统一提交时须显式 `git add -f output/state_ledger/method_revision_ledger.jsonl`。复盘流程已写入 `RUN_REVIEW_CHECKLIST.md`，明确由 Fable/用户主持、系统不自动改方法。全量 837 passed、58 条既有 warning；reviewer 最终复核 no findings；未提交 git）
 
 ---
 
@@ -150,7 +150,7 @@
 
 **测试**：脚本冒烟（构造小样本序列断点/簇计数各一例）。
 
-**状态**：⬜ 未开工
+**状态**：✅ 已完成（2026-07-19；新增独立脚本 `src/analog_history_audit.py` 及 JSON/Markdown 审计产物，只统计数据覆盖、来源断点和“同向观察至少间隔 63 个清洗后交易日位置”的机械簇上界，明确它不是经济政权定义；未计算状态后的收益、条件分布、胜率、收益估计或类比信号，也未接入主链或 L1-L5。`as_of` 已作为硬过滤剔除未来观察并记录剔除数；DFII10、HY OAS、VIX 均披露 PIT vintage 缺失及修订风险；Wind 快照与 History of Market trailing/forward 谱系分别审计、禁止拼接。FRED 官方自 2026-04 起仅开放 `BAMLH0A0HYM2` 最近三年，产物已把 2023 起点标为访问窗口而非序列起点并记录来源断点。审计结论为 `rejected_insufficient_clean_pit_history`，不准入任何类比引擎；全量 841 passed、58 条既有 warning；reviewer 最终复核 no findings；未提交 git）
 
 ---
 
@@ -176,7 +176,7 @@
 
 **测试**：发布时滞 PIT 各一条（effective_date 早于可见日 → 不可见）；权限标签断言；断源 unavailable 断言。
 
-**状态**：⬜ 未开工
+**状态**：✅ 已完成（2026-07-19；新增 CFTC Legacy Futures-Only Nasdaq-100 非商业持仓与 FINRA Margin Statistics 两条 L2 官方事实源，均按字段限制为 `supporting_only` 并接入 Evidence Passport、注册表、证据族和 Fable 逐字判读卡。CFTC 按周二快照、周五起可见建模，只在恰有前一周数据时计算周变化；Legacy 不含 TFF leveraged funds，未混称、未计算无 PIT 档案支撑的历史分位。本机真实 CFTC API 抽样因 TLS/SSL 失败而诚实返回 unavailable，构造样本已验证解析、发布时滞和异常值 fail-closed；FINRA 官方 Excel 实连可用，按月末后 21 个自然日保守放行，严格绑定列名与月份格式并拒绝未来、非有限或负数余额。两源仅支持 live + 近期，超过 120 天的历史日期在接入不可变 publication vintage 前拒绝；升级路径已写入 `DATA_COVERAGE_REVIEW.md`。ETF 申赎资金流因没有本项目可接受的官方免费源，本轮未接入。定向 66 passed、4 条既有 warning；全量 868 passed、58 条既有 warning；`git diff --check` 通过；reviewer 最终复核无 findings；未提交 git）
 
 ---
 
@@ -190,4 +190,14 @@
 
 ## 验收记录区（Fable 填写）
 
-（空）
+**2026-07-19 凌晨，Fable 逐单亲验，W1-W7 全部通过，统一提交（W8 维持冻结，未发现越界实现）。**
+
+- 全量测试亲跑：**868 passed、58 条既有 warning**（基线 800，新增 68 条全部随单交付），与各单状态行自报一致。
+- **W1**：亲读 `_check_time_consistency` / `_publish_gate` / `_llm_adjudication` 全部改动。日期收集范围、"≥2 且全等"规则、容差放行留痕、无效日期 fail-closed、时点不一致时 LLM 裁决跳过、reporter 警示条（复用 `boundary-card bad`）逐项与工单一致；8 条新测试覆盖错配/一致/缺日期/容差/无效日期/调查报告参与/跳过裁决仍警示。
+- **W2**：`_build_recollection_requests` 只接收窄参数 + 调查报告字段白名单，代码结构上够不到判决正文；候选函数经 Evidence Registry 核验、未知不猜；哨兵泄漏与空清单落盘测试在 `test_integrated_adjudication.py`。
+- **W3**：`LongTermAssessment` 合约（% 数字无 refs 拒收、四正文全空归 None）；Fable 提示词块与工单原文逐字比对一致；报告折叠小节 + core_position 缺"政策书"字样时程序化追加固定文案，只动展示层不改模型输出。
+- **W4**：`expectation_ledger.py` 三分册 PIT 纪律亲读——vintage 只取 ≤effective_date 快照并明确拒用供应商回看字段（`eps_trend.30daysAgo/90daysAgo`）；利率对照只接纳可发布历史 run，FRED 实际值按可见日过滤、按营业日完整性 fail-closed；波动溢价样本 <20 不报分位。主链失败不阻断；治理侧摘要有"同日 + supporting_only"双闸；分歧声明纪律逐字入提示词。
+- **W5**：error_taxonomy 映射保守（consistent→correct、价格反向触发 falsifier→direction_wrong、其余 not_scorable，不猜幅度/条件类）；`append_method_revision_entry` 严格校验（commit 必须真实存在、日期次序、要素枚举）+ 精确重复幂等；空台账 0 字节已建并 `git add -f` 入库；复盘流程三段入 `RUN_REVIEW_CHECKLIST.md`。
+- **W6**：审计脚本独立于主链；产物无任何收益/胜率/条件分布数字；结论 `rejected_insufficient_clean_pit_history` 属合格产出；HY OAS 的 FRED 三年访问窗如实标为访问边界而非序列起点；Wind/HoM 谱系分开审计、禁止拼接。
+- **W7**：CFTC（周二快照 +3 天可见）与 FINRA（月末 +21 天保守可见）PIT 建模、field-level `supporting_only`、Legacy 不冒充 TFF、断源诚实 unavailable，16 条定向测试全绿；判读卡与工单原文逐字一致入 `RESEARCH_CANON.md`；升级路径入 `DATA_COVERAGE_REVIEW.md`；packet_builder/collector/evidence_families/data_evidence/deep_research_canon 五处登记齐全。
+- **剩余低风险**（各单状态行已如实申报）：W3 未做真实 LLM 在线抽样与视觉回归；W4 未做 FRED 在线抽样；W7 本机 CFTC API TLS 失败（fail-closed 为 unavailable，非造假路径）。均不阻断验收，留待下一次 live run 自然覆盖。

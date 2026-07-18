@@ -1757,6 +1757,7 @@ class VNextReportGenerator:
             "event_interpretation_cards": _load_json(run_path / "event_interpretation_cards.json", {}),
             "event_layer_summary": _load_json(run_path / "event_layer_summary.json", {}),
             "integrated_synthesis_report": _load_json(run_path / "integrated_synthesis_report.json", {}),
+            "expectation_vs_realized": _load_json(run_path / "expectation_vs_realized.json", {}),
             "investigation_reports": investigation_reports,
             "chart_time_series": _load_json(run_path / "chart_time_series.json", {}),
             "layers": layers,
@@ -2302,6 +2303,7 @@ class VNextReportGenerator:
   <div class="chain-grid">{''.join(chains) or '<p>暂无结构化支撑链。</p>'}</div>
   <h3 class="reader-sub">价格反映</h3><div class="chain-grid">{''.join(price_rows) or '<p>暂无结构化价格反映地图。</p>'}</div>
   <h3 class="reader-sub">三个时间尺度</h3><div class="chain-grid">{''.join(horizon_rows) or '<p>暂无结构化时间尺度判断。</p>'}</div>
+  {self._long_term_assessment_section(final)}
 </section>
 """
 
@@ -2314,12 +2316,76 @@ class VNextReportGenerator:
 </section>
 """
 
+    def _expectation_ledger_block(self, artifacts: Dict[str, Any]) -> str:
+        ledger = artifacts.get("expectation_vs_realized", {})
+        if not isinstance(ledger, dict) or not ledger:
+            return ""
+
+        status_labels = {
+            "available": "已有可比样本",
+            "insufficient_coverage": "样本不足",
+            "accumulating": "对照样本积累中",
+            "unavailable": "暂不可用",
+            "generation_failed_non_blocking": "生成失败（不阻断主流程）",
+        }
+
+        def status(value: Any) -> str:
+            raw = str(value or "未记录")
+            return status_labels.get(raw, raw)
+
+        def number(value: Any, suffix: str = "") -> str:
+            parsed = _safe_number(value)
+            return f"{parsed:.2f}{suffix}" if parsed is not None else "未形成"
+
+        earnings = ledger.get("earnings_expectations", {}) if isinstance(ledger.get("earnings_expectations"), dict) else {}
+        window_rows = []
+        for window in _as_list(earnings.get("windows")):
+            if not isinstance(window, dict):
+                continue
+            window_rows.append(
+                "<li><b>{days} 日</b>：{window_status}；共同样本 {count}；平均变化 {change}。{note}</li>".format(
+                    days=_escape(window.get("window_days") or "?"),
+                    window_status=_escape(status(window.get("status"))),
+                    count=_escape(window.get("intersection_ticker_count", 0)),
+                    change=_escape(number(window.get("average_change_pct"), "%")),
+                    note=_escape(window.get("note") or ""),
+                )
+            )
+        earnings_detail = "".join(window_rows) or "<li>尚未形成 30/90 日可比窗口。</li>"
+
+        rate = ledger.get("rate_path", {}) if isinstance(ledger.get("rate_path"), dict) else {}
+        current_path = rate.get("current_path") if isinstance(rate.get("current_path"), dict) else {}
+        path_points = len(_as_list(current_path.get("path"))) if current_path else 0
+        comparisons = len(_as_list(rate.get("comparisons")))
+
+        volatility = ledger.get("volatility_premium", {}) if isinstance(ledger.get("volatility_premium"), dict) else {}
+        authority = str(ledger.get("metric_authority") or "未记录")
+        overall_status = ledger.get("status")
+        overall_note = ""
+        if overall_status:
+            overall_note = f'<p class="section-note">台账状态：{_escape(status(overall_status))}。</p>'
+        return f"""
+<div class="audit-boundaries expectation-ledger" id="expectation-vs-realized">
+  <h3>预期与兑现</h3>
+  <p>这是辅助对照账，只帮助检查市场预期后来兑现了多少；权威级别为 <b>{_escape(authority)}</b>，不能充当 L1-L5 核心证据。</p>
+  {overall_note}
+  <div class="audit-grid">
+    <div><b>盈利预期</b><p>{_escape(status(earnings.get('status')))}；当前快照 {_escape(earnings.get('current_snapshot_date') or '未形成')}；覆盖 {_escape(earnings.get('current_ticker_count', 0))} 个标的。</p><ul>{earnings_detail}</ul></div>
+    <div><b>利率路径</b><p>{_escape(status(rate.get('status')))}；当前路径 {path_points} 个点；历史兑现对照 {comparisons} 条。</p><p>{_escape(rate.get('note') or '')}</p></div>
+    <div><b>波动溢价</b><p>{_escape(status(volatility.get('status')))}；有效窗口 {_escape(volatility.get('sample_count', 0))} 个；近期溢价 {number(volatility.get('recent_premium_pct_points'), ' 个百分点')}；近期分位 {number(volatility.get('recent_percentile'), '%')}。</p><p>{_escape(volatility.get('note') or '')}</p></div>
+  </div>
+</div>
+"""
+
     def _brief_world_section(self, artifacts: Dict[str, Any]) -> str:
         section = self._event_layer_summary_section(artifacts)
+        expectation = self._expectation_ledger_block(artifacts)
         if not section:
-            return '<section class="panel sec" id="world"><div class="sec-head"><span class="tag sans">03 · 外部世界</span><h2>事实对照</h2></div><p>本轮没有新闻事实材料。</p></section>'
+            return '<section class="panel sec" id="world"><div class="sec-head"><span class="tag sans">03 · 外部世界</span><h2>事实对照</h2></div><p>本轮没有新闻事实材料。</p>' + expectation + '</section>'
         section = section.replace('<section class="panel" id="event-layer-summary">', '<section class="panel sec" id="world">', 1)
         section = section.replace('<div class="section-kicker">05 · 新闻事实底账</div>', '<div class="sec-head"><span class="tag sans">03 · 外部世界</span></div>', 1)
+        if expectation:
+            section = section.replace("</section>", expectation + "</section>", 1)
         return section
 
     def _brief_change_section(self, artifacts: Dict[str, Any]) -> str:
@@ -2403,6 +2469,48 @@ class VNextReportGenerator:
             "secondary_contradictions": final.get("secondary_contradictions") or thesis.get("secondary_contradictions") or [],
             "price_reflection_map": final.get("price_reflection_map") or thesis.get("price_reflection_map") or [],
         }
+
+    def _portfolio_action_note_html(self, item: Dict[str, Any]) -> str:
+        notes = []
+        rationale = str(item.get("rationale") or "").strip()
+        if rationale:
+            notes.append(rationale)
+        conditions = [str(value) for value in _as_list(item.get("conditions")) if str(value).strip()]
+        notes.extend(f"条件：{value}" for value in conditions)
+        policy_text = " ".join([rationale, *conditions])
+        if str(item.get("bucket") or "") == "core_position" and "政策书" not in policy_text:
+            notes.append("核心仓动作须经个人投资政策书与再平衡带确认")
+        if not notes:
+            return ""
+        return "<small>" + "<br>".join(_escape(note) for note in notes) + "</small>"
+
+    def _long_term_assessment_section(self, final: Dict[str, Any]) -> str:
+        assessment = final.get("long_term_assessment")
+        if not isinstance(assessment, dict):
+            return ""
+        hypotheses = [str(item) for item in _as_list(assessment.get("permanent_loss_hypotheses")) if str(item).strip()]
+        if not any(str(assessment.get(field) or "").strip() for field in (
+            "object_quality", "earnings_compounding", "valuation_implied_return"
+        )) and not hypotheses:
+            return ""
+        hypothesis_rows = "".join(f"<li>{_escape(item)}</li>" for item in hypotheses) or "<li>未列出。</li>"
+        uncertainty_rows = "".join(
+            f"<li>{_escape(item)}</li>" for item in _as_list(assessment.get("uncertainty_notes"))
+        )
+        refs = self._ref_chips(assessment.get("evidence_refs", []))
+        return f"""
+  <details class="audit-boundaries long-term-assessment">
+    <summary>长期资产评估（3-5 年以上）</summary>
+    <div class="governance-grid">
+      <article><h3>对象质量</h3><p>{_escape(assessment.get('object_quality') or '证据不足，未提供。')}</p></article>
+      <article><h3>盈利复利</h3><p>{_escape(assessment.get('earnings_compounding') or '证据不足，未提供。')}</p></article>
+      <article><h3>估值隐含回报</h3><p>{_escape(assessment.get('valuation_implied_return') or '证据不足，未提供。')}</p></article>
+      <article><h3>永久损失假说</h3><ul>{hypothesis_rows}</ul></article>
+    </div>
+    {f'<div class="risk-list"><h3>不确定性</h3><ul>{uncertainty_rows}</ul></div>' if uncertainty_rows else ''}
+    {f'<div class="ref-row">{refs}</div>' if refs else ''}
+  </details>
+"""
 
     def _hero(
         self,
@@ -2840,7 +2948,7 @@ class VNextReportGenerator:
       <article>
         <h3>{_escape(item.get('bucket', 'position'))}</h3>
         <p>{_escape(item.get('action', ''))}</p>
-        <small>{_escape(item.get('rationale', ''))}</small>
+        {self._portfolio_action_note_html(item)}
       </article>
 """
             for item in _as_list(surface.get("portfolio_actions"))[:3]
@@ -2900,6 +3008,7 @@ class VNextReportGenerator:
       <ul>{price_rows or '<li>暂无结构化 price_reflection_map。</li>'}</ul>
     </article>
   </div>
+  {self._long_term_assessment_section(final)}
   <div class="trigger-grid">{horizon_rows or '<article><h3>时间尺度</h3><p>暂无结构化 time_horizon_views。</p></article>'}</div>
   <div class="trigger-grid">{action_rows or '<article><h3>组合动作</h3><p>暂无结构化 portfolio_actions。</p></article>'}</div>
   <div class="risk-list">
@@ -2922,7 +3031,7 @@ class VNextReportGenerator:
 <article class="trigger-card">
   <h3>{_escape(item.get('bucket', 'position') if isinstance(item, dict) else '动作')}</h3>
   <p><b>{_escape(item.get('action', item) if isinstance(item, dict) else item)}</b></p>
-  <p>{_escape(item.get('rationale', '') if isinstance(item, dict) else '')}</p>
+  {self._portfolio_action_note_html(item) if isinstance(item, dict) else ''}
 </article>
 """
                 for item in structured_actions[:4]
@@ -3724,8 +3833,48 @@ class VNextReportGenerator:
     def _integrated_adjudication_block(self, artifacts: Dict[str, Any]) -> str:
         integrated = artifacts.get("integrated_synthesis_report", {})
         adjudication = integrated.get("integrated_adjudication") if isinstance(integrated, dict) else None
-        if not isinstance(adjudication, dict) or not adjudication.get("llm_adjudicated"):
+        recollection = integrated.get("recollection_requests") if isinstance(integrated, dict) else {}
+        recollection_rows = ""
+        for request in _as_list(recollection.get("requests") if isinstance(recollection, dict) else []):
+            if not isinstance(request, dict):
+                continue
+            candidates = "、".join(str(item) for item in _as_list(request.get("candidate_function_ids"))) or "待人工确定"
+            recollection_rows += (
+                f"<li><b>{_escape(request.get('source_type'))} · {_escape(request.get('source_id'))}</b>"
+                f"<span>{_escape(request.get('missing'))}</span>"
+                f"<small>候选函数：{_escape(candidates)}；触发：{_escape(request.get('trigger_reason'))}</small></li>"
+            )
+        recollection_section = (
+            f'<div class="audit-boundaries"><h3>下轮建议补采清单</h3><ul>{recollection_rows}</ul></div>'
+            if recollection_rows else ""
+        )
+        time_consistency = integrated.get("time_consistency") if isinstance(integrated, dict) else None
+        time_warning = ""
+        if isinstance(time_consistency, dict) and not time_consistency.get("consistent", False):
+            member_dates = "、".join(
+                f"{member.get('artifact')}={member.get('date')}"
+                for member in _as_list(time_consistency.get("members"))
+                if isinstance(member, dict)
+            ) or "可核对日期不足"
+            time_warning = (
+                '<article class="boundary-card bad"><b>时点一致性闸门未通过</b>'
+                f'<p>本报告输入时点不一致（{_escape(member_dates)}），已降级为审计参考，不构成正式结论</p></article>'
+            )
+        if (
+            not isinstance(adjudication, dict) or not adjudication.get("llm_adjudicated")
+        ) and not time_warning and not recollection_section:
             return ""
+        if not isinstance(adjudication, dict) or not adjudication.get("llm_adjudicated"):
+            return f"""
+<section class="panel sec" id="integrated-adjudication">
+  <div class="sec-head">
+    <span class="kicker section-kicker">第三层 · 综合裁决</span>
+    <h2>数据与外部世界的对质记录</h2>
+  </div>
+  {time_warning}
+  {recollection_section}
+</section>
+"""
         status_labels = {
             "answered_by_data": ("数据已回答", "good"),
             "partially_answered": ("部分回答", "watch"),
@@ -3769,10 +3918,12 @@ class VNextReportGenerator:
     <span class="kicker section-kicker">第三层 · 综合裁决</span>
     <h2>数据与外部世界的对质记录</h2>
   </div>
+  {time_warning}
   <p class="section-note">姿态以第一层数据判决为锚（不可在本层改判）；本层职责是解释整合与张力登记。</p>
   {f'<div class="prose"><p class="reasoned-verdict">{self._reasoned_verdict_html(adjudication.get("integrated_verdict"))}</p></div>' if str(adjudication.get("integrated_verdict") or "").strip() else ''}
   {f'<div class="audit-boundaries"><h3>新闻事件出的题，数据的回答</h3><ul class="qlist">{qa_rows}</ul></div>' if qa_rows else ''}
   {f'<div class="audit-boundaries"><h3>事件叙事 × 数据检验</h3><ul class="risk-list">{matrix_rows}</ul></div>' if matrix_rows else ''}
+  {recollection_section}
   {f'<div class="audit-boundaries"><h3>当前解释不了的</h3><ul class="risk-list">{unexplained}</ul></div>' if unexplained else ''}
   {f'<p class="dissent"><b>最强反证</b>：{_escape(counter)}</p>' if counter else ''}
 </section>
@@ -5853,6 +6004,7 @@ class VNextReportGenerator:
             ("L1-L5 底稿", str(run_path / "layer_cards")),
             ("Bridge 冲突共振", str(run_path / "bridge_memos")),
             ("图表时间序列", str(run_path / "chart_time_series.json")),
+            ("预期与兑现台账", str(run_path / "expectation_vs_realized.json")),
             ("第一层：纯数据研报", str(run_path / "pure_data_report.json")),
             ("第二层：事件摘要", str(run_path / "event_layer_summary.json")),
             ("第二层：新闻事件研报", str(run_path / "event_mechanism_report.json")),
@@ -5896,6 +6048,7 @@ class VNextReportGenerator:
     <h3>回测数据边界</h3>
     <ul>{boundary_rows}</ul>
   </div>
+  {self._expectation_ledger_block(artifacts)}
   {invariant_rows}
   <div class="audit-boundaries">
     <h3>阻断原因</h3>

@@ -85,6 +85,14 @@ L3 是最重要的薄弱点。
 - 不要用没有证据的跌幅、点位、估值倍数或盈利阈值包装风险判断。
 - 不要让联网搜索、bb browser 或网页爬取结果直接替代正式历史数据源。它们可以发现线索，但回测里默认只是待审候选。
 
+## L2 官方仓位数据的当前覆盖与升级路径（2026-07-19）
+
+- `get_cftc_nq_positioning` 已接 CFTC Legacy Futures-Only 的 Nasdaq-100 Consolidated 周度报告。当前只消费 live + 近期数据，并按“周二快照、周五起可见”建模；Legacy 的官方分类是 non-commercial，不含 TFF 报告里的 leveraged funds，系统不会把两者混称。历史分位暂不计算。
+- `get_finra_margin_debt` 已接 FINRA 官方 Margin Statistics Excel。当前只消费 live + 近期数据，并用“参考月月底后 21 个自然日”作为保守可见日；FINRA 只说明通常在次月第三周发布，没有为每个历史月份提供逐行发布时间。
+- 两条数据均为 `supporting_only`：CFTC 只覆盖期货一角，FINRA 是全市场月度后视数据；都不能单独给方向或买卖时点。
+- 升级历史回测前，需按每次官方发布日期保存不可变 vintage，记录后续更正，并验证每个 `effective_date` 当时可见的文件/行。CFTC 虽有官方历史档案、FINRA Excel 虽含 1997 年以来历史，本单都不把当前下载文件冒充历史当时版本。
+- ETF 申赎资金流仍没有本项目可接受的官方免费来源，本轮不接入；不得用商业聚合站或浏览器页面替代正式 L1-L5 数据源。
+
 ---
 
 ## 历史数据缺口的补法

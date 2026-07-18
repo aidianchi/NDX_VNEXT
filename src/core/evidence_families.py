@@ -98,6 +98,8 @@ EVIDENCE_FAMILIES: Dict[str, str] = {
     # docstring) since no sibling LAYER_FUNCTIONS entry re-uses any of its
     # three internal legs.
     "get_crowdedness_dashboard": "positioning_crowdedness_dashboard",
+    "get_cftc_nq_positioning": "cftc_nasdaq100_futures_positioning",
+    "get_finra_margin_debt": "finra_broad_market_margin_leverage",
     "get_cnn_fear_greed_index": "cnn_fear_greed_composite",
 
     # ============================================================

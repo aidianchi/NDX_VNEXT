@@ -57,6 +57,8 @@ TOOLS_REGISTRY = {
     "get_percent_above_ma": get_percent_above_ma,
     "get_new_highs_lows": get_new_highs_lows,
     "get_mcclellan_oscillator_nasdaq_or_nyse": get_mcclellan_oscillator_nasdaq_or_nyse,
+    "get_cftc_nq_positioning": get_cftc_nq_positioning,
+    "get_finra_margin_debt": get_finra_margin_debt,
     "get_cnn_fear_greed_index": get_cnn_fear_greed_index,
 
     # Layer 3

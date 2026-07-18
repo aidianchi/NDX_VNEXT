@@ -50,6 +50,8 @@ CORE_EVIDENCE_FUNCTIONS = {
     "get_hy_quality_spread_bp",
     "get_hyg_momentum",
     "get_xly_xlp_ratio",
+    "get_cftc_nq_positioning",
+    "get_finra_margin_debt",
     "get_vxn_vix_ratio",
     "get_vix_term_structure",
     "get_cnn_fear_greed_index",
@@ -91,6 +93,15 @@ def _supporting_authority(reason: str, *, usage: str = "supporting_only", requir
     return {
         "usage": usage,
         "authority": "proxy_or_derived_observation",
+        "reason": reason,
+        "requires_confirmation": list(requires or []),
+    }
+
+
+def _official_supporting_authority(reason: str, *, requires: Optional[List[str]] = None) -> Dict[str, Any]:
+    return {
+        "usage": "supporting_only",
+        "authority": "official_positioning_fact",
         "reason": reason,
         "requires_confirmation": list(requires or []),
     }
@@ -165,6 +176,28 @@ WEAK_METRIC_AUTHORITY_POLICIES: Dict[str, Dict[str, Any]] = {
         },
         "downgrade_rules": ["partial_positioning_components_cannot_be_promoted_to_complete_crowding_fact", "composite_cannot_bypass_component_availability"],
     },
+    "get_cftc_nq_positioning": {
+        "metric_authority": {
+            "noncommercial_long_contracts": _official_supporting_authority("Official Legacy futures-only long positions remain partial-market context only."),
+            "noncommercial_short_contracts": _official_supporting_authority("Official Legacy futures-only short positions remain partial-market context only."),
+            "noncommercial_net_contracts": _official_supporting_authority("Official Legacy futures-only positioning covers only one part of total market positioning.", requires=["get_crowdedness_dashboard", "get_vxn", "get_advance_decline_line"]),
+            "weekly_change_net_contracts": _official_supporting_authority("Weekly positioning change is vulnerability context, not a direction or timing signal."),
+            "open_interest_contracts": _official_supporting_authority("Open interest gives scale context only."),
+            "historical_percentile": _official_supporting_authority("Unavailable until a retained point-in-time archive is connected."),
+            "leveraged_funds_net_contracts": _official_supporting_authority("Legacy COT does not contain the TFF leveraged-funds classification."),
+        },
+        "downgrade_rules": ["cftc_futures_cover_only_one_part_of_total_market_positioning", "legacy_noncommercial_must_not_be_relabelled_as_tff_leveraged_funds", "positioning_extreme_cannot_independently_drive_direction_or_timing", "historical_percentile_requires_point_in_time_archive"],
+    },
+    "get_finra_margin_debt": {
+        "metric_authority": {
+            "margin_debt_millions": _official_supporting_authority("Official broad-market monthly leverage fact; not NDX-specific.", requires=["get_hy_oas_bp", "get_net_liquidity_momentum", "get_advance_decline_line"]),
+            "month_over_month_pct": _official_supporting_authority("Noisy lagged monthly change must not be used for timing."),
+            "year_over_year_pct": _official_supporting_authority("Leverage-cycle context only; not an action signal."),
+            "cash_account_free_credit_millions": _official_supporting_authority("Broad-market free-credit context only."),
+            "margin_account_free_credit_millions": _official_supporting_authority("Broad-market free-credit context only."),
+        },
+        "downgrade_rules": ["finra_margin_debt_is_broad_market_not_ndx_specific", "monthly_publication_lag_precludes_short_term_timing", "nominal_level_high_cannot_be_interpreted_as_market_top", "historical_backtest_requires_retained_finra_publication_vintages"],
+    },
     "get_vxn_vix_ratio": {
         "metric_authority": {"level": _supporting_authority("Derived relative options-pressure ratio; it does not measure fundamentals or valuation.", requires=["get_vxn", "get_vix"])},
         "downgrade_rules": ["derived_volatility_ratio_requires_underlying_series", "ratio_cannot_independently_drive_action"],
@@ -203,6 +236,8 @@ BACKTEST_VINTAGE_REQUIRED_FUNCTIONS = {
     "get_fed_funds_rate",
     "get_m2_yoy",
     "get_net_liquidity_momentum",
+    "get_cftc_nq_positioning",
+    "get_finra_margin_debt",
     "get_ndx_wind_point_in_time_earnings_expectations",
     "get_ndx_forward_earnings_quality",
     "get_m7_capex_cycle",

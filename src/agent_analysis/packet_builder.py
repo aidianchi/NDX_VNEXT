@@ -82,6 +82,8 @@ LAYER_FUNCTIONS = {
         "get_hyg_momentum",
         "get_xly_xlp_ratio",
         "get_crowdedness_dashboard",
+        "get_cftc_nq_positioning",
+        "get_finra_margin_debt",
         "get_vxn_vix_ratio",
         "get_vix_term_structure",
         "get_cnn_fear_greed_index",
