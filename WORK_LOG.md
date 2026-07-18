@@ -4,6 +4,70 @@
 
 ---
 
+## 2026-07-18
+
+### 定时验收第二轮：R1-R7 六单中五单验收通过，R3 余额阻塞待重验；slate_v3 皮肤交付（Fable）
+
+- 用户亲自重跑的 Codex 完成全部五单施工（R3 06:20 / R4 07:10 / R7 07:23 / R5 08:21 / R2 08:52），全程未提交（遵守本波纪律）、逐单更新状态行、两处语义疑点诚实上报不冒充通过。Fable 逐单亲验：775 测试全绿亲跑（基线 721+54）。
+- **R2 验收通过 + CSS 交付**：体积/复读/digest（23.9KB/42 指标）/锚点/脊柱顺序断言逐项复核；Fable 交付 `report_styles/slate_v3.css`（令牌契约同 slate_v2、B 风格、深色模式、新钩子+旧类双覆盖、抽屉组件移植），默认样式切 slate_v3（方法+CLI 默认、后缀规则、1 处测试同步）。v3 成品 `vnext_brief_20260715_001617_v3.html` = **92,198 bytes，较原版 744KB 降 87.6%**，104 类程序化全覆盖。
+- **R4 验收通过（Fable 裁决）**：三份真实调查报告亲读——两份完全合格；信用报告"语义倒置"裁定为格式歧义非实质错误（实为对"扩散恐惧"的合法挑战，先写结论后名主张），下游降级为保守 kept_unresolved 无污染。**`downgrade_or_split_events` 机制建成后首次开火（17 run 恒零 → 1）**。调查员提示词加一行澄清（challenged 放被削弱的原主张）。
+- **R5 验收通过（Fable 亲验）**：Clash diff 恰三条域名同 SEC 节点其余未动（备份 `clash-verge.yaml.backup_20260718_075019`）；live 底账 Fed/BLS/BEA 零错误、9 条官方日历事件、2024 泄漏=0、未来项物理隔离（21 条独立日程）、零默认实体误标；新闻模块零 L1-L5 标签残留；"窗口外"3 条经盘问实为按 event_date 归窗的日历项，语义正确。
+- **R7 验收通过（Fable 亲验）**：2 candidate 各一 response，absorb_partially 带 3 refs 理由充分，reject 带 5 个合法 refs 点名具体反证。
+- **R3 代码验收通过、live 正文阻塞**：Fable 亲读 396 字失败样本裁定为提示词约束交互过紧非模型能力问题；定稿提示词升 v2（字数 450-800、风险短语点名制、audit-only 数值禁令），验证驱动持久化 `investigation_reports/20260717_redesign/r3v2_verdict_driver.py`。执行时发现 **DeepSeek API 402 Insufficient Balance**（Codex 凌晨 8 次重试耗尽余额）——充值后跑驱动+亲读即关单；这同时阻塞一切 live LLM run。
+- 过程记录：resume 重放曾遇 L1 空响应，根因即 402；直连驱动（复用 prompt_audit 审计件换血 v2 文本）为后续同类验证留了轻量路径。
+
+### 定时验收第一轮：R1 通过；Codex 半夜停工，剩余五单经 rescue 通道重派（Fable）
+
+- 05:23 定时验收启动。取证：Codex 于 00:28-00:29 完成 WO-R1 代码后未提交、未更新状态行即停工，其余五单零痕迹（git log 无 WO-Rx 提交、无 WO 指纹、无活动进程）。
+- R1 验收通过（Fable 亲验）：721 测试全绿（基线 714+7）；重生成 brief 断言全过（美光模板=0、拼接 bug=0、罐头复核区消失、决策翻译"无模型参与"、16 张主线新闻卡带来源/tier/日期）。Fable 补修一处小瑕疵：`published_at` RFC/ISO 混合格式统一为 YYYY-MM-DD（`vnext_reporter._display_date`）。
+- **git 纪律修订**：本波施工不做任何提交——工作树混有 2026-07-17 方向 1-4 收口批次的未提交改动，按单提交会互相污染；改为整批验收后与用户确认统一提交方案（已写进工单包总纪律）。
+- 剩余五单（R3→R4→R7→R5→R2）经 codex-rescue 通道重派，git 纪律修订与 R5 步骤 0 沙箱降级预案已随派工下达；3 小时后有兜底复查。
+
+- 对最新 run `20260715_001617` 及 brief 做四问诊断（报告疲劳/新闻管线/交叉质询/推理机制），三条并行取证线 + Fable 逐项亲验。核心结论：① 报告"累"的病根是四阅读层级被压扁成滚动条（判断句复读 7 次、新旧冲突卡双份、隐藏 JSON 占文件 53%），CSS 工程本身合格；② 新闻子系统全程无 LLM（12 桶关键词模板冒充"AI 分析"，模板错配/截断/拼接三类 bug 实证），本次 run 官方源（Fed/BLS/BEA/SEC×7）全部 SSL 失败，`effective_date` 为空时 45 天窗口被旁路（2024-07 事件混入），实体兜底把英国房企公告标成全 M7；③ 数据链内交叉质询真实（Bridge typed conflicts + Critic 真命中），新闻-数据"综合"是两句模板文案二选一；④ 受控追问只有骨架（`is_deterministic_stub` 恒 True，"本轮未执行真实调查"），竞争假说真实健康（3 假说、反方独立性可审计），非单调降级机制 17 个 run 从未触发（触发源被 stub 堵死）。
+- 结论对照两份 2026-07-03 设计文档：认识论架构报告实施率约六成、未实施的恰是灵魂件（第二层 LLM 卡/第三层真裁决/追问执行器/非单调触发）；Gemini 报告三条病理诊断全部实证命中、处方（编造权重阈值/Neo4j/动作矩阵点位）不可采信。
+- 最终裁决"太碎"根因实证：`final_adjudication.json` 30 余个文本字段最长仅 140 字，合约无成文论证字段——立"判决正文双轨"方案。
+- 用户拍板决议清单 v3 → 立工单包 `investigation_reports/20260717_redesign/WORK_ORDERS.md`（R1 模板三类处置 / R2 脊柱重排 / R3 判决正文双轨 / R4 受控调查执行器 / R5 新闻官方日历底账+三 bug / R6 LLM 事件卡 / R7 Thesis 强制回应竞争假说 / R8 第三层真裁决范围锁定），全部 LLM 提示词原文已由 Fable 定稿内嵌，Codex 施工、Fable 验收。
+- 报告样张 `output/reports/demo_20260717_spine.html`（Fable 亲做，正方先行脊柱 + A/B/C 三排版风格切换，内容全部取自真实 run，判决正文段为字段素材手工合成的形态演示）。等用户选型后 R2 开工。
+- 待用户两个开关：Phase 0 Clash 放行 `www.federalreserve.gov`/`www.bls.gov`/`www.bea.gov`；样张 A/B/C 选型。
+
+### NEXT_STEPS 方向 1–4 收口（盈利预期保持暂停）
+
+- 旧快照兼容：只把“没有新合约、没有有效值、且带明确采集失败文本”的旧 payload 从伪 `available` 归一为 `unavailable`；新合约空值继续硬阻断。复核 `20240805` / `20250409` / `20260509` 三份旧快照，全部仍为 `blocked + unpublishable`；2024 快照的未来估值、2025 的 L3 低覆盖、2026 的 L4 低覆盖都没有被洗白。
+- 独立重算输入：采集器把生产函数返回的长序列移到顶层 `recompute_inputs`，写 SHA256 后再供纯 stdlib 第二本账使用；`AnalysisPacketBuilder` 测试确认该附件不进入 L1-L5 raw_data / prompt。L5 增加完整 PIT 截断 OHLCV，第二本账独立实现 SMA/RSI/MACD/ATR/ADX/DI/OBV/MFI/CMF/Donchian/VWAP；L1/L2 增加长窗口 value series、动量和分位重算。
+- 真实 live 采集后复核：此前 61 个 `unrecomputable_missing_raw` 降为 6。最终落盘快照（46 指标，2026-07-17 18:25 完成）共 223 项，217 match、0 deviation、6 missing raw、0 uncovered，覆盖率 97.31%，critical deviation=0，DataIntegrity=86.6%、publishable。本轮 Wind 不可用使检查总数少于前一次；6 个保留项是 ERP 上游缺值 1 项和第三方检查字段缺原始序列 5 项，没有冒充已覆盖。
+- 重算账本钓出并修复旧 bug：`analyze_series_momentum_relativity` 收到 `date` 列 + RangeIndex 时，1 年分位曾退化成全历史；现在按日期列截取真实 1 年窗口。VIX3M/VIX 分位重算改为由两条未舍入的腿独立相除，避免四位小数排名产生假偏差。
+- 权限纪律：8 个弱权限指标（VIX、VXN、铜金比、HYG、XLY/XLP、拥挤度、VXN/VIX、CNN 恐贪）统一由证据归一层补 `metric_authority` 与 `downgrade_rules`；真实拥挤度字段名已对齐，合并采用最小权限胜出，旧 payload 不能把 supporting/audit-only 抬为 core，未知字段或非法 usage 枚举统一 fail-closed 为 audit-only。Evidence Passport 继承这些规则，且 unavailable/无有效观测值一律 `verified=false`。
+- 盈利预期：未实现 Top 15 forward EPS、自建全指数 forward PE 或 FMP/Finnhub；HoM 继续只作第三方参考。来源名、methodology、formula、notes、coverage 与上游 metadata 中所有 Bloomberg BEst 表述均统一加“HoM 公开 API 自述归因、未独立核验”限定；递归测试扫描完整 payload，避免任何运行时字段误标 Bloomberg 官方源。
+- 个人决策出口：`UserDecisionProfile` 只读取 tracked/local 文档里的 `reader_exit` 白名单，金额与持仓字段不会进入模型或报告。空纪律不再静默通过或启用默认阈值，而是生成 `profile_disciplines_unconfigured` 闸门。状态变量补 evidence ref、单位、允许比较符；Wind PE 分位路径修正为 `PEHistoricalPercentile`；阈值必须 `confirmed` 且单位匹配，否则 `insufficient_evidence`。
+- Golden Pit：predicate 条件引用 Evidence Registry 可解析的完整字段路径，并生成 predicate 专属失效条件；派生回撤同时引用 Donchian 上轨与 QQQ 价格，未注册引用会 fail-closed。无 predicate 的旧条件才使用 claim 级 refs/falsifiers 兜底。
+- 输出体验：新增 HY OAS、ADX、MACD 等静态本地术语解释，支持 hover/focus/click 与键盘，重复术语使用唯一 tooltip ID 且同步 ARIA 状态；新增 `source_snapshot.json`，报告展示快照模式、文件名、真实 SHA256、真实采集时间、有效日。pipeline 与 event-only 都会在创建产物前拒绝把 live/未标日期快照重贴成历史。简洁研究控制台沿用既有实现并纳入验收。
+- 最终审查补强：快照内旧式 `raw_data.recompute_input` 会迁移到顶层审计附件，AnalysisPacket 和最终 prompt 各自再清洗一次；live/undated 快照搭配历史 `--date` 直接拒绝；实时审计缺文件或时间时写 `not_recorded`，不再生成看似完整的占位值。
+- 方向 5 评估后暂不动工：巨型文件拆分、恒零调查 stub 和历史 docs 归档都需要独立设计/迁移验收，本轮贸然修改只会扩大回归面。
+- 未提交、未推送；保留用户原有 `.codex/*`、`NEXT_STEPS.md`、`WORK_LOG.md` 和调查文档改动。
+
+验证：
+
+- 首次全量：`693 passed, 2 failed`；两项均为 VIX 新独立公式与旧测试夹具当前值选择不一致，已修正后定向 `5 passed`。
+- 最终全量：`714 passed, 58 warnings in 41.61s`（项目 `.venv` / Python 3.12）；warning 均为既有第三方弃用提示或测试夹具的数值精度提示。另有 legacy/DataIntegrity、recompute、authority、state ledger/orchestrator、HoM、reporter、console 等定向测试全部通过。
+
+---
+
+## 2026-07-16
+
+### SEC YKK 路由恢复与 HoM 单路优先判断
+
+- 检查 Clash Verge 当前生效规则：FRED 的 `api.stlouisfed.org` / `fred.stlouisfed.org` 走 YKK，其余未单独列出的外部域名走 `AI-Chain` → IPRoyal。
+- 只新增一条 `DOMAIN,data.sec.gov,🇺🇸 UnitedStates 02` 规则并重载 Clash；没有改 FRED 规则，也没有把 Yahoo、GitHub 或其他外部域名切到 YKK。
+- 对照验证：未改路由时 SEC 仍为 `SSL_ERROR_SYSCALL`；YKK 临时通道访问 `data.sec.gov` 的 submissions 与 companyfacts 均 HTTP 200；项目实际调用 `_fetch_sec_xbrl_summary("AAPL")` 返回 `availability=available`，AAPL 的 capex、回购、收入和稀释 EPS 均命中，最新 filed date 为 2026-05-01。
+- HoM 实时获取验证：`https://historyofmarket.com/api/ndx/forward-pe.json` 可用；trailing PE=34.21（2026-07-16，当前可用），forward PE=24.29（数据尾日 2026-05-18，代码正确标记 `stale_for_decision`，不可作当前决策值）；forward 历史 298 点、2008-10-31 起，percentile=68.5 的计算链可重算。
+- HoM 来源复核：公开站点将自己定位为独立数据聚合与历史图表站；forward PE 页面声称采用 Bloomberg BEst，但站点总说明同时写明 Bloomberg forward-PE 文件“manually maintained”。因此 HoM 不是 Bloomberg 官方直连接口；`updated=2026-07-16` 只是数据包更新时间，forward 历史尾值仍是 2026-05-18，说明上游 forward 序列没有跟随包更新时间同步延长。
+- 主审判断：暂不实施工单 #18 的“前 15 权重股 forward EPS 自算”主路；先把 HoM 的来源、字段一致性、更新时间和历史回放验证扎实。前 15 自算保留为低优先级备选，不进入主证据链。
+- M7 主路验收：live 与 `effective_date=2026-06-01` 的 PIT smoke 均通过。资本开支 7/7 家走 SEC、均 `pit_safe=true`；回购 6/7 家走 SEC，1 家缺官方字段且未偷偷用 yfinance 补齐，保持诚实缺失。资本开支最新覆盖到 2026Q1，合计 $90.011B，来源为 `sec_xbrl`。
+
+收尾判断：SEC 路由和 M7 主路已恢复；旧文档中“SEC 生产中从未成功”的表述已改为“当时默认路径失败”。历史记录显示旧 `companyfacts` 官方交叉检查曾有 20/20 成功，后续失败是路径/代理问题，不是 SEC 数据从未拿到过。
+
+---
+
 ## 2026-07-14
 
 ### 数据基础三连修 + 证据菜单再平衡收官 + DataIntegrity 家族计分 + 对称性审计（Fable 编排，两轮并行施工）
@@ -61,7 +125,7 @@
 ### 独立重算校验带、M7 资本开支周期、VIX 期限结构（当日追加）
 
 - 独立重算校验带 `src/recompute_belt.py`（纯 stdlib 第二本账，零管线 import）：分位/比率/均线/动量重算 + 量级哨兵，接入 checker 硬闸门（critical deviation → blocked，standard 只记录，总开关可应急豁免，带自身崩溃不炸闸门）；live 快照实跑 0 偏差，Damodaran 分位与净流动性两本账咬合，注入式篡改与单位混用均被抓获。
-- 新指标 `get_m7_capex_cycle`（L4）：SEC XBRL 主路（filed_date 级 PIT）+ yfinance 季度现金流备胎（pit_safe=false、仅限 live、回测禁用）；实跑 M7 2026Q1 合计 $135.5B、YoY +75.52%。**重大发现**：SEC 域名全机不可达（疑地区封锁），既有 `_fetch_sec_xbrl_summary` 官方通道生产中从未成功——代理/VPN 决定待用户（WORK_ORDERS #12）。
+- 新指标 `get_m7_capex_cycle`（L4）：SEC XBRL 主路（filed_date 级 PIT）+ yfinance 季度现金流备胎（pit_safe=false、仅限 live、回测禁用）；当时该次运行因 SEC 域名不可达而未走通官方主路，实跑的 $135.5B、YoY +75.52% 不能推出“生产中从未成功”。后续历史产物已有旧 `companyfacts` 20/20 官方成功记录；当前应表述为“默认代理路径曾失败”。
 - 新指标 `get_vix_term_structure`（L2）：VIX3M/VIX 比值+contango/backwardation 判定+5y/10y 分位；payload 自带原始序列供第二本账独立重算（新规矩首次落地）；2024-08-05 历史极端倒挂回测验证吻合。fed funds futures 免费源探源完成（ZQ 合约可行但远月流动性薄，CME 不可达，建议缩水版）。
 - 测试推进：530 → 577 全绿；main 分四批推送至 `58125a1` 后续。
 - 全链 E2E 验收（工单#10）通过：run `20260712_221916`，publishable 93.2%、belt 0 偏差、claim 7/8（唯一降级为真命中）、两个新指标全链零越权、Critic 抓住并修正一次真实过度悲观、四份报告正常生成；新 prompt 首次正式姿态经人工审定合格。钓出 coverage-factor 子串误读与 Schema Guard 两处疑似误报（WORK_ORDERS #14/#15）。

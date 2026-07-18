@@ -20,7 +20,7 @@ def _ledger():
                 "source_tier": "official_macro",
                 "event_type": "policy_or_financial_conditions",
                 "symbols": [],
-                "layers": ["L1", "L2", "L4"],
+                "layers": ["topic:macro_rates", "topic:credit_vol", "topic:valuation_earnings"],
             }
         ],
     }
@@ -97,7 +97,7 @@ def test_news_event_data_linker_drops_future_events_and_observations():
             "source_tier": "official_macro",
             "event_type": "policy_or_financial_conditions",
             "symbols": [],
-            "layers": ["L1"],
+            "layers": ["topic:macro_rates"],
         }
     )
     chart = _chart_time_series()
@@ -112,3 +112,28 @@ def test_news_event_data_linker_drops_future_events_and_observations():
     assert {link["event_id"] for link in payload["links"]} == {"event:fomc"}
     for observation in payload["links"][0]["observations"]:
         assert observation["end_time"] <= "2026-05-08"
+
+
+def test_news_event_data_linker_ignores_separate_scheduled_future_ledger_section():
+    ledger = _ledger()
+    ledger["scheduled_future_events"] = [
+        {
+            "event_id": "event:fomc_future",
+            "source_id": "fomc_meeting_calendar",
+            "source_name": "Federal Reserve FOMC Meeting Calendar",
+            "event_type": "official_calendar",
+            "title": "FOMC meeting (July 28-29, 2026)",
+            "published_at": "2026-07-01T12:00:00Z",
+            "event_date": "2026-07-29",
+            "collection_status": "scheduled_future",
+        }
+    ]
+    chart = _chart_time_series()
+    chart["effective_date"] = "2026-05-08"
+
+    payload = NewsEventDataLinker(windows_days=[5]).build(
+        event_ledger=ledger,
+        chart_time_series=chart,
+    )
+
+    assert {link["event_id"] for link in payload["links"]} == {"event:fomc"}

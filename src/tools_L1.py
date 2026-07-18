@@ -24,6 +24,69 @@ _VOL_LEVEL_CACHE = {}
 AMOUNT_UNIT_BILLION_USD = "billion_usd"
 
 
+def _recompute_value_series_input(
+    series: pd.DataFrame, *, value_column: str = "value", history_years: int = 10
+) -> Dict[str, Any]:
+    """Serialize dated observations for the independent recomputation belt.
+
+    The collector moves this audit-only payload to top-level `recompute_inputs`,
+    so long series never enter L1-L5 runtime context.
+    """
+    if series is None or series.empty or value_column not in series.columns:
+        return {}
+    frame = series.copy()
+    if "date" not in frame.columns:
+        frame = frame.reset_index()
+        date_column = "date" if "date" in frame.columns else frame.columns[0]
+        frame = frame.rename(columns={date_column: "date"})
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    frame[value_column] = pd.to_numeric(frame[value_column], errors="coerce")
+    frame = frame.dropna(subset=["date", value_column]).sort_values("date")
+    if frame.empty:
+        return {}
+    anchor = frame["date"].iloc[-1]
+    frame = frame[frame["date"] >= anchor - pd.DateOffset(years=history_years)]
+    return {
+        "schema_version": "dated_value_series_v1",
+        "point_in_time_cutoff": anchor.strftime("%Y-%m-%d"),
+        "purpose": "independent_recompute_only",
+        "raw_series": [
+            {"date": row["date"].strftime("%Y-%m-%d"), "value": float(row[value_column])}
+            for _, row in frame.iterrows()
+        ],
+    }
+
+
+def _attach_recompute_value_series(
+    payload: Dict[str, Any], series: pd.DataFrame, *, value_column: str = "value"
+) -> Dict[str, Any]:
+    value = payload.get("value") if isinstance(payload.get("value"), dict) else {}
+    relativity = value.get("relativity") if isinstance(value.get("relativity"), dict) else {}
+    legacy_momentum_relativity = "history_years" in relativity
+    audit_input = _recompute_value_series_input(
+        series,
+        value_column=value_column,
+        history_years=15 if legacy_momentum_relativity else 10,
+    )
+    if audit_input:
+        audit_input["percentile_contract"] = (
+            {
+                "scale": "0_100",
+                "comparison": "strict_less",
+                "one_year_window": "calendar_year",
+                "ten_year_window": "all_attached_history_if_at_least_9_5_years",
+            }
+            if legacy_momentum_relativity
+            else {
+                "scale": "0_1",
+                "comparison": "less_than_or_equal",
+                "windows": "calendar_year",
+            }
+        )
+        payload["recompute_input"] = audit_input
+    return payload
+
+
 def _fred_unavailable_payload(
     *,
     name: str,
@@ -134,11 +197,11 @@ def _get_yf_series_with_analysis(
         if not analysis or analysis.get("level") is None:
             raise ValueError("Analysis function returned empty results.")
 
-        return {
+        return _attach_recompute_value_series({
             "name": name, "series_id": ticker, "value": analysis,
             "unit": "level", "source_name": "yfinance",
             "notes": f"Successfully fetched data as of {analysis['date']}." + (" 分层降噪：Spot/MA20。" if use_ma20_trend else "")
-        }
+        }, stats_df[["date", "value"]] if use_ma20_trend and len(df) >= 20 else series_for_analysis)
     except Exception as e:
         error_note = f"Failed to get {ticker} data: {str(e)}"
         logging.warning(f"  - {name}: {error_note}")
@@ -195,14 +258,14 @@ def _vix_payload_from_frame(vix_df: pd.DataFrame, *, source_name: str) -> Option
         ma20 = float(vix_s.rolling(20, min_periods=20).mean().iloc[-1])
         value_out["spot_over_ma20_ratio"] = round(latest_level / ma20, 4) if ma20 > 0 else None
         value_out["ma20"] = round(ma20, 4)
-    return {
+    return _attach_recompute_value_series({
         "name": "VIX Index",
         "series_id": "^VIX",
         "value": value_out,
         "unit": "index level",
         "source_name": source_name,
         "notes": "VIX 恐慌指数；分层降噪：现值 + 趋势比(Spot/MA20)。",
-    }
+    }, vix_df[["date", "value"]])
 
 
 def get_vix(end_date: str = None) -> Dict[str, Any]:
@@ -293,14 +356,14 @@ def _get_vix_from_alphavantage(end_date: str = None) -> Dict[str, Any]:
             value_out["ma20"] = round(ma20, 4)
         
         logging.info(f"成功从 Alpha Vantage 获取 VIX 数据: {latest_level}")
-        return {
+        return _attach_recompute_value_series({
             "name": "VIX Index",
             "series_id": "VIX",
             "value": value_out,
             "unit": "index level",
             "source_name": "Alpha Vantage (fallback)",
             "notes": "VIX 恐慌指数（Alpha Vantage备用）；分层降噪：现值 + 趋势比(Spot/MA20)。"
-        }
+        }, df_for_stats)
     except Exception as e:
         logging.error(f"Alpha Vantage 获取 VIX 失败: {str(e)}")
         return {
@@ -1100,11 +1163,11 @@ def get_10y2y_spread_bp(end_date: str = None) -> Dict[str, Any]:
     analysis = analyze_series_ma_deviation(series, ma_period=20)
     stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
     analysis["relativity"] = stats
-    return {
+    return _attach_recompute_value_series({
         "name": "10Y-2Y Treasury Spread", "series_id": "T10Y2Y", "value": analysis,
         "unit": "basis points", "source_name": "FRED",
         "notes": "10Y-2Y 利差；分层降噪：用距离 MA20 乖离率衡量趋势，替代日度动量。"
-    }
+    }, series[["date", "value"]])
 
 
 def get_hy_oas_bp(end_date: str = None) -> Dict[str, Any]:
@@ -1122,11 +1185,11 @@ def get_hy_oas_bp(end_date: str = None) -> Dict[str, Any]:
     analysis = analyze_series_ma_trend(series, short_period=5, long_period=20)
     stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
     analysis["relativity"] = stats
-    return {
+    return _attach_recompute_value_series({
         "name": "High Yield OAS", "series_id": "BAMLH0A0HYM2", "value": analysis,
         "unit": "basis points", "source_name": "FRED",
         "notes": "ICE BofA US High Yield OAS；分层降噪：MA5 vs MA20 趋势方向。"
-    }
+    }, series[["date", "value"]])
 
 
 def get_ig_oas_bp(end_date: str = None) -> Dict[str, Any]:
@@ -1144,11 +1207,11 @@ def get_ig_oas_bp(end_date: str = None) -> Dict[str, Any]:
     analysis = analyze_series_ma_trend(series, short_period=5, long_period=20)
     stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
     analysis["relativity"] = stats
-    return {
+    return _attach_recompute_value_series({
         "name": "Investment Grade OAS", "series_id": "BAMLC0A0CM", "value": analysis,
         "unit": "basis points", "source_name": "FRED",
         "notes": "ICE BofA US Corporate OAS；分层降噪：MA5 vs MA20 趋势方向。"
-    }
+    }, series[["date", "value"]])
 
 
 def get_10y_real_rate(end_date: str = None) -> Dict[str, Any]:
@@ -1166,11 +1229,11 @@ def get_10y_real_rate(end_date: str = None) -> Dict[str, Any]:
     analysis = analyze_series_ma_deviation(series, ma_period=20)
     stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
     analysis["relativity"] = stats
-    return {
+    return _attach_recompute_value_series({
         "name": "10Y Real Rate", "series_id": "DFII10", "value": analysis,
         "unit": "percent", "source_name": "FRED",
         "notes": "10年期实际利率；分层降噪：用距离 MA20 乖离率衡量趋势，替代日度动量。"
-    }
+    }, series[["date", "value"]])
 
 
 def get_10y_treasury(end_date: str = None) -> Dict[str, Any]:
@@ -1188,11 +1251,11 @@ def get_10y_treasury(end_date: str = None) -> Dict[str, Any]:
     analysis = analyze_series_ma_deviation(series, ma_period=20)
     stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
     analysis["relativity"] = stats
-    return {
+    return _attach_recompute_value_series({
         "name": "10Y Treasury Yield", "series_id": "DGS10", "value": analysis,
         "unit": "percent", "source_name": "FRED",
         "notes": "10年期美债收益率；分层降噪：用距离 MA20 乖离率衡量趋势，替代日度动量。"
-    }
+    }, series[["date", "value"]])
 
 
 def get_10y_breakeven(end_date: str = None) -> Dict[str, Any]:
@@ -1210,11 +1273,11 @@ def get_10y_breakeven(end_date: str = None) -> Dict[str, Any]:
     analysis = analyze_series_ma_deviation(series, ma_period=20)
     stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
     analysis["relativity"] = stats
-    return {
+    return _attach_recompute_value_series({
         "name": "10Y Breakeven Inflation", "series_id": "T10YIE", "value": analysis,
         "unit": "percent", "source_name": "FRED",
         "notes": "10年期盈亏平衡通胀率；分层降噪：用距离 MA20 乖离率衡量趋势，替代日度动量。"
-    }
+    }, series[["date", "value"]])
 
 
 def get_fed_funds_rate(end_date: str = None) -> Dict[str, Any]:
@@ -1239,11 +1302,11 @@ def get_fed_funds_rate(end_date: str = None) -> Dict[str, Any]:
             series=series,
             calculation="momentum_relativity",
         )
-    return {
+    return _attach_recompute_value_series({
         "name": "Fed Funds Rate", "series_id": "FEDFUNDS", "value": analysis,
         "unit": "percent", "source_name": "FRED",
         "notes": "Effective Federal Funds Rate with momentum and relativity."
-    }
+    }, series[["date", "value"]])
 
 
 def get_m2_yoy(end_date: str = None) -> Dict[str, Any]:
@@ -1265,12 +1328,12 @@ def get_m2_yoy(end_date: str = None) -> Dict[str, Any]:
             "unavailable_reason": "m2_yoy_level_or_observation_date_missing",
             "notes": "M2 YoY cannot be used because the level or observation date is missing.",
         }
-    return {
+    return _attach_recompute_value_series({
         "name": "M2 YoY Growth", "series_id": "M2SL",
         "value": {"level": yoy, "date": date, "momentum": "monthly", "relativity": relativity},
         "unit": "percent", "source_name": "FRED",
         "notes": "M2 Money Supply Year-over-Year Growth (monthly momentum); relativity is calculated on the YoY series itself."
-    }
+    }, yoy_history[["date", "value"]] if yoy_history is not None else None)
 
 
 def _fetch_walcl_history(start_date: Optional[Any] = None) -> pd.DataFrame:
@@ -1534,7 +1597,7 @@ def get_net_liquidity_momentum(end_date: str = None) -> Dict[str, Any]:
         "rrp": float(rrp_s.iloc[-1]),
     }
 
-    return {
+    return _attach_recompute_value_series({
         "name": "Net Liquidity (Fed - TGA - RRP)",
         "series_id": "WALCL-WTREGEN-RRPONTSYD",
         "value": {
@@ -1551,7 +1614,7 @@ def get_net_liquidity_momentum(end_date: str = None) -> Dict[str, Any]:
         "unit": "USD Billions",
         "source_name": "FRED",
         "notes": "净流动性；分层降噪：4周滚动动量（月度/周度趋势），替代日度动量。"
-    }
+    }, net_liq_df[["date", "value"]])
 
 
 
@@ -1679,13 +1742,13 @@ def get_xly_xlp_ratio(end_date: str = None) -> Dict[str, Any]:
                     if ma_analysis:
                         value_out["position_vs_ma20"] = ma_analysis.get("position_vs_ma")
                         value_out["ma20"] = ma_analysis.get("ma")
-                    return {
+                    return _attach_recompute_value_series({
                         "name": "XLY/XLP Ratio",
                         "value": value_out,
                         "unit": "ratio",
                         "source_name": "yfinance (cached)",
                         "notes": "XLY/XLP 风险偏好；分层降噪：比值相对 MA20 位置。"
-                    }
+                    }, ratio_for_ma)
     except Exception as e:
         logging.warning(f"TimeSeriesManager 获取 XLY/XLP 数据失败: {e}")
 
@@ -1732,13 +1795,13 @@ def get_xly_xlp_ratio(end_date: str = None) -> Dict[str, Any]:
             value_out["position_vs_ma20"] = analysis.get("position_vs_ma")
             value_out["ma20"] = analysis.get("ma")
 
-        return {
+        return _attach_recompute_value_series({
             "name": "XLY/XLP Ratio",
             "value": value_out,
             "unit": "ratio",
             "source_name": "yfinance",
             "notes": f"XLY/XLP 风险偏好；分层降噪：比值相对 MA20 位置。Raw: XLY={aligned_df['xly'].iloc[-1]:.2f}, XLP={aligned_df['xlp'].iloc[-1]:.2f}"
-        }
+        }, ratio_for_analysis)
     except Exception as e:
         return {
             "name": "XLY/XLP Ratio",
@@ -1789,13 +1852,13 @@ def get_copper_gold_ratio(end_date: str = None) -> Dict[str, Any]:
                     if ma_analysis:
                         value_out["position_vs_ma50"] = ma_analysis.get("position_vs_ma")
                         value_out["ma50"] = ma_analysis.get("ma")
-                    return {
+                    return _attach_recompute_value_series({
                         "name": "Copper/Gold Ratio",
                         "value": value_out,
                         "unit": "ratio",
                         "source_name": "yfinance (cached)",
                         "notes": "铜/金比率；分层降噪：比值相对 MA50 位置，替代日度动量。"
-                    }
+                    }, ratio_for_ma)
     except Exception as e:
         logging.warning(f"TimeSeriesManager 获取铜/金数据失败: {e}")
 
@@ -1842,13 +1905,13 @@ def get_copper_gold_ratio(end_date: str = None) -> Dict[str, Any]:
             value_out["position_vs_ma50"] = analysis.get("position_vs_ma")
             value_out["ma50"] = analysis.get("ma")
 
-        return {
+        return _attach_recompute_value_series({
             "name": "Copper/Gold Ratio",
             "value": value_out,
             "unit": "ratio",
             "source_name": "yfinance",
             "notes": f"铜/金比率；分层降噪：比值相对 MA50 位置。Raw: Copper={aligned_df['copper'].iloc[-1]:.2f}, Gold={aligned_df['gold'].iloc[-1]:.2f}"
-        }
+        }, ratio_for_analysis)
     except Exception as e:
         return {
             "name": "Copper/Gold Ratio",

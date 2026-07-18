@@ -190,3 +190,13 @@ def test_adapter_declares_compatibility_only_role():
 
     assert native["adapter_policy"]["legacy_adapter_role"] == "compatibility_mapping_only"
     assert native["adapter_policy"]["primary_reasoning_source"] == "vnext_artifacts"
+
+
+def test_adapter_passes_reasoned_verdict_into_legacy_master_perspective():
+    final, revised, cards = _base_contracts()
+    final.reasoned_verdict = "判决正文明确保留支持证据、反面证据与改判条件。" * 25
+
+    result = adapt_vnext_to_legacy(final, revised, cards, [], {"confidence_percent": 95.0})
+
+    perspective = result["__LOGIC__"]["market_regime_analysis"]["masters_perspective"]
+    assert final.reasoned_verdict in perspective

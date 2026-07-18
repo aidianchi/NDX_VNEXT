@@ -951,6 +951,31 @@ def test_get_ndx_valuation_history_of_market_returns_valid_forward_pe(monkeypatc
     assert value.get("forward_percentile_status") == "insufficient_history"
     assert value.get("forward_percentile_context", {}).get("sample_count") == 5
     assert len(value.get("forward_percentile_context", {}).get("raw_series", [])) == 5
+    assert "unverified attribution" in result.get("source_name", "")
+
+
+def test_history_of_market_bloomberg_best_labels_are_always_caveated(monkeypatch):
+    """Every runtime-facing Bloomberg BEst label must retain the HoM caveat."""
+    _install_history_of_market_fixture(monkeypatch)
+    monkeypatch.setattr(tools_L4, "get_ndx_valuation_third_party_checks", lambda: {})
+    monkeypatch.delenv("NDX_ENABLE_COMPONENT_MODEL", raising=False)
+
+    result = tools_L4.get_ndx_pe_and_earnings_yield(end_date="2026-07-09")
+
+    def _strings(value):
+        if isinstance(value, dict):
+            for item in value.values():
+                yield from _strings(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                yield from _strings(item)
+        elif isinstance(value, str):
+            yield value
+
+    caveat_markers = ("unverified", "not independently verified", "not independently verifiable", "未独立核验")
+    bloomberg_labels = [s for s in _strings(result) if "bloomberg best" in s.lower()]
+    assert bloomberg_labels, "fixture should exercise the Bloomberg BEst HoM path"
+    assert all(any(marker in s.lower() for marker in caveat_markers) for s in bloomberg_labels), bloomberg_labels
 
 
 @pytest.mark.parametrize("backtest_date,expected_min,expected_max", [

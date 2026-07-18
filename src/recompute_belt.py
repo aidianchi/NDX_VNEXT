@@ -117,6 +117,12 @@ def _indicator_value(item: Optional[Dict[str, Any]]) -> Any:
     return raw.get("value")
 
 
+def _recompute_input(data_json: Dict[str, Any], function_id: str) -> Dict[str, Any]:
+    inputs = data_json.get("recompute_inputs") if isinstance(data_json, dict) else None
+    value = inputs.get(function_id) if isinstance(inputs, dict) else None
+    return value if isinstance(value, dict) else {}
+
+
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
@@ -456,14 +462,32 @@ def check_vix_term_structure_percentile(data_json: Dict[str, Any], handled: Set[
         window_start = window_meta.get("window_start")
         window_end = window_meta.get("window_end")
         pipeline_status = window_meta.get("status")
-        windowed = [
-            entry.get(primary_field)
+        eligible_entries = [
+            entry
             for entry in raw_series
             if isinstance(entry, dict)
             and _is_number(entry.get(primary_field))
             and (not window_start or str(entry.get("data_date", "")) >= window_start)
             and (not window_end or str(entry.get("data_date", "")) <= window_end)
         ]
+        # Prefer rebuilding VIX3M/VIX from the two legs.  The producer computes
+        # its percentile before rounding the displayed ratio to four decimals;
+        # ranking the rounded convenience field can move one or more ties.
+        if primary_field == "ratio_vix3m_over_vix" and all(
+            _is_number(entry.get("vix")) and _is_number(entry.get("vix3m")) and float(entry["vix"]) != 0
+            for entry in eligible_entries
+        ):
+            windowed = [float(entry["vix3m"]) / float(entry["vix"]) for entry in eligible_entries]
+            current_vix = value.get("vix") if isinstance(value.get("vix"), dict) else {}
+            current_vix3m = value.get("vix3m") if isinstance(value.get("vix3m"), dict) else {}
+            if (
+                _is_number(current_vix.get("level"))
+                and float(current_vix["level"]) != 0
+                and _is_number(current_vix3m.get("level"))
+            ):
+                current_value = float(current_vix3m["level"]) / float(current_vix["level"])
+        else:
+            windowed = [entry.get(primary_field) for entry in eligible_entries]
         note = (
             f"method=count(v<=current)/n*100; primary_field={primary_field}; "
             f"window={window_start}..{window_end}; n={len(windowed)} "
@@ -1310,7 +1334,7 @@ def check_ma_deviation_family(data_json: Dict[str, Any], handled: Set[str]) -> L
 
 
 # ---------------------------------------------------------------------------
-# L5 technical snapshot: moving averages recomputable from recent_closes_30
+# L5 technical snapshot: independently recomputable from audit-only raw OHLCV
 # ---------------------------------------------------------------------------
 
 L5_UNRECOMPUTABLE_TECHNICAL_KEYS: Tuple[str, ...] = (
@@ -1320,48 +1344,170 @@ L5_UNRECOMPUTABLE_TECHNICAL_KEYS: Tuple[str, ...] = (
 )
 
 
+def _mean(values: Sequence[float]) -> Optional[float]:
+    return sum(values) / len(values) if values else None
+
+
+def _ema(values: Sequence[float], span: int) -> List[float]:
+    if not values:
+        return []
+    alpha = 2.0 / (span + 1.0)
+    result = [float(values[0])]
+    for value in values[1:]:
+        result.append(alpha * float(value) + (1.0 - alpha) * result[-1])
+    return result
+
+
+def _wilder_ewm(values: Sequence[float], window: int, *, seed_from_first: bool = False) -> List[Optional[float]]:
+    if not values:
+        return []
+    if seed_from_first:
+        result: List[Optional[float]] = [float(values[0])]
+        alpha = 1.0 / window
+        for value in values[1:]:
+            previous = result[-1]
+            result.append(alpha * float(value) + (1.0 - alpha) * float(previous))
+        return result
+    result = [None] * len(values)
+    if len(values) < window:
+        return result
+    result[window - 1] = sum(float(value) for value in values[:window]) / window
+    for index in range(window, len(values)):
+        previous = float(result[index - 1])
+        result[index] = (previous * (window - 1) + float(values[index])) / window
+    return result
+
+
+def _l5_recompute_values(rows: List[Dict[str, Any]]) -> Dict[str, Optional[float]]:
+    cleaned = [
+        row for row in rows
+        if isinstance(row, dict)
+        and all(_is_number(row.get(key)) for key in ("high", "low", "close", "volume"))
+    ]
+    if not cleaned:
+        return {}
+    high = [float(row["high"]) for row in cleaned]
+    low = [float(row["low"]) for row in cleaned]
+    close = [float(row["close"]) for row in cleaned]
+    volume = [float(row["volume"]) for row in cleaned]
+    result: Dict[str, Optional[float]] = {}
+    for window in (5, 20, 50, 60, 100, 200):
+        result[f"sma_{window}"] = _mean(close[-window:]) if len(close) >= window else None
+
+    deltas = [0.0] + [close[index] - close[index - 1] for index in range(1, len(close))]
+    gains = [max(delta, 0.0) for delta in deltas]
+    losses = [max(-delta, 0.0) for delta in deltas]
+    avg_gains = _wilder_ewm(gains, 14, seed_from_first=True)
+    avg_losses = _wilder_ewm(losses, 14, seed_from_first=True)
+    if len(close) >= 14 and avg_gains and avg_losses:
+        gain = float(avg_gains[-1])
+        loss = float(avg_losses[-1])
+        result["rsi_14"] = 100.0 if loss == 0 else 100.0 - (100.0 / (1.0 + gain / loss))
+
+    ema12 = _ema(close, 12)
+    ema26 = _ema(close, 26)
+    macd = [fast - slow for fast, slow in zip(ema12, ema26)]
+    signal = _ema(macd, 9)
+    if macd:
+        result["macd_line"] = macd[-1]
+        result["macd_signal"] = signal[-1]
+        result["macd_histogram"] = macd[-1] - signal[-1]
+
+    true_ranges = []
+    for index in range(len(close)):
+        previous_close = close[index - 1] if index else close[index]
+        true_ranges.append(max(high[index] - low[index], abs(high[index] - previous_close), abs(low[index] - previous_close)))
+    atr = _wilder_ewm(true_ranges, 14)
+    if atr and atr[-1] is not None:
+        result["atr_14"] = float(atr[-1])
+
+    plus_dm = [0.0]
+    minus_dm = [0.0]
+    for index in range(1, len(close)):
+        up_move = high[index] - high[index - 1]
+        down_move = low[index - 1] - low[index]
+        plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0.0)
+        minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0.0)
+    smooth_plus = _wilder_ewm(plus_dm, 14)
+    smooth_minus = _wilder_ewm(minus_dm, 14)
+    dx: List[Optional[float]] = [None] * len(close)
+    pdi: List[Optional[float]] = [None] * len(close)
+    mdi: List[Optional[float]] = [None] * len(close)
+    for index in range(len(close)):
+        if atr[index] in (None, 0) or smooth_plus[index] is None or smooth_minus[index] is None:
+            continue
+        pdi[index] = 100.0 * float(smooth_plus[index]) / float(atr[index])
+        mdi[index] = 100.0 * float(smooth_minus[index]) / float(atr[index])
+        denominator = float(pdi[index]) + float(mdi[index])
+        dx[index] = 0.0 if denominator == 0 else 100.0 * abs(float(pdi[index]) - float(mdi[index])) / denominator
+    valid_dx = [float(value) for value in dx if value is not None]
+    adx_values = _wilder_ewm(valid_dx, 14)
+    if adx_values and adx_values[-1] is not None:
+        result["adx_14"] = float(adx_values[-1])
+    result["pdi_14"] = next((float(value) for value in reversed(pdi) if value is not None), None)
+    result["mdi_14"] = next((float(value) for value in reversed(mdi) if value is not None), None)
+
+    obv = volume[0]
+    for index in range(1, len(close)):
+        if close[index] < close[index - 1]:
+            obv -= volume[index]
+        else:
+            obv += volume[index]
+    result["obv"] = obv
+
+    if len(close) >= 20:
+        result["donchian_upper"] = max(high[-20:])
+        result["donchian_lower"] = min(low[-20:])
+        result["donchian_middle"] = (float(result["donchian_upper"]) + float(result["donchian_lower"])) / 2.0
+        typical = [(h + l + c) / 3.0 for h, l, c in zip(high, low, close)]
+        pv = [price * vol for price, vol in zip(typical, volume)]
+        result["vwap_20"] = sum(pv[-20:]) / sum(volume[-20:]) if sum(volume[-20:]) else None
+        money_flow_multiplier = [
+            0.0 if h == l else ((c - l) - (h - c)) / (h - l)
+            for h, l, c in zip(high, low, close)
+        ]
+        money_flow_volume = [multiplier * vol for multiplier, vol in zip(money_flow_multiplier, volume)]
+        result["cmf_20"] = sum(money_flow_volume[-20:]) / sum(volume[-20:]) if sum(volume[-20:]) else None
+    if len(close) >= 14:
+        typical = [(h + l + c) / 3.0 for h, l, c in zip(high, low, close)]
+        raw_flow = [price * vol for price, vol in zip(typical, volume)]
+        positive = []
+        negative = []
+        for index, flow in enumerate(raw_flow):
+            direction = 0 if index == 0 else (1 if typical[index] > typical[index - 1] else -1 if typical[index] < typical[index - 1] else 0)
+            positive.append(flow if direction == 1 else 0.0)
+            negative.append(flow if direction == -1 else 0.0)
+        pos_sum = sum(positive[-14:])
+        neg_sum = sum(negative[-14:])
+        result["mfi_14"] = 100.0 if neg_sum == 0 and pos_sum > 0 else (0.0 if pos_sum == 0 else 100.0 - 100.0 / (1.0 + pos_sum / neg_sum))
+    return result
+
+
 def check_l5_moving_averages(data_json: Dict[str, Any], handled: Set[str]) -> List[Dict[str, Any]]:
     findings: List[Dict[str, Any]] = []
     fid = "get_l5_deterministic_snapshot"
     value = _indicator_value(_get_indicator(data_json, fid))
     if not isinstance(value, dict):
         return findings
-    closes_raw = value.get("recent_closes_30")
     exact = value.get("exact_technical_values") if isinstance(value.get("exact_technical_values"), dict) else {}
-    closes: List[float] = []
-    if isinstance(closes_raw, list):
-        closes = [entry.get("close") for entry in closes_raw if isinstance(entry, dict) and _is_number(entry.get("close"))]
+    audit_input = _recompute_input(data_json, fid)
+    raw_ohlcv = audit_input.get("raw_ohlcv") if isinstance(audit_input, dict) else None
+    recomputed = _l5_recompute_values(raw_ohlcv) if isinstance(raw_ohlcv, list) else {}
 
-    for window, sma_key in ((5, "sma_5"), (20, "sma_20")):
-        field = f"{fid}.exact_technical_values.{sma_key}"
-        handled.add(field)
-        pipeline_value = exact.get(sma_key)
-        note = f"formula=mean(last {window} closes in recent_closes_30); n_available={len(closes)}"
-        if len(closes) < window:
-            findings.append(_missing(field, "moving_average", CRITICALITY_STANDARD, note + "; insufficient closes"))
-            continue
-        recomputed = sum(closes[-window:]) / window
-        findings.append(_compare(field, pipeline_value, recomputed, TOLERANCE_ROUNDED_2DP,
-                                  "moving_average", CRITICALITY_STANDARD, note))
-
-    row_count = value.get("row_count")
-    for sma_key in ("sma_50", "sma_60", "sma_100", "sma_200"):
-        field = f"{fid}.exact_technical_values.{sma_key}"
-        handled.add(field)
-        findings.append(_missing(
-            field, "moving_average", CRITICALITY_STANDARD,
-            f"needs a longer close-price window than the embedded recent_closes_30 provides "
-            f"(full history row_count={row_count} is not embedded in the snapshot)",
-        ))
-    for key in L5_UNRECOMPUTABLE_TECHNICAL_KEYS:
+    keys = ("sma_5", "sma_20", "sma_50", "sma_60", "sma_100", "sma_200") + L5_UNRECOMPUTABLE_TECHNICAL_KEYS
+    for key in keys:
+        category = "moving_average" if key.startswith("sma_") else "technical_indicator"
         field = f"{fid}.exact_technical_values.{key}"
         handled.add(field)
-        findings.append(_missing(
-            field, "technical_indicator", CRITICALITY_STANDARD,
-            "Wilder-smoothed or multi-window technical indicator; its exact value is path-dependent on "
-            f"the full row_count={row_count} OHLCV history, which is not embedded (only the last 30 closes, "
-            "no OHLC/volume, are present), so it cannot be exactly reproduced from this snapshot alone",
-        ))
+        note = f"independent stdlib recompute from audit-only raw_ohlcv; n={len(raw_ohlcv or [])}"
+        if key not in recomputed or recomputed.get(key) is None:
+            findings.append(_missing(field, category, CRITICALITY_STANDARD, note + "; input or recipe unavailable"))
+            continue
+        tolerance = 0.2 if key in {"adx_14", "pdi_14", "mdi_14"} else TOLERANCE_ROUNDED_2DP
+        if key == "obv":
+            tolerance = EPSILON_EXACT
+        findings.append(_compare(field, exact.get(key), recomputed.get(key), tolerance,
+                                  category, CRITICALITY_STANDARD, note))
     return findings
 
 
@@ -1413,11 +1559,24 @@ def check_momentum_fields(data_json: Dict[str, Any], handled: Set[str]) -> List[
                 continue
             field = f"{fid}.{key}.{sub_key}"
             handled.add(field)
-            findings.append(_missing(
-                field, "growth_rate", CRITICALITY_STANDARD,
-                "requires multi-day raw price/level history not embedded in this snapshot "
-                "(only the current level and moving-average summary stats are present)",
-            ))
+            audit_input = _recompute_input(data_json, fid)
+            rows = audit_input.get("raw_series") if isinstance(audit_input, dict) else None
+            values = [
+                float(row.get("value")) for row in (rows or [])
+                if isinstance(row, dict) and _is_number(row.get("value"))
+            ]
+            note = f"independent difference from audit-only raw_series; n={len(values)}"
+            if len(values) < 3:
+                findings.append(_missing(field, "growth_rate", CRITICALITY_STANDARD, note + "; fewer than 3 values"))
+                continue
+            velocity = values[-1] - values[-2]
+            acceleration = velocity - (values[-2] - values[-3])
+            recomputed = velocity if sub_key == "velocity_1d" else acceleration if sub_key == "acceleration_1d" else None
+            if recomputed is None:
+                findings.append(_uncovered(field, "growth_rate", note + "; unsupported momentum subfield"))
+                continue
+            findings.append(_compare(field, sub_value, recomputed, TOLERANCE_ROUNDED_4DP,
+                                     "growth_rate", CRITICALITY_STANDARD, note))
     return findings
 
 
@@ -1462,6 +1621,89 @@ def _walk_numeric_leaves(node: Any, path: str) -> Iterator[Tuple[str, Any, Any]]
                 yield child_path, val, None
             else:
                 yield from _walk_numeric_leaves(val, child_path)
+
+
+def _years_before(value: datetime, years: int) -> datetime:
+    try:
+        return value.replace(year=value.year - years)
+    except ValueError:
+        return value.replace(year=value.year - years, day=28)
+
+
+def _parse_observation_date(value: Any) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def check_audit_value_series_percentiles(data_json: Dict[str, Any], handled: Set[str]) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    indicators = data_json.get("indicators") if isinstance(data_json, dict) else None
+    if not isinstance(indicators, list):
+        return findings
+    for item in indicators:
+        if not isinstance(item, dict):
+            continue
+        fid = str(item.get("function_id") or "unknown_function")
+        value = _indicator_value(item)
+        audit_input = _recompute_input(data_json, fid)
+        rows = audit_input.get("raw_series") if isinstance(audit_input, dict) else None
+        if value is None or not isinstance(rows, list):
+            continue
+        observations: List[Tuple[datetime, float]] = []
+        for row in rows:
+            if not isinstance(row, dict) or not _is_number(row.get("value")):
+                continue
+            parsed = _parse_observation_date(row.get("date") or row.get("data_date"))
+            if parsed is not None:
+                observations.append((parsed, float(row["value"])))
+        observations.sort(key=lambda pair: pair[0])
+        if not observations:
+            continue
+        anchor = observations[-1][0]
+        current = observations[-1][1]
+        history_years = max((anchor - observations[0][0]).days / 365.25, 0.0)
+        percentile_contract = audit_input.get("percentile_contract") if isinstance(audit_input.get("percentile_contract"), dict) else {}
+        for field, pipeline_value, _parent in _walk_numeric_leaves(value, fid):
+            key = field.rsplit(".", 1)[-1].lower()
+            if "percentile" not in key or field in handled:
+                continue
+            window = 1 if "1y" in key else 5 if "5y" in key else 10 if "10y" in key else None
+            if window is None:
+                continue
+            handled.add(field)
+            declared_scale = str(percentile_contract.get("scale") or "")
+            scale_100 = declared_scale == "0_100" or (not declared_scale and abs(float(pipeline_value)) > 1.0)
+            if scale_100 and window == 10:
+                if history_years < 9.5:
+                    findings.append(_missing(field, "percentile", CRITICALITY_STANDARD,
+                                             f"raw history {history_years:.1f}y is below pipeline 9.5y minimum"))
+                    continue
+                selected = observations
+            else:
+                cutoff = _years_before(anchor, window)
+                selected = [pair for pair in observations if pair[0] >= cutoff]
+                if scale_100 and window == 1 and len(selected) < 3:
+                    selected = observations
+            values = [pair[1] for pair in selected]
+            if not values:
+                findings.append(_missing(field, "percentile", CRITICALITY_STANDARD, "no dated values inside requested window"))
+                continue
+            strict_less = str(percentile_contract.get("comparison") or "") == "strict_less" or (not percentile_contract and scale_100)
+            count = sum(1 for candidate in values if candidate < current) if strict_less else sum(1 for candidate in values if candidate <= current)
+            recomputed = count / len(values) * (100.0 if scale_100 else 1.0)
+            tolerance = 0.06 if scale_100 else 0.0006
+            findings.append(_compare(
+                field,
+                pipeline_value,
+                recomputed,
+                tolerance,
+                "percentile",
+                CRITICALITY_STANDARD,
+                f"audit raw_series window={window}y n={len(values)} comparison={'<' if strict_less else '<='}",
+            ))
+    return findings
 
 
 def check_uncatalogued_percentile_fields(data_json: Dict[str, Any], handled: Set[str]) -> List[Dict[str, Any]]:
@@ -1547,6 +1789,7 @@ def run(data_json: Dict[str, Any]) -> Dict[str, Any]:
     findings.extend(check_l5_moving_averages(data_json, handled))
     findings.extend(check_multi_scale_ma_position(data_json, handled))
     findings.extend(check_momentum_fields(data_json, handled))
+    findings.extend(check_audit_value_series_percentiles(data_json, handled))
     findings.extend(check_uncatalogued_percentile_fields(data_json, handled))
 
     return {

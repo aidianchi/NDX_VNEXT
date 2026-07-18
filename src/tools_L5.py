@@ -207,6 +207,17 @@ def _build_l5_snapshot_from_frame(
         {"date": _date_text(index), "close": _round_value(float(value), 2)}
         for index, value in df["close"].tail(30).items()
     ]
+    raw_ohlcv = [
+        {
+            "date": _date_text(index),
+            "open": float(row["open"]) if "open" in df.columns and pd.notna(row.get("open")) else None,
+            "high": float(row["high"]) if "high" in df.columns and pd.notna(row.get("high")) else None,
+            "low": float(row["low"]) if "low" in df.columns and pd.notna(row.get("low")) else None,
+            "close": float(row["close"]),
+            "volume": int(row["volume"]) if "volume" in df.columns and pd.notna(row.get("volume")) else None,
+        }
+        for index, row in df.iterrows()
+    ]
     effective_text = effective_date.strftime("%Y-%m-%d")
     return {
         "name": "L5 Deterministic Technical Snapshot",
@@ -249,6 +260,13 @@ def _build_l5_snapshot_from_frame(
             "formula_engine": indicators.get("formula_engine"),
         },
         "notes": "L5 精确价格、均线、RSI、MACD、ATR 等技术数值的单一确定性快照；模型只能解释这些数值，不得自行估算。",
+        "recompute_input": {
+            "schema_version": "dated_ohlcv_v1",
+            "point_in_time_cutoff": effective_text,
+            "row_count": len(raw_ohlcv),
+            "purpose": "independent_recompute_only",
+            "raw_ohlcv": raw_ohlcv,
+        },
     }
 
 

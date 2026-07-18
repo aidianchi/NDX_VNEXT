@@ -1,7 +1,7 @@
 # Project-level Codex orchestration defaults.
 # The root session is the supervisor: it plans, delegates bounded work, and
 # owns the final integration and publication decision.
-model = "gpt-5.6"
+model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 
 [agents]

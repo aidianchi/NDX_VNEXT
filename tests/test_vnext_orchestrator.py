@@ -10,6 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import tools_L4
 from agent_analysis.contracts import (
+    AgentBudget,
+    AgentSpec,
     ApprovalStatus,
     BridgeMemo,
     ClaimLedger,
@@ -18,12 +20,15 @@ from agent_analysis.contracts import (
     Confidence,
     ContextBrief,
     CoreFact,
+    CounterThesisDraft,
     Critique,
     EvidencePassport,
     EvidenceRegistry,
     FinalAdjudication,
     GoldenPitChecklist,
     HypothesisCompetition,
+    InquiryMessage,
+    InquiryMessageType,
     InvestigationReport,
     IndicatorAnalysis,
     KeySupportChain,
@@ -89,6 +94,16 @@ class MiniStageModel(BaseModel):
 
 class RefStageModel(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
+
+
+_VALID_REASONED_VERDICT = (
+    "当前判断对象是纳斯达克100，姿态为中性偏谨慎，时间尺度覆盖未来数日到十二个月。"
+    "第一条理由是政策利率仍高，折现压力没有解除 [L1.get_fed_funds_rate]，但趋势尚未破坏限制了结论强度。"
+    "第二条理由是估值处于偏高水平 [L4.get_ndx_pe_and_earnings_yield]，不过盈利韧性意味着估值不能单独决定方向。"
+    "第三条理由是价格趋势仍有支撑 [L5.get_qqq_technical_indicators]，但内部广度不足使这条证据只能支持等待而非追涨。"
+    "综合来看，当前赔率不足以支持激进加仓，等待确认也会付出踏空代价。"
+    "最强的反对解释是盈利与趋势会继续压过利率和估值压力，但本轮证据还不足以让它改变判断。"
+)
 
 
 class RoutingFakeLLMEngine(FakeLLMEngine):
@@ -727,6 +742,7 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
             {
                 "approval_status": "approved_with_reservations",
                 "final_stance": "中性偏谨慎",
+                "reasoned_verdict": _VALID_REASONED_VERDICT,
                 "confidence": "medium",
                 "key_support_chains": [
                     {"chain_description": "趋势尚未破坏", "evidence_refs": ["L5.get_qqq_technical_indicators"], "weight": 0.3}
@@ -771,10 +787,16 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
     result = orchestrator.run(_mock_packet())
 
     assert result["final_adjudication"].final_stance == "中性偏谨慎"
+    assert result["final_adjudication"].reasoned_verdict == _VALID_REASONED_VERDICT
     assert result["schema_guard_report"].passed is True
     assert len(result["bridge_memos"]) == 2
     assert "L1.get_fed_funds_rate" in result["synthesis_packet"].evidence_index
     assert (tmp_path / "final_adjudication.json").exists()
+    saved_final = json.loads((tmp_path / "final_adjudication.json").read_text(encoding="utf-8"))
+    assert saved_final["reasoned_verdict"] == _VALID_REASONED_VERDICT
+    assert "reasoned_verdict_unresolved_refs" not in str(
+        (saved_final.get("quality_gate") or {}).get("notes") or ""
+    )
     assert (tmp_path / "run_review_report.json").exists()
     assert (tmp_path / "bridge_memos" / "bridge_v2.json").exists()
     assert (tmp_path / "counter_thesis.json").exists()
@@ -851,6 +873,7 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
         resume_from_existing=True,
     ).run(_mock_packet())
     assert resumed["final_adjudication"].final_stance == "中性偏谨慎"
+    assert resumed["final_adjudication"].reasoned_verdict == _VALID_REASONED_VERDICT
     resumed_diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
     assert resumed_diagnostics["stages"]["l1"]["status"] == "resumed"
     assert resumed_diagnostics["stages"]["final_adjudicator"]["status"] == "resumed"
@@ -1838,6 +1861,233 @@ def test_run_stage_uses_stage_model_routing_for_cognitive_stages(tmp_path: Path)
     assert diagnostics["stages"]["thesis"]["model"] == "deepseek-v4-pro"
 
 
+def test_thesis_retries_until_every_candidate_hypothesis_has_auditable_response(tmp_path: Path):
+    invalid = {
+        "environment_assessment": "环境偏紧。",
+        "valuation_assessment": "估值偏高。",
+        "timing_assessment": "趋势仍在但质量存疑。",
+        "main_thesis": "主线仍成立，但必须回应竞争解释。",
+        "hypothesis_responses": [
+            {
+                "hypothesis_id": "hyp_counter_1",
+                "verdict": "reject",
+                "reasoning": "趋势证据不足以推翻估值压力。",
+                "evidence_refs": [],
+            }
+        ],
+        "overall_confidence": "medium",
+    }
+    valid = {
+        **invalid,
+        "hypothesis_responses": [
+            {
+                "hypothesis_id": "hyp_counter_1",
+                "verdict": "reject",
+                "reasoning": "正式估值证据构成反证。",
+                "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+            },
+            {
+                "hypothesis_id": "hyp_counter_2",
+                "verdict": "absorb_partially",
+                "reasoning": "部分吸收趋势解释，但仍缺少广度确认。",
+                "evidence_refs": ["L5.get_qqq_technical_indicators"],
+            },
+        ],
+    }
+    engine = SequencedFakeLLMEngine(
+        {"thesis": [json.dumps(invalid, ensure_ascii=False), json.dumps(valid, ensure_ascii=False)]}
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+    )
+    synthesis = SynthesisPacket(
+        packet_meta={"data_date": "2026-04-24"},
+        evidence_index={
+            "L4.get_ndx_pe_and_earnings_yield": {"layer": "L4"},
+            "L5.get_qqq_technical_indicators": {"layer": "L5"},
+        },
+        competing_hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_counter_1",
+                hypothesis_text="估值压力可能仍未反映。",
+                source="counter_thesis",
+                status="candidate",
+            ),
+            CompetingHypothesis(
+                hypothesis_id="hyp_counter_2",
+                hypothesis_text="趋势可能已经吸收部分压力。",
+                source="counter_thesis",
+                status="candidate",
+            ),
+            CompetingHypothesis(
+                hypothesis_id="hyp_leading",
+                hypothesis_text="当前主线解释。",
+                source="bridge_v2",
+                status="leading",
+            ),
+        ],
+    )
+
+    thesis = orchestrator._run_thesis(synthesis)
+
+    assert engine.calls["thesis"] == 2
+    assert {response.hypothesis_id for response in thesis.hypothesis_responses} == {
+        "hyp_counter_1",
+        "hyp_counter_2",
+    }
+    assert thesis.hypothesis_responses[0].evidence_refs == ["L4.get_ndx_pe_and_earnings_yield"]
+    retry_prompt = (tmp_path / "prompt_audit" / "thesis" / "attempt_2.prompt.txt").read_text(encoding="utf-8")
+    assert "hyp_counter_2" in retry_prompt
+    assert "reject requires at least one evidence_ref" in retry_prompt
+
+    governance = orchestrator._build_governance_input_packet(synthesis, thesis)
+
+    assert [response.hypothesis_id for response in governance.thesis_hypothesis_responses] == [
+        "hyp_counter_1",
+        "hyp_counter_2",
+    ]
+    assert "L4.get_ndx_pe_and_earnings_yield" in governance.key_evidence_refs
+    assert "L5.get_qqq_technical_indicators" in governance.key_evidence_refs
+
+
+def test_thesis_hypothesis_response_validator_rejects_duplicates_and_refs_outside_index(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    synthesis = SynthesisPacket(
+        packet_meta={"data_date": "2026-04-24"},
+        evidence_index={"L4.get_ndx_pe_and_earnings_yield": {"layer": "L4"}},
+        competing_hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_counter",
+                hypothesis_text="估值压力可能仍未反映。",
+                source="counter_thesis",
+                status="candidate",
+            )
+        ],
+    )
+    base = {
+        "environment_assessment": "环境偏紧。",
+        "valuation_assessment": "估值偏高。",
+        "timing_assessment": "趋势待确认。",
+        "main_thesis": "保留竞争解释。",
+        "overall_confidence": "medium",
+    }
+    duplicate = ThesisDraft.model_validate(
+        {
+            **base,
+            "hypothesis_responses": [
+                {
+                    "hypothesis_id": "hyp_counter",
+                    "verdict": "absorb_partially",
+                    "reasoning": "部分吸收。",
+                },
+                {
+                    "hypothesis_id": "hyp_counter",
+                    "verdict": "reject",
+                    "reasoning": "驳回。",
+                    "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+                },
+            ],
+        }
+    )
+    invalid_ref = ThesisDraft.model_validate(
+        {
+            **base,
+            "hypothesis_responses": [
+                {
+                    "hypothesis_id": "hyp_counter",
+                    "verdict": "reject",
+                    "reasoning": "驳回。",
+                    "evidence_refs": ["L9.fake_ref"],
+                }
+            ],
+        }
+    )
+
+    assert any(
+        "duplicate hypothesis_responses" in error
+        for error in orchestrator._validate_thesis_hypothesis_responses(duplicate, synthesis)
+    )
+    assert any(
+        "outside evidence_index" in error
+        for error in orchestrator._validate_thesis_hypothesis_responses(invalid_ref, synthesis)
+    )
+
+
+def test_thesis_resume_rejects_legacy_checkpoint_without_candidate_responses(tmp_path: Path):
+    synthesis = SynthesisPacket(
+        packet_meta={"data_date": "2026-04-24"},
+        evidence_index={"L4.get_ndx_pe_and_earnings_yield": {"layer": "L4"}},
+        competing_hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_counter",
+                hypothesis_text="估值压力可能仍未反映。",
+                source="counter_thesis",
+                status="candidate",
+            )
+        ],
+    )
+    valid_payload = {
+        "environment_assessment": "环境偏紧。",
+        "valuation_assessment": "估值偏高。",
+        "timing_assessment": "趋势待确认。",
+        "main_thesis": "保留竞争解释。",
+        "hypothesis_responses": [
+            {
+                "hypothesis_id": "hyp_counter",
+                "verdict": "reject",
+                "reasoning": "估值证据构成反证。",
+                "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+            }
+        ],
+        "overall_confidence": "medium",
+    }
+    first = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({"thesis": json.dumps(valid_payload, ensure_ascii=False)}),
+    )
+    first._run_thesis(synthesis)
+
+    checkpoint_path = tmp_path / "thesis_draft.json"
+    legacy_payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    legacy_payload.pop("hypothesis_responses", None)
+    checkpoint_path.write_text(json.dumps(legacy_payload, ensure_ascii=False), encoding="utf-8")
+    manifest_path = tmp_path / "stage_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"]["thesis_draft.json"]["sha256"] = first._sha256_file(checkpoint_path)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    second_engine = SequencedFakeLLMEngine({"thesis": json.dumps(valid_payload, ensure_ascii=False)})
+    second = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=second_engine,
+        resume_from_existing=True,
+    )
+    thesis = second._run_thesis(synthesis)
+
+    assert second_engine.calls["thesis"] == 1
+    assert thesis.hypothesis_responses[0].hypothesis_id == "hyp_counter"
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["stages"]["thesis"]["status"] == "ok"
+
+
+def test_thesis_builder_prompt_keeps_work_order_r7_block_exact():
+    prompt = Path(orchestrator_module.__file__).with_name("prompts").joinpath("thesis_builder.md").read_text(encoding="utf-8")
+    required_block = (
+        "## 对竞争假说的强制回应\n"
+        "`synthesis_packet.competing_hypotheses` 里每一个 status 为 candidate 的假说，你必须在 `hypothesis_responses` 里逐一回应，三选一：接受并修正判断（accept_and_revise）、部分吸收（absorb_partially）、驳回（reject）。驳回必须引用具体的反证 evidence_ref，不许用\"证据不足\"四个字一笔带过——证据不足时的诚实选项是 absorb_partially 并写明缺哪条证据。你的主论点如果无法回应某个假说最强的那条证据，就不许假装没看见它。"
+    )
+
+    assert prompt.count(required_block) == 1
+
+
 def test_reviser_final_evidence_refs_outside_index_trigger_retry(tmp_path: Path):
     engine = SequencedFakeLLMEngine(
         {
@@ -1871,6 +2121,96 @@ def test_reviser_final_evidence_refs_outside_index_trigger_retry(tmp_path: Path)
     assert engine.calls["final_adjudicator"] == 2
     assert diagnostics["stages"]["final_adjudicator"]["errors"][0]["kind"] == "contract_validation_error"
     assert "evidence_ref_source_validation failed" in diagnostics["stages"]["final_adjudicator"]["errors"][0]["message"]
+
+
+def test_final_stage_retries_after_overlong_reasoned_verdict(tmp_path: Path):
+    base = {
+        "approval_status": "approved_with_reservations",
+        "final_stance": "中性偏谨慎",
+        "confidence": "medium",
+        "must_preserve_risks": ["估值压缩风险"],
+        "blocking_issues": [],
+        "adjudicator_notes": "保留风险边界。",
+    }
+    engine = SequencedFakeLLMEngine({
+        "final_adjudicator": [
+            json.dumps({**base, "reasoned_verdict": "过长" * 651}, ensure_ascii=False),
+            json.dumps({**base, "reasoned_verdict": _VALID_REASONED_VERDICT}, ensure_ascii=False),
+        ]
+    })
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="final",
+        stage_name="final_adjudicator",
+        model_cls=FinalAdjudication,
+        payload={"example": "payload"},
+    )
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+
+    assert result.reasoned_verdict == _VALID_REASONED_VERDICT
+    assert engine.calls["final_adjudicator"] == 2
+    assert diagnostics["stages"]["final_adjudicator"]["errors"][0]["kind"] == "schema_validation_error"
+    assert "reasoned_verdict" in diagnostics["stages"]["final_adjudicator"]["errors"][0]["message"]
+
+
+def test_reasoned_verdict_ref_validation_is_non_blocking_and_normalized(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    body = (
+        "当前判断对象是纳斯达克100，姿态为中性偏谨慎。"
+        "实际利率仍构成折现压力 [ l1.get_10y_real_rate ]，但趋势反证限制结论强度。"
+        "估值补偿仍薄，盈利韧性则构成反面证据。价格趋势尚有支撑，内部广度不足限制追涨。"
+        "当前赔率不足以支持激进加仓，等待确认也会付出踏空代价。"
+        "最强反对解释是盈利与趋势会继续占优，但本轮证据不足以改变判断。"
+    )
+    final = FinalAdjudication(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="中性偏谨慎",
+        confidence=Confidence.MEDIUM,
+        must_preserve_risks=["估值压缩风险"],
+        adjudicator_notes="保留风险边界。",
+        reasoned_verdict=(body * 2)[:700],
+    )
+
+    orchestrator._annotate_reasoned_verdict_refs(final, {"L1.get_10y_real_rate"})
+
+    notes = final.quality_gate.notes if final.quality_gate is not None else ""
+    assert "reasoned_verdict_unresolved_refs" not in notes
+
+    final.reasoned_verdict = final.reasoned_verdict.replace(
+        "[ l1.get_10y_real_rate ]", "[L9.fake_ref]", 1
+    )
+    orchestrator._annotate_reasoned_verdict_refs(final, {"L1.get_10y_real_rate"})
+    assert "reasoned_verdict_unresolved_refs:L9.fake_ref" in final.quality_gate.notes
+
+
+def test_reasoned_verdict_without_any_ref_gets_degraded_note(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    final = FinalAdjudication(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="中性偏谨慎",
+        confidence=Confidence.MEDIUM,
+        must_preserve_risks=["估值压缩风险"],
+        adjudicator_notes="保留风险边界。",
+        reasoned_verdict="没有引用的判决正文。" * 30,
+    )
+
+    orchestrator._annotate_reasoned_verdict_refs(final, {"L1.get_10y_real_rate"})
+
+    assert "reasoned_verdict_missing_refs" in final.quality_gate.notes
 
 
 class FakeModelWithGeneratedAt(BaseModel):
@@ -2186,6 +2526,536 @@ def test_stub_investigation_does_not_downgrade_competition(tmp_path: Path):
     assert records == []
 
 
+def _controlled_investigation_inputs(tmp_path: Path):
+    artifact = tmp_path / "layer_cards" / "L1.json"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(
+        json.dumps(
+            {
+                "layer_synthesis": "实际利率仍高，但政策路径存在不确定性。",
+                "risk_flags": ["高利率压制估值"],
+                "unrelated": "不相关材料",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    message = InquiryMessage(
+        message_id="inq_controlled",
+        message_type=InquiryMessageType.ADJUDICATION_GAP,
+        sender_stage="bridge",
+        target_stage="bridge",
+        trigger="利率与估值冲突未决。",
+        question="实际利率材料能确认什么、挑战什么？",
+        allowed_context_refs=["layer_cards/L1.json"],
+        forbidden_context_refs=["thesis_draft.json", "final_adjudication.json"],
+        effective_date="2026-07-14",
+    )
+    spec = AgentSpec(
+        agent_id="agent_controlled",
+        originating_message_id=message.message_id,
+        research_question=message.question,
+        allowed_context_refs=list(message.allowed_context_refs),
+        forbidden_context_refs=list(message.forbidden_context_refs),
+        allowed_tools=["read_allowed_artifacts"],
+        budget=AgentBudget(max_tool_calls=0, max_minutes=1, max_source_refs=3),
+        stop_conditions=["materials_exhausted"],
+        success_criteria=["separate support and challenge"],
+        required_output={"contract": "InvestigationReport"},
+    )
+    return spec, message
+
+
+def test_controlled_investigation_llm_output_is_non_stub_and_audited(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "1")
+    response = json.dumps(
+        {
+            "finding": "材料确认实际利率仍构成约束，但不能确认估值一定下跌 [M1]。",
+            "claims_supported": ["实际利率约束仍在 [M1]"],
+            "claims_challenged": ["高利率必然导致指数下跌 [M1]"],
+            "counter_evidence_refs": ["[M1]"],
+            "cannot_establish": ["缺少估值与盈利材料，不能确认价格方向 [M1]"],
+            "confidence": "medium",
+            "limits": ["只读取 [M1]，没有外部研究"],
+        },
+        ensure_ascii=False,
+    )
+    engine = SequencedFakeLLMEngine({"controlled_investigation": response})
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine
+    )
+    spec, message = _controlled_investigation_inputs(tmp_path)
+
+    report = orchestrator._build_investigation_report(spec, message)
+
+    assert report.is_deterministic_stub is False
+    assert report.claims_challenged
+    assert "no_real_investigation_performed" not in report.limits
+    assert engine.calls["controlled_investigation"] == 1
+    audit_prompts = list((tmp_path / "prompt_audit" / "controlled_investigation").glob("*.prompt.txt"))
+    assert audit_prompts
+    prompt = audit_prompts[0].read_text(encoding="utf-8")
+    assert "[M1]" in prompt
+    assert "实际利率仍高" in prompt
+
+
+def test_real_investigation_challenge_creates_downgrade_record(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    base = CompetingHypothesis(
+        hypothesis_id="hyp_base",
+        hypothesis_text="主线解释",
+        support_evidence_refs=["L1.get_fed_funds_rate"],
+        diagnostic_evidence_refs=["L1.get_fed_funds_rate"],
+        falsification_conditions=["利率回落"],
+    )
+    report = InvestigationReport(
+        originating_agent_id="agent_real",
+        is_deterministic_stub=False,
+        finding="材料挑战单一路径。",
+        evidence_refs=["layer_cards/L1.json"],
+        claims_challenged=["高利率必然压低指数"],
+        cannot_establish=["价格方向"],
+        effective_date="2026-07-14",
+    )
+
+    records = orchestrator._build_adjudication_change_records(
+        base_hypothesis=base,
+        counter_hypotheses=[],
+        investigation_reports=[report],
+        fallback_warnings=[],
+        effective_date="2026-07-14",
+    )
+
+    assert records
+    assert records[0].change_type == "kept_unresolved"
+    assert records[0].trigger_evidence_refs == ["layer_cards/L1.json"]
+
+
+def test_real_investigation_propagates_through_bridge_and_hypothesis_competition(
+    tmp_path: Path,
+    monkeypatch,
+):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    report = InvestigationReport(
+        originating_agent_id="agent_real",
+        is_deterministic_stub=False,
+        finding="材料挑战单一路径 [M1]。",
+        evidence_refs=["layer_cards/L1.json"],
+        claims_challenged=["高利率必然压低指数 [M1]"],
+        cannot_establish=["价格方向仍不能确认 [M1]"],
+        effective_date="2026-07-14",
+    )
+    bridge_v1 = BridgeMemo(
+        bridge_type="macro_valuation",
+        layers_connected=["L1", "L4"],
+        principal_contradiction={
+            "contradiction_id": "rates_vs_valuation",
+            "summary": "高利率与高估值并存。",
+            "why_principal": "决定估值承压程度。",
+            "dominant_side": "利率约束。",
+            "secondary_side": "盈利韧性。",
+            "price_reflection": "partially_reflected",
+            "evidence_refs": ["L1.get_fed_funds_rate"],
+        },
+        implication_for_ndx="保留争议。",
+    )
+    router_output = orchestrator_module.InquiryRouterOutput()
+
+    bridge_v2 = orchestrator._build_bridge_v2(
+        packet_model=_mock_packet(),
+        layer_cards=[],
+        bridge_v1=bridge_v1,
+        router_output=router_output,
+        investigation_reports=[report],
+    )
+
+    assert bridge_v2.investigation_effects[0]["is_deterministic_stub"] is False
+    assert bridge_v2.feedback_loop_summary["changed_judgment_count"] == 1
+    assert "价格方向仍不能确认 [M1]" in bridge_v2.key_uncertainties
+
+    counter = CompetingHypothesis(
+        hypothesis_id="hyp_counter",
+        hypothesis_text="反方解释：价格可能已部分反映压力。",
+        source="counter_thesis",
+        support_evidence_refs=["L1.get_fed_funds_rate"],
+        diagnostic_evidence_refs=["L1.get_fed_funds_rate"],
+        falsification_conditions=["价格反映证据转弱。"],
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_build_counter_thesis",
+        lambda **_: CounterThesisDraft(hypotheses=[counter]),
+    )
+
+    competition = orchestrator._build_hypothesis_competition(
+        synthesis_packet=SynthesisPacket(
+            evidence_index={"L1.get_fed_funds_rate": {"evidence_ref": "L1.get_fed_funds_rate"}}
+        ),
+        bridge_v2=bridge_v2,
+        investigation_reports=[report],
+        effective_date="2026-07-14",
+    )
+
+    assert competition.downgrade_or_split_events
+    assert competition.downgrade_or_split_events[0].trigger_evidence_refs == ["layer_cards/L1.json"]
+
+
+def test_controlled_investigation_two_failures_fall_back_to_stub(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "1")
+    engine = SequencedFakeLLMEngine(
+        {"controlled_investigation": ["not-json", '{"finding": "missing required shape"}']}
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine
+    )
+    spec, message = _controlled_investigation_inputs(tmp_path)
+
+    report = orchestrator._build_investigation_report(spec, message)
+
+    assert report.is_deterministic_stub is True
+    assert "llm_investigation_failed_fell_back_to_stub" in report.limits
+    assert engine.calls["controlled_investigation"] == 2
+
+
+def test_controlled_investigation_rejects_forbidden_ref_in_assembly(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "1")
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    spec, message = _controlled_investigation_inputs(tmp_path)
+    spec.allowed_context_refs.append("final_adjudication.json")
+
+    with pytest.raises(ValueError, match="forbidden_context_ref"):
+        orchestrator._build_investigation_report(spec, message)
+
+
+def test_controlled_investigation_disabled_preserves_stub_path(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "0")
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    spec, message = _controlled_investigation_inputs(tmp_path)
+
+    report = orchestrator._build_investigation_report(spec, message)
+
+    assert report.is_deterministic_stub is True
+    assert "no_real_investigation_performed" in report.limits
+    assert "llm_investigation_failed_fell_back_to_stub" not in report.limits
+
+
+def test_controlled_investigation_wraps_single_list_field_without_rewriting_content(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "1")
+    response = json.dumps(
+        {
+            "finding": "材料不足，无法确认方向 [M1]。",
+            "claims_supported": [],
+            "claims_challenged": [],
+            "counter_evidence_refs": [],
+            "cannot_establish": ["缺少价格材料 [M1]"],
+            "confidence": "low",
+            "limits": "仅依据 [M1]",
+        },
+        ensure_ascii=False,
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=SequencedFakeLLMEngine({"controlled_investigation": response}),
+    )
+    spec, message = _controlled_investigation_inputs(tmp_path)
+
+    report = orchestrator._build_investigation_report(spec, message)
+
+    assert report.is_deterministic_stub is False
+    assert report.limits[0] == "仅依据 [M1]"
+
+
+def test_controlled_investigation_flattens_claim_material_pair_to_contract_string(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "1")
+    response = json.dumps(
+        {
+            "finding": "材料确认约束仍在 [M1]。",
+            "claims_supported": [{"claim": "实际利率约束仍在", "material_ref": "[M1]"}],
+            "claims_challenged": [],
+            "counter_evidence_refs": [],
+            "cannot_establish": ["不能确认价格方向 [M1]"],
+            "confidence": "medium",
+            "limits": ["仅依据 [M1]"],
+        },
+        ensure_ascii=False,
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=SequencedFakeLLMEngine({"controlled_investigation": response}),
+    )
+    spec, message = _controlled_investigation_inputs(tmp_path)
+
+    report = orchestrator._build_investigation_report(spec, message)
+
+    assert report.claims_supported == ["实际利率约束仍在 [M1]"]
+
+
+def test_controlled_investigation_retries_then_falls_back_when_material_citations_missing(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "1")
+    response = json.dumps(
+        {
+            "finding": "材料不足，无法确认方向。",
+            "claims_supported": [],
+            "claims_challenged": [],
+            "counter_evidence_refs": [],
+            "cannot_establish": ["缺少价格材料"],
+            "confidence": "low",
+            "limits": ["仅依据给定材料"],
+        },
+        ensure_ascii=False,
+    )
+    engine = SequencedFakeLLMEngine({"controlled_investigation": response})
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine
+    )
+    spec, message = _controlled_investigation_inputs(tmp_path)
+    second_artifact = tmp_path / "layer_cards" / "L2.json"
+    second_artifact.write_text('{"risk_flags": ["信用分层"]}', encoding="utf-8")
+    spec.allowed_context_refs.append("layer_cards/L2.json")
+
+    report = orchestrator._build_investigation_report(spec, message)
+
+    assert report.is_deterministic_stub is True
+    assert "llm_investigation_failed_fell_back_to_stub" in report.limits
+    assert engine.calls["controlled_investigation"] == 2
+
+
+def test_controlled_investigation_single_material_citation_normalization_is_audited(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "1")
+    response = json.dumps(
+        {
+            "finding": "唯一材料只能确认利率约束。",
+            "claims_supported": ["实际利率约束仍在"],
+            "claims_challenged": [],
+            "counter_evidence_refs": [],
+            "cannot_establish": ["不能确认价格方向"],
+            "confidence": "low",
+            "limits": ["仅依据唯一材料"],
+        },
+        ensure_ascii=False,
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=SequencedFakeLLMEngine({"controlled_investigation": response}),
+    )
+    spec, message = _controlled_investigation_inputs(tmp_path)
+
+    report = orchestrator._build_investigation_report(spec, message)
+
+    assert report.finding.endswith("[M1]")
+    assert report.claims_supported == ["实际利率约束仍在 [M1]"]
+    assert report.cannot_establish == ["不能确认价格方向 [M1]"]
+    assert report.normalization_notes == [
+        "single_material_citation_normalized_to_M1:finding,claims_supported[0],cannot_establish[0]"
+    ]
+
+
+def test_controlled_investigation_multi_material_absence_scope_is_audited(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "1")
+    second_artifact = tmp_path / "layer_cards" / "L2.json"
+    second_artifact.parent.mkdir(parents=True, exist_ok=True)
+    second_artifact.write_text('{"risk_flags": ["信用分层"]}', encoding="utf-8")
+    response = json.dumps(
+        {
+            "finding": "两份材料都不足以确认价格方向 [M1][M2]。",
+            "claims_supported": [],
+            "claims_challenged": [],
+            "counter_evidence_refs": [],
+            "cannot_establish": ["缺少价格序列，不能确认方向"],
+            "confidence": "low",
+            "limits": ["仅依据两份材料"],
+        },
+        ensure_ascii=False,
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=SequencedFakeLLMEngine({"controlled_investigation": response}),
+    )
+    spec, message = _controlled_investigation_inputs(tmp_path)
+    spec.allowed_context_refs.append("layer_cards/L2.json")
+
+    report = orchestrator._build_investigation_report(spec, message)
+
+    assert report.cannot_establish == ["缺少价格序列，不能确认方向 [M1][M2]"]
+    assert report.normalization_notes == [
+        "cannot_establish_absence_scope_normalized_to_all_materials:0"
+    ]
+
+
+def test_controlled_investigation_finding_uses_only_explicit_output_citation_union(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "1")
+    second_artifact = tmp_path / "layer_cards" / "L2.json"
+    second_artifact.parent.mkdir(parents=True, exist_ok=True)
+    second_artifact.write_text('{"risk_flags": ["信用分层"]}', encoding="utf-8")
+    response = json.dumps(
+        {
+            "finding": "两份材料给出相反线索。",
+            "claims_supported": ["实际利率约束仍在 [M1]"],
+            "claims_challenged": ["信用压力尚未扩散 [M2]"],
+            "counter_evidence_refs": ["[M2]"],
+            "cannot_establish": ["不能确认价格方向 [M1][M2]"],
+            "confidence": "medium",
+            "limits": ["仅依据两份材料"],
+        },
+        ensure_ascii=False,
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=SequencedFakeLLMEngine({"controlled_investigation": response}),
+    )
+    spec, message = _controlled_investigation_inputs(tmp_path)
+    spec.allowed_context_refs.append("layer_cards/L2.json")
+
+    report = orchestrator._build_investigation_report(spec, message)
+
+    assert report.finding == "两份材料给出相反线索。 [M1][M2]"
+    assert report.normalization_notes == [
+        "finding_citations_normalized_from_explicit_output_refs:M1,M2"
+    ]
+
+
+def test_controlled_investigation_rejects_limits_that_deny_reported_numbers(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "1")
+    response = json.dumps(
+        {
+            "finding": "材料只提供单条报道数字 [M1]。",
+            "claims_supported": ["报道写明盘后上涨 10% [M1]"],
+            "claims_challenged": [],
+            "counter_evidence_refs": [],
+            "cannot_establish": ["缺少后续价格序列 [M1]"],
+            "confidence": "low",
+            "limits": ["材料不包含实际市场数据，也未分析具体数字"],
+        },
+        ensure_ascii=False,
+    )
+    engine = SequencedFakeLLMEngine({"controlled_investigation": response})
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine
+    )
+    spec, message = _controlled_investigation_inputs(tmp_path)
+    artifact = tmp_path / "layer_cards" / "L1.json"
+    artifact.write_text('{"event": "盘后上涨 10%"}', encoding="utf-8")
+
+    report = orchestrator._build_investigation_report(spec, message)
+
+    assert report.is_deterministic_stub is True
+    assert "llm_investigation_failed_fell_back_to_stub" in report.limits
+    assert engine.calls["controlled_investigation"] == 2
+
+
+def test_controlled_investigation_evidence_refs_only_include_readable_json(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "1")
+    response = json.dumps(
+        {
+            "finding": "可读材料只确认实际利率约束 [M1]。",
+            "claims_supported": ["实际利率约束仍在 [M1]"],
+            "claims_challenged": [],
+            "counter_evidence_refs": [],
+            "cannot_establish": ["缺少估值材料，不能确认方向 [M1]"],
+            "confidence": "low",
+            "limits": ["只读取可用材料"],
+        },
+        ensure_ascii=False,
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=SequencedFakeLLMEngine({"controlled_investigation": response}),
+    )
+    spec, message = _controlled_investigation_inputs(tmp_path)
+    spec.allowed_context_refs.append("synthesis_packet.pending")
+
+    report = orchestrator._build_investigation_report(spec, message)
+
+    assert report.evidence_refs == ["layer_cards/L1.json"]
+    assert [item.evidence_ref for item in report.source_authority] == ["layer_cards/L1.json"]
+
+
+def test_controlled_investigation_marks_bridge_as_derived_unknown_authority(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+
+    assert orchestrator._source_tier_for_allowed_ref("bridge_memos/bridge_0.json") == "unknown"
+    assert orchestrator._source_tier_for_allowed_ref("synthesis_packet.pending") == "unknown"
+
+
+def test_controlled_investigation_material_excerpt_limits_and_keyword_priority(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    refs = []
+    for index in range(4):
+        ref = f"layer_cards/L{index + 1}.json"
+        path = tmp_path / ref
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "rates_block": "实际利率约束" + "甲" * 6000,
+                    "unrelated": "不相关材料" + "乙" * 6000,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        refs.append(ref)
+
+    materials = orchestrator._read_allowed_context_notes(
+        refs,
+        max_refs=4,
+        question="实际利率能确认什么？",
+    )
+
+    assert len(materials) == 3
+    assert all(len(material) <= 4000 for material in materials)
+    assert sum(map(len, materials)) <= 12000
+    assert all("rates_block" in material for material in materials)
+    assert all("unrelated" not in material for material in materials)
+    assert [material.endswith(f"[/M{index}]") for index, material in enumerate(materials, 1)] == [
+        True,
+        True,
+        True,
+    ]
+
+
 def test_synthesis_packet_does_not_duplicate_bridge_v1_structure_from_bridge_v2(tmp_path: Path):
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
@@ -2283,6 +3153,110 @@ def test_counter_thesis_uses_llm_when_available(tmp_path: Path):
     assert draft.hypotheses[0].support_evidence_refs == ["L5.get_qqq_technical_indicators"]
     assert draft.prompt_input_audit["allowed_inputs_only"] is True
     assert draft.prompt_input_audit["thesis_read"] is False
+
+
+def test_field_authority_merge_uses_the_most_restrictive_usage(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    authority = orchestrator._field_authority_from_payload({
+        "value": {"MetricAuthority": {"level": {"usage": "core_allowed", "authority": "official_fact"}}},
+        "data_quality": {
+            "metric_authority": {
+                "level": {"usage": "supporting_only", "authority": "proxy_or_derived_observation"},
+            },
+        },
+    })
+
+    assert authority["level"]["usage"] == "supporting_only"
+    assert authority["level"]["authority"] == "proxy_or_derived_observation"
+    malformed = orchestrator._field_authority_from_payload({
+        "value": {"MetricAuthority": {"mystery": {"usage": "super_core"}}},
+    })
+    assert malformed["mystery"]["usage"] == "audit_only"
+
+
+def test_unavailable_evidence_passports_are_never_verified(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    packet = _mock_packet()
+    packet.raw_data["L2"] = {
+        "get_vix": {
+            "name": "VIX",
+            "value": {"level": None},
+            "data_quality": {
+                "availability": "unavailable",
+                "source_name": "CBOE via market-data provider",
+                "source_tier": "official_provider",
+                "effective_date": "2026-04-24",
+                "metric_authority": {"level": {"usage": "supporting_only"}},
+            },
+        },
+    }
+    synthesis_packet = SynthesisPacket(
+        packet_meta=packet.meta,
+        evidence_index={
+            "L2.get_vix": {
+                "layer": "L2",
+                "function_id": "get_vix",
+                "permission_type": "fact",
+            },
+        },
+        bridge_summaries=[],
+    )
+
+    registry = orchestrator._build_evidence_registry(
+        packet_model=packet,
+        synthesis_packet=synthesis_packet,
+        investigation_reports=[],
+        hypothesis_competition=HypothesisCompetition(hypotheses=[]),
+    )
+
+    assert registry.passports["L2.get_vix"].verified is False
+    assert registry.passports["L2.get_vix#level"].verified is False
+    assert "evidence_unavailable" in registry.passports["L2.get_vix"].downgrade_rules
+    assert "evidence_value_missing" in registry.passports["L2.get_vix#level"].downgrade_rules
+
+
+def test_evidence_registry_registers_exact_nested_state_variable_ref(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    packet = _mock_packet()
+    packet.raw_data["L2"] = {
+        "get_vix": {
+            "value": {"level": 18.0, "historical_stats": {"percentile_10y": 0.72}},
+            "data_quality": {
+                "availability": "available",
+                "source_name": "market data provider",
+                "source_tier": "official_provider",
+                "effective_date": "2026-04-24",
+                "metric_authority": {"historical_stats": {"usage": "supporting_only"}},
+            },
+        },
+    }
+    synthesis = SynthesisPacket(
+        packet_meta=packet.meta,
+        evidence_index={"L2.get_vix": {"layer": "L2", "function_id": "get_vix", "permission_type": "fact"}},
+        bridge_summaries=[],
+    )
+
+    registry = orchestrator._build_evidence_registry(
+        packet_model=packet,
+        synthesis_packet=synthesis,
+        investigation_reports=[],
+        hypothesis_competition=HypothesisCompetition(hypotheses=[]),
+    )
+
+    ref = "L2.get_vix#historical_stats.percentile_10y"
+    assert ref in registry.passports
+    assert registry.passports[ref].verified is True
+    assert registry.passports[ref].authority_model["state_variable_key"] == "risk_appetite.vix_percentile_10y"
 
 
 def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path: Path):
@@ -2849,6 +3823,7 @@ def test_stage5_golden_pit_checklist_defers_cross_run_diff_even_if_previous_exis
     )
     # 显式构造档案：测试不得依赖仓库 config/user_decision_profile.json 的全局状态。
     profile = UserDecisionProfile(
+        configuration_status="configured",
         buy_disciplines=[
             UserDecisionCondition(
                 condition_id="buy_value_discount_confirmed",
@@ -2913,6 +3888,7 @@ def test_stage5_profile_conditions_use_metric_predicates_before_claim_text_fallb
         adjudicator_notes="保留条件式结论。",
     )
     profile = UserDecisionProfile(
+        configuration_status="configured",
         buy_disciplines=[
             UserDecisionCondition(
                 condition_id="buy_metric_value_zone",
@@ -2922,7 +3898,13 @@ def test_stage5_profile_conditions_use_metric_predicates_before_claim_text_fallb
                 required_claim_types=["valuation"],
                 metric_predicates={
                     "logic": "all_of",
-                    "predicates": [{"var": "valuation.forward_pe", "op": "<=", "value": 20}],
+                    "predicates": [{
+                        "var": "valuation.forward_pe",
+                        "op": "<=",
+                        "value": 20,
+                        "unit": "pe_multiple",
+                        "threshold_status": "confirmed",
+                    }],
                 },
             )
         ],
@@ -2951,3 +3933,177 @@ def test_stage5_profile_conditions_use_metric_predicates_before_claim_text_fallb
     assert metric_item.status_method == "metric_predicates"
     assert metric_item.status_evidence["results"][0]["actual"] == 18.5
     assert fallback_item.status_method == "claim_text_fallback"
+
+
+def test_profile_predicate_uses_only_its_state_variable_evidence_ref(tmp_path: Path):
+    orchestrator = VNextOrchestrator(available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({}))
+    ledger = ClaimLedger(
+        effective_date="2026-07-17",
+        entries=[ClaimLedgerEntry(
+            claim_id="claim:valuation",
+            source_stage="final",
+            claim_text="估值条件式观察。",
+            claim_type="valuation",
+            evidence_refs=["L4.get_ndx_pe_and_earnings_yield", "L1.get_10y_real_rate"],
+            counter_evidence_refs=[],
+            inference_steps=["条件式。"],
+            falsification_conditions=["另一条并不属于该谓词的失效条件。"],
+            verified=True,
+            authority_status="verified",
+        )],
+    )
+    final = FinalAdjudication(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="条件式。",
+        confidence=Confidence.MEDIUM,
+        key_support_chains=[], must_preserve_risks=[], blocking_issues=[], adjudicator_notes="",
+    )
+    profile = UserDecisionProfile(configuration_status="configured", buy_disciplines=[UserDecisionCondition(
+        condition_id="forward_pe_zone",
+        side="buy",
+        label="远期估值区",
+        discipline="只按远期市盈率判断。",
+        required_claim_types=["valuation"],
+        metric_predicates={"logic": "all_of", "predicates": [{
+            "var": "valuation.forward_pe", "op": "<=", "value": 20,
+            "unit": "pe_multiple", "threshold_status": "confirmed",
+        }]},
+    )])
+
+    checklist = orchestrator._build_golden_pit_checklist(
+        final_claim_ledger=ledger,
+        decision_profile=profile,
+        final_adjudication=final,
+        effective_date="2026-07-17",
+        state_variables={"valuation.forward_pe": 19.0},
+    )
+    item = next(entry for entry in checklist.entries if entry.condition_id == "forward_pe_zone")
+
+    assert item.evidence_refs == ["L4.get_ndx_pe_and_earnings_yield#ForwardPE"]
+    assert "L1.get_10y_real_rate" not in item.evidence_refs
+    assert item.falsification_conditions == ["若 valuation.forward_pe 不再满足 <= 20 pe_multiple，则该条件失效。"]
+
+
+def test_derived_profile_predicate_cites_every_raw_input(tmp_path: Path):
+    orchestrator = VNextOrchestrator(available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({}))
+    condition = UserDecisionCondition(
+        condition_id="drawdown_zone",
+        side="buy",
+        label="回撤区",
+        discipline="按通道回撤观察。",
+        required_claim_types=["timing"],
+        metric_predicates={"predicates": [{
+            "var": "trend.drawdown_from_donchian_upper_pct",
+            "op": ">=", "value": 5.0, "unit": "percent", "threshold_status": "confirmed",
+        }]},
+    )
+
+    refs, _ = orchestrator._predicate_refs_and_falsifiers(condition)
+
+    assert refs == [
+        "L5.get_donchian_channels_qqq#upper",
+        "L5.get_multi_scale_ma_position#current_price",
+    ]
+
+
+def test_profile_predicate_fails_closed_when_registered_evidence_is_unverified(tmp_path: Path):
+    orchestrator = VNextOrchestrator(available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({}))
+    ref = "L4.get_ndx_pe_and_earnings_yield#ForwardPE"
+    registry = EvidenceRegistry(
+        effective_date="2026-07-17",
+        passports={ref: EvidencePassport(
+            evidence_id=ref,
+            evidence_kind="data",
+            source_tier="licensed_provider",
+            verified=False,
+            downgrade_rules=["evidence_unavailable"],
+        )},
+    )
+    profile = UserDecisionProfile(configuration_status="configured", buy_disciplines=[UserDecisionCondition(
+        condition_id="forward_pe_zone",
+        side="buy",
+        label="远期估值区",
+        discipline="只按远期市盈率判断。",
+        required_claim_types=["valuation"],
+        metric_predicates={"predicates": [{
+            "var": "valuation.forward_pe", "op": "<=", "value": 20,
+            "unit": "pe_multiple", "threshold_status": "confirmed",
+        }]},
+    )])
+    final = FinalAdjudication(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="条件式。", confidence=Confidence.MEDIUM,
+        key_support_chains=[], must_preserve_risks=[], blocking_issues=[], adjudicator_notes="",
+    )
+
+    checklist = orchestrator._build_golden_pit_checklist(
+        final_claim_ledger=ClaimLedger(effective_date="2026-07-17", entries=[]),
+        decision_profile=profile,
+        final_adjudication=final,
+        effective_date="2026-07-17",
+        state_variables={"valuation.forward_pe": 18.0},
+        evidence_registry=registry,
+    )
+    item = next(entry for entry in checklist.entries if entry.condition_id == "forward_pe_zone")
+
+    assert item.current_status == "insufficient_evidence"
+    assert item.status_method == "evidence_registry_gate"
+    assert item.status_evidence["unverified_predicate_refs"] == [ref]
+
+
+def test_unconfirmed_or_wrong_unit_profile_threshold_fails_closed(tmp_path: Path):
+    orchestrator = VNextOrchestrator(available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({}))
+
+    unconfirmed, _ = orchestrator._evaluate_metric_predicates(
+        {"predicates": [{"var": "valuation.forward_pe", "op": "<=", "value": 20, "unit": "pe_multiple", "threshold_status": "unconfirmed"}]},
+        {"valuation.forward_pe": 18.0},
+    )
+    wrong_unit, details = orchestrator._evaluate_metric_predicates(
+        {"predicates": [{"var": "valuation.forward_pe", "op": "<=", "value": 20, "unit": "percent", "threshold_status": "confirmed"}]},
+        {"valuation.forward_pe": 18.0},
+    )
+
+    assert unconfirmed == "insufficient_evidence"
+    assert wrong_unit == "insufficient_evidence"
+    assert details["results"][0]["status"] == "unit_mismatch"
+
+
+def test_empty_profile_is_explicitly_visible_in_reader_exit(tmp_path: Path):
+    orchestrator = VNextOrchestrator(available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({}))
+    final = FinalAdjudication(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="条件式。", confidence=Confidence.MEDIUM,
+        key_support_chains=[], must_preserve_risks=[], blocking_issues=[], adjudicator_notes="",
+    )
+    checklist = orchestrator._build_golden_pit_checklist(
+        final_claim_ledger=ClaimLedger(effective_date="2026-07-17", entries=[]),
+        decision_profile=UserDecisionProfile(
+            configuration_status="unconfigured",
+            configuration_issues=["no_confirmed_buy_or_sell_disciplines"],
+        ),
+        final_adjudication=final,
+        effective_date="2026-07-17",
+        state_variables={},
+    )
+
+    item = next(entry for entry in checklist.entries if entry.condition_id == "profile_disciplines_unconfigured")
+    assert item.current_status == "insufficient_evidence"
+    assert item.status_method == "profile_configuration_gate"
+
+
+def test_profile_adapter_whitelists_reader_exit_and_drops_private_amounts(tmp_path: Path):
+    orchestrator = VNextOrchestrator(available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({}))
+    profile = orchestrator._decision_profile_from_config_documents(
+        {"reader_exit": {"configuration_status": "unconfigured", "buy_disciplines": [], "sell_disciplines": []}},
+        {
+            "net_worth_snapshot": {"approx_total_cny": 123456789},
+            "buckets": {"liquidity": {"floor_cny": 987654}},
+            "reader_exit": {"configuration_status": "unconfigured", "configuration_issues": ["awaiting_user_confirmation"]},
+        },
+    )
+    dumped = profile.model_dump(mode="json")
+
+    assert "net_worth_snapshot" not in dumped
+    assert "buckets" not in dumped
+    assert "123456789" not in json.dumps(dumped)
+    assert "987654" not in json.dumps(dumped)

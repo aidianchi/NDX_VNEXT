@@ -23,6 +23,30 @@ NDX100_BREADTH_MIN_DAILY_COVERAGE = 0.80
 NDX100_ARCHIVE_ROLLING_ROWS = 260
 
 
+def _attach_recompute_value_series(payload: Dict[str, Any], frame: Optional[pd.DataFrame]) -> Dict[str, Any]:
+    """Attach dated audit input for the collector to move outside L1-L5 raw_data."""
+    if frame is None or frame.empty or not {"date", "value"}.issubset(frame.columns):
+        return payload
+    working = frame[["date", "value"]].copy()
+    working["date"] = pd.to_datetime(working["date"], errors="coerce")
+    working["value"] = pd.to_numeric(working["value"], errors="coerce")
+    working = working.dropna().sort_values("date").tail(3660)
+    payload["recompute_input"] = {
+        "schema": "dated_value_series_v1",
+        "purpose": "audit_only_independent_recomputation",
+        "percentile_contract": {
+            "scale": "0_1",
+            "comparison": "less_than_or_equal",
+            "windows": "calendar_year",
+        },
+        "raw_series": [
+            {"date": row.date.strftime("%Y-%m-%d"), "value": float(row.value)}
+            for row in working.itertuples(index=False)
+        ],
+    }
+    return payload
+
+
 def reset_ndx100_price_panel_run_cache() -> None:
     """Clear the shared component panel at the start of each formal collector run."""
     _NDX100_PRICE_PANEL_RUN_CACHE.clear()
@@ -452,7 +476,7 @@ def _cap_weight_equal_weight_ratio_from_yfinance(
             value_out["cap_weight_price_vs_ma60"] = "above" if latest_numerator > numerator_ma60 else "below"
             value_out["cap_weight_ma60"] = round(numerator_ma60, 2)
 
-        return {
+        payload = {
             "name": metric_name,
             "series_id": series_id,
             "value": value_out,
@@ -477,6 +501,7 @@ def _cap_weight_equal_weight_ratio_from_yfinance(
                 "该比值只说明市值加权相对等权的结构强弱，不能证明估值便宜或宏观宽松。"
             ),
         }
+        return _attach_recompute_value_series(payload, ratio_df)
     except Exception as e:
         return {"name": metric_name, "value": None, "notes": f"Error: {str(e)}"}
 
@@ -544,7 +569,7 @@ def get_hy_quality_spread_bp(end_date: str = None) -> Dict[str, Any]:
             "relativity": stats,
         }
     )
-    return {
+    payload = {
         "name": "HY CCC & Lower minus BB OAS",
         "series_id": "BAMLH0A3HYC-BAMLH0A1HYBB",
         "value": analysis,
@@ -570,6 +595,7 @@ def get_hy_quality_spread_bp(end_date: str = None) -> Dict[str, Any]:
             "不是精确 CCC+；应与 HY OAS、IG OAS 和 VIX 联合阅读。"
         ),
     }
+    return _attach_recompute_value_series(payload, spread_series[["date", "value"]])
 
 
 def _extract_component_close_prices(data: pd.DataFrame) -> pd.DataFrame:

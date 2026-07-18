@@ -30,6 +30,7 @@ def test_hy_quality_spread_calculates_ccc_lower_minus_bb(monkeypatch):
     assert result["value"]["level"] > 0
     assert result["value"]["ccc_oas"] > result["value"]["bb_oas"]
     assert result["data_quality"]["formula"].startswith("ICE BofA CCC & Lower")
+    assert result["recompute_input"]["raw_series"][-1]["date"] <= "2026-02-15"
 
 
 def test_hy_quality_spread_is_registered_for_l2():

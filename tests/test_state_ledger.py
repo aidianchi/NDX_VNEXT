@@ -5,7 +5,12 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from state_ledger import append_state_ledger_entry, build_state_ledger_entry, extract_state_variables
+from state_ledger import (
+    STATE_VARIABLE_SPEC_BY_KEY,
+    append_state_ledger_entry,
+    build_state_ledger_entry,
+    extract_state_variables,
+)
 
 
 def _write_run_dir(tmp_path: Path) -> Path:
@@ -65,11 +70,41 @@ def test_extract_state_variables_records_values_and_missing():
     variables, missing = extract_state_variables(packet)
     assert variables["risk_appetite.vix_level"] == 20.0
     assert variables["risk_appetite.vix_percentile_10y"] == 0.8
+    assert STATE_VARIABLE_SPEC_BY_KEY["risk_appetite.vix_percentile_10y"]["unit"] == "percentile_0_1"
     assert variables["valuation.trailing_pe"] is None
     assert "valuation.trailing_pe" in missing
     # 缺 donchian/price 时派生回撤也必须显式记缺，不得静默编造。
     assert variables["trend.drawdown_from_donchian_upper_pct"] is None
     assert "trend.drawdown_from_donchian_upper_pct" in missing
+
+
+def test_wind_percentile_uses_real_payload_path_and_declares_scale_and_ref():
+    packet = {
+        "raw_data": {
+            "L4": {
+                "get_ndx_wind_valuation_snapshot": {
+                    "value": {"PEHistoricalPercentile": 83.2}
+                }
+            }
+        }
+    }
+    variables, _ = extract_state_variables(packet)
+    spec = STATE_VARIABLE_SPEC_BY_KEY["valuation.wind_pe_percentile"]
+
+    assert variables["valuation.wind_pe_percentile"] == 83.2
+    assert spec["unit"] == "percentile_0_100"
+    assert spec["evidence_ref"] == "L4.get_ndx_wind_valuation_snapshot#PEHistoricalPercentile"
+    assert "<=" in spec["allowed_operators"]
+
+
+def test_nested_and_derived_state_variables_declare_complete_evidence_refs():
+    assert STATE_VARIABLE_SPEC_BY_KEY["risk_appetite.vix_percentile_10y"]["evidence_refs"] == [
+        "L2.get_vix#historical_stats.percentile_10y"
+    ]
+    assert STATE_VARIABLE_SPEC_BY_KEY["trend.drawdown_from_donchian_upper_pct"]["evidence_refs"] == [
+        "L5.get_donchian_channels_qqq#upper",
+        "L5.get_multi_scale_ma_position#current_price",
+    ]
 
 
 def test_build_state_ledger_entry_is_deterministic_and_bounded(tmp_path: Path):

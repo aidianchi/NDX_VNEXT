@@ -421,6 +421,8 @@ def test_ndx_ndxe_ratio_yfinance_request_includes_effective_date(monkeypatch):
     monkeypatch.setattr(tools_L2, "cached_yf_download", fake_download)
 
     result = tools_L2.get_ndx_ndxe_ratio("2025-04-09")
+    assert result["recompute_input"]["schema"] == "dated_value_series_v1"
+    assert result["recompute_input"]["raw_series"][-1]["date"] <= "2025-04-09"
 
     assert {ticker for ticker, _end in calls} == {"^NDX", "^NDXE"}
     assert {pd.Timestamp(end).date().isoformat() for _ticker, end in calls} == {"2025-04-10"}

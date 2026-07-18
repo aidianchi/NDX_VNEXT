@@ -86,6 +86,98 @@ LATEST_ONLY_FUNCTIONS = {
 PROXY_SOURCE_TOKENS = {"proxy", "component_model", "market_data_provider", "third_party_estimate"}
 OFFICIAL_SOURCE_TOKENS = {"official", "official_provider", "licensed_manual/wind", "licensed_provider/wind"}
 
+
+def _supporting_authority(reason: str, *, usage: str = "supporting_only", requires: Optional[List[str]] = None) -> Dict[str, Any]:
+    return {
+        "usage": usage,
+        "authority": "proxy_or_derived_observation",
+        "reason": reason,
+        "requires_confirmation": list(requires or []),
+    }
+
+
+_AUTHORITY_USAGE_RANK = {
+    "rejected": 0,
+    "audit_only": 1,
+    "supporting_only": 2,
+    "core_allowed": 3,
+}
+
+
+def _merge_authority_rule_min_privilege(policy_rule: Dict[str, Any], producer_rule: Any) -> Dict[str, Any]:
+    """Retain producer detail while preventing old payloads from raising evidence authority."""
+    existing = producer_rule if isinstance(producer_rule, dict) else {}
+    merged = {**existing, **deepcopy(policy_rule)}
+    policy_usage = str(policy_rule.get("usage") or "audit_only").strip().lower()
+    producer_usage = str(existing.get("usage") or policy_usage).strip().lower()
+    if policy_usage not in _AUTHORITY_USAGE_RANK:
+        policy_usage = "audit_only"
+    if producer_usage not in _AUTHORITY_USAGE_RANK:
+        producer_usage = "audit_only"
+    merged["usage"] = min(
+        (policy_usage, producer_usage),
+        key=lambda usage: _AUTHORITY_USAGE_RANK.get(usage, _AUTHORITY_USAGE_RANK["audit_only"]),
+    )
+    merged["requires_confirmation"] = list(dict.fromkeys(
+        _as_list(policy_rule.get("requires_confirmation"))
+        + _as_list(existing.get("requires_confirmation"))
+    ))
+    return merged
+
+
+# These series are useful observations, but none is an official valuation,
+# fundamental, or executable trading conclusion.  Keeping the policy beside
+# the evidence normalizer guarantees that success, fallback, and unavailable
+# producer branches all receive the same field-level authority contract.
+WEAK_METRIC_AUTHORITY_POLICIES: Dict[str, Dict[str, Any]] = {
+    "get_vix": {
+        "metric_authority": {
+            "level": _supporting_authority("Options-implied insurance price; high is not a buy signal and low is not proof of safety.", requires=["get_hy_oas_bp", "get_advance_decline_line"]),
+            "historical_stats": _supporting_authority("Third-party historical relativity only; it cannot establish valuation or a trade threshold."),
+        },
+        "downgrade_rules": ["volatility_level_requires_credit_and_breadth_confirmation", "volatility_cannot_prove_valuation_or_trade_action"],
+    },
+    "get_vxn": {
+        "metric_authority": {
+            "level": _supporting_authority("Nasdaq options-implied insurance price; it measures stress pricing, not fundamental value.", requires=["get_hy_oas_bp", "get_percent_above_ma"]),
+            "historical_stats": _supporting_authority("Third-party historical relativity only; it cannot establish valuation or a trade threshold."),
+        },
+        "downgrade_rules": ["volatility_level_requires_credit_and_breadth_confirmation", "volatility_cannot_prove_valuation_or_trade_action"],
+    },
+    "get_copper_gold_ratio": {
+        "metric_authority": {"level": _supporting_authority("Tradable-price macro proxy; it may describe the growth/rate regime but is not official macro evidence.", requires=["get_10y_real_rate", "get_hy_oas_bp"])},
+        "downgrade_rules": ["commodity_ratio_is_macro_proxy_only", "proxy_cannot_independently_drive_action"],
+    },
+    "get_hyg_momentum": {
+        "metric_authority": {"level": _supporting_authority("Dividend-adjusted ETF price is a tradable credit proxy; HY OAS remains the primary spread measure.", requires=["get_hy_oas_bp"])},
+        "downgrade_rules": ["hyg_price_proxy_requires_hy_oas_confirmation", "proxy_cannot_replace_official_spread_measure"],
+    },
+    "get_xly_xlp_ratio": {
+        "metric_authority": {"level": _supporting_authority("Sector-price ratio is a risk-appetite proxy, not proof of broad economic health or valuation.", requires=["get_advance_decline_line", "get_hy_oas_bp"])},
+        "downgrade_rules": ["sector_ratio_is_risk_appetite_proxy_only", "proxy_cannot_independently_drive_action"],
+    },
+    "get_crowdedness_dashboard": {
+        "metric_authority": {
+            "skew_index": _supporting_authority("Third-party tail-risk price observation; not a complete positioning measure."),
+            "qqq_put_call_ratio_oi": _supporting_authority("Current option-chain open-interest proxy; historical backtests require dated snapshots."),
+            "qqq_short_interest_percent": _supporting_authority("Availability-limited third-party positioning observation.", usage="audit_only"),
+            "status": _supporting_authority("Composite label derived from partial inputs; unavailable components must remain visible.", usage="audit_only"),
+        },
+        "downgrade_rules": ["partial_positioning_components_cannot_be_promoted_to_complete_crowding_fact", "composite_cannot_bypass_component_availability"],
+    },
+    "get_vxn_vix_ratio": {
+        "metric_authority": {"level": _supporting_authority("Derived relative options-pressure ratio; it does not measure fundamentals or valuation.", requires=["get_vxn", "get_vix"])},
+        "downgrade_rules": ["derived_volatility_ratio_requires_underlying_series", "ratio_cannot_independently_drive_action"],
+    },
+    "get_cnn_fear_greed_index": {
+        "metric_authority": {
+            "score": _supporting_authority("Third-party composite sentiment score; extremes require price, volatility, and credit confirmation."),
+            "sub_metrics": _supporting_authority("Component display is audit context only and cannot bypass the composite's semantics.", usage="audit_only"),
+        },
+        "downgrade_rules": ["composite_sentiment_requires_market_confirmation", "composite_or_submetric_cannot_bypass_total_signal_semantics"],
+    },
+}
+
 # Coverage is decision-relevant only when a value aggregates constituents or
 # analyst consensus. A direct market series does not become weaker merely
 # because it has no constituent-coverage object.
@@ -346,6 +438,32 @@ def normalize_data_evidence(
 ) -> Dict[str, Any]:
     normalized = payload if isinstance(payload, dict) else {"value": payload}
     quality = deepcopy(normalized.get("data_quality") if isinstance(normalized.get("data_quality"), dict) else {})
+    legacy_contract_missing = not str(quality.get("contract_version") or "").strip()
+    legacy_failure_text = " ".join(
+        str(value or "").strip().lower()
+        for value in (
+            normalized.get("notes"),
+            normalized.get("error"),
+            normalized.get("failure_type"),
+            quality.get("failure_type"),
+            quality.get("failure_reason"),
+        )
+    )
+    legacy_explicit_failure = (
+        legacy_contract_missing
+        and not has_meaningful_observation_value(normalized.get("value"))
+        and any(
+            marker in legacy_failure_text
+            for marker in (
+                "failed to calculate",
+                "failed to get",
+                "insufficient data",
+                "no data returned",
+                "upstream_error",
+                "collection_error",
+            )
+        )
+    )
     source_name = _first_text(quality.get("source_name"), normalized.get("source_name"), normalized.get("source"), normalized.get("provider"))
     source_tier = _first_text(quality.get("source_tier"), normalized.get("source_tier"), _source_tier_from_name(source_name))
     data_date = _infer_data_date(normalized, quality, effective_date)
@@ -360,6 +478,10 @@ def normalize_data_evidence(
     coverage = quality.get("coverage") if "coverage" in quality else normalized.get("coverage", {})
     availability = _first_text(quality.get("availability"), normalized.get("availability"))
     reason = no_data_reason(normalized)
+    if legacy_explicit_failure:
+        availability = "unavailable"
+        fallback_reason = "legacy_collection_failure"
+        _append_unique(anomalies, "legacy_available_failure_normalized_to_unavailable")
     if not availability:
         availability = "unavailable" if reason else "available"
     if fallback_chain and not fallback_reason:
@@ -403,6 +525,30 @@ def normalize_data_evidence(
     for key, value in quality.items():
         if key not in normalized_quality:
             normalized_quality[key] = value
+    weak_policy = WEAK_METRIC_AUTHORITY_POLICIES.get(function_id)
+    if weak_policy:
+        existing_authority = normalized_quality.get("metric_authority")
+        producer_authority = existing_authority if isinstance(existing_authority, dict) else {}
+        policy_authority = {
+            field: _merge_authority_rule_min_privilege(rule, producer_authority.get(field))
+            for field, rule in weak_policy["metric_authority"].items()
+        }
+        undeclared_policy = _supporting_authority(
+            "Field is not declared in the weak-metric authority policy; retain for audit only until explicitly reviewed.",
+            usage="audit_only",
+        )
+        undeclared_authority = {
+            field: _merge_authority_rule_min_privilege(undeclared_policy, rule)
+            for field, rule in producer_authority.items()
+            if field not in policy_authority
+        }
+        normalized_quality["metric_authority"] = {**undeclared_authority, **policy_authority}
+        normalized_quality["downgrade_rules"] = list(
+            dict.fromkeys(
+                _as_list(normalized_quality.get("downgrade_rules"))
+                + list(weak_policy["downgrade_rules"])
+            )
+        )
     normalized_quality["function_id"] = function_id
     if layer is not None:
         normalized_quality["layer"] = layer

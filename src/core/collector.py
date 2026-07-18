@@ -10,6 +10,7 @@ core.collector
 
 import os
 import json
+import hashlib
 import logging
 import time
 from copy import deepcopy
@@ -608,10 +609,27 @@ class DataCollector:
                         "future_upgrade": "接入能证明回测日可见性的历史数据源后再启用",
                     })
 
+        recompute_inputs: Dict[str, Dict[str, Any]] = {}
+        for indicator in indicators:
+            raw = indicator.get("raw_data") if isinstance(indicator.get("raw_data"), dict) else None
+            if raw is None:
+                continue
+            recompute_input = raw.pop("recompute_input", None)
+            if not isinstance(recompute_input, dict) or not recompute_input:
+                continue
+            function_id = str(indicator.get("function_id") or "unknown_function")
+            canonical = json.dumps(recompute_input, sort_keys=True, ensure_ascii=False, default=str)
+            recompute_inputs[function_id] = {
+                "layer": indicator.get("layer"),
+                "source_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+                **recompute_input,
+            }
+
         data_json = {
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "backtest_date": backtest_date,
             "indicators": indicators,
+            "recompute_inputs": recompute_inputs,
             "backtest_data_boundaries": backtest_data_boundaries,
             "strict_backtest_invariants": self._build_strict_backtest_invariants(backtest_date),
             "runtime_diagnostics": get_yfinance_runtime_diagnostics(),

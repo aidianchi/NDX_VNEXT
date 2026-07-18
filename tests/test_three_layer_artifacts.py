@@ -26,7 +26,7 @@ def _event_ledger():
                 "event_type": "policy_or_financial_conditions",
                 "title": "Federal Reserve issues FOMC statement",
                 "published_at": "Fri, 08 May 2026 18:00:00 GMT",
-                "layers": ["L1", "L2", "L4"],
+                "layers": ["topic:macro_rates", "topic:credit_vol", "topic:valuation_earnings"],
                 "symbols": [],
             },
             {
@@ -89,6 +89,30 @@ def test_event_narrative_ledger_builds_claims_and_filters_future_events():
     assert claim["status"] == "event_fact"
 
 
+def test_event_excerpt_does_not_split_after_numeric_period():
+    builder = EventNarrativeLedgerBuilder()
+
+    assert builder._first_sentence("股价跌近1。随后公司发布正式财测。") == "股价跌近1。随后公司发布正式财测"
+
+
+def test_event_excerpt_hard_truncates_when_no_sentence_boundary():
+    builder = EventNarrativeLedgerBuilder()
+    text = "甲" * 130
+
+    excerpt = builder._first_sentence(text, max_chars=120)
+
+    assert excerpt == "甲" * 120 + "…"
+
+
+def test_event_excerpt_ignores_sentence_boundary_after_hard_limit():
+    builder = EventNarrativeLedgerBuilder()
+    text = "甲" * 125 + "。后文"
+
+    excerpt = builder._first_sentence(text, max_chars=120)
+
+    assert excerpt == "甲" * 120 + "…"
+
+
 def test_write_event_narrative_ledger_reads_run_dir_artifacts(tmp_path: Path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -119,7 +143,7 @@ def test_event_research_pipeline_writes_required_layer_two_artifacts(tmp_path: P
                 "event_type": "policy_or_financial_conditions",
                 "title": "Federal Reserve issues FOMC statement",
                 "published_at": "Fri, 08 May 2026 18:00:00 GMT",
-                "layers": ["L1", "L2", "L4"],
+                "layers": ["topic:macro_rates", "topic:credit_vol", "topic:valuation_earnings"],
                 "symbols": [],
                 "raw_text_available": False,
             },
@@ -132,7 +156,7 @@ def test_event_research_pipeline_writes_required_layer_two_artifacts(tmp_path: P
                 "event_type": "policy_or_financial_conditions",
                 "title": "Federal Reserve issues FOMC statement",
                 "published_at": "Fri, 08 May 2026 18:05:00 GMT",
-                "layers": ["L1", "L2", "L4"],
+                "layers": ["topic:macro_rates", "topic:credit_vol", "topic:valuation_earnings"],
                 "symbols": [],
                 "raw_text_available": False,
             },
@@ -374,6 +398,67 @@ def test_event_mechanism_report_caps_market_narrative_materiality(tmp_path: Path
     assert card["mainline_id"] == "macro_rate_valuation_pressure"
     assert card["relevance_band"] != "core"
     assert card["source_quality"] == "有限材料：只有标题"
+
+
+def test_aggregator_report_does_not_get_high_materiality_from_filing_family_alone():
+    materiality = EventNarrativeLedgerBuilder()._materiality(
+        {
+            "event_family": "issuer_announcement_or_filing",
+            "canonical_title": "Microsoft earnings guidance",
+            "supporting_sources": [{"source_type": "aggregator_report"}],
+        },
+        ["earnings_path"],
+        [{"series_key": "QQQ_OHLCV", "direction": "up"}],
+    )
+
+    assert materiality == "medium"
+
+
+def test_scheduled_future_calendar_event_stays_out_of_mainlines(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    ledger = {
+        "schema_version": "news_event_ledger_v2",
+        "events": [
+            {
+                "event_id": "event:fomc_future",
+                "source_id": "fomc_meeting_calendar",
+                "source_name": "Federal Reserve FOMC Meeting Calendar",
+                "source_tier": "official",
+                "event_type": "official_calendar",
+                "title": "FOMC meeting (July 28-29, 2026)",
+                "published_at": "2026-07-18T01:00:00Z",
+                "event_date": "2026-07-29",
+                "collection_status": "scheduled_future",
+                "relevance_tags": ["topic:macro_rates"],
+                "symbols": [],
+                "raw_text_available": False,
+            }
+        ],
+    }
+
+    output = write_event_narrative_ledger(run_dir, event_ledger=ledger, effective_date="2026-07-18")
+    event_ledger_payload = json.loads(Path(output).read_text(encoding="utf-8"))
+    claims = json.loads((run_dir / "event_claim_ledger.json").read_text(encoding="utf-8"))["claims"]
+    research_packets = list((run_dir / "event_research_packets").glob("*.json"))
+    mechanism = json.loads((run_dir / "event_mechanism_report.json").read_text(encoding="utf-8"))
+
+    assert event_ledger_payload["events"] == []
+    assert event_ledger_payload["claim_count"] == 0
+    assert [item["event_id"] for item in event_ledger_payload["scheduled_future_events"]] == ["event:fomc_future"]
+    assert claims == []
+    assert research_packets == []
+    assert mechanism["news_cards"] == []
+    assert mechanism["scheduled_future_events"] == [
+        {
+            "event_id": "event:fomc_future",
+            "title": "FOMC meeting (July 28-29, 2026)",
+            "event_date": "2026-07-29",
+            "source_name": "Federal Reserve FOMC Meeting Calendar",
+            "status": "scheduled_future",
+        }
+    ]
+    assert all("FOMC meeting" not in str(line) for line in mechanism["mainlines"])
 
 
 def test_event_mechanism_report_analyzes_each_news_card_separately(tmp_path: Path):

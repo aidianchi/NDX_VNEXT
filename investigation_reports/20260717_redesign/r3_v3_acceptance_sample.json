@@ -1,0 +1,486 @@
+{
+  "generated_at": "2026-07-14T00:00:00Z",
+  "approval_status": "approved_with_reservations",
+  "final_stance": "当前NDX面临宏观利率约束与高估值之间的核心矛盾，风险补偿不足，赔率不利，建议核心仓防御、战术仓观望，等待盈利或利率信号明确。",
+  "reasoned_verdict": "当前NDX市场处于宏观限制与高估值碰撞的风险主导状态。实际利率2.32%处于10年99.08%分位，是成长股估值的核心压力来源[L1.get_10y_real_rate]；而NDX Trailing PE 34x（第三方数据，仅审计级别）与Damodaran ERP 4.30%（10年25%分位）[L4.get_damodaran_us_implied_erp]共同指向风险补偿偏薄。信用市场表面宽松（HY OAS 7.9%分位），但内部质量分化极端：CCC-BB利差99.6%分位，尾部信用压力显著[L2.get_hy_quality_spread_bp]。技术面短期走弱，价格低于短期均线和VWAP，MACD熊叉[L5.get_macd_qqq]，但成交量萎缩，恐慌抛售概率低[L5.get_volume_analysis_qqq]。长期均线MA60（705.7）仍提供支撑[L5.get_multi_scale_ma_position]。\n\n三条理由支撑当前谨慎立场。第一，实际利率高企与低ERP的组合使估值安全垫极薄，且盈利预期数据缺失（已知数据缺口），无法验证增长能否消化折现率压力。第二，信用分层虽未扩散，但若持续可能成为系统性风险领先指标，目前价格未反映此尾部风险（信用类别price_reflection为not_reflected）。第三，内部结构脆弱：集中度极高（Top10权重45.38%[L3.get_qqq_top10_concentration]），NDX/NDXE比值回落形成熊背离[L3.get_ndx_ndxe_ratio]，腾落线虽上升但单日广度偏弱[L3.get_advance_decline_line]。反面证据方面，资本开支加速（M7 2026Q1同比+75.52%[L4.get_m7_capex_cycle#m7_aggregate]）为盈利增长提供叙事支撑，但此为supporting_only权限，不能作为核心估值依据；长期趋势未破、VIX中性、HY OAS极低均构成风险偏好未崩溃的证据。\n\n赔率判断为不利：五类支持中，实际利率（rates）和估值（valuation）方向明确指向风险补偿不足；信用分层（credit）尚未扩散但已构成尾部风险；技术（technical_panic）和流动性（liquidity）未提供抵消信号。踏空风险存在于若盈利超预期且利率回落，但当前证据不足以支持这一情景。核心矛盾是宏观约束与估值之间的冲突，机会面（资本开支叙事）尚缺盈利数据兑现。等待确认的代价是可能错过财报季反弹，但降低左侧接飞刀风险。核心仓应维持或略降暴露，战术仓严格止损观望，等待实际利率回落至2.0%以下或盈利超预期信号。失效条件需双向覆盖：若实际利率突破2.5%或盈利下修，则进一步减仓；若M7盈利超预期且回购恢复，则重新评估向上暴露。",
+  "confidence": "medium",
+  "key_support_chains": [
+    {
+      "chain_description": "约束链：实际利率极高 → 折现率上升 → 估值倍数承压",
+      "evidence_refs": [
+        "L1.get_10y_real_rate",
+        "L4.get_ndx_pe_and_earnings_yield#TrailingPE",
+        "L4.get_damodaran_us_implied_erp"
+      ],
+      "event_refs": [],
+      "weight": 0.8
+    },
+    {
+      "chain_description": "信用分层：HY OAS极低但CCC-BB利差极端",
+      "evidence_refs": [
+        "L2.get_hy_oas_bp",
+        "L2.get_hy_quality_spread_bp"
+      ],
+      "event_refs": [],
+      "weight": 0.6
+    },
+    {
+      "chain_description": "内部结构分化：腾落线上升但NDX/NDXE比值回落",
+      "evidence_refs": [
+        "L3.get_advance_decline_line",
+        "L3.get_ndx_ndxe_ratio",
+        "L3.get_qqq_top10_concentration",
+        "L3.get_percent_above_ma"
+      ],
+      "event_refs": [],
+      "weight": 0.5
+    },
+    {
+      "chain_description": "盈利缺失与回购收缩：前瞻PE和盈利预期缺失，M7回购收缩",
+      "evidence_refs": [
+        "L4.get_m7_buyback_flow",
+        "L4.get_m7_capex_cycle#m7_aggregate"
+      ],
+      "event_refs": [],
+      "weight": 0.6
+    }
+  ],
+  "must_preserve_risks": [
+    "估值压缩风险（高）：L1实际利率2.32%（10年99.08%分位）+ L4 NDX PE 34x（Danjuan十年分位77.4%）+ Damodaran ERP 4.30%（10年25%分位），估值安全垫薄，若盈利增速无法抵消折现率压力，估值压缩风险必须保留",
+    "集中度崩塌风险（高）：QQQ Top10权重45.38%，M7权重36.86%，NDX/NDXE比值95.78%分位但近期回落形成熊背离，若头部公司任何一家业绩miss可能引发连锁抛售",
+    "广度恶化风险（已触发）：腾落线累计上升但单日净下跌9只，%Above MA 50d仅51.49%，NDX/NDXE比值低于20日均线，指数上涨依赖少数权重股，趋势脆弱性高",
+    "盈利 miss 风险（中）：Forward PE和盈利预期数据缺失，前瞻估值不可知；M7回购明显收缩（85.7%处于静默窗），若实际盈利明显不及预期，估值双杀风险上升",
+    "信用分层扩散风险（中）：HY OAS极低（7.9%分位）但CCC-BB利差极端（99.6%分位），若低质信用压力扩散至整体利差，将系统性打压风险偏好"
+  ],
+  "blocking_issues": [],
+  "adjudicator_notes": "基于输入数据，主要矛盾明确，但盈利数据缺失导致置信度受限。TrailingPE为audit_only权限，未作为核心估值依据，仅参考其方向。质量闸门通过，但保留所有高严重度冲突。",
+  "evidence_refs": [
+    "L1.get_10y_real_rate",
+    "L4.get_ndx_pe_and_earnings_yield#TrailingPE",
+    "L4.get_damodaran_us_implied_erp",
+    "L2.get_hy_oas_bp",
+    "L2.get_hy_quality_spread_bp",
+    "L3.get_advance_decline_line",
+    "L3.get_ndx_ndxe_ratio",
+    "L3.get_qqq_top10_concentration",
+    "L3.get_percent_above_ma",
+    "L5.get_macd_qqq",
+    "L5.get_multi_scale_ma_position",
+    "L5.get_volume_analysis_qqq",
+    "L4.get_m7_buyback_flow",
+    "L4.get_m7_capex_cycle#m7_aggregate",
+    "L2.get_vix",
+    "L5.get_atr_qqq"
+  ],
+  "token_usage": 0,
+  "quality_gate": {
+    "approval_status": "approved_with_reservations",
+    "blocking_issues": [],
+    "evidence_ref_issues": [],
+    "preserved_risks_check": "所有must_preserve_risks已在reasoned_verdict中提及，无遗漏",
+    "notes": "Schema校验存在一致性缺失（high severity conflicts未全部保留），但非阻塞。盈利数据缺口使结论置信度为medium。"
+  },
+  "reader_final": {
+    "one_liner": "NDX面临高利率与高估值的双重压力，风险补偿不足，赔率不利，建议核心仓防守、战术仓观望，等待盈利或利率信号，但需警惕踏空风险。",
+    "three_reasons": [
+      "实际利率处于十年极高水平，直接压制成长股估值，而NDX估值仍处高位，安全垫薄。",
+      "信用市场表面宽松但内部质量分化极端，低质债券压力骤升，可能蔓延。",
+      "指数短期趋势走弱，成交量不支持上涨，且集中度风险极高。"
+    ],
+    "time_horizon_summary": [
+      {
+        "horizon": "same_day_or_days",
+        "view": "短期偏弱，价格低于短期均线和VWAP，但成交量萎缩，恐慌抛售概率低。",
+        "action_implication": "短线观望，等待价格站稳或反弹信号。",
+        "evidence_refs": [
+          "L5.get_qqq_technical_indicators",
+          "L5.get_volume_analysis_qqq"
+        ],
+        "invalidation_conditions": [
+          "放量跌破MA60 → 恶化；突然放量站上VWAP → 转强。"
+        ]
+      },
+      {
+        "horizon": "one_to_three_months",
+        "view": "估值压缩风险是核心；利率不降则估值难扩，盈利增长是关键。",
+        "action_implication": "战术性仓位应等待盈利确认或利率回落。",
+        "evidence_refs": [
+          "L1.get_10y_real_rate",
+          "L4.get_ndx_pe_and_earnings_yield#TrailingPE"
+        ],
+        "invalidation_conditions": [
+          "利率继续上行或盈利下修 → 市场进一步调整。"
+        ]
+      },
+      {
+        "horizon": "six_to_twelve_months",
+        "view": "长期看AI投资能否转化为盈利将决定NDX走向；若不能，当前估值不可持续。",
+        "action_implication": "核心持仓控制风险，静待盈利趋势明朗。",
+        "evidence_refs": [
+          "L4.get_m7_capex_cycle#m7_aggregate",
+          "L4.get_damodaran_us_implied_erp"
+        ],
+        "invalidation_conditions": [
+          "盈利增长实质超预期 → 增加配置。"
+        ]
+      }
+    ],
+    "action_summary": [
+      {
+        "bucket": "core_position",
+        "action": "维持或略微降低",
+        "rationale": "高利率高估值环境下，长期回报风险比不高。",
+        "conditions": [
+          "利率回落或盈利上修"
+        ],
+        "evidence_refs": [
+          "L1.get_10y_real_rate",
+          "L4.get_ndx_pe_and_earnings_yield#TrailingPE"
+        ]
+      },
+      {
+        "bucket": "tactical_position",
+        "action": "观望或极小仓位短线",
+        "rationale": "短期弱势但未破位，反弹可能但赔率不利。",
+        "conditions": [
+          "站上VWAP或止损"
+        ],
+        "evidence_refs": [
+          "L5.get_qqq_technical_indicators"
+        ]
+      },
+      {
+        "bucket": "waiting_cash",
+        "action": "保持观望",
+        "rationale": "等待盈利或利率明朗化，警惕踏空。",
+        "conditions": [
+          "信用与广度改善"
+        ],
+        "evidence_refs": [
+          "L1.get_10y_real_rate",
+          "L2.get_hy_oas_bp"
+        ]
+      }
+    ],
+    "invalidation_summary": [
+      "【转空】实际利率进一步上升或盈利下修将恶化前景。",
+      "【转多】若盈利超预期且利率稳定，当前谨慎立场可能过于保守。"
+    ],
+    "evidence_refs": [
+      "L1.get_10y_real_rate",
+      "L4.get_ndx_pe_and_earnings_yield#TrailingPE",
+      "L4.get_damodaran_us_implied_erp"
+    ]
+  },
+  "state_diagnosis": "宏观限制与高估值碰撞的风险主导状态：实际利率99分位压制成长股估值，信用分层极端但总体宽松，集中度极高但等权补涨，短期技术回调、长期趋势未破，处于过渡期，需盈利或利率信号打破平衡。",
+  "priced_narrative": "当前价格定价：利率高位部分已消化（ERP低，PE未完全压缩），但尚未定价盈利下修风险；假设AI资本开支转化为盈利，回购收缩的暂时性影响被低估，信用分层隐含尾部风险未扩散。",
+  "payoff_assessment": "赔率不利：五类中支持补偿变厚的类别为无，反对的类别包括实际利率（rates，高折现率压制估值）、估值（valuation，PE高位ERP低位）；信用（credit）分层未扩散但构成尾部风险；技术（technical_panic）和流动性（liquidity）方向中性，未提供补偿。合计风险补偿不足，赔率不利。",
+  "time_horizon_views": [
+    {
+      "horizon": "same_day_or_days",
+      "view": "短期技术面偏弱，价格低于短期均线和VWAP，MACD熊叉，OBV下降，但成交量萎缩，恐慌性抛售概率低。MA60为关键支撑。",
+      "action_implication": "短线观望，若放量跌破MA60则止损观望；若站上VWAP且MACD转正，可极小仓位试探反弹。",
+      "evidence_refs": [
+        "L5.get_l5_deterministic_snapshot",
+        "L5.get_qqq_technical_indicators",
+        "L5.get_macd_qqq",
+        "L5.get_volume_analysis_qqq"
+      ],
+      "invalidation_conditions": [
+        "放量跌破MA60（705.7）且ADX上升至25以上 → 回调可能转趋势反转。",
+        "突然放量站上VWAP（722.35）且MACD柱转正 → 短期弱势可能快速修复。"
+      ]
+    },
+    {
+      "horizon": "one_to_three_months",
+      "view": "估值压缩是主要矛盾，若利率维持高位，NDX估值难扩张，盈利成为关键。利好包括财报季可能超预期、静默窗后回购恢复，但赔率偏不利。",
+      "action_implication": "战术仓低暴露，等待以下信号至少一个出现再小幅加仓：(1) 实际利率回落至2.0%以下 (2) M7盈利超预期且回购重启 (3) 信用分层收窄。",
+      "evidence_refs": [
+        "L1.get_10y_real_rate",
+        "L4.get_ndx_pe_and_earnings_yield#TrailingPE",
+        "L4.get_m7_buyback_flow"
+      ],
+      "invalidation_conditions": [
+        "实际利率突破2.5%或名义利率接近5% → 估值压缩加速，进一步减仓。",
+        "盈利下修 → 重新评估。"
+      ]
+    },
+    {
+      "horizon": "six_to_twelve_months",
+      "view": "宏观约束和估值压力可能持续，NDX核心收益取决于AI资本开支转化。若转化低于预期，高估值难消化；若信用未系统性恶化，长期趋势线提供支撑。",
+      "action_implication": "核心仓保持中性偏低，等待盈利确认或利率改善；可部分转向等权或价值风格分散风险。",
+      "evidence_refs": [
+        "L1.get_10y_real_rate",
+        "L4.get_m7_capex_cycle#m7_aggregate",
+        "L3.get_qqq_top10_concentration"
+      ],
+      "invalidation_conditions": [
+        "若未来两季度M7盈利增长超预期且利率未进一步上升 → 上调核心仓。",
+        "若信用利差全面走阔（HY OAS回升） → 转防守。"
+      ]
+    }
+  ],
+  "portfolio_actions": [
+    {
+      "bucket": "core_position",
+      "action": "维持或略微降低科技成长暴露",
+      "rationale": "宏观限制未解除，估值安全垫薄，盈利缺失，集中度风险高；不宜在当前增加长期核心仓位。",
+      "conditions": [
+        "实际利率回落至2.0%以下且盈利预期上修。",
+        "信用分层显著收窄，HY OAS未走阔。"
+      ],
+      "evidence_refs": [
+        "L1.get_10y_real_rate",
+        "L4.get_ndx_pe_and_earnings_yield#TrailingPE",
+        "L2.get_hy_quality_spread_bp"
+      ]
+    },
+    {
+      "bucket": "tactical_position",
+      "action": "观望或极小仓位短线，严格止损",
+      "rationale": "短期弱势但未破位，可能有反弹，但赔率不利；若价格守住MA60放量反弹可极小试探，跌破止损。",
+      "conditions": [
+        "QQQ回到VWAP（722.35）上方且MACD柱转正 → 极小仓位试探。",
+        "跌破MA60（705.7） → 止损观望。"
+      ],
+      "evidence_refs": [
+        "L5.get_multi_scale_ma_position",
+        "L5.get_macd_qqq",
+        "L5.get_volume_analysis_qqq"
+      ]
+    },
+    {
+      "bucket": "waiting_cash",
+      "action": "保持中性偏防守，不做积极配置",
+      "rationale": "证据冲突，风险补偿不足，等待确认降低左侧被套风险；但需警惕踏空：若盈利意外上行且利率回落，成本上升。",
+      "conditions": [
+        "信用环境和广度明显改善（HY OAS不升，腾落线加速，%Above MA 50d升至60%以上）→ 逐步配置。",
+        "实际利率跌破2.0%且ERP回升 → 更积极。"
+      ],
+      "evidence_refs": [
+        "L1.get_10y_real_rate",
+        "L2.get_hy_oas_bp",
+        "L3.get_percent_above_ma"
+      ]
+    }
+  ],
+  "confirmation_cost": "等待确认可降低左侧估值压缩风险，避免在盈利缺失时过早暴露；但代价是可能错失M7财报超预期或利率意外回落带来的反弹，尤其在价格接近支撑位、情绪恐惧时踏空成本上升。",
+  "invalidation_conditions": [
+    "【转空】实际利率突破2.5%并站稳，或名义利率接近5% → 估值压缩深化，防守姿态不足。",
+    "【转多】M7财报盈利全面超预期且回购恢复，同时信用分层收窄 → 赔率可能改善，需重新评估。",
+    "【转空】QQQ收盘跌破MA60（705.7）且ADX>25 → 短期可能加速下跌，升级防守。"
+  ],
+  "principal_contradiction": {
+    "contradiction_id": "macro_valuation_squeeze",
+    "summary": "宏观利率约束（实际利率极高）与NDX高估值（PE 34x, 低ERP）之间的估值压缩风险是主要矛盾",
+    "why_principal": "决定当前价格是否已反映风险：实际利率99分位并未在估值中完全体现（ERP仅25分位），安全垫薄；若盈利下修或利率上行，双杀风险最大。其他冲突受其放大或缓解。",
+    "dominant_side": "风险面（宏观约束）",
+    "secondary_side": "机会面（资本开支叙事、长期趋势未破，以及可能的盈利超预期消化估值）",
+    "price_reflection": "partially_reflected",
+    "action_implication": "核心仓防御，等待实际利率回落；战术仓短线严格止损；等待现金中立偏防守。",
+    "conflict_refs": [
+      "C1_macro_valuation_squeeze"
+    ],
+    "evidence_refs": [
+      "L1.get_10y_real_rate",
+      "L4.get_ndx_pe_and_earnings_yield#TrailingPE",
+      "L4.get_damodaran_us_implied_erp"
+    ],
+    "transformation_signals": [
+      {
+        "signal": "实际利率突破前高或名义利率接近5%",
+        "direction": "风险面加深，估值压缩加速",
+        "implication": "减仓科技股，增加短久期资产",
+        "evidence_refs": [
+          "L1.get_10y_real_rate"
+        ],
+        "event_refs": []
+      },
+      {
+        "signal": "M7盈利超预期且回购恢复",
+        "direction": "机会面增强，估值压力缓解",
+        "implication": "可小幅加仓，但需确认利率不再上行",
+        "evidence_refs": [
+          "L4.get_m7_buyback_flow",
+          "L4.get_m7_capex_cycle#m7_aggregate"
+        ],
+        "event_refs": []
+      }
+    ],
+    "unresolved_questions": [
+      "盈利预期数据缺失，无法验证增长能否消化估值",
+      "Forward PE缺失，前瞻估值不可知",
+      "利率上升的中性利率驱动情景vs衰退驱动情景，哪一种占主导？"
+    ]
+  },
+  "secondary_contradictions": [
+    {
+      "contradiction_id": "breadth_leadership_divergence",
+      "summary": "内部结构冲突：腾落线上升但NDX/NDXE比值下降，领导力收窄",
+      "why_secondary": "广度脆弱性在宏观约束未解除前是次要的，因为即使广度改善，高利率仍压制估值；但广度恶化可能加速价格下跌。",
+      "action_constraint": "仓位不宜过度集中，分散至等权或价值型",
+      "evidence_refs": [
+        "L3.get_ndx_ndxe_ratio",
+        "L3.get_advance_decline_line"
+      ]
+    },
+    {
+      "contradiction_id": "credit_quality_deterioration",
+      "summary": "信用分层极端，低质信用利差飙升",
+      "why_secondary": "目前未扩散到整体利差（HY OAS极低），系统性风险未确认；但若分层持续，可能成为领先预警。",
+      "action_constraint": "避免买入低质量beta资产",
+      "evidence_refs": [
+        "L2.get_hy_quality_spread_bp",
+        "L2.get_hy_oas_bp"
+      ]
+    }
+  ],
+  "price_reflection_map": [
+    {
+      "category": "credit",
+      "target": "系统性信用风险",
+      "reflected_state": "not_reflected",
+      "rationale": "HY OAS仍极低（7.9%分位），市场未定价信用分层恶化的扩散风险",
+      "evidence_refs": [
+        "L2.get_hy_oas_bp",
+        "L2.get_hy_quality_spread_bp"
+      ],
+      "counterevidence": [
+        "HY OAS持续低位，分层未扩散"
+      ],
+      "counterevidence_refs": [
+        "L2.get_hy_oas_bp"
+      ],
+      "action_implication": "若分层扩散，信用利差将走阔，风险资产承压；当前未反映，不宜做空但需警惕",
+      "missing_evidence": [
+        "贷款官员调查",
+        "CDS指数"
+      ]
+    },
+    {
+      "category": "rates",
+      "target": "实际利率高位对估值的压制",
+      "reflected_state": "partially_reflected",
+      "rationale": "实际利率99分位，但NDX PE仍处于高位，说明估值尚未充分压缩；ERP低位（25%分位）表明风险补偿不足",
+      "evidence_refs": [
+        "L1.get_10y_real_rate",
+        "L4.get_ndx_pe_and_earnings_yield#TrailingPE",
+        "L4.get_damodaran_us_implied_erp"
+      ],
+      "counterevidence": [
+        "盈利增长预期支撑抵消部分利率压力"
+      ],
+      "counterevidence_refs": [],
+      "action_implication": "估值仍有压缩空间，需警惕利率继续上行",
+      "missing_evidence": [
+        "盈利预测数据",
+        "NDX久期敞口"
+      ]
+    },
+    {
+      "category": "valuation",
+      "target": "NDX整体估值水平",
+      "reflected_state": "largely_reflected",
+      "rationale": "PE 34x处于历史偏高位置，市场已定价了一定的增长预期；但缺乏Forward PE，前瞻估值不确定",
+      "evidence_refs": [
+        "L4.get_ndx_pe_and_earnings_yield#TrailingPE",
+        "L4.get_damodaran_us_implied_erp"
+      ],
+      "counterevidence": [
+        "资本开支加速可能支撑未来盈利"
+      ],
+      "counterevidence_refs": [
+        "L4.get_m7_capex_cycle#m7_aggregate"
+      ],
+      "action_implication": "估值已较贵，新增头寸需严格安全边际",
+      "missing_evidence": [
+        "Forward PE",
+        "FCF yield"
+      ]
+    },
+    {
+      "category": "technical_panic",
+      "target": "恐慌性抛售风险",
+      "reflected_state": "not_reflected",
+      "rationale": "VIX中性（52%分位），ATR正常，未出现恐慌溢价",
+      "evidence_refs": [
+        "L2.get_vix",
+        "L5.get_atr_qqq"
+      ],
+      "counterevidence": [
+        "OBV下降但速度温和"
+      ],
+      "counterevidence_refs": [
+        "L5.get_obv_qqq"
+      ],
+      "action_implication": "短期下跌但非恐慌，无需投降式减仓",
+      "missing_evidence": [
+        "put/call比率极端值"
+      ]
+    },
+    {
+      "category": "liquidity",
+      "target": "市场流动性环境",
+      "reflected_state": "not_reflected",
+      "rationale": "净流动性总量中高但动量极弱，RRP几乎耗尽；但HY OAS极低表明融资环境仍宽松",
+      "evidence_refs": [
+        "L1.get_net_liquidity_momentum",
+        "L2.get_hy_oas_bp"
+      ],
+      "counterevidence": [
+        "流动性总量不低"
+      ],
+      "counterevidence_refs": [
+        "L1.get_net_liquidity_momentum"
+      ],
+      "action_implication": "流动性未显著收紧，但边际改善空间有限",
+      "missing_evidence": [
+        "回购市场压力指标"
+      ]
+    }
+  ],
+  "claim_ledger": {
+    "claims": [
+      {
+        "claim": "实际利率极高压制NDX估值",
+        "status": "supported",
+        "evidence_refs": [
+          "L1.get_10y_real_rate"
+        ],
+        "confidence": "high"
+      },
+      {
+        "claim": "NDX估值偏高，安全垫薄",
+        "status": "supported",
+        "evidence_refs": [
+          "L4.get_ndx_pe_and_earnings_yield#TrailingPE",
+          "L4.get_damodaran_us_implied_erp"
+        ],
+        "confidence": "medium"
+      },
+      {
+        "claim": "信用分层极端存在尾部风险",
+        "status": "supported",
+        "evidence_refs": [
+          "L2.get_hy_quality_spread_bp"
+        ],
+        "confidence": "high"
+      },
+      {
+        "claim": "短期技术面偏弱",
+        "status": "supported",
+        "evidence_refs": [
+          "L5.get_qqq_technical_indicators",
+          "L5.get_macd_qqq"
+        ],
+        "confidence": "high"
+      },
+      {
+        "claim": "盈利数据缺失，增长无法验证",
+        "status": "inconclusive",
+        "evidence_refs": [],
+        "confidence": "low"
+      }
+    ]
+  }
+}

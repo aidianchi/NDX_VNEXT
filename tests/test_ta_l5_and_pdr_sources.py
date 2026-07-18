@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import tools_L5
 import tools_common
+import recompute_belt
 
 
 def _ohlcv_frame(periods=260):
@@ -56,6 +57,50 @@ def test_l5_formula_layer_calculates_adx_without_ta_library(monkeypatch):
     assert indicators["pdi_14"] is not None
     assert indicators["mdi_14"] is not None
     assert indicators["adx_direction"] in {"up", "down", "neutral"}
+
+
+def test_l5_deterministic_snapshot_embeds_full_ohlcv_for_independent_recompute():
+    frame = _ohlcv_frame()
+    payload = tools_L5._build_l5_snapshot_from_frame(
+        frame,
+        effective_date=frame.index[-1].to_pydatetime(),
+        source_name="unit-test",
+        raw_row_count=len(frame),
+        future_rows_dropped=0,
+    )
+
+    raw_ohlcv = payload["recompute_input"]["raw_ohlcv"]
+    assert len(raw_ohlcv) == len(frame)
+    assert raw_ohlcv[-1] == {
+        "date": frame.index[-1].strftime("%Y-%m-%d"),
+        "open": 358.5,
+        "high": 360.0,
+        "low": 358.0,
+        "close": 359.0,
+        "volume": 1_000_259,
+    }
+
+    recompute_input = payload.pop("recompute_input")
+    report = recompute_belt.run(
+        {
+            "recompute_inputs": {"get_l5_deterministic_snapshot": recompute_input},
+            "indicators": [
+                {
+                    "layer": 5,
+                    "function_id": "get_l5_deterministic_snapshot",
+                    "raw_data": payload,
+                }
+            ]
+        }
+    )
+    l5_findings = [
+        finding
+        for finding in report["findings"]
+        if finding["field"].startswith("get_l5_deterministic_snapshot.exact_technical_values.")
+    ]
+    assert l5_findings
+    assert not [finding for finding in l5_findings if finding["status"] == "unrecomputable_missing_raw"]
+    assert not [finding for finding in l5_findings if finding["status"] == "deviation"]
 
 
 def test_l5_price_volume_quality_reuses_technical_indicator_payload(monkeypatch):

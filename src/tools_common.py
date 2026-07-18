@@ -1477,8 +1477,10 @@ def analyze_series_momentum_relativity(series: pd.DataFrame) -> Dict[str, Any]:
 
     # 统一日期获取方式
     if isinstance(series.index, pd.DatetimeIndex):
+        observation_dates = pd.Series(pd.to_datetime(series.index), index=series.index)
         latest_date = series.index[-1]
     else:
+        observation_dates = pd.to_datetime(series["date"], errors="coerce")
         latest_date = pd.to_datetime(latest_row["date"])
     date_str = latest_date.strftime("%Y-%m-%d")
 
@@ -1499,9 +1501,10 @@ def analyze_series_momentum_relativity(series: pd.DataFrame) -> Dict[str, Any]:
     latest_value = latest_row["value"]
 
     # 1年窗口：若索引为日期，则按时间截取，否则退化为全部可用样本
-    if isinstance(series.index, pd.DatetimeIndex):
-        one_year_ago = latest_date - pd.DateOffset(years=1)
-        series_1y = series[series.index >= one_year_ago]
+    one_year_ago = latest_date - pd.DateOffset(years=1)
+    valid_date_mask = observation_dates.notna()
+    if valid_date_mask.any():
+        series_1y = series.loc[valid_date_mask & (observation_dates >= one_year_ago)]
         if len(series_1y) < 3:  # 数据太短则退化为全样本
             series_1y = series
     else:
@@ -1510,12 +1513,9 @@ def analyze_series_momentum_relativity(series: pd.DataFrame) -> Dict[str, Any]:
     percentile_1y = (series_1y["value"] < latest_value).mean() * 100.0
 
     # 10年窗口：若历史不足10年，则用全部可用样本并在notes中注明
-    if isinstance(series.index, pd.DatetimeIndex):
-        first_date = series.index[0]
-        last_date = series.index[-1]
-    else:
-        first_date = pd.to_datetime(series["date"].iloc[0])
-        last_date = pd.to_datetime(series["date"].iloc[-1])
+    dated = observation_dates.dropna()
+    first_date = dated.iloc[0] if not dated.empty else latest_date
+    last_date = dated.iloc[-1] if not dated.empty else latest_date
 
     history_years = max((last_date - first_date).days / 365.25, 0.0)
     

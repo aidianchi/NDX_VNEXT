@@ -2,6 +2,8 @@ import os
 import sys
 from datetime import datetime, timezone
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from agent_analysis.contracts import (
@@ -30,6 +32,7 @@ from agent_analysis.contracts import (
     GoldenPitChecklist,
     GoldenPitChecklistItem,
     HypothesisCompetition,
+    HypothesisResponse,
     InquiryMessage,
     InquiryMessageType,
     InvestigationReport,
@@ -280,6 +283,29 @@ def test_competing_hypothesis_contract_requires_auditable_adjudication_fields():
     assert history.records[0].reason.startswith("强反证")
 
 
+def test_thesis_draft_contract_carries_structured_hypothesis_responses():
+    thesis = ThesisDraft(
+        environment_assessment="环境仍偏紧。",
+        valuation_assessment="估值仍有压力。",
+        timing_assessment="趋势仍待确认。",
+        main_thesis="保留主线，也吸收竞争解释。",
+        hypothesis_responses=[
+            HypothesisResponse(
+                hypothesis_id="hyp_counter",
+                verdict="reject",
+                reasoning="趋势证据尚未覆盖估值反证。",
+                evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+            )
+        ],
+        overall_confidence=Confidence.MEDIUM,
+    )
+
+    restored = ThesisDraft.model_validate(thesis.model_dump(mode="json"))
+
+    assert restored.hypothesis_responses[0].hypothesis_id == "hyp_counter"
+    assert restored.hypothesis_responses[0].verdict == "reject"
+    assert restored.hypothesis_responses[0].evidence_refs == ["L4.get_ndx_pe_and_earnings_yield"]
+
 def test_layer_analysis_serialization():
     analysis = LayerCard(
         layer=Layer.L1,
@@ -411,6 +437,49 @@ def test_final_adjudication_serialization_roundtrip():
     assert restored.approval_status == ApprovalStatus.APPROVED_WITH_RESERVATIONS
     assert len(restored.key_support_chains) == 1
     assert restored.key_support_chains[0].weight == 0.3
+
+
+def test_final_adjudication_reasoned_verdict_contract_and_missing_note():
+    valid_verdict = (
+        "当前判断对象是纳斯达克100，姿态为中性偏谨慎，时间尺度覆盖未来数日到十二个月。"
+        "第一条理由是实际利率仍高，折现率压力没有解除，但趋势尚未破坏这一反证限制了结论强度。"
+        "第二条理由是估值补偿仍薄，不过盈利韧性意味着估值不能单独决定方向。"
+        "第三条理由是价格趋势仍有支撑，但内部广度不足使这条证据只能支持等待而非追涨。"
+        "综合来看，当前赔率不足以支持激进加仓，等待确认会付出踏空代价。"
+        "最强的反对解释是盈利与趋势会继续压过利率和估值压力，但本轮证据还不足以让它改变判断。"
+    )
+    valid_verdict = (valid_verdict * 2)[:700]
+    final = FinalAdjudication(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="中性偏谨慎",
+        confidence=Confidence.MEDIUM,
+        must_preserve_risks=["估值压缩风险"],
+        adjudicator_notes="保留风险边界。",
+        reasoned_verdict=valid_verdict,
+    )
+    assert final.reasoned_verdict == valid_verdict
+
+    missing = FinalAdjudication(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="中性偏谨慎",
+        confidence=Confidence.MEDIUM,
+        must_preserve_risks=["估值压缩风险"],
+        adjudicator_notes="保留风险边界。",
+    )
+    assert missing.reasoned_verdict == ""
+    assert missing.quality_gate is not None
+    assert "判决正文缺失" in missing.quality_gate.notes
+
+    for invalid in ("过短", "过长" * 651):
+        with pytest.raises(Exception, match="reasoned_verdict"):
+            FinalAdjudication(
+                approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+                final_stance="中性偏谨慎",
+                confidence=Confidence.MEDIUM,
+                must_preserve_risks=["估值压缩风险"],
+                adjudicator_notes="保留风险边界。",
+                reasoned_verdict=invalid,
+            )
 
 
 def test_decision_semantics_fields_roundtrip():

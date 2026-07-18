@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 try:
@@ -16,6 +16,7 @@ try:
     from .chart_time_series_artifacts import write_chart_time_series_artifact
     from .config import MODEL_CONFIGS, path_config
     from .core import DataCollector, DataIntegrity, ReportGenerator
+    from .data_evidence import normalize_data_evidence
     from .event_narrative_ledger import write_event_narrative_ledger
     from .integrated_synthesis_report import build_pure_data_report_manifest, write_integrated_synthesis_report
     from .news_event_data_linker import write_news_event_data_links
@@ -30,6 +31,7 @@ except ImportError:
     from chart_time_series_artifacts import write_chart_time_series_artifact
     from config import MODEL_CONFIGS, path_config
     from core import DataCollector, DataIntegrity, ReportGenerator
+    from data_evidence import normalize_data_evidence
     from event_narrative_ledger import write_event_narrative_ledger
     from integrated_synthesis_report import build_pure_data_report_manifest, write_integrated_synthesis_report
     from news_event_data_linker import write_news_event_data_links
@@ -135,8 +137,131 @@ def resolve_available_models(raw_models: Optional[str]) -> List[str]:
 
 
 def load_data_json(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
+    source_path = os.path.abspath(path)
+    with open(source_path, "rb") as source_handle:
+        source_bytes = source_handle.read()
+    with open(source_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        return payload
+    declared_effective_date = str(payload.get("backtest_date") or payload.get("effective_date") or "").strip()
+    if declared_effective_date and declared_effective_date not in {"live", "not_recorded"}:
+        try:
+            declared_effective_date = validate_date(declared_effective_date) or ""
+        except ValueError as exc:
+            raise ValueError(
+                f"snapshot effective_date must be YYYY-MM-DD, got {declared_effective_date!r}"
+            ) from exc
+        # Snapshot replay has one canonical point-in-time date.  Writing it to
+        # backtest_date makes DataIntegrity and AnalysisPacket enforce the same
+        # future-data boundary used by the CLI/run directory.
+        payload["backtest_date"] = declared_effective_date
+    effective_date = declared_effective_date or None
+    indicators = payload.get("indicators")
+    recompute_inputs = payload.get("recompute_inputs")
+    if not isinstance(recompute_inputs, dict):
+        recompute_inputs = {}
+        payload["recompute_inputs"] = recompute_inputs
+    if isinstance(indicators, list):
+        for indicator in indicators:
+            if not isinstance(indicator, dict) or not isinstance(indicator.get("raw_data"), dict):
+                continue
+            function_id = str(indicator.get("function_id") or "unknown_function")
+            layer = indicator.get("layer")
+            nested_recompute_input = indicator["raw_data"].pop("recompute_input", None)
+            if isinstance(nested_recompute_input, dict) and nested_recompute_input:
+                canonical = json.dumps(nested_recompute_input, sort_keys=True, ensure_ascii=False, default=str)
+                migrated = {
+                    "layer": layer,
+                    "source_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+                    **nested_recompute_input,
+                }
+                existing = recompute_inputs.get(function_id)
+                if not isinstance(existing, dict):
+                    recompute_inputs[function_id] = migrated
+                elif existing != migrated:
+                    conflicts = payload.setdefault("recompute_input_migration_conflicts", [])
+                    if isinstance(conflicts, list):
+                        conflicts.append({
+                            "function_id": function_id,
+                            "resolution": "preserved_existing_top_level_recompute_input",
+                        })
+            indicator["raw_data"] = normalize_data_evidence(
+                indicator["raw_data"],
+                function_id=function_id,
+                layer=layer if isinstance(layer, int) else None,
+                effective_date=effective_date,
+                collected_at_utc=str(indicator.get("collection_timestamp_utc") or "") or None,
+            )
+    payload["source_snapshot"] = {
+        "mode": "snapshot_replay",
+        "source_filename": os.path.basename(source_path),
+        "source_path": source_path,
+        "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+        "file_modified_at_utc": datetime.fromtimestamp(os.path.getmtime(source_path), tz=timezone.utc).isoformat(),
+        "collection_time": str(
+            payload.get("timestamp_utc")
+            or payload.get("collection_timestamp_utc")
+            or payload.get("collection_timestamp")
+            or payload.get("collected_at_utc")
+            or "not_recorded"
+        ),
+        "effective_date": str(payload.get("backtest_date") or payload.get("effective_date") or "not_recorded"),
+    }
+    return payload
+
+
+def _collector_source_snapshot(backtest_date: Optional[str], data_json: Dict[str, Any]) -> Dict[str, Any]:
+    """Describe the exact collector file without claiming a hash that was not observed."""
+    source_path = os.path.abspath(collector_output_path(backtest_date))
+    source_exists = os.path.isfile(source_path)
+    source_sha256 = "not_recorded"
+    modified_at = "not_recorded"
+    if source_exists:
+        with open(source_path, "rb") as source_handle:
+            source_sha256 = hashlib.sha256(source_handle.read()).hexdigest()
+        modified_at = datetime.fromtimestamp(os.path.getmtime(source_path), tz=timezone.utc).isoformat()
+    return {
+        "mode": "live_collection" if not backtest_date else "point_in_time_collection",
+        "source_filename": os.path.basename(source_path),
+        "source_path": source_path,
+        "source_sha256": source_sha256,
+        "file_modified_at_utc": modified_at,
+        "source_file_status": "observed" if source_exists else "not_recorded",
+        "collection_time": str(
+            data_json.get("timestamp_utc")
+            or data_json.get("collection_timestamp_utc")
+            or "not_recorded"
+        ),
+        "effective_date": backtest_date or str(data_json.get("effective_date") or data_json.get("data_date") or "live"),
+    }
+
+
+def _persist_source_snapshot(run_dir: str, data_json: Dict[str, Any]) -> str:
+    audit = data_json.get("source_snapshot") if isinstance(data_json.get("source_snapshot"), dict) else {}
+    path = os.path.join(run_dir, "source_snapshot.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(audit, handle, ensure_ascii=False, indent=2, default=str)
+        handle.write("\n")
+    return path
+
+
+def _resolve_snapshot_effective_date(requested_date: Optional[str], data_json: Dict[str, Any]) -> Optional[str]:
+    snapshot = data_json.get("source_snapshot") if isinstance(data_json.get("source_snapshot"), dict) else {}
+    snapshot_date = str(snapshot.get("effective_date") or "")
+    if requested_date and (not snapshot_date or snapshot_date in {"not_recorded", "live"}):
+        raise ValueError(
+            f"--date {requested_date} requires a snapshot with an explicit historical effective_date; "
+            "refusing to relabel an undated/live snapshot."
+        )
+    if not snapshot_date or snapshot_date in {"not_recorded", "live"}:
+        return requested_date
+    if requested_date and requested_date != snapshot_date:
+        raise ValueError(
+            f"--date {requested_date} conflicts with snapshot effective_date {snapshot_date}; "
+            "refusing to relabel a historical snapshot."
+        )
+    return requested_date or snapshot_date
 
 
 def _persist_checker_input(run_dir: str, data_json: Dict[str, Any], integrity_report: Dict[str, Any]) -> None:
@@ -286,6 +411,11 @@ def run_collect_only(args: argparse.Namespace) -> Dict[str, Any]:
 
 def run_event_only(args: argparse.Namespace) -> Dict[str, Any]:
     backtest_date = validate_date(args.date)
+    data_json_path = getattr(args, "data_json", None)
+    data_json: Dict[str, Any] = {}
+    if data_json_path:
+        data_json = load_data_json(data_json_path)
+        backtest_date = _resolve_snapshot_effective_date(backtest_date, data_json)
     run_dir = build_run_dir(
         backtest_date,
         run_id=getattr(args, "run_id", None),
@@ -299,11 +429,7 @@ def run_event_only(args: argparse.Namespace) -> Dict[str, Any]:
     news_event_data_links_path = ""
     news_layer_analysis_path = ""
     chart_time_series_path = ""
-    data_json_path = getattr(args, "data_json", None)
-    data_json: Dict[str, Any] = {}
-
     if data_json_path:
-        data_json = load_data_json(data_json_path)
         packet = AnalysisPacketBuilder().build(
             data_json,
             context={"news_event_ledger_path": news_event_ledger_path, "event_material_policy": "event_only_market_validation_not_l1_l5"},
@@ -391,9 +517,11 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
 
     if args.data_json:
         data_json = load_data_json(args.data_json)
+        backtest_date = _resolve_snapshot_effective_date(backtest_date, data_json)
     else:
         collector = DataCollector()
         data_json = collector.run(backtest_date=backtest_date)
+        data_json["source_snapshot"] = _collector_source_snapshot(backtest_date, data_json)
 
     run_dir = build_run_dir(
         backtest_date,
@@ -409,6 +537,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
 
     integrity_report = DataIntegrity().run(data_json)
     os.makedirs(run_dir, exist_ok=True)
+    source_snapshot_path = _persist_source_snapshot(run_dir, data_json)
     _persist_checker_input(run_dir, data_json, integrity_report)
     integrity_path = os.path.join(run_dir, "data_integrity_report.json")
     with open(integrity_path, "w", encoding="utf-8") as handle:
@@ -444,6 +573,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         summary = {
             "run_dir": run_dir,
             "data_integrity_report": integrity_path,
+            "source_snapshot": source_snapshot_path,
             "pure_data_report": pure_data_report_path,
             "event_narrative_ledger": event_narrative_ledger_path,
             "event_source_raw": os.path.join(run_dir, "event_source_raw.jsonl") if args.enable_news else "",
@@ -606,6 +736,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
         "approval_status": _enum_value(getattr(artifacts["final_adjudication"], "approval_status", "")),
         "run_review_report": os.path.join(run_dir, "run_review_report.json"),
+        "source_snapshot": source_snapshot_path,
         "outcome_review_report": os.path.join(run_dir, "outcome_review_report.json"),
         "models": available_models,
         "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),

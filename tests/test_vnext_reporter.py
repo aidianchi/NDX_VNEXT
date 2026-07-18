@@ -8,19 +8,334 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from agent_analysis.vnext_reporter import (
+    BRIEF_SECTION_ORDER,
+    DRAWER_TREND_WHITELIST,
     INDICATOR_CHARTS,
+    REF_DIGEST_FIELDS,
     VNextReportGenerator,
+    _glossary_term,
     _label,
     _load_local_decision_profile,
     _render_invalidation_item,
     _slug,
 )
+
+
+def test_indicator_glossary_definitions_are_static_and_safe():
+    html = _glossary_term('HY OAS')
+    assert 'metric-glossary' in html
+    assert '高收益债相对国债的信用利差' in html
+    assert 'aria-describedby=' in html
+    assert 'aria-hidden="true"' in html
+    assert ' hidden' not in html
+    assert _glossary_term('<script>') == '&lt;script&gt;'
+
+
+def test_indicator_card_renders_keyboard_glossary_for_common_indicators():
+    reporter = VNextReportGenerator()
+    html = reporter._indicator_card(
+        'L5',
+        {'function_id': 'get_macd_qqq', 'metric': 'MACD', 'current_reading': 'MACD柱为正', 'normalized_state': 'bullish'},
+        {'layers': {}, 'chart_time_series': {}},
+    )
+    assert 'metric-glossary' in html
+    assert '移动平均收敛发散指标' in html
+    assert 'tabindex="0"' in html
+
+
+def test_glossary_tooltips_have_unique_ids_and_aria_hidden_sync():
+    first = _glossary_term('MACD', unique_id='L5-get_macd_qqq')
+    second = _glossary_term('MACD', unique_id='L5-get_macd_qqq-brief')
+    assert 'id="metric-glossary-macd-l5-get-macd-qqq"' in first
+    assert 'id="metric-glossary-macd-l5-get-macd-qqq-brief"' in second
+    assert first.count('aria-hidden="true"') == 1
+    js = VNextReportGenerator()._js()
+    assert 'tooltip.setAttribute(\'aria-hidden\', String(!open))' in js
+    nested = _glossary_term('MACD', as_button=False, unique_id='nested')
+    assert 'role="button"' not in nested
+    assert 'tabindex=' not in nested
+    assert "owner.setAttribute('aria-describedby', tooltip.id)" in js
 from agent_analysis.prompt_inspector import PromptInspectorGenerator
 
 
 def _write_json(path: Path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def test_r2_brief_spine_and_layers_template_are_declared():
+    from agent_analysis.vnext_reporter import TEMPLATE_DESCRIPTIONS, TEMPLATE_ORDER
+
+    assert TEMPLATE_ORDER["brief"] == list(BRIEF_SECTION_ORDER)
+    assert BRIEF_SECTION_ORDER == (
+        "facade",
+        "thesis",
+        "stress",
+        "world",
+        "risks",
+        "change",
+        "brief_layers",
+        "brief_audit",
+    )
+    assert TEMPLATE_ORDER["layers"] == ["layers"]
+    assert "layers" in TEMPLATE_DESCRIPTIONS
+
+
+def test_r2_ref_digest_has_fixed_fields_and_hard_budgets(tmp_path: Path):
+    source = tmp_path / "snapshot.json"
+    _write_json(
+        source,
+        {
+            "effective_date": "2026-07-15",
+            "recompute_inputs": {
+                "get_ndx_ndxe_ratio": {
+                    "raw_series": [
+                        {"date": f"2026-06-{index + 1:02d}", "value": index / 10}
+                        for index in range(30)
+                    ] + [{"date": "2026-07-16", "value": 99.0}]
+                }
+            },
+        },
+    )
+    source_bytes = source.read_bytes()
+    artifacts = {
+        "analysis_packet": {
+            "meta": {"data_date": "2026-07-15"},
+            "raw_data": {
+                "L3": {
+                    "get_ndx_ndxe_ratio": {
+                        "value": {"relativity": {"percentile_10y": 86.5}}
+                    }
+                }
+            },
+        },
+        "source_snapshot": {
+            "source_path": str(source),
+            "source_sha256": __import__("hashlib").sha256(source_bytes).hexdigest(),
+            "effective_date": "2026-07-15",
+        },
+        "layers": {
+            "L3": {
+                "indicator_analyses": [
+                    {
+                        "function_id": "get_ndx_ndxe_ratio",
+                        "metric": "NDX/NDXE Ratio",
+                        "current_reading": "当前 2.9，10 年分位 86.5%",
+                        "canonical_question": "头部集中度是否正在松动？",
+                        "misread_guards": ["不能单独证明牛市结束。"],
+                        "falsifiers": ["等权指数持续走弱。"],
+                    }
+                ]
+            }
+        },
+    }
+
+    digest = VNextReportGenerator()._build_ref_digest(
+        tmp_path,
+        artifacts,
+        Path("vnext_layers_unit.html"),
+    )
+
+    metric = digest["metrics"]["L3.get_ndx_ndxe_ratio"]
+    assert set(metric) == set(REF_DIGEST_FIELDS)
+    assert len(json.dumps(metric, ensure_ascii=False).encode("utf-8")) <= 1024
+    assert len(json.dumps(digest, ensure_ascii=False).encode("utf-8")) <= 50 * 1024
+    assert len(json.dumps(digest["trends"], ensure_ascii=False).encode("utf-8")) <= 12 * 1024
+    assert len(digest["trends"]["L3.get_ndx_ndxe_ratio"]) <= 60
+    assert all(point[0] <= "2026-07-15" for point in digest["trends"]["L3.get_ndx_ndxe_ratio"])
+    assert metric["artifact_anchor"] == "vnext_layers_unit.html#get_ndx_ndxe_ratio"
+    assert len(DRAWER_TREND_WHITELIST) <= 15
+
+
+def test_r2_ref_digest_refuses_unverified_or_mismatched_snapshot(tmp_path: Path):
+    source = tmp_path / "snapshot.json"
+    _write_json(
+        source,
+        {
+            "effective_date": "2026-07-18",
+            "recompute_inputs": {
+                "get_ndx_ndxe_ratio": {"raw_series": [{"date": "2026-07-18", "value": 1.0}]}
+            },
+        },
+    )
+    artifacts = {
+        "analysis_packet": {"meta": {"data_date": "2026-07-15"}, "raw_data": {}},
+        "source_snapshot": {
+            "source_path": str(source),
+            "source_sha256": "wrong-hash",
+            "effective_date": "2026-07-18",
+        },
+        "layers": {
+            "L3": {
+                "indicator_analyses": [
+                    {"function_id": "get_ndx_ndxe_ratio", "metric": "NDX/NDXE Ratio"}
+                ]
+            }
+        },
+    }
+
+    digest = VNextReportGenerator()._build_ref_digest(tmp_path, artifacts, Path("layers.html"))
+
+    assert digest["trends"] == {}
+
+
+def test_r2_ref_digest_refuses_effective_date_mismatch(tmp_path: Path):
+    source = tmp_path / "snapshot.json"
+    _write_json(
+        source,
+        {"effective_date": "2026-07-18", "recompute_inputs": {"get_ndx_ndxe_ratio": {"raw_series": []}}},
+    )
+    artifacts = {
+        "analysis_packet": {"meta": {"backtest_date": "2026-07-15", "data_date": "2026-07-15"}, "raw_data": {}},
+        "source_snapshot": {
+            "source_path": str(source),
+            "source_sha256": __import__("hashlib").sha256(source.read_bytes()).hexdigest(),
+            "effective_date": "2026-07-18",
+        },
+        "layers": {"L3": {"indicator_analyses": [{"function_id": "get_ndx_ndxe_ratio"}]}},
+    }
+
+    digest = VNextReportGenerator()._build_ref_digest(tmp_path, artifacts, Path("layers.html"))
+
+    assert digest["trends"] == {}
+
+
+def test_r2_ref_digest_budget_validator_fails_closed():
+    reporter = VNextReportGenerator()
+    oversize = {
+        "metrics": {
+            "L1.get_unit": {
+                "metric": "x" * 2000,
+                "layer": "L1",
+                "value_line": "",
+                "quantile": None,
+                "answers": "",
+                "cannot_prove": "",
+                "falsifier": "",
+                "artifact_anchor": "layers.html#get_unit",
+            }
+        },
+        "trends": {},
+    }
+
+    with __import__("pytest").raises(ValueError, match="exceeds 1KB"):
+        reporter._validate_ref_digest(oversize)
+
+
+def test_r2_brief_metric_card_only_uses_real_quantile_gauge():
+    reporter = VNextReportGenerator()
+    with_quantile = reporter._brief_metric_card(
+        "L3",
+        {"function_id": "get_ndx_ndxe_ratio", "metric": "NDX/NDXE", "current_reading": "10 年分位 86.5%"},
+        86.5,
+    )
+    low_danger = reporter._brief_metric_card(
+        "L4",
+        {"function_id": "get_damodaran_us_implied_erp", "metric": "ERP", "current_reading": "10 年分位 25%"},
+        25.0,
+    )
+    neutral = reporter._brief_metric_card(
+        "L1",
+        {"function_id": "get_copper_gold_ratio", "metric": "铜金比", "current_reading": "10 年分位 44%"},
+        44.0,
+    )
+    curve_neutral = reporter._brief_metric_card(
+        "L1",
+        {"function_id": "get_10y2y_spread_bp", "metric": "10Y-2Y", "current_reading": "10 年分位 51%"},
+        51.0,
+    )
+    dual_tail_neutral = reporter._brief_metric_card(
+        "L2",
+        {"function_id": "get_hy_oas_bp", "metric": "HY OAS", "current_reading": "10 年分位 8%"},
+        8.0,
+    )
+    without_quantile = reporter._brief_metric_card(
+        "L3",
+        {"function_id": "get_advance_decline_line", "metric": "腾落线", "current_reading": "402"},
+        None,
+    )
+
+    assert 'class="gauge"' in with_quantile
+    assert "zone hi" in with_quantile and "zone lo" not in with_quantile
+    assert "zone lo" in low_danger and "zone hi" not in low_danger
+    assert "transform:scaleX(-1)" in low_danger
+    assert "zone neutral" in neutral and "zone hi" not in neutral and "zone lo" not in neutral
+    assert "zone neutral" in curve_neutral
+    assert "zone neutral" in dual_tail_neutral
+    assert "spark" not in with_quantile
+    assert 'class="gauge"' not in without_quantile
+    assert "spark" not in without_quantile
+
+
+def test_r2_stress_section_uses_r7_hypothesis_response():
+    html = VNextReportGenerator()._brief_stress_section(
+        {
+            "hypothesis_competition": {
+                "hypotheses": [
+                    {
+                        "hypothesis_id": "hyp_counter",
+                        "hypothesis_text": "增长可以消化估值。",
+                        "status": "candidate",
+                        "support_evidence_refs": ["L4.get_m7_capex_cycle"],
+                        "falsification_conditions": ["盈利没有兑现。"],
+                    }
+                ]
+            },
+            "thesis_draft": {
+                "hypothesis_responses": [
+                    {
+                        "hypothesis_id": "hyp_counter",
+                        "verdict": "absorb_partially",
+                        "reasoning": "资本开支提供支撑，但盈利证据仍缺失。",
+                        "evidence_refs": ["L4.get_m7_capex_cycle"],
+                    }
+                ]
+            },
+            "counter_thesis": {},
+        }
+    )
+
+    assert "它的主张" in html
+    assert "最强证据" in html
+    assert "暂不采纳" in html
+    assert "什么会让它赢" in html
+    assert "资本开支提供支撑，但盈利证据仍缺失。" in html
+    assert "盈利没有兑现。" in html
+
+
+def test_r2_facade_keeps_publish_block_visible(tmp_path: Path):
+    html = VNextReportGenerator()._brief_facade_section(
+        tmp_path,
+        {
+            "final_adjudication": {"final_stance": "偏多", "confidence": "medium"},
+            "analysis_packet": {"meta": {"data_date": "2026-07-15"}},
+            "synthesis_packet": {"packet_meta": {}},
+            "data_integrity_report": {"publish_status": "blocked", "blocked": True},
+        },
+    )
+
+    assert "发布闸门未通过" in html
+    assert "不能当作可发布结论" in html
+
+    missing_gate = VNextReportGenerator()._brief_facade_section(
+        tmp_path,
+        {
+            "final_adjudication": {"final_stance": "偏多", "confidence": "medium"},
+            "analysis_packet": {"meta": {"data_date": "2026-07-15"}},
+            "synthesis_packet": {"packet_meta": {}},
+        },
+    )
+    contradictory_gate = VNextReportGenerator()._brief_facade_section(
+        tmp_path,
+        {
+            "final_adjudication": {"final_stance": "偏多", "confidence": "medium"},
+            "analysis_packet": {"meta": {"data_date": "2026-07-15"}},
+            "synthesis_packet": {"packet_meta": {}},
+            "data_integrity_report": {"publish_status": "publishable", "blocking_reasons": ["schema mismatch"]},
+        },
+    )
+    assert "发布闸门未通过" in missing_gate
+    assert "发布闸门未通过" in contradictory_gate
 
 
 def test_invalidation_item_direction_badges_and_legacy_text():
@@ -83,12 +398,14 @@ def test_risks_section_shows_upside_triggers_or_honest_placeholder():
         "final_adjudication": {"invalidation_conditions": ["信用利差扩大"]},
         "risk_boundary_report": {},
     }
-    assert "本轮未产出结构化的上行触发条件。" in reporter._risks_section(base)
+    html = reporter._risks_section(base)
+    assert "观察条件 1" in html
+    assert html.count("信用利差扩大") == 1
 
     base["final_adjudication"]["invalidation_conditions"] = ["【转多】盈利预期上修并广度改善"]
     html = reporter._risks_section(base)
-    assert "上行触发（哪些情况会让判断转向机会）" in html
-    assert '<span class="pill good">转多</span> 盈利预期上修并广度改善' in html
+    assert "【转多】条件 1" in html
+    assert html.count("盈利预期上修并广度改善") == 1
 
 
 def test_risks_section_uses_plain_language_labels():
@@ -169,6 +486,31 @@ def test_vnext_reporter_news_section_shows_event_data_links():
     assert "附近市场序列观察" in html
     assert "QQQ 在事件日前后" in html
     assert "不是因果证明，也不是 evidence_ref" in html
+
+
+def test_brief_hero_renders_reasoned_verdict_with_clickable_refs(tmp_path: Path):
+    reporter = VNextReportGenerator()
+    final = {
+        "approval_status": "approved_with_reservations",
+        "final_stance": "中性偏谨慎",
+        "confidence": "medium",
+        "reasoned_verdict": "实际利率仍构成压力 [ l1.get_10y_real_rate ]，但趋势尚未破坏。",
+        "reader_final": {"one_liner": "中性偏谨慎"},
+        "must_preserve_risks": ["估值压缩风险"],
+    }
+    html = reporter._hero(
+        final,
+        {"indicator_successful": 1, "indicator_total": 1, "data_date": "2026-07-15"},
+        tmp_path,
+        "brief",
+        {"analysis_packet": {}, "data_integrity_report": {}},
+    )
+
+    assert "实际利率仍构成压力" in html
+    assert 'class="ref-chip"' in html
+    assert 'data-ref="L1.get_10y_real_rate"' in html
+    assert "[ l1.get_10y_real_rate ]" not in html
+    assert "canonical.split('#', 1)[0]" in reporter._js()
 
 
 def test_reader_exit_checklist_renders_compact_rows_with_shared_dedup():
@@ -971,122 +1313,55 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     report_path = reporter.run(run_dir)
     html = Path(report_path).read_text(encoding="utf-8")
 
-    # Structural assertions (present in every template)
+    # Brief is now a single fixed spine with depth moved to a companion layers artifact.
     assert "NDX 投资判断书" in html
-    assert "主论点证据链" in html
-    assert "主判断" in html
-    assert "风险与反证" in html
-    assert "冲突与共振" in html
-    assert "L1-L5 底稿" in html
-    assert "数据与审计" in html
-    assert "新闻源" not in html
-    assert "新闻侧边材料" in html
-    assert "五层底稿" in html
-    assert "evidence-L1-get_10y_real_rate" in html
-    assert "L1_vs_L4" in html
-    assert "证据发言权" in html
-    assert "主要冲突" in html
-    assert "压力传导" in html
-    assert "real_rate_vs_valuation" in html
-    assert "rates_to_valuation" in html
-    assert "risk_off_resonance" in html
-    assert "来源等级" in html
-    assert "component_model" in html
-    assert "估值来源对照" in html
-    assert "Trendonify" in html
-    assert "WorldPERatio" in html
-    assert "34.1" in html
-    assert "86.0" in html
-    assert '"data_quality"' in html
-    assert "data-contract-ref" in html
-    assert "403 Forbidden" in html
-    assert "US equity market reference, not NDX-specific" in html
-    assert "覆盖率" in html
-    assert "NDX Simple Yield Gap" in html
-    assert "确认指标" in html
-    assert "本页读法" in html
-    assert "优先复核" in html
+    assert "主论证" in html
+    assert "压力测试" in html
+    assert "外部事件事实底账" in html
+    assert "如果发生这些事，我就改判断" in html
+    assert "和上次判断比，什么变了" in html
+    assert "分层证据" in html
+    assert "完整底稿 artifact" in html
+    spine_ids = [html.index(f'id="{section_id}"') for section_id in ("facade", "thesis", "stress", "world", "risks", "change", "layers", "audit")]
+    assert spine_ids == sorted(spine_ids)
     assert "这不是低风险环境，但可能是高风险高赔率候选。" in html
-    assert "价格已反映部分坏消息。" in html
     assert "高风险高赔率候选。" in html
-    # "战术仓" comes from time_horizon_views.action_implication ("战术仓分批。"), not
-    # from portfolio_actions — the brief template's 个人决策翻译 card was redesigned
-    # to a deterministic IPS translation (see _personal_policy_translation) and no
-    # longer echoes final_adjudication.portfolio_actions, so "分批试探" is gone from
-    # this template's output.
     assert "战术仓" in html
-    assert "优先复核" in html
-    assert "回测数据边界" in html
-    assert "get_ndx_forward_earnings_quality" in html
-    assert "historical source required" in html
-    assert "严格回测 invariant" in html
-    assert "observation_dates_lte_effective_date" in html
-    assert "alfred_first_vintage_not_enforced" in html
     assert "可发布" in html
-    assert "可控" in html
-    assert "需关注" in html
-    assert "<b>safe</b>" not in html
-    assert "<b>warning</b>" not in html
-    assert "2 个阶段；输入 30，输出 15，合计 45" in html
-    assert "{&#x27;prompt_tokens&#x27;:" not in html
-    assert "数据日期" in html
-    assert "输入跨度" in html
-    assert "采集时间" in html
-    assert "生成时间" in html
-    assert "Yahoo 数据诊断" in html
-    assert "Agent 运行健康" in html
-    assert "Agent 原文检查器" in html
-    assert "已保存 1 个阶段" in html
     assert "Agent IO Audit" not in html
     assert "L1-L5 输入边界卡" not in html
-    assert "other layer runtime highlights absent" not in html
-    assert "llm_stage_diagnostics.json" in html
-    assert "审计索引" in html
-    assert "页面使用的原生 JSON" not in html
-    assert 'data-typed-conflict="real_rate_vs_valuation"' in html
-    assert 'data-transmission-path="rates_to_valuation"' in html
-    assert 'data-resonance-chain="risk_off_resonance"' in html
-    assert "市场图谱" not in html
-    assert "Damodaran ERP monthly lens" in html
-    assert "Valuation cross-check + WorldPERatio" in html
-    assert "ERPbymonth.xlsx" in html
-    assert "ERPMay26.xlsx" in html
-    assert "data-visual-type=\"damodaran-current\"" in html
-    assert "data-indicator-visual=\"L4.get_damodaran_us_implied_erp\"" in html
-    assert "std-dev, not percentile" in html
-    assert "Overvalued" in html
-    assert "function handleEvidenceHash" in html
-    assert "window.addEventListener('hashchange', handleEvidenceHash)" in html
-    assert "location.hash" in html
-
-    # Redesign assertions — accordion, Slate Editorial, vocabulary translation
-    assert "aria-expanded" in html
-    assert "data-layer-panel" not in html
-    assert 'class="layer-tab"' not in html
-    assert "showLayer" not in html
-    assert "有保留通过" in html
-    assert "30秒裁决" in html
-    assert "个人决策翻译" in html
-    assert "暂无黄金坑清单条目" in html
-    assert "toggleLayerCard" in html
-    assert "layer-card" in html
-    assert "layer-card__head" in html
-    assert "layer-card__body" in html
-    assert "layer-summary-tile" in html
-    assert "grid-template-rows" in html
-    assert "prefers-reduced-motion" in html
-    assert ":focus-visible" in html
+    assert "style-b micro-1" in html
+    assert 'class="hero sec facade"' in html
+    assert " hyp" in html
+    assert " dcard" in html
     assert "skip-link" in html
     assert "Source Serif Pro" in html
     assert "JetBrains Mono" in html
     assert "Inter" in html
-    payload_match = re.search(r'<script type="application/json" id="vnext-data">(.*?)</script>', html, re.S)
+    assert 'id="vnext-data"' not in html
+    payload_match = re.search(r'<script type="application/json" id="ref-digest">(.*?)</script>', html, re.S)
     assert payload_match
     assert "&quot;" not in payload_match.group(1)
     payload = json.loads(payload_match.group(1))
-    assert "analysis_packet" not in payload
-    assert "chart_time_series" not in payload
-    assert payload["layers"]["L1"]["indicator_analyses"][0]["function_id"] == "get_10y_real_rate"
+    assert set(payload) == {"metrics", "trends"}
+    assert set(payload["metrics"]["L1.get_10y_real_rate"]) == set(REF_DIGEST_FIELDS)
+    assert len(payload_match.group(1).encode("utf-8")) <= 50 * 1024
+
+    layers_path = Path(report_path).with_name(Path(report_path).stem.replace("brief", "layers", 1) + ".html")
+    assert layers_path.exists()
+    layers_html = layers_path.read_text(encoding="utf-8")
+    assert "template-layers" in layers_html
+    assert 'id="get_10y_real_rate"' in layers_html
+    assert 'id="evidence-L1-get_10y_real_rate"' in layers_html
+    assert "data-contract-ref" in layers_html
+    assert "Valuation cross-check + WorldPERatio" in layers_html
+    assert "ERPbymonth.xlsx" in layers_html
+    assert "ERPMay26.xlsx" in layers_html
+    assert "std-dev, not percentile" in layers_html
+    assert "Overvalued" in layers_html
+    assert "toggleLayerCard" in layers_html
+    assert "layer-card__head" in layers_html
+    assert "layer-summary-tile" in layers_html
     audit_index = Path(report_path).with_name(f"{Path(report_path).stem}_audit_index.json")
     assert audit_index.exists()
     audit_payload = json.loads(audit_index.read_text(encoding="utf-8"))
@@ -1100,8 +1375,8 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
 
     legacy_path = reporter.run(run_dir, template="brief", include_legacy_agent_io_audit=True)
     legacy_html = Path(legacy_path).read_text(encoding="utf-8")
-    assert "Agent IO Audit" in legacy_html
-    assert "L1-L5 输入边界卡" in legacy_html
+    assert "Agent IO Audit" not in legacy_html
+    assert 'id="ref-digest"' in legacy_html
 
 
 def test_prompt_inspector_renders_complete_prompt_and_hash(tmp_path: Path):
@@ -1465,7 +1740,8 @@ def test_vnext_reporter_renders_indicator_level_visuals(tmp_path: Path):
 
     reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
     report_path = reporter.run(run_dir)
-    html = Path(report_path).read_text(encoding="utf-8")
+    layers_path = Path(report_path).with_name(Path(report_path).stem.replace("brief", "layers", 1) + ".html")
+    html = layers_path.read_text(encoding="utf-8")
 
     assert 'data-indicator-visual="L1.get_10y_real_rate"' in html
     assert 'data-visual-type="relative-position"' in html
@@ -1564,7 +1840,8 @@ def test_vnext_reporter_handles_missing_data_quality(tmp_path: Path):
 
     reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
     report_path = reporter.run(run_dir)
-    html = Path(report_path).read_text(encoding="utf-8")
+    layers_path = Path(report_path).with_name(Path(report_path).stem.replace("brief", "layers", 1) + ".html")
+    html = layers_path.read_text(encoding="utf-8")
 
     # Should NOT render an inline data quality box when data_quality is absent.
     assert '<div class="data-quality-box">' not in html
@@ -1748,7 +2025,7 @@ def test_vnext_reporter_default_output_keeps_run_id_when_data_date_repeats(tmp_p
     )
     reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
 
-    output = reporter._default_output_path(run_dir, reporter._load_artifacts(run_dir), "brief", "slate_v2")
+    output = reporter._default_output_path(run_dir, reporter._load_artifacts(run_dir), "brief", "slate_v3")
 
     assert output.name == "vnext_brief_20260502_0000_20260506_0612.html"
 
@@ -1959,7 +2236,8 @@ def test_timestamp_chip_appears_in_brief_html(tmp_path: Path):
 
     reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
     report_path = reporter.run(run_dir)
-    html = Path(report_path).read_text(encoding="utf-8")
+    layers_path = Path(report_path).with_name(Path(report_path).stem.replace("brief", "layers", 1) + ".html")
+    html = layers_path.read_text(encoding="utf-8")
 
     # Evidence status should appear in the HTML with data time, not run collection time.
     assert "timestamp-chip" in html
@@ -2124,3 +2402,34 @@ def test_user_decision_profile_local_json_is_gitignored():
         "config/user_decision_profile.local.json must be covered by .gitignore; "
         f"git check-ignore stdout={result.stdout!r} stderr={result.stderr!r}"
     )
+
+
+def test_audit_section_displays_snapshot_identity_and_hash(tmp_path: Path):
+    reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
+    snapshot = {
+        "mode": "snapshot_replay",
+        "source_filename": "data_collected_v9_20250409.json",
+        "source_path": "/private/audit/data_collected_v9_20250409.json",
+        "source_sha256": "abc123def456",
+        "collection_time": "2025-04-10T01:02:03Z",
+        "effective_date": "2025-04-09",
+    }
+    artifacts = {
+        "final_adjudication": {},
+        "synthesis_packet": {},
+        "analysis_packet": {},
+        "data_integrity_report": {},
+        "run_summary": {},
+        "llm_stage_diagnostics": {},
+        "layer_context_briefs": {},
+        "source_snapshot": snapshot,
+    }
+
+    html = reporter._audit_section(tmp_path, artifacts, "{}")
+
+    assert "data_collected_v9_20250409.json" in html
+    assert "/private/audit/data_collected_v9_20250409.json" in html
+    assert "snapshot_replay" in html
+    assert "abc123def456" in html
+    assert "2025-04-09" in html
+    assert "source_snapshot.json" in html

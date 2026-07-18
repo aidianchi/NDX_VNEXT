@@ -22,13 +22,21 @@ import requests
 try:
     from .api_config import get_api_key, get_base_url, get_requests_proxies, is_service_enabled
     from .config import path_config
+    from .tools_L4 import get_m7_earnings_blackout_calendar
 except ImportError:
     from api_config import get_api_key, get_base_url, get_requests_proxies, is_service_enabled
     from config import path_config
+    from tools_L4 import get_m7_earnings_blackout_calendar
 
 logger = logging.getLogger(__name__)
 
 FetchText = Callable[[str, Dict[str, str], int], str]
+
+TOPIC_MACRO_RATES = "topic:macro_rates"
+TOPIC_CREDIT_VOL = "topic:credit_vol"
+TOPIC_INDEX_STRUCTURE = "topic:index_structure"
+TOPIC_VALUATION_EARNINGS = "topic:valuation_earnings"
+TOPIC_TREND_EXECUTION = "topic:trend_execution"
 
 M7_SEC_CIKS = {
     "AAPL": "0000320193",
@@ -47,7 +55,7 @@ OFFICIAL_RSS_SOURCES = [
         "url": "https://www.federalreserve.gov/feeds/press_all.xml",
         "authority_tier": "official",
         "event_type": "policy_or_financial_conditions",
-        "relevance_tags": ["L1", "L2", "L4"],
+        "relevance_tags": [TOPIC_MACRO_RATES, TOPIC_CREDIT_VOL, TOPIC_VALUATION_EARNINGS],
     },
     {
         "source_id": "bls_latest",
@@ -55,15 +63,15 @@ OFFICIAL_RSS_SOURCES = [
         "url": "https://www.bls.gov/feed/bls_latest.rss",
         "authority_tier": "official",
         "event_type": "macro_data_release",
-        "relevance_tags": ["L1"],
+        "relevance_tags": [TOPIC_MACRO_RATES],
     },
     {
         "source_id": "bea_news",
         "source_name": "BEA News",
-        "url": "https://www.bea.gov/news/rss.xml",
+        "url": "https://www.bea.gov/news/rss",
         "authority_tier": "official",
         "event_type": "macro_data_release",
-        "relevance_tags": ["L1", "L4"],
+        "relevance_tags": [TOPIC_MACRO_RATES, TOPIC_VALUATION_EARNINGS],
     },
 ]
 
@@ -75,7 +83,7 @@ YAHOO_FINANCE_RSS_SOURCES = [
         "source_tier": "reliable_mainstream_report",
         "authority_tier": "market_news_aggregator",
         "event_type": "market_news_report",
-        "relevance_tags": ["L3", "L4", "L5"],
+        "relevance_tags": [TOPIC_INDEX_STRUCTURE, TOPIC_VALUATION_EARNINGS, TOPIC_TREND_EXECUTION],
         "symbols": ["QQQ", "NDX"],
     },
     {
@@ -85,7 +93,7 @@ YAHOO_FINANCE_RSS_SOURCES = [
         "source_tier": "reliable_mainstream_report",
         "authority_tier": "market_news_aggregator",
         "event_type": "mega_cap_market_news",
-        "relevance_tags": ["L3", "L4"],
+        "relevance_tags": [TOPIC_INDEX_STRUCTURE, TOPIC_VALUATION_EARNINGS],
         "symbols": ["AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "TSLA"],
     },
 ]
@@ -98,7 +106,7 @@ SOCIAL_RSS_SOURCES = [
         "source_tier": "market_narrative",
         "authority_tier": "social_discussion",
         "event_type": "social_market_narrative",
-        "relevance_tags": ["L5"],
+        "relevance_tags": [TOPIC_TREND_EXECUTION],
         "symbols": ["QQQ", "NDX"],
     }
 ]
@@ -111,10 +119,10 @@ WIND_DOC_QUERIES = [
         "source_name": "Wind Company Announcements",
         "tool_name": "get_company_announcements",
         "query": "AAPLMSFTNVDAMETAAMZNGOOGLTSLA公告财报指引",
-        "source_tier": "company_disclosure",
+        "source_tier": "aggregator_report",
         "authority_tier": "licensed_provider/Wind",
         "event_type": "issuer_announcement_or_filing",
-        "relevance_tags": ["L3", "L4"],
+        "relevance_tags": [TOPIC_INDEX_STRUCTURE, TOPIC_VALUATION_EARNINGS],
         "symbols": ["AAPL", "MSFT", "NVDA", "META", "AMZN", "GOOGL", "TSLA"],
     },
     {
@@ -125,10 +133,43 @@ WIND_DOC_QUERIES = [
         "source_tier": "reliable_mainstream_report",
         "authority_tier": "licensed_provider/Wind",
         "event_type": "licensed_financial_news",
-        "relevance_tags": ["L1", "L3", "L4", "L5"],
+        "relevance_tags": [TOPIC_MACRO_RATES, TOPIC_INDEX_STRUCTURE, TOPIC_VALUATION_EARNINGS, TOPIC_TREND_EXECUTION],
         "symbols": ["NDX", "QQQ"],
     },
 ]
+
+OFFICIAL_CALENDAR_SOURCES = {
+    "fomc_meeting_calendar": {
+        "source_name": "Federal Reserve FOMC Meeting Calendar",
+        "url": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+        "relevance_tags": [TOPIC_MACRO_RATES],
+    },
+    "bls_release_calendar": {
+        "source_name": "BLS Release Calendar",
+        "url": "https://www.bls.gov/schedule/news_release/bls.ics",
+        "relevance_tags": [TOPIC_MACRO_RATES],
+    },
+    "bea_release_calendar": {
+        "source_name": "BEA Release Calendar",
+        "url": "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics",
+        "relevance_tags": [TOPIC_MACRO_RATES, TOPIC_VALUATION_EARNINGS],
+    },
+    "nasdaq_index_announcements": {
+        "source_name": "Nasdaq Press Center Index Announcements",
+        "url": "https://www.nasdaq.com/about/press-center",
+        "relevance_tags": [TOPIC_INDEX_STRUCTURE],
+    },
+}
+
+M7_ENTITY_ALIASES = {
+    "AAPL": ["APPLE", "苹果"],
+    "MSFT": ["MICROSOFT", "微软"],
+    "GOOGL": ["ALPHABET", "GOOGLE", "谷歌"],
+    "AMZN": ["AMAZON", "亚马逊"],
+    "NVDA": ["NVIDIA", "英伟达"],
+    "META": ["META PLATFORMS", "FACEBOOK", "脸书"],
+    "TSLA": ["TESLA", "特斯拉"],
+}
 
 HIGH_RELEVANCE_KEYWORDS = [
     "fomc",
@@ -253,14 +294,17 @@ class NewsEvent:
     symbols: List[str]
     confidence: str
     notes: str
+    event_date: str = ""
+    relevance: str = "medium"
     raw_text_available: bool = False
     raw_text: str = ""
     collection_status: str = "ok"
+    published_at_basis: str = "source_timestamp"
 
     def to_dict(self) -> Dict[str, Any]:
-        event_date = ""
+        event_date = self.event_date
         parsed = _parse_event_datetime(self.published_at)
-        if parsed is not None:
+        if not event_date and parsed is not None:
             event_date = parsed.date().isoformat()
         hash_basis = self.raw_text if self.raw_text_available and self.raw_text else f"{self.title}|{self.url}"
         return {
@@ -274,6 +318,7 @@ class NewsEvent:
             "title": self.title,
             "url": self.url,
             "published_at": self.published_at,
+            "published_at_basis": self.published_at_basis,
             "event_date": event_date,
             "information_available_at": self.published_at,
             "raw_text_available": bool(self.raw_text_available),
@@ -283,6 +328,7 @@ class NewsEvent:
             "relevance_tags": self.relevance_tags,
             "layers": self.layers,
             "symbols": self.symbols,
+            "relevance": self.relevance,
             "confidence": self.confidence,
             "notes": self.notes,
         }
@@ -352,13 +398,155 @@ def _clean_text(value: Any, max_chars: int = 500) -> str:
     return text[:max_chars]
 
 
-def _symbols_from_text(text: str, defaults: Optional[List[str]] = None) -> List[str]:
-    defaults = defaults or []
+def _symbols_from_text(text: str) -> List[str]:
     upper = text.upper()
-    found = [symbol for symbol in ALPHA_VANTAGE_TICKERS + ["NDX"] if symbol in upper]
+    found = [
+        symbol
+        for symbol in ALPHA_VANTAGE_TICKERS + ["NDX"]
+        if re.search(rf"(?<![A-Z0-9]){re.escape(symbol)}(?![A-Z0-9])", upper)
+    ]
     if "NASDAQ 100" in upper or "NASDAQ-100" in upper:
         found.extend(["NDX", "QQQ"])
-    return sorted(dict.fromkeys(found or defaults))
+    return sorted(dict.fromkeys(found))
+
+
+def _m7_symbols_from_text(text: str) -> List[str]:
+    upper = text.upper()
+    symbols = _symbols_from_text(text)
+    for symbol, aliases in M7_ENTITY_ALIASES.items():
+        if any(
+            (
+                re.search(rf"(?<![A-Z0-9]){re.escape(alias.upper())}(?![A-Z0-9])", upper)
+                if alias.isascii()
+                else alias in text
+            )
+            for alias in aliases
+        ):
+            symbols.append(symbol)
+    return sorted({symbol for symbol in symbols if symbol in M7_SEC_CIKS})
+
+
+def _iso_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _unfold_ics(raw: str) -> List[str]:
+    lines: List[str] = []
+    for line in str(raw or "").replace("\r\n", "\n").split("\n"):
+        if line.startswith((" ", "\t")) and lines:
+            lines[-1] += line[1:]
+        else:
+            lines.append(line.strip())
+    return lines
+
+
+def _ics_datetime(value: str) -> Optional[datetime]:
+    text = str(value or "").strip()
+    for fmt in ("%Y%m%dT%H%M%SZ", "%Y%m%dT%H%M%S", "%Y%m%d"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        return parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _parse_ics_events(raw: str) -> List[Dict[str, str]]:
+    events: List[Dict[str, str]] = []
+    current: Optional[Dict[str, str]] = None
+    for line in _unfold_ics(raw):
+        if line == "BEGIN:VEVENT":
+            current = {}
+            continue
+        if line == "END:VEVENT":
+            if current and current.get("summary") and current.get("event_date"):
+                events.append(current)
+            current = None
+            continue
+        if current is None or ":" not in line:
+            continue
+        raw_key, value = line.split(":", 1)
+        key = raw_key.split(";", 1)[0].upper()
+        if key == "SUMMARY":
+            current["summary"] = value.replace("\\,", ",").replace("\\n", " ").strip()
+        elif key == "DTSTART":
+            parsed = _ics_datetime(value)
+            if parsed is not None:
+                current["event_date"] = parsed.date().isoformat()
+        elif key == "DTSTAMP":
+            parsed = _ics_datetime(value)
+            if parsed is not None:
+                current["published_at"] = _iso_utc(parsed)
+    return events
+
+
+def _parse_fomc_calendar(raw: str) -> List[Dict[str, str]]:
+    year_matches = list(re.finditer(r"(20\d{2})\s+FOMC\s+Meetings", raw, flags=re.IGNORECASE))
+    month_pattern = re.compile(
+        r'class=["\'][^"\']*fomc-meeting__month[^"\']*["\'][^>]*>(.*?)</',
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    date_pattern = re.compile(
+        r'class=["\'][^"\']*fomc-meeting__date[^"\']*["\'][^>]*>(.*?)</',
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    month_numbers = {
+        "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+        "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+    }
+    parsed_events: List[Dict[str, str]] = []
+    for index, year_match in enumerate(year_matches):
+        year = int(year_match.group(1))
+        end = year_matches[index + 1].start() if index + 1 < len(year_matches) else len(raw)
+        section = raw[year_match.end():end]
+        months = [_clean_text(re.sub(r"<[^>]+>", " ", value)) for value in month_pattern.findall(section)]
+        dates = [_clean_text(re.sub(r"<[^>]+>", " ", value)) for value in date_pattern.findall(section)]
+        for month_text, date_text in zip(months, dates):
+            month_key = month_text.split("/")[-1].strip().lower()
+            month = month_numbers.get(month_key)
+            day_numbers = [int(item) for item in re.findall(r"\d{1,2}", date_text)]
+            if month is None or not day_numbers:
+                continue
+            day = day_numbers[-1]
+            try:
+                event_date = datetime(year, month, day, tzinfo=timezone.utc).date().isoformat()
+            except ValueError:
+                continue
+            parsed_events.append(
+                {
+                    "summary": f"FOMC meeting ({month_text} {date_text}, {year})",
+                    "event_date": event_date,
+                }
+            )
+    if parsed_events:
+        return parsed_events
+
+    plain = html_lib.unescape(re.sub(r"<[^>]+>", " ", raw or ""))
+    plain = " ".join(plain.split())
+    year_matches = list(re.finditer(r"(20\d{2})\s+FOMC\s+Meetings", plain, flags=re.IGNORECASE))
+    meeting_pattern = re.compile(
+        r"(?<!Released\s)(January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"\s+(\d{1,2}(?:\s*[-–]\s*\d{1,2})?)\*?",
+        flags=re.IGNORECASE,
+    )
+    for index, year_match in enumerate(year_matches):
+        year = int(year_match.group(1))
+        end = year_matches[index + 1].start() if index + 1 < len(year_matches) else len(plain)
+        for match in meeting_pattern.finditer(plain[year_match.end():end]):
+            month_text, date_text = match.groups()
+            month = month_numbers[month_text.lower()]
+            day = int(re.findall(r"\d{1,2}", date_text)[-1])
+            try:
+                event_date = datetime(year, month, day, tzinfo=timezone.utc).date().isoformat()
+            except ValueError:
+                continue
+            parsed_events.append(
+                {
+                    "summary": f"FOMC meeting ({month_text} {date_text}, {year})",
+                    "event_date": event_date,
+                }
+            )
+    return parsed_events
 
 
 def _social_source_tier(title: str) -> str:
@@ -474,6 +662,9 @@ def _entry_text(element: ElementTree.Element, names: Iterable[str]) -> str:
 
 
 def _parse_rss_items(xml_text: str) -> List[Dict[str, str]]:
+    xml_text = str(xml_text or "").lstrip("\ufeff")
+    if xml_text.startswith("ï»¿"):
+        xml_text = xml_text[3:]
     root = ElementTree.fromstring(xml_text)
     channel_items = root.findall(".//item")
     if channel_items:
@@ -513,6 +704,7 @@ class NewsEventLedgerBuilder:
         self.timeout = timeout
         self.lookback_days = lookback_days
         self.effective_date = effective_date
+        self.collected_at = datetime.now(timezone.utc)
 
     def build(
         self,
@@ -522,9 +714,14 @@ class NewsEventLedgerBuilder:
         include_market_news: bool = True,
         include_social: bool = True,
         include_wind: bool = True,
+        include_calendars: bool = True,
     ) -> Dict[str, Any]:
         events: List[NewsEvent] = []
-        source_errors: List[Dict[str, str]] = []
+        source_errors: List[Dict[str, Any]] = []
+        if include_calendars:
+            calendar_events, calendar_errors = self._collect_official_calendar_events()
+            events.extend(calendar_events)
+            source_errors.extend(calendar_errors)
         if include_rss:
             rss_events, rss_errors = self._collect_rss_events()
             events.extend(rss_events)
@@ -546,10 +743,12 @@ class NewsEventLedgerBuilder:
             events.extend(wind_events)
             source_errors.extend(wind_errors)
         events = self._dedupe_and_window(events)
+        scheduled_future_events = [event for event in events if event.collection_status == "scheduled_future"]
+        realized_events = [event for event in events if event.collection_status != "scheduled_future"]
 
         payload = {
             "schema_version": "news_event_ledger_v2",
-            "generated_at_utc": _utc_now_iso(),
+            "generated_at_utc": _iso_utc(self.collected_at),
             "policy": {
                 "runtime_context_rule": "This sidecar is not injected into L1-L5 layer-local prompts.",
                 "usage_rule": "Bridge/Thesis may cite event_ref only as catalyst/background/observation, never as numeric indicator evidence or proof.",
@@ -560,6 +759,9 @@ class NewsEventLedgerBuilder:
                     "official_macro",
                     "official_filing",
                     "company_disclosure",
+                    "aggregator_report",
+                    "official",
+                    "third_party_calendar",
                     "reliable_mainstream_report",
                     "market_narrative",
                     "unverified_signal",
@@ -572,11 +774,15 @@ class NewsEventLedgerBuilder:
                     "yahoo_finance_rss_adapter",
                     "alpha_vantage_news_sentiment_adapter",
                     "reddit_social_rss_adapter",
+                    "official_calendar_adapter",
+                    "m7_earnings_calendar_adapter",
                 ],
                 "dedupe_key": "source_id + normalized title + url + published date",
                 "lookback_days": self.lookback_days,
                 "effective_date": self.effective_date,
-                "event_fields": ["source_tier", "event_type", "published_at", "symbols", "layers", "dedupe_id", "source_errors"],
+                "window_anchor": "effective_date" if self.effective_date else "collected_at",
+                "collected_at": _iso_utc(self.collected_at),
+                "event_fields": ["source_tier", "event_type", "published_at", "event_date", "collection_status", "symbols", "relevance_tags", "dedupe_id", "source_errors"],
                 "raw_text_rule": "raw_text_available=true only when an adapter retrieves document/body text, not merely title, URL, or vendor sentiment metadata.",
                 "social_rule": "social sources are market_narrative by default; rumor/leak/unconfirmed titles are downgraded to unverified_signal.",
             },
@@ -586,8 +792,10 @@ class NewsEventLedgerBuilder:
                 "market_news": ([source["source_id"] for source in YAHOO_FINANCE_RSS_SOURCES] + ["alpha_vantage_news_sentiment"]) if include_market_news else [],
                 "social": [source["source_id"] for source in SOCIAL_RSS_SOURCES] if include_social else [],
                 "wind_docs": [source["source_id"] for source in WIND_DOC_QUERIES] if include_wind else [],
+                "official_calendars": (list(OFFICIAL_CALENDAR_SOURCES) + ["m7_earnings_calendar"]) if include_calendars else [],
             },
-            "events": [event.to_dict() for event in events],
+            "events": [event.to_dict() for event in realized_events],
+            "scheduled_future_events": [event.to_dict() for event in scheduled_future_events],
             "source_errors": source_errors,
         }
         output = Path(output_path)
@@ -597,16 +805,17 @@ class NewsEventLedgerBuilder:
         return payload
 
     def _dedupe_and_window(self, events: List[NewsEvent]) -> List[NewsEvent]:
-        effective = _effective_datetime(self.effective_date) if self.effective_date else datetime.now(timezone.utc)
+        effective = _effective_datetime(self.effective_date) if self.effective_date else self.collected_at
         cutoff = effective - timedelta(days=max(0, self.lookback_days))
         deduped: Dict[str, NewsEvent] = {}
         for event in events:
-            parsed = _parse_event_datetime(event.published_at)
-            if self.effective_date and parsed is None:
+            is_calendar = event.event_type == "official_calendar"
+            parsed = _parse_event_datetime(event.event_date if is_calendar else event.published_at)
+            if parsed is None:
                 continue
-            if self.effective_date and parsed is not None and parsed > effective:
+            if not is_calendar and parsed > effective:
                 continue
-            if self.effective_date and parsed is not None and self.lookback_days > 0 and parsed < cutoff:
+            if self.lookback_days > 0 and parsed < cutoff:
                 continue
             deduped.setdefault(event.dedupe_id, event)
         return sorted(
@@ -629,9 +838,10 @@ class NewsEventLedgerBuilder:
                 "source_url": event.url,
                 "title": event.title,
                 "published_at": event.published_at,
-                "event_date": parsed.date().isoformat() if parsed else "",
+                "published_at_basis": event.published_at_basis,
+                "event_date": event.event_date or (parsed.date().isoformat() if parsed else ""),
                 "information_available_at": event.published_at,
-                "retrieved_at": _utc_now_iso(),
+                "retrieved_at": _iso_utc(self.collected_at),
                 "effective_date_passed": parsed is None or effective is None or parsed <= effective,
                 "raw_text_available": bool(event.raw_text_available),
                 "raw_text_excerpt": _clean_text(event.raw_text, 2200) if event.raw_text_available else "",
@@ -647,6 +857,205 @@ class NewsEventLedgerBuilder:
             "User-Agent": "ndx-vnext research console contact=local@example.com",
             "Accept": "application/json, application/rss+xml, application/xml, text/xml;q=0.9,*/*;q=0.8",
         }
+
+    def _calendar_anchor(self) -> datetime:
+        return _effective_datetime(self.effective_date) if self.effective_date else self.collected_at
+
+    def _select_calendar_events(self, candidates: List[NewsEvent]) -> List[NewsEvent]:
+        limit = max(0, self.max_events_per_source)
+        if limit == 0 or len(candidates) <= limit:
+            return candidates[:limit] if limit == 0 else candidates
+        anchor_date = self._calendar_anchor().date()
+        future = sorted(
+            (event for event in candidates if str(event.event_date) > anchor_date.isoformat()),
+            key=lambda event: str(event.event_date),
+        )
+        realized = sorted(
+            (event for event in candidates if str(event.event_date) <= anchor_date.isoformat()),
+            key=lambda event: str(event.event_date),
+            reverse=True,
+        )
+        future_quota = min(len(future), max(1, limit // 2)) if future else 0
+        selected = future[:future_quota] + realized[: limit - future_quota]
+        if len(selected) < limit:
+            selected.extend(future[future_quota : future_quota + (limit - len(selected))])
+        return sorted(selected[:limit], key=lambda event: str(event.event_date))
+
+    def _calendar_event(
+        self,
+        *,
+        source_id: str,
+        source_name: str,
+        source_url: str,
+        title: str,
+        event_date: str,
+        published_at: str = "",
+        relevance_tags: List[str],
+        source_tier: str = "official",
+        authority_tier: str = "official_calendar",
+        symbols: Optional[List[str]] = None,
+    ) -> Optional[NewsEvent]:
+        parsed_event = _parse_event_datetime(event_date)
+        if parsed_event is None:
+            return None
+        anchor = self._calendar_anchor()
+        if self.lookback_days > 0 and parsed_event < anchor - timedelta(days=self.lookback_days):
+            return None
+        collected_at = _iso_utc(self.collected_at)
+        parsed_published_at = _parse_event_datetime(published_at)
+        published_at_value = _iso_utc(parsed_published_at) if parsed_published_at is not None else collected_at
+        published_at_basis = "source_timestamp" if parsed_published_at is not None else "collected_at_fallback"
+        status = "scheduled_future" if parsed_event.date() > anchor.date() else "calendar_event_current_or_past"
+        dedupe_id = _dedupe_id(source_id, title, source_url, event_date)
+        return NewsEvent(
+            event_id=f"event:{dedupe_id}",
+            dedupe_id=dedupe_id,
+            source_id=source_id,
+            source_name=source_name,
+            source_tier=source_tier,
+            authority_tier=authority_tier,
+            event_type="official_calendar",
+            title=title,
+            url=source_url,
+            published_at=published_at_value,
+            published_at_basis=published_at_basis,
+            event_date=parsed_event.date().isoformat(),
+            relevance_tags=list(relevance_tags),
+            layers=list(relevance_tags),
+            symbols=list(symbols or []),
+            relevance="medium",
+            confidence="high" if source_tier == "official" else "medium",
+            notes=(
+                f"Scheduled calendar event; event_date is distinct from published_at. published_at_basis={published_at_basis}. "
+                "scheduled_future entries are not realized-event evidence."
+            ),
+            collection_status=status,
+        )
+
+    def _collect_official_calendar_events(self) -> tuple[List[NewsEvent], List[Dict[str, Any]]]:
+        events: List[NewsEvent] = []
+        errors: List[Dict[str, Any]] = []
+        anchor = self._calendar_anchor()
+        if self.effective_date and self.collected_at.date() > anchor.date():
+            reason = "live_calendar_not_pit_safe_for_historical_effective_date"
+            return [], [
+                {"source_id": source_id, "error": reason}
+                for source_id in list(OFFICIAL_CALENDAR_SOURCES) + ["m7_earnings_calendar"]
+            ]
+
+        for source_id in ("fomc_meeting_calendar", "bls_release_calendar", "bea_release_calendar"):
+            source = OFFICIAL_CALENDAR_SOURCES[source_id]
+            try:
+                raw = self.fetch_text(str(source["url"]), self._headers(), self.timeout)
+                records = _parse_fomc_calendar(raw) if source_id == "fomc_meeting_calendar" else _parse_ics_events(raw)
+                candidates: List[NewsEvent] = []
+                for record in records:
+                    event = self._calendar_event(
+                        source_id=source_id,
+                        source_name=str(source["source_name"]),
+                        source_url=str(source["url"]),
+                        title=str(record.get("summary") or "Scheduled official release"),
+                        event_date=str(record.get("event_date") or ""),
+                        published_at=str(record.get("published_at") or ""),
+                        relevance_tags=list(source["relevance_tags"]),
+                    )
+                    if event is None:
+                        continue
+                    candidates.append(event)
+                selected = self._select_calendar_events(candidates)
+                events.extend(selected)
+                added = len(selected)
+                if added == 0:
+                    errors.append({"source_id": source_id, "error": "official_calendar_parse_no_records_in_window"})
+            except Exception as exc:
+                errors.append({"source_id": source_id, "error": str(exc)[:220]})
+
+        nasdaq_id = "nasdaq_index_announcements"
+        nasdaq_source = OFFICIAL_CALENDAR_SOURCES[nasdaq_id]
+        try:
+            raw = self.fetch_text(str(nasdaq_source["url"]), self._headers(), self.timeout)
+            records = self._parse_nasdaq_index_announcements(raw)
+            if not records:
+                errors.append({"source_id": nasdaq_id, "error": "nasdaq_index_announcements_parse_no_records"})
+            for record in records[: self.max_events_per_source]:
+                event = self._calendar_event(
+                    source_id=nasdaq_id,
+                    source_name=str(nasdaq_source["source_name"]),
+                    source_url=str(record.get("url") or nasdaq_source["url"]),
+                    title=str(record.get("summary") or "Nasdaq index announcement"),
+                    event_date=str(record.get("event_date") or ""),
+                    relevance_tags=list(nasdaq_source["relevance_tags"]),
+                )
+                if event is not None:
+                    events.append(event)
+        except Exception as exc:
+            errors.append({"source_id": nasdaq_id, "error": str(exc)[:220]})
+
+        try:
+            m7_result = get_m7_earnings_blackout_calendar(anchor.date().isoformat())
+            value = m7_result.get("value") if isinstance(m7_result, dict) else None
+            rows = value.get("upcoming_28d_calendar", []) if isinstance(value, dict) else []
+            added = 0
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                ticker = str(row.get("ticker") or "").upper()
+                event_date = str(row.get("earnings_date") or "")
+                if ticker not in M7_SEC_CIKS:
+                    continue
+                event = self._calendar_event(
+                    source_id="m7_earnings_calendar",
+                    source_name=str(m7_result.get("source_name") or "M7 earnings calendar"),
+                    source_url=str(m7_result.get("source_url") or "https://finance.yahoo.com/calendar/earnings/"),
+                    title=f"{ticker} scheduled earnings date",
+                    event_date=event_date,
+                    relevance_tags=[TOPIC_VALUATION_EARNINGS],
+                    source_tier="third_party_calendar",
+                    authority_tier=str(m7_result.get("source_tier") or "third_party_unofficial"),
+                    symbols=[ticker],
+                )
+                if event is not None:
+                    events.append(event)
+                    added += 1
+            if added == 0:
+                errors.append({"source_id": "m7_earnings_calendar", "error": "m7_earnings_calendar_no_records_in_window"})
+        except Exception as exc:
+            errors.append({"source_id": "m7_earnings_calendar", "error": str(exc)[:220]})
+        return events, errors
+
+    def _parse_nasdaq_index_announcements(self, raw: str) -> List[Dict[str, str]]:
+        records: List[Dict[str, str]] = []
+        pattern = re.compile(
+            r'<a[^>]+href=["\'](?P<url>[^"\']+)["\'][^>]*>(?P<title>.*?)</a>',
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        for match in pattern.finditer(raw or ""):
+            title = _clean_text(re.sub(r"<[^>]+>", " ", match.group("title")), 240)
+            if not re.search(r"nasdaq[- ]?100|\bndx\b|index (?:rebalance|reconstitution|announcement)", title, re.IGNORECASE):
+                continue
+            nearby = (raw or "")[max(0, match.start() - 180): min(len(raw or ""), match.end() + 180)]
+            date_match = re.search(
+                r"(20\d{2})[-/](\d{1,2})[-/](\d{1,2})|([A-Z][a-z]+)\s+(\d{1,2}),\s*(20\d{2})",
+                nearby,
+            )
+            if not date_match:
+                continue
+            date_text = date_match.group(0)
+            parsed = _parse_event_datetime(date_text)
+            if parsed is None:
+                for fmt in ("%B %d, %Y", "%b %d, %Y"):
+                    try:
+                        parsed = datetime.strptime(date_text, fmt).replace(tzinfo=timezone.utc)
+                        break
+                    except ValueError:
+                        pass
+            if parsed is None:
+                continue
+            url = match.group("url")
+            if url.startswith("/"):
+                url = "https://www.nasdaq.com" + url
+            records.append({"summary": title, "event_date": parsed.date().isoformat(), "url": url})
+        return records
 
     def _should_fetch_article_body(self, title: str, url: str, *, social: bool = False) -> bool:
         if social or not url.lower().startswith(("http://", "https://")):
@@ -744,8 +1153,8 @@ class NewsEventLedgerBuilder:
                             title=title,
                             url=filing_url,
                             published_at=filing_dates[idx],
-                            relevance_tags=["L3", "L4"],
-                            layers=["L3", "L4"],
+                            relevance_tags=[TOPIC_INDEX_STRUCTURE, TOPIC_VALUATION_EARNINGS],
+                            layers=[TOPIC_INDEX_STRUCTURE, TOPIC_VALUATION_EARNINGS],
                             symbols=[symbol],
                             confidence="high",
                             notes="Official issuer filing for M7 constituent; not a numeric indicator.",
@@ -791,6 +1200,7 @@ class NewsEventLedgerBuilder:
                     source_tier = _social_source_tier(title) if social else str(source["source_tier"])
                     url = item.get("url", "")
                     raw_text, body_status = self._fetch_article_body(title, url, social=social)
+                    symbols = _symbols_from_text(title)
                     dedupe_id = _dedupe_id(str(source["source_id"]), title, url, item.get("published_at", ""))
                     events.append(
                         NewsEvent(
@@ -806,8 +1216,9 @@ class NewsEventLedgerBuilder:
                             published_at=item.get("published_at", ""),
                             relevance_tags=list(source["relevance_tags"]),
                             layers=list(source["relevance_tags"]),
-                            symbols=_symbols_from_text(title, list(source.get("symbols", []))),
-                            confidence="low" if social else "medium",
+                            symbols=symbols,
+                            relevance="low" if not symbols else "medium",
+                            confidence="low" if social or not symbols else "medium",
                             notes=(
                                 f"Social discussion item; useful for narrative temperature only. article_body_status={body_status}."
                                 if social
@@ -857,6 +1268,7 @@ class NewsEventLedgerBuilder:
                 for row in ticker_sentiment
                 if isinstance(row, dict) and row.get("ticker")
             ]
+            detected_symbols = _symbols_from_text(" ".join([title, " ".join(symbols)]))
             dedupe_id = _dedupe_id("alpha_vantage_news_sentiment", title, url, published_at)
             summary = _clean_text(item.get("summary"), 900)
             sentiment = item.get("overall_sentiment_label") or item.get("overall_sentiment_score")
@@ -872,10 +1284,11 @@ class NewsEventLedgerBuilder:
                     title=title,
                     url=url,
                     published_at=published_at,
-                    relevance_tags=["L3", "L4", "L5"],
-                    layers=["L3", "L4", "L5"],
-                    symbols=_symbols_from_text(" ".join([title, " ".join(symbols)]), symbols),
-                    confidence="medium",
+                    relevance_tags=[TOPIC_INDEX_STRUCTURE, TOPIC_VALUATION_EARNINGS, TOPIC_TREND_EXECUTION],
+                    layers=[TOPIC_INDEX_STRUCTURE, TOPIC_VALUATION_EARNINGS, TOPIC_TREND_EXECUTION],
+                    symbols=detected_symbols,
+                    relevance="low" if not detected_symbols else "medium",
+                    confidence="low" if not detected_symbols else "medium",
                     notes=f"Alpha Vantage NEWS_SENTIMENT item; sentiment={sentiment}. Sentiment is narrative metadata, not investment evidence.",
                     raw_text_available=False,
                     raw_text=summary,
@@ -883,9 +1296,9 @@ class NewsEventLedgerBuilder:
             )
         return events, []
 
-    def _collect_wind_doc_events(self) -> tuple[List[NewsEvent], List[Dict[str, str]]]:
+    def _collect_wind_doc_events(self) -> tuple[List[NewsEvent], List[Dict[str, Any]]]:
         events: List[NewsEvent] = []
-        errors: List[Dict[str, str]] = []
+        errors: List[Dict[str, Any]] = []
         for source in WIND_DOC_QUERIES:
             payload, error = _call_wind_docs(
                 str(source["tool_name"]),
@@ -903,6 +1316,7 @@ class NewsEventLedgerBuilder:
             if not records:
                 errors.append({"source_id": str(source["source_id"]), "error": "wind_docs_no_records"})
                 continue
+            dropped_no_entity_match = 0
             for record in records[: self.max_events_per_source]:
                 title = _clean_text(_first_field(record, "title", "标题", "name", "summary", "content", "正文"), 240)
                 if not title:
@@ -910,6 +1324,11 @@ class NewsEventLedgerBuilder:
                 url = _first_field(record, "url", "link", "source_url", "链接")
                 published_at = _first_field(record, "published_at", "publish_time", "time", "date", "日期", "发布时间")
                 raw_text = _clean_text(_first_field(record, "content", "正文", "summary", "摘要", "description"), 1800)
+                m7_symbols = _m7_symbols_from_text(f"{title} {raw_text}")
+                detected_symbols = _symbols_from_text(f"{title} {raw_text}")
+                if source["source_id"] == "wind_company_announcements_m7" and not m7_symbols:
+                    dropped_no_entity_match += 1
+                    continue
                 dedupe_id = _dedupe_id(str(source["source_id"]), title, url, published_at)
                 events.append(
                     NewsEvent(
@@ -925,12 +1344,21 @@ class NewsEventLedgerBuilder:
                         published_at=published_at,
                         relevance_tags=list(source["relevance_tags"]),
                         layers=list(source["relevance_tags"]),
-                        symbols=_symbols_from_text(title, list(source.get("symbols", []))),
-                        confidence="medium" if raw_text else "low",
+                        symbols=m7_symbols or detected_symbols,
+                        relevance="low" if not (m7_symbols or detected_symbols) else "medium",
+                        confidence="medium" if raw_text and (m7_symbols or detected_symbols) else "low",
                         notes="Wind financial_docs item; licensed source, still layer-2 event material until promoted by formal data rules.",
                         raw_text_available=bool(raw_text),
                         raw_text=raw_text,
                     )
+                )
+            if dropped_no_entity_match:
+                errors.append(
+                    {
+                        "source_id": str(source["source_id"]),
+                        "error": "dropped_no_entity_match",
+                        "count": dropped_no_entity_match,
+                    }
                 )
         return events, errors
 
@@ -943,6 +1371,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-market-news", action="store_true", help="Skip Yahoo Finance and Alpha Vantage market news.")
     parser.add_argument("--no-social", action="store_true", help="Skip social narrative sources such as Reddit RSS.")
     parser.add_argument("--no-wind", action="store_true", help="Skip Wind financial_docs event sources.")
+    parser.add_argument("--no-calendars", action="store_true", help="Skip official and M7 calendar event sources.")
     parser.add_argument("--max-events-per-source", type=int, default=8)
     parser.add_argument("--lookback-days", type=int, default=45)
     parser.add_argument("--effective-date", default=None)
@@ -963,6 +1392,7 @@ def main() -> int:
         include_market_news=not args.no_market_news,
         include_social=not args.no_social,
         include_wind=not args.no_wind,
+        include_calendars=not args.no_calendars,
     )
     logging.info("news_event_ledger written: %s (%s events)", args.output, len(payload["events"]))
     return 0

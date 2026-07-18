@@ -876,6 +876,8 @@ def adapt_vnext_to_legacy(
     dependencies = [str(item) for item in thesis_data.get("dependencies") or []]
 
     masters_sections = []
+    if final_data.get("reasoned_verdict"):
+        masters_sections.append(f"判决正文：{final_data['reasoned_verdict']}")
     if final_data.get("adjudicator_notes"):
         masters_sections.append(f"最终裁决：{final_data['adjudicator_notes']}")
     if main_thesis:

@@ -16,6 +16,9 @@ CLAIM_TYPE_BY_SOURCE = {
     "official_regulatory": "official_fact",
     "official_filing": "company_disclosure",
     "company_disclosure": "company_disclosure",
+    "aggregator_report": "interpretation_claim",
+    "official": "official_fact",
+    "third_party_calendar": "interpretation_claim",
     "primary_market_data_release": "data_release_claim",
     "reliable_mainstream_report": "interpretation_claim",
     "sell_side_or_expert_view": "view_claim",
@@ -29,6 +32,9 @@ SOURCE_TYPE_BY_TIER = {
     "official_fact": "official_fact",
     "official_filing": "company_disclosure",
     "company_disclosure": "company_disclosure",
+    "aggregator_report": "aggregator_report",
+    "official": "official_fact",
+    "third_party_calendar": "reliable_mainstream_report",
     "primary_market_data_release": "primary_market_data_release",
     "reliable_mainstream_report": "reliable_mainstream_report",
     "sell_side_or_expert_view": "sell_side_or_expert_view",
@@ -292,6 +298,7 @@ def _source_nature_label(source_type: str) -> str:
         "sell_side_or_expert_view": "专家或卖方观点",
         "market_narrative": "市场叙事",
         "unverified_signal": "未核实信号",
+        "aggregator_report": "聚合平台转述",
     }
     return labels.get(source_type, "候选事件材料")
 
@@ -384,7 +391,8 @@ class EventNarrativeLedgerBuilder:
             if isinstance(item, dict)
         }
         raw_events: List[Dict[str, Any]] = []
-        for event in _as_list(event_ledger.get("events")):
+        input_events = _as_list(event_ledger.get("events")) + _as_list(event_ledger.get("scheduled_future_events"))
+        for event in input_events:
             if not isinstance(event, dict):
                 continue
             published_dt = _parse_datetime(event.get("published_at"))
@@ -393,6 +401,13 @@ class EventNarrativeLedgerBuilder:
             if effective_dt is not None and published_dt is None:
                 continue
             raw_events.append(event)
+
+        scheduled_future_events = [
+            event for event in raw_events if event.get("collection_status") == "scheduled_future"
+        ]
+        raw_events = [
+            event for event in raw_events if event.get("collection_status") != "scheduled_future"
+        ]
 
         clusters = self._build_clusters(raw_events)
         cluster_by_event_id = {
@@ -454,6 +469,18 @@ class EventNarrativeLedgerBuilder:
                 "claim_types": ALLOWED_CLAIM_TYPES,
             },
             "events": events,
+            "scheduled_future_events": [
+                {
+                    "event_id": event.get("event_id"),
+                    "title": event.get("title"),
+                    "event_date": event.get("event_date"),
+                    "published_at": event.get("published_at"),
+                    "source_name": event.get("source_name"),
+                    "source_type": _source_type(event),
+                    "collection_status": "scheduled_future",
+                }
+                for event in scheduled_future_events
+            ],
             "claim_count": len(claims),
             "event_cluster_count": len(public_clusters),
             "research_packet_count": len(research_packets),
@@ -552,6 +579,7 @@ class EventNarrativeLedgerBuilder:
             "source_refs": [event.get("source_id") or event_id],
             "published_at": event.get("published_at"),
             "event_date": event.get("event_date") or _iso_date_or_none(event.get("published_at")),
+            "collection_status": event.get("collection_status"),
             "information_available_at": event.get("published_at"),
             "related_index_object": _related_object(event),
             "affected_financial_links": affected_links,
@@ -654,9 +682,16 @@ class EventNarrativeLedgerBuilder:
     def _materiality(self, cluster: Dict[str, Any], affected_links: List[str], observations: List[Dict[str, Any]]) -> str:
         family = str(cluster.get("event_family") or "").lower()
         title = str(cluster.get("canonical_title") or "").lower()
+        source_types = {
+            str(item.get("source_type") or "")
+            for item in _as_list(cluster.get("supporting_sources"))
+            if isinstance(item, dict)
+        }
         if "form nport" in title or "form n-csr" in title:
             return "low"
         high_link = any(link in {"discount_rate", "risk_premium", "earnings_path", "index_structure"} for link in affected_links)
+        if source_types and source_types <= {"aggregator_report"}:
+            return "medium" if ("policy" in family or "filing" in family or high_link) else "low"
         if ("policy" in family or "filing" in family or high_link) and observations:
             return "high"
         if "policy" in family or "filing" in family or high_link:
@@ -862,13 +897,22 @@ class EventNarrativeLedgerBuilder:
             return "弱材料：市场讨论"
         return "普通来源：需要数据确认"
 
-    def _first_sentence(self, text: Any, max_chars: int = 180) -> str:
+    def _first_sentence(self, text: Any, max_chars: int = 120) -> str:
         value = _clean_text(text)
         if not value:
             return ""
-        pieces = [piece.strip() for piece in re.split(r"[。！？.!?]\s*", value) if piece.strip()]
-        sentence = pieces[0] if pieces else value
-        return sentence[:max_chars]
+        for match in re.finditer(r"[。.]", value):
+            index = match.start()
+            if index > max_chars:
+                break
+            if index > 0 and value[index - 1].isdigit():
+                continue
+            sentence = value[:index].strip()
+            if sentence:
+                return sentence
+        if len(value) > max_chars:
+            return value[:max_chars].rstrip() + "…"
+        return value
 
     def _news_topic(self, title: str, raw_text_excerpt: str, mainline_id: str) -> str:
         title_text = title.lower()
@@ -981,8 +1025,7 @@ class EventNarrativeLedgerBuilder:
             can_support = "可以支持“市场关注度上升”的弱线索。"
             cannot_support = "不能支持指数级判断。"
         elif relevance_band == "background":
-            link_text = "、".join(readable_links[:2]) if readable_links else "背景信息"
-            summary = f"这条新闻目前只提供{link_text}背景，和纳指100核心判断关系不够直接。"
+            summary = excerpt or title
             analysis = f"{source_basis} 它可以留在观察清单，但不应进入主线裁决。"
             needs = ["是否影响纳指100权重公司", "是否有更高等级来源确认", "是否能映射到明确数据指标"]
         else:
@@ -1192,6 +1235,7 @@ class EventNarrativeLedgerBuilder:
         self,
         claims: List[Dict[str, Any]],
         research_packets: List[Dict[str, Any]],
+        scheduled_future_events: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         news_cards = self._dedupe_news_cards([self._news_card_from_claim(claim) for claim in claims])
         cards_by_line: Dict[str, List[Dict[str, Any]]] = {}
@@ -1276,6 +1320,17 @@ class EventNarrativeLedgerBuilder:
             "event_research_cards": event_research_cards,
             "cross_layer_questions": questions,
             "claim_permission_ledger": claim_permission_ledger,
+            "scheduled_future_events": [
+                {
+                    "event_id": event.get("event_id"),
+                    "title": event.get("title"),
+                    "event_date": event.get("event_date"),
+                    "source_name": event.get("source_name"),
+                    "status": "scheduled_future",
+                }
+                for event in _as_list(scheduled_future_events)
+                if isinstance(event, dict)
+            ],
             "delivery_to_integrated_report": delivery,
         }
 
@@ -1316,7 +1371,11 @@ class EventNarrativeLedgerBuilder:
         self._write_json(run_path / "event_market_validation.json", market_validation)
         layer_summary = self._event_layer_summary(event_narrative_ledger, research_packets, market_validation)
         self._write_json(run_path / "event_layer_summary.json", layer_summary)
-        mechanism_report = self._build_event_mechanism_report(claims, research_packets)
+        mechanism_report = self._build_event_mechanism_report(
+            claims,
+            research_packets,
+            _as_list(event_narrative_ledger.get("scheduled_future_events")),
+        )
         self._write_json(run_path / "event_mechanism_report.json", mechanism_report)
         self._write_json(run_path / "cross_layer_questions.json", {
             "schema_version": "cross_layer_questions_v1",

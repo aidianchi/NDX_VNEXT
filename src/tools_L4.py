@@ -53,6 +53,19 @@ SOURCE_TIER_COMPONENT_MODEL = "component_model"
 SOURCE_TIER_THIRD_PARTY = "third_party_estimate"
 SOURCE_TIER_PROXY = "proxy"
 SOURCE_TIER_UNAVAILABLE = "unavailable"
+HISTORY_OF_MARKET_BEST_CAVEAT = "HoM public API self-attribution to Bloomberg BEst; unverified attribution (not independently verified)"
+HISTORY_OF_MARKET_SOURCE_LABEL = f"History of Market ({HISTORY_OF_MARKET_BEST_CAVEAT})"
+
+
+def _caveat_history_of_market_text(text: Any) -> str:
+    """Keep upstream HoM labels caveated before exposing them in a payload."""
+    rendered = str(text or "")
+    lowered = rendered.lower()
+    if "bloomberg best" in lowered and not any(
+        marker in lowered for marker in ("unverified", "not independently verified", "not independently verifiable", "未独立核验")
+    ):
+        return f"{rendered} ({HISTORY_OF_MARKET_BEST_CAVEAT})"
+    return rendered
 NDX_COMPONENT_VALUATION_FALLBACK_REASON = (
     "component_model_used_for_yield_and_coverage_detail_while_licensed_or_official_ndx_aggregate_is_collected_separately"
 )
@@ -4586,7 +4599,7 @@ def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
         except ValueError:
             return _unavailable_valuation_source(
                 source_id="history_of_market",
-                source_name="History of Market (Bloomberg BEst)",
+                source_name=HISTORY_OF_MARKET_SOURCE_LABEL,
                 source_url=HISTORY_OF_MARKET_NDX_URL,
                 metric="ndx_trailing_and_forward_pe",
                 reason=f"invalid_end_date_format:{end_date}",
@@ -4607,16 +4620,19 @@ def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
     except Exception as exc:
         return _unavailable_valuation_source(
             source_id="history_of_market",
-            source_name="History of Market (Bloomberg BEst)",
+            source_name=HISTORY_OF_MARKET_SOURCE_LABEL,
             source_url=HISTORY_OF_MARKET_NDX_URL,
             metric="ndx_trailing_and_forward_pe",
             reason=str(exc)[:120],
-            methodology="JSON API: cap-weighted trailing PE from 100 NDX constituents + Bloomberg BEst forward PE",
+            methodology=(
+                "JSON API: cap-weighted trailing PE from 100 NDX constituents + "
+                f"{HISTORY_OF_MARKET_BEST_CAVEAT} forward PE"
+            ),
         )
     if not isinstance(data, dict):
         return _unavailable_valuation_source(
             source_id="history_of_market",
-            source_name="History of Market (Bloomberg BEst)",
+            source_name=HISTORY_OF_MARKET_SOURCE_LABEL,
             source_url=HISTORY_OF_MARKET_NDX_URL,
             metric="ndx_trailing_and_forward_pe",
             reason="response_not_object",
@@ -4626,7 +4642,7 @@ def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
     if not isinstance(current, dict):
         return _unavailable_valuation_source(
             source_id="history_of_market",
-            source_name="History of Market (Bloomberg BEst)",
+            source_name=HISTORY_OF_MARKET_SOURCE_LABEL,
             source_url=HISTORY_OF_MARKET_NDX_URL,
             metric="ndx_trailing_and_forward_pe",
             reason="missing_current_field",
@@ -4647,7 +4663,7 @@ def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
     if not trailing_ok and not forward_ok:
         return _unavailable_valuation_source(
             source_id="history_of_market",
-            source_name="History of Market (Bloomberg BEst)",
+            source_name=HISTORY_OF_MARKET_SOURCE_LABEL,
             source_url=HISTORY_OF_MARKET_NDX_URL,
             metric="ndx_trailing_and_forward_pe",
             reason="no_valid_trailing_or_forward_pe",
@@ -4694,8 +4710,9 @@ def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
     )
     trailing_coverage = current.get("trailingCoverage") if not end_date else None
     forward_coverage = current.get("forwardCoverage") if not end_date else None
-    api_note = data.get("note", "")
+    api_note = _caveat_history_of_market_text(data.get("note", ""))
     source_info = data.get("source", {})
+    source_method = _caveat_history_of_market_text(source_info.get("method", "History of Market")) if isinstance(source_info, dict) else "History of Market"
     return {
         "name": "NDX Valuation from History of Market",
         "series_id": "NDX_HISTORY_OF_MARKET",
@@ -4726,7 +4743,7 @@ def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
             trailing_freshness.get("usage") != "audit_only" or forward_freshness.get("usage") != "audit_only"
         ) else "stale",
         "source_tier": SOURCE_TIER_THIRD_PARTY,
-        "source_name": "History of Market (Bloomberg BEst)",
+        "source_name": HISTORY_OF_MARKET_SOURCE_LABEL,
         "source_url": HISTORY_OF_MARKET_NDX_URL,
         "data_quality": _quality_block(
             source_tier=SOURCE_TIER_THIRD_PARTY,
@@ -4734,7 +4751,8 @@ def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
             update_frequency="trailing PE daily; forward PE monthly",
             formula=(
                 "Trailing PE = cap-weighted Σ(w·P)/Σ(w·trailingEps) from 100 NDX constituents; "
-                "Forward PE = Bloomberg BEst P/E Ratio (12-month forward consensus, monthly)"
+                f"Forward PE = {HISTORY_OF_MARKET_BEST_CAVEAT} "
+                "(12-month forward consensus, monthly)"
             ),
             coverage={
                 "trailing": f"{trailing_coverage}% of NDX mcap" if trailing_coverage is not None else "not point-in-time verified",
@@ -4747,7 +4765,7 @@ def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
             fallback_chain=[SOURCE_TIER_THIRD_PARTY, SOURCE_TIER_COMPONENT_MODEL, SOURCE_TIER_UNAVAILABLE],
         ),
         "notes": (
-            f"Source: {source_info.get('method', 'History of Market')}. "
+            f"Source: {source_method}. "
             f"Trailing history starts {data.get('historyStarts', {}).get('trailing', 'unknown')}; "
             f"forward history starts {data.get('historyStarts', {}).get('forward', 'unknown')}. "
             f"{api_note}"
@@ -4989,9 +5007,14 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
                 "unit": "ratio/percent",
                 "date": effective_date.strftime("%Y-%m-%d"),
                 "source_tier": SOURCE_TIER_COMPONENT_MODEL if component_enabled else SOURCE_TIER_THIRD_PARTY,
-                "source_name": "History of Market (Bloomberg BEst)" if hom_available else ("field-policy L4 snapshot" if component_enabled else "unavailable"),
+                "source_name": HISTORY_OF_MARKET_SOURCE_LABEL if hom_available else ("field-policy L4 snapshot" if component_enabled else "unavailable"),
                 "data_quality": data_quality,
-                "notes": f"ForwardPE from History of Market (Bloomberg BEst, {hom_value.get('forward_coverage_pct', 'N/A')}% coverage)" if hom_available else f"市值加权计算，覆盖{coverage_pct:.1f}%的NDX成分股",
+                "notes": (
+                    f"ForwardPE from {HISTORY_OF_MARKET_BEST_CAVEAT} "
+                    f"({hom_value.get('forward_coverage_pct', 'N/A')}% coverage)"
+                    if hom_available
+                    else f"市值加权计算，覆盖{coverage_pct:.1f}%的NDX成分股"
+                ),
             }
         except Exception as e:
             print(f"Component model failed: {str(e)[:80]}, falling back to HoM/AV")
@@ -5059,7 +5082,10 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
                     "total_stocks": 100,
                     "market_cap_coverage": "100.0%",
                     "trailing_source": f"cap-weighted {hom_value.get('trailing_coverage_pct', 'N/A')}% of NDX mcap",
-                    "forward_source": f"Bloomberg BEst {hom_value.get('forward_coverage_pct', 'N/A')}% of NDX mcap",
+                    "forward_source": (
+                        f"{HISTORY_OF_MARKET_BEST_CAVEAT}; "
+                        f"{hom_value.get('forward_coverage_pct', 'N/A')}% of NDX mcap"
+                    ),
                 },
                 "ThirdPartyChecks": third_party,
                 "HistoryOfMarket": hom_value,
@@ -5068,7 +5094,7 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
             "unit": "ratio/percent",
             "date": hom_value.get("trailing_data_date") or hom_value.get("forward_data_date") or date_str,
             "source_tier": SOURCE_TIER_THIRD_PARTY,
-            "source_name": "History of Market (Bloomberg BEst)",
+            "source_name": HISTORY_OF_MARKET_SOURCE_LABEL,
             "data_quality": hom.get("data_quality", {}),
             "notes": (
                 "History of Market is a third-party validation source. "

@@ -24,31 +24,52 @@ DEFAULT_LEDGER_PATH = ROOT / "output" / "state_ledger" / "state_ledger.jsonl"
 
 STATE_LEDGER_SCHEMA_VERSION = "state_ledger_v1"
 
-# 提取表：稳定状态键 -> (layer, function_id, value 内路径)。
-# 路径取不到时记 None 并写入 missing_variables，不视为错误。
+# 提取表：稳定状态键 -> 来源、字段路径、单位和允许比较方式。
+# 路径取不到时记 None 并写入 missing_variables，不视为错误；单位元数据供
+# 读者出口的个人规则做 fail-closed 校验，不能回流主分析。
 STATE_VARIABLE_SPECS: List[Dict[str, Any]] = [
-    {"key": "valuation.trailing_pe", "layer": "L4", "function_id": "get_ndx_pe_and_earnings_yield", "path": ["TrailingPE"]},
-    {"key": "valuation.forward_pe", "layer": "L4", "function_id": "get_ndx_pe_and_earnings_yield", "path": ["ForwardPE"]},
-    {"key": "valuation.forward_earnings_yield_pct", "layer": "L4", "function_id": "get_ndx_pe_and_earnings_yield", "path": ["ForwardEarningsYield"]},
-    {"key": "valuation.forward_eps_growth_proxy_pct", "layer": "L4", "function_id": "get_ndx_forward_earnings_quality", "path": ["ndx", "forward_eps_growth_proxy_pct"]},
-    {"key": "liquidity.net_liquidity_level_bn", "layer": "L1", "function_id": "get_net_liquidity_momentum", "path": ["level"]},
-    {"key": "liquidity.net_liquidity_momentum_4w_bn", "layer": "L1", "function_id": "get_net_liquidity_momentum", "path": ["momentum_4w"]},
-    {"key": "risk_appetite.vix_level", "layer": "L2", "function_id": "get_vix", "path": ["level"]},
-    {"key": "risk_appetite.vix_percentile_10y", "layer": "L2", "function_id": "get_vix", "path": ["historical_stats", "percentile_10y"]},
-    {"key": "credit.hyg_level", "layer": "L2", "function_id": "get_hyg_momentum", "path": ["level"]},
-    {"key": "credit.hyg_percentile_1y", "layer": "L2", "function_id": "get_hyg_momentum", "path": ["relativity", "percentile_1y"]},
-    {"key": "breadth.adv_decline_level", "layer": "L3", "function_id": "get_advance_decline_line", "path": ["level"]},
-    {"key": "breadth.adv_decline_trend", "layer": "L3", "function_id": "get_advance_decline_line", "path": ["trend"]},
-    {"key": "concentration.ndx_ndxe_ratio", "layer": "L3", "function_id": "get_ndx_ndxe_ratio", "path": ["level"]},
-    {"key": "concentration.ndx_ndxe_percentile_10y", "layer": "L3", "function_id": "get_ndx_ndxe_ratio", "path": ["relativity", "percentile_10y"]},
-    {"key": "trend.qqq_price", "layer": "L5", "function_id": "get_multi_scale_ma_position", "path": ["current_price"]},
-    {"key": "trend.short_vs_long_divergence_pct", "layer": "L5", "function_id": "get_multi_scale_ma_position", "path": ["cross_scale_divergence", "short_vs_long"]},
-    {"key": "trend.donchian_upper", "layer": "L5", "function_id": "get_donchian_channels_qqq", "path": ["upper"]},
-    {"key": "trend.donchian_position_pct", "layer": "L5", "function_id": "get_donchian_channels_qqq", "path": ["position_pct"]},
+    {"key": "valuation.trailing_pe", "layer": "L4", "function_id": "get_ndx_pe_and_earnings_yield", "path": ["TrailingPE"], "unit": "pe_multiple"},
+    {"key": "valuation.forward_pe", "layer": "L4", "function_id": "get_ndx_pe_and_earnings_yield", "path": ["ForwardPE"], "unit": "pe_multiple"},
+    {"key": "valuation.forward_earnings_yield_pct", "layer": "L4", "function_id": "get_ndx_pe_and_earnings_yield", "path": ["ForwardEarningsYield"], "unit": "percent"},
+    {"key": "valuation.forward_eps_growth_proxy_pct", "layer": "L4", "function_id": "get_ndx_forward_earnings_quality", "path": ["ndx", "forward_eps_growth_proxy_pct"], "unit": "percent"},
+    {"key": "liquidity.net_liquidity_level_bn", "layer": "L1", "function_id": "get_net_liquidity_momentum", "path": ["level"], "unit": "usd_billions"},
+    {"key": "liquidity.net_liquidity_momentum_4w_bn", "layer": "L1", "function_id": "get_net_liquidity_momentum", "path": ["momentum_4w"], "unit": "usd_billions"},
+    {"key": "risk_appetite.vix_level", "layer": "L2", "function_id": "get_vix", "path": ["level"], "unit": "index_points"},
+    {"key": "risk_appetite.vix_percentile_10y", "layer": "L2", "function_id": "get_vix", "path": ["historical_stats", "percentile_10y"], "unit": "percentile_0_1"},
+    {"key": "credit.hyg_level", "layer": "L2", "function_id": "get_hyg_momentum", "path": ["level"], "unit": "usd_adjusted_price"},
+    {"key": "credit.hyg_percentile_1y", "layer": "L2", "function_id": "get_hyg_momentum", "path": ["relativity", "percentile_1y"], "unit": "percentile_0_100"},
+    {"key": "breadth.adv_decline_level", "layer": "L3", "function_id": "get_advance_decline_line", "path": ["level"], "unit": "cumulative_count"},
+    {"key": "breadth.adv_decline_trend", "layer": "L3", "function_id": "get_advance_decline_line", "path": ["trend"], "unit": "enum"},
+    {"key": "concentration.ndx_ndxe_ratio", "layer": "L3", "function_id": "get_ndx_ndxe_ratio", "path": ["level"], "unit": "ratio"},
+    {"key": "concentration.ndx_ndxe_percentile_10y", "layer": "L3", "function_id": "get_ndx_ndxe_ratio", "path": ["relativity", "percentile_10y"], "unit": "percentile_0_1"},
+    {"key": "trend.qqq_price", "layer": "L5", "function_id": "get_multi_scale_ma_position", "path": ["current_price"], "unit": "usd_price"},
+    {"key": "trend.short_vs_long_divergence_pct", "layer": "L5", "function_id": "get_multi_scale_ma_position", "path": ["cross_scale_divergence", "short_vs_long"], "unit": "percent"},
+    {"key": "trend.donchian_upper", "layer": "L5", "function_id": "get_donchian_channels_qqq", "path": ["upper"], "unit": "usd_price"},
+    {"key": "trend.donchian_position_pct", "layer": "L5", "function_id": "get_donchian_channels_qqq", "path": ["position_pct"], "unit": "percent"},
     # Wind 主锚离线时为 None；接上后无需改代码即可入账。
-    {"key": "valuation.wind_pe_percentile", "layer": "L4", "function_id": "get_ndx_wind_valuation_snapshot", "path": ["pe_percentile"]},
-    {"key": "valuation.equity_risk_premium", "layer": "L4", "function_id": "get_equity_risk_premium", "path": ["level"]},
+    {"key": "valuation.wind_pe_percentile", "layer": "L4", "function_id": "get_ndx_wind_valuation_snapshot", "path": ["PEHistoricalPercentile"], "unit": "percentile_0_100"},
+    {"key": "valuation.equity_risk_premium", "layer": "L4", "function_id": "get_equity_risk_premium", "path": ["level"], "unit": "percent"},
 ]
+
+for _spec in STATE_VARIABLE_SPECS:
+    _spec["evidence_refs"] = [
+        f'{_spec["layer"]}.{_spec["function_id"]}#{".".join(_spec["path"])}'
+    ]
+    _spec["evidence_ref"] = _spec["evidence_refs"][0]
+    _spec["allowed_operators"] = ["==", "!="] if _spec["unit"] == "enum" else ["<", "<=", ">", ">=", "==", "!="]
+
+STATE_VARIABLE_SPEC_BY_KEY: Dict[str, Dict[str, Any]] = {spec["key"]: spec for spec in STATE_VARIABLE_SPECS}
+STATE_VARIABLE_SPEC_BY_KEY["trend.drawdown_from_donchian_upper_pct"] = {
+    "key": "trend.drawdown_from_donchian_upper_pct",
+    "unit": "percent",
+    "allowed_operators": ["<", "<=", ">", ">=", "==", "!="],
+    "evidence_refs": [
+        "L5.get_donchian_channels_qqq#upper",
+        "L5.get_multi_scale_ma_position#current_price",
+    ],
+    "evidence_ref": "L5.get_donchian_channels_qqq#upper",
+    "derived_from": ["trend.donchian_upper", "trend.qqq_price"],
+}
 
 
 def _load_json(path: Path, default: Any) -> Any:

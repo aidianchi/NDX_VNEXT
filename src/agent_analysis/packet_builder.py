@@ -40,6 +40,19 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def _strip_recompute_audit_inputs(value: Any) -> Any:
+    """Enforce the prompt/artifact boundary even for replayed or hand-built payloads."""
+    if isinstance(value, dict):
+        return {
+            key: _strip_recompute_audit_inputs(item)
+            for key, item in value.items()
+            if key not in {"recompute_input", "recompute_inputs"}
+        }
+    if isinstance(value, list):
+        return [_strip_recompute_audit_inputs(item) for item in value]
+    return value
+
 LAYER_NAMES = {
     "L1": "宏观流动性",
     "L2": "风险偏好",
@@ -214,7 +227,7 @@ def _sanitize_manual_overrides(manual_overrides: Dict[str, Any]) -> Dict[str, An
     overrides = deepcopy(manual_overrides if isinstance(manual_overrides, dict) else {})
     metrics = overrides.get("metrics") if isinstance(overrides.get("metrics"), dict) else {}
     if overrides.get("active"):
-        return overrides
+        return _strip_recompute_audit_inputs(overrides)
     return {
         "active": False,
         "date": overrides.get("date", ""),
@@ -513,8 +526,8 @@ class AnalysisPacketBuilder:
             "layer_summaries": {layer: facts.summary for layer, facts in facts_by_layer.items()},
         }
         if isinstance(extra_context, dict):
-            context.update(extra_context)
-        return context
+            context.update(_strip_recompute_audit_inputs(extra_context))
+        return _strip_recompute_audit_inputs(context)
 
     def _group_raw_data(
         self,
@@ -534,7 +547,9 @@ class AnalysisPacketBuilder:
             if not function_id:
                 continue
 
-            raw_payload = deepcopy(indicator.get("raw_data") if isinstance(indicator.get("raw_data"), dict) else {})
+            raw_payload = _strip_recompute_audit_inputs(
+                deepcopy(indicator.get("raw_data") if isinstance(indicator.get("raw_data"), dict) else {})
+            )
             raw_payload.setdefault("name", indicator.get("metric_name") or function_id)
             raw_payload["function_id"] = function_id
             raw_payload["metric_name"] = indicator.get("metric_name") or raw_payload.get("name") or function_id

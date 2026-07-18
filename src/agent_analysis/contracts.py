@@ -300,6 +300,10 @@ class UserDecisionProfile(BaseModel):
     decision_frequency: str = Field("2-5 decisions per year", description="真实决策频率")
     buy_disciplines: List[UserDecisionCondition] = Field(default_factory=list, description="买入纪律")
     sell_disciplines: List[UserDecisionCondition] = Field(default_factory=list, description="卖出纪律")
+    configuration_status: Literal["configured", "unconfigured", "invalid"] = Field(
+        "unconfigured", description="读者出口纪律是否已由用户明确确认"
+    )
+    configuration_issues: List[str] = Field(default_factory=list, description="未配置或无效原因；不得静默吞掉")
     no_backflow_rule: str = Field(
         "UserDecisionProfile is reader-exit translation material only; it must not be injected into L1-L5, Bridge, Thesis, Critic, Risk, Reviser, Final, or hypothesis competition prompts.",
         description="个人决策档案不得反向污染上游分析",
@@ -938,6 +942,24 @@ class CompetingHypothesis(BaseModel):
         return _coerce_llm_string_to_list(value)
 
 
+class HypothesisResponse(BaseModel):
+    """Thesis 对一个候选竞争假说的显式裁决。"""
+    model_config = {"extra": "allow"}
+
+    hypothesis_id: str = Field(..., min_length=1, description="被回应的竞争假说 ID")
+    verdict: Literal["accept_and_revise", "absorb_partially", "reject"] = Field(
+        ...,
+        description="接受并修正、部分吸收或驳回",
+    )
+    reasoning: str = Field(..., min_length=1, description="回应理由")
+    evidence_refs: List[str] = Field(default_factory=list, description="回应所引用的正式证据")
+
+    @field_validator("evidence_refs", mode="before")
+    @classmethod
+    def _coerce_single_string_evidence_ref(cls, value: Any) -> Any:
+        return _coerce_llm_string_to_list(value)
+
+
 class CounterThesisDraft(BaseModel):
     """第一次反方构建产物；不得读取 Thesis。"""
     model_config = {"extra": "allow"}
@@ -1389,6 +1411,11 @@ class ThesisDraft(BaseModel):
         description="必须保留的未解决冲突"
     )
 
+    hypothesis_responses: List[HypothesisResponse] = Field(
+        default_factory=list,
+        description="对每个 candidate 竞争假说的逐一回应",
+    )
+
     # 依赖前提
     dependencies: List[str] = Field(
         default_factory=list,
@@ -1596,6 +1623,10 @@ class GovernanceInputPacket(BaseModel):
         default_factory=list,
         description="Thesis 主论点的关键支撑链，保留 evidence_refs 以供治理阶段核验"
     )
+    thesis_hypothesis_responses: List[HypothesisResponse] = Field(
+        default_factory=list,
+        description="Thesis 对 candidate 竞争假说的逐一回应，治理阶段不得静默丢失",
+    )
     retained_conflict_types: List[str] = Field(default_factory=list, description="已保留的冲突类型名")
     thesis_state_diagnosis: str = Field("", description="Decision Thesis 状态诊断")
     thesis_priced_narrative: str = Field("", description="Decision Thesis 价格隐含叙事")
@@ -1742,6 +1773,11 @@ class FinalAdjudication(BaseModel):
         max_length=200
     )
 
+    reasoned_verdict: str = Field(
+        "",
+        description="给读者看的总分总判决正文",
+    )
+
     # 置信度
     confidence: Confidence = Field(..., description="置信度")
 
@@ -1814,6 +1850,30 @@ class FinalAdjudication(BaseModel):
         default=None,
         description="阶段 4：最终自然语言结论的 claim-level 台账；完整产物另存 final_claim_ledger.json",
     )
+
+    @field_validator("reasoned_verdict")
+    @classmethod
+    def _validate_reasoned_verdict_length(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if text and not 300 <= len(text) <= 1300:
+            raise ValueError("reasoned_verdict must be empty or contain 300-1300 characters")
+        return text
+
+    @model_validator(mode="after")
+    def _note_missing_reasoned_verdict(self) -> "FinalAdjudication":
+        if self.reasoned_verdict:
+            return self
+        if self.quality_gate is None:
+            self.quality_gate = QualityGate(
+                approval_status=self.approval_status,
+                blocking_issues=list(self.blocking_issues),
+                notes="判决正文缺失",
+            )
+        elif "判决正文缺失" not in self.quality_gate.notes:
+            self.quality_gate.notes = "；".join(
+                item for item in (self.quality_gate.notes.strip(), "判决正文缺失") if item
+            )
+        return self
 
     model_config = {"extra": "allow"}
 

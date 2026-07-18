@@ -17,5 +17,14 @@
   "deployment_rules": [],
   "rebalancing_rules": [],
   "modification_conditions": {"can_change_for": [], "cannot_change_for": []},
-  "prohibitions": []
+  "prohibitions": [],
+  "reader_exit": {
+    "schema_version": "user_decision_profile_v1",
+    "profile_id": "ips_reader_exit",
+    "version": "v1",
+    "configuration_status": "unconfigured",
+    "configuration_issues": ["no_confirmed_buy_or_sell_disciplines"],
+    "buy_disciplines": [],
+    "sell_disciplines": []
+  }
 }

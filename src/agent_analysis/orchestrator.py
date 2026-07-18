@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import hashlib
 from datetime import datetime, timezone
@@ -38,6 +39,7 @@ try:
         LayerCard,
         ObjectiveFirewallSummary,
         OutcomeReviewReport,
+        QualityGate,
         SynthesisPacket,
         LayerSynthesisItem,
         BridgeSynthesisItem,
@@ -85,6 +87,7 @@ except ImportError:
         LayerCard,
         ObjectiveFirewallSummary,
         OutcomeReviewReport,
+        QualityGate,
         SynthesisPacket,
         LayerSynthesisItem,
         BridgeSynthesisItem,
@@ -114,9 +117,9 @@ except ImportError:
     from data_evidence import data_evidence_issues, normalize_source_tier_for_evidence_passport
 
 try:
-    from ..state_ledger import extract_state_variables
+    from ..state_ledger import STATE_VARIABLE_SPEC_BY_KEY, extract_state_variables
 except ImportError:
-    from state_ledger import extract_state_variables
+    from state_ledger import STATE_VARIABLE_SPEC_BY_KEY, extract_state_variables
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +136,7 @@ PROMPT_FILES = {
     "risk": "risk_sentinel.md",
     "reviser": "reviser.md",
     "final": "final_adjudicator.md",
+    "controlled_investigation": "controlled_investigator.md",
 }
 
 PROMPT_AUDIT_BOOKKEEPING_FIELDS = {
@@ -140,6 +144,9 @@ PROMPT_AUDIT_BOOKKEEPING_FIELDS = {
     "StaleReferences",
     "HistoryOfMarket",
     "raw_wind_payload_compact",
+    "recompute_input",
+    "recompute_inputs",
+    "source_snapshot",
 }
 MANIFEST_DATA_QUALITY_LIST_LIMIT = 10
 MANIFEST_DATA_QUALITY_OBJECT_CHAR_LIMIT = 1200
@@ -417,10 +424,16 @@ class VNextOrchestrator:
             model_cls=AnalysisRevised,
             payload={"governance_input": _model_dump(gov_input_reviser)},
             filename="analysis_revised.json",
-            validator=lambda candidate: self._validate_stage_evidence_refs(
-                candidate,
-                set(synthesis_packet.evidence_index.keys()),
-                "reviser",
+            validator=lambda candidate: (
+                self._validate_stage_evidence_refs(
+                    candidate,
+                    set(synthesis_packet.evidence_index.keys()),
+                    "reviser",
+                )
+                + self._validate_thesis_hypothesis_responses(
+                    candidate.revised_thesis,
+                    synthesis_packet,
+                )
             ),
         )
 
@@ -464,6 +477,10 @@ class VNextOrchestrator:
                 stage_name="final_adjudicator",
                 payload=final_payload,
             )
+        self._annotate_reasoned_verdict_refs(
+            final_adjudication,
+            set(synthesis_packet.evidence_index.keys()),
+        )
         final_claim_ledger = self._build_final_claim_ledger(
             synthesis_packet=synthesis_packet,
             thesis=analysis_revised.revised_thesis,
@@ -492,6 +509,7 @@ class VNextOrchestrator:
             final_adjudication=final_adjudication,
             effective_date=self._effective_date(packet_model),
             state_variables=extract_state_variables(_model_dump(packet_model))[0],
+            evidence_registry=evidence_registry,
         )
         self._save_json("user_decision_profile.json", user_decision_profile)
         self._save_json("golden_pit_checklist.json", golden_pit_checklist)
@@ -1098,7 +1116,179 @@ class VNextOrchestrator:
 
     def _build_investigation_report(self, spec: Any, message: InquiryMessage) -> InvestigationReport:
         investigation_id = f"inv_{hashlib.sha1(spec.agent_id.encode('utf-8')).hexdigest()[:12]}"
-        context_notes = self._read_allowed_context_notes(spec.allowed_context_refs, spec.budget.max_source_refs)
+        forbidden_refs = set(spec.forbidden_context_refs) | set(message.forbidden_context_refs)
+        forbidden_paths = {(self.output_dir / ref).resolve() for ref in forbidden_refs}
+        requested_forbidden = [
+            ref
+            for ref in spec.allowed_context_refs
+            if ref in forbidden_refs or (self.output_dir / ref).resolve() in forbidden_paths
+        ]
+        if requested_forbidden:
+            raise ValueError(f"forbidden_context_ref: {', '.join(requested_forbidden)}")
+
+        llm_enabled = os.getenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "1").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        assembled_refs: List[str] = []
+        context_notes = self._read_allowed_context_notes(
+            spec.allowed_context_refs,
+            spec.budget.max_source_refs,
+            question=message.question,
+            assembled_refs=assembled_refs,
+            include_status_notes=not llm_enabled,
+        )
+        if not llm_enabled:
+            return self._build_stub_investigation_report(
+                spec,
+                message,
+                investigation_id=investigation_id,
+                context_notes=context_notes,
+            )
+
+        base_prompt = self._load_prompt("controlled_investigation")
+        materials_text = "\n\n".join(context_notes) if context_notes else "（无可读材料）"
+        required_fields = {
+            "finding",
+            "claims_supported",
+            "claims_challenged",
+            "counter_evidence_refs",
+            "cannot_establish",
+            "confidence",
+            "limits",
+        }
+        list_fields = required_fields - {"finding", "confidence"}
+        last_error = ""
+        allowed_refs = list(assembled_refs)
+        for attempt in range(1, 3):
+            retry_instruction = (
+                "\n\n上一次输出未通过 JSON/合约校验。请重新输出完整 JSON，不要省略任何字段。"
+                f"校验错误：{last_error[:600]}"
+                if attempt == 2
+                else ""
+            )
+            prompt = (
+                f"{base_prompt}\n\n调查问题：\n{message.question}"
+                f"\n\n允许材料（只能依据以下内容）：\n{materials_text}"
+                "\n\n材料编号纪律（合约会逐项校验）：finding、claims_supported、claims_challenged、"
+                "cannot_establish 和 counter_evidence_refs 的每一项都必须原样写出至少一个可用的"
+                " [M#] 编号；counter_evidence_refs 如需同时保留材料内的证据 ID，写成“[M#] 证据ID”。"
+                f"{retry_instruction}"
+            )
+            audit_prefix = f"{investigation_id}.attempt_{attempt}"
+            self._save_prompt_audit_text(
+                "controlled_investigation",
+                f"{audit_prefix}.prompt.txt",
+                prompt,
+            )
+            try:
+                response = self.llm_engine.call_with_fallback(
+                    prompt,
+                    stage_name="controlled_investigation",
+                )
+                self._save_prompt_audit_text(
+                    "controlled_investigation",
+                    f"{audit_prefix}.response.txt",
+                    str(response),
+                )
+                payload = self.llm_engine.extract_json(response, "controlled_investigation")
+                if not isinstance(payload, dict):
+                    raise ValueError("controlled investigation output must be a JSON object")
+                missing = sorted(required_fields - set(payload))
+                if missing:
+                    raise ValueError(f"missing required fields: {', '.join(missing)}")
+                for field in list_fields:
+                    if isinstance(payload.get(field), str):
+                        payload[field] = [payload[field]]
+                for field in ("claims_supported", "claims_challenged"):
+                    normalized_claims: List[Any] = []
+                    for item in payload.get(field, []):
+                        if isinstance(item, dict) and isinstance(item.get("claim"), str):
+                            material_ref = item.get("material_ref") or item.get("ref")
+                            if isinstance(material_ref, str) and material_ref.strip():
+                                normalized_claims.append(f"{item['claim']} {material_ref}".strip())
+                            else:
+                                normalized_claims.append(item["claim"])
+                        else:
+                            normalized_claims.append(item)
+                    payload[field] = normalized_claims
+                invalid_lists = sorted(field for field in list_fields if not isinstance(payload.get(field), list))
+                if invalid_lists:
+                    raise ValueError(f"fields must be lists: {', '.join(invalid_lists)}")
+                citation_normalizations = self._normalize_single_material_citations(
+                    payload,
+                    len(context_notes),
+                )
+                citation_normalizations.extend(
+                    self._normalize_finding_from_explicit_citations(payload)
+                )
+                citation_normalizations.extend(
+                    self._normalize_cannot_establish_absence_scope(
+                        payload,
+                        len(context_notes),
+                    )
+                )
+                cited_material_indexes = self._validate_investigation_material_citations(
+                    payload,
+                    len(context_notes),
+                )
+                self._validate_investigation_limits_against_materials(payload, materials_text)
+                cited_refs = [allowed_refs[index - 1] for index in cited_material_indexes]
+                report_payload = {
+                    **payload,
+                    "investigation_id": investigation_id,
+                    "originating_agent_id": spec.agent_id,
+                    "is_deterministic_stub": False,
+                    "evidence_refs": cited_refs,
+                    "limits": list(payload["limits"])
+                    + ["zero_external_tools", "no_backflow_to_l1_l5"],
+                    "source_authority": self._investigation_source_authority(
+                        cited_refs,
+                        message.question,
+                    ),
+                    "effective_date": message.effective_date,
+                }
+                if citation_normalizations:
+                    report_payload["normalization_notes"] = citation_normalizations
+                return InvestigationReport.model_validate(report_payload)
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                self._save_prompt_audit_json(
+                    "controlled_investigation",
+                    f"{audit_prefix}.error.json",
+                    {"attempt": attempt, "error": last_error},
+                )
+                logger.warning(
+                    "Controlled investigation %s attempt %s failed: %s",
+                    investigation_id,
+                    attempt,
+                    last_error,
+                )
+
+        stub = self._build_stub_investigation_report(
+            spec,
+            message,
+            investigation_id=investigation_id,
+            context_notes=context_notes,
+        )
+        return stub.model_copy(
+            update={
+                "limits": list(stub.limits)
+                + ["llm_investigation_failed_fell_back_to_stub"],
+                "llm_failure": last_error,
+            }
+        )
+
+    def _build_stub_investigation_report(
+        self,
+        spec: Any,
+        message: InquiryMessage,
+        *,
+        investigation_id: str,
+        context_notes: List[str],
+    ) -> InvestigationReport:
         message_type = message.message_type
         if message_type == InquiryMessageType.EVENT_CHALLENGE:
             finding = "本轮未执行真实调查，仅登记事件挑战缺口；事件材料仍不能升级为 L1-L5 主证据。"
@@ -1116,23 +1306,16 @@ class VNextOrchestrator:
             cannot_establish = ["主要矛盾已经完全解决", "价格反映程度已经高置信确定"]
             confidence = Confidence.LOW
 
-        source_authority = [
-            EvidenceSourceAuthority(
-                evidence_ref=ref,
-                source_ref=ref,
-                source_tier=self._source_tier_for_allowed_ref(ref),
-                authority_note="受控调查只读取 AgentSpec.allowed_context_refs；该引用不自动升级为 L1-L5 evidence_ref。",
-                supports=[message.question],
-                limitations=["不能回写 L1-L5 layer card", "不能替代正式数据源升级流程"],
-            )
-            for ref in spec.allowed_context_refs[: spec.budget.max_source_refs or len(spec.allowed_context_refs)]
-        ]
+        allowed_refs = list(
+            spec.allowed_context_refs[: spec.budget.max_source_refs or len(spec.allowed_context_refs)]
+        )
+        source_authority = self._investigation_source_authority(allowed_refs, message.question)
         return InvestigationReport(
             investigation_id=investigation_id,
             originating_agent_id=spec.agent_id,
             is_deterministic_stub=True,
             finding=finding,
-            evidence_refs=list(spec.allowed_context_refs[: spec.budget.max_source_refs or len(spec.allowed_context_refs)]),
+            evidence_refs=allowed_refs,
             counter_evidence_refs=[],
             claims_supported=[],
             claims_challenged=claims_challenged,
@@ -1149,34 +1332,249 @@ class VNextOrchestrator:
             effective_date=message.effective_date,
         )
 
-    def _read_allowed_context_notes(self, refs: List[str], max_refs: int) -> List[str]:
+    def _investigation_source_authority(
+        self,
+        refs: List[str],
+        question: str,
+    ) -> List[EvidenceSourceAuthority]:
+        return [
+            EvidenceSourceAuthority(
+                evidence_ref=ref,
+                source_ref=ref,
+                source_tier=self._source_tier_for_allowed_ref(ref),
+                authority_note="受控调查只读取 AgentSpec.allowed_context_refs；该引用不自动升级为 L1-L5 evidence_ref。",
+                supports=[question],
+                limitations=["不能回写 L1-L5 layer card", "不能替代正式数据源升级流程"],
+            )
+            for ref in refs
+        ]
+
+    def _read_allowed_context_notes(
+        self,
+        refs: List[str],
+        max_refs: int,
+        *,
+        question: str = "",
+        assembled_refs: Optional[List[str]] = None,
+        include_status_notes: bool = True,
+    ) -> List[str]:
         notes: List[str] = []
+        total_chars = 0
         for ref in refs[: max_refs or len(refs)]:
             path = (self.output_dir / ref).resolve()
             try:
                 path.relative_to(self.output_dir)
             except ValueError:
-                notes.append(f"{ref}: rejected_outside_run_dir")
+                if not include_status_notes:
+                    continue
+                excerpt = "rejected_outside_run_dir"
+                material_index = len(notes) + 1
+                material = f"[M{material_index}] artifact={ref}\n{excerpt}\n[/M{material_index}]"
+                notes.append(material[: min(4000, 12000 - total_chars)])
+                total_chars += len(notes[-1])
                 continue
             if not path.exists() or not path.is_file():
-                notes.append(f"{ref}: artifact_not_found_or_symbolic_ref")
+                if not include_status_notes:
+                    continue
+                excerpt = "artifact_not_found_or_symbolic_ref"
+                material_index = len(notes) + 1
+                material = f"[M{material_index}] artifact={ref}\n{excerpt}\n[/M{material_index}]"
+                notes.append(material[: min(4000, 12000 - total_chars)])
+                total_chars += len(notes[-1])
                 continue
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
+                raw_text = path.read_text(encoding="utf-8")
+                payload = json.loads(raw_text)
             except Exception:
-                notes.append(f"{ref}: unreadable_json")
+                if not include_status_notes:
+                    continue
+                excerpt = "unreadable_json"
+                material_index = len(notes) + 1
+                material = f"[M{material_index}] artifact={ref}\n{excerpt}\n[/M{material_index}]"
+                notes.append(material[: min(4000, 12000 - total_chars)])
+                total_chars += len(notes[-1])
                 continue
-            if isinstance(payload, dict):
-                keys = ", ".join(sorted(str(key) for key in list(payload.keys())[:8]))
-                notes.append(f"{ref}: keys={keys}")
-            else:
-                notes.append(f"{ref}: {type(payload).__name__}")
+            excerpt = raw_text
+            if isinstance(payload, dict) and question:
+                keywords = self._investigation_question_keywords(question)
+                ranked_blocks: List[tuple[int, int, str, Any]] = []
+                for index, (key, value) in enumerate(payload.items()):
+                    searchable = f"{key} {json.dumps(value, ensure_ascii=False, default=str)}".lower()
+                    score = sum(1 for keyword in keywords if keyword in searchable)
+                    if score:
+                        ranked_blocks.append((score, -index, str(key), value))
+                if ranked_blocks:
+                    ranked_blocks.sort(reverse=True)
+                    selected = {key: value for _, _, key, value in ranked_blocks}
+                    excerpt = json.dumps(selected, ensure_ascii=False, indent=2, default=str)
+
+            remaining = 12000 - total_chars
+            if remaining <= 0:
+                break
+            material_index = len(notes) + 1
+            prefix = f"[M{material_index}] artifact={ref}\n"
+            suffix = f"\n[/M{material_index}]"
+            material = prefix + excerpt[: max(0, 4000 - len(prefix) - len(suffix))] + suffix
+            material = material[:remaining]
+            notes.append(material)
+            total_chars += len(material)
+            if assembled_refs is not None:
+                assembled_refs.append(ref)
         return notes
+
+    def _validate_investigation_material_citations(
+        self,
+        payload: Dict[str, Any],
+        material_count: int,
+    ) -> List[int]:
+        valid_citations = {f"M{index}" for index in range(1, material_count + 1)}
+        cited_materials: set[str] = set()
+
+        def validate_text(label: str, text: Any) -> None:
+            if not isinstance(text, str):
+                raise ValueError(f"{label} must contain strings")
+            citations = set(re.findall(r"\[(M\d+)\]", text))
+            if not citations:
+                raise ValueError(f"{label} missing [M#] material citation")
+            invalid = sorted(citations - valid_citations)
+            if invalid:
+                raise ValueError(f"{label} cites unavailable materials: {', '.join(invalid)}")
+            cited_materials.update(citations)
+
+        validate_text("finding", payload.get("finding"))
+        for field in ("claims_supported", "claims_challenged", "cannot_establish", "counter_evidence_refs"):
+            for index, item in enumerate(payload.get(field, [])):
+                validate_text(f"{field}[{index}]", item)
+        return sorted(int(citation.removeprefix("M")) for citation in cited_materials)
+
+    def _normalize_single_material_citations(
+        self,
+        payload: Dict[str, Any],
+        material_count: int,
+    ) -> List[str]:
+        if material_count != 1:
+            return []
+        normalized_fields: List[str] = []
+
+        finding = payload.get("finding")
+        if isinstance(finding, str) and not re.search(r"\[M\d+\]", finding):
+            payload["finding"] = f"{finding.rstrip()} [M1]"
+            normalized_fields.append("finding")
+
+        for field in ("claims_supported", "claims_challenged", "cannot_establish", "counter_evidence_refs"):
+            values = payload.get(field, [])
+            if not isinstance(values, list):
+                continue
+            for index, item in enumerate(values):
+                if isinstance(item, str) and not re.search(r"\[M\d+\]", item):
+                    values[index] = f"{item.rstrip()} [M1]"
+                    normalized_fields.append(f"{field}[{index}]")
+        if not normalized_fields:
+            return []
+        return [
+            "single_material_citation_normalized_to_M1:" + ",".join(normalized_fields)
+        ]
+
+    def _normalize_cannot_establish_absence_scope(
+        self,
+        payload: Dict[str, Any],
+        material_count: int,
+    ) -> List[str]:
+        if material_count <= 1:
+            return []
+        values = payload.get("cannot_establish", [])
+        if not isinstance(values, list):
+            return []
+        scope = "".join(f"[M{index}]" for index in range(1, material_count + 1))
+        normalized_indexes: List[str] = []
+        for index, item in enumerate(values):
+            if isinstance(item, str) and not re.search(r"\[M\d+\]", item):
+                values[index] = f"{item.rstrip()} {scope}"
+                normalized_indexes.append(str(index))
+        if not normalized_indexes:
+            return []
+        return [
+            "cannot_establish_absence_scope_normalized_to_all_materials:"
+            + ",".join(normalized_indexes)
+        ]
+
+    def _normalize_finding_from_explicit_citations(
+        self,
+        payload: Dict[str, Any],
+    ) -> List[str]:
+        finding = payload.get("finding")
+        if not isinstance(finding, str) or re.search(r"\[M\d+\]", finding):
+            return []
+        citations: set[str] = set()
+        for field in ("claims_supported", "claims_challenged", "cannot_establish", "counter_evidence_refs"):
+            for item in payload.get(field, []):
+                if isinstance(item, str):
+                    citations.update(re.findall(r"\[(M\d+)\]", item))
+        if not citations:
+            return []
+        ordered = sorted(citations, key=lambda value: int(value.removeprefix("M")))
+        payload["finding"] = f"{finding.rstrip()} " + "".join(f"[{citation}]" for citation in ordered)
+        return [
+            "finding_citations_normalized_from_explicit_output_refs:" + ",".join(ordered)
+        ]
+
+    def _validate_investigation_limits_against_materials(
+        self,
+        payload: Dict[str, Any],
+        materials_text: str,
+    ) -> None:
+        has_reported_number = bool(
+            re.search(
+                r"\d+(?:\.\d+)?\s*(?:%|％|倍|点|分位|亿美元|万亿美元)",
+                materials_text,
+            )
+        )
+        if not has_reported_number:
+            return
+        limits_text = " ".join(str(item) for item in payload.get("limits", []))
+        denies_reported_numbers = bool(
+            re.search(
+                r"(?:无|没有|未包含任何).{0,10}(?:定量|量化|数值|数字).{0,6}(?:数据|指标)",
+                limits_text,
+            )
+            or re.search(r"(?:未分析|没有分析).{0,12}(?:具体)?(?:数字|数值)", limits_text)
+            or re.search(r"(?:不包含|不含|没有|无).{0,8}实际市场数据", limits_text)
+            or (
+                re.search(r"(?:不包含|不含|没有|无).{0,12}(?:价格|行情|交易).{0,12}(?:数据|硬数据)", limits_text)
+                and not re.search(r"(?:时间序列|结构化|连续序列)", limits_text)
+            )
+        )
+        if denies_reported_numbers:
+            raise ValueError(
+                "limits overstates material absence: materials contain reported numbers; "
+                "state the missing structured series or confirmation data instead"
+            )
+
+    def _investigation_question_keywords(self, question: str) -> List[str]:
+        keywords = {item.lower() for item in re.findall(r"[A-Za-z0-9_]{2,}", question)}
+        stopwords = {
+            "材料",
+            "确认",
+            "什么",
+            "挑战",
+            "问题",
+            "回答",
+            "哪些",
+            "是否",
+            "能否",
+            "无法",
+        }
+        for chunk in re.findall(r"[\u4e00-\u9fff]+", question):
+            if len(chunk) <= 6:
+                keywords.add(chunk)
+            for width in range(2, min(6, len(chunk)) + 1):
+                keywords.update(chunk[index : index + width] for index in range(len(chunk) - width + 1))
+        return sorted((keyword for keyword in keywords if keyword not in stopwords), key=len, reverse=True)
 
     def _source_tier_for_allowed_ref(self, ref: str) -> str:
         if ref.startswith("event_") or ref.startswith("cross_layer_questions"):
             return "candidate_external_material"
-        if ref.startswith("layer_cards/") or ref.startswith("bridge_memos/") or ref == "synthesis_packet.pending":
+        if ref.startswith("layer_cards/"):
             return "formal_data_source"
         return "unknown"
 
@@ -1758,15 +2156,28 @@ class VNextOrchestrator:
             permission = item.get("permission_type") if isinstance(item, dict) else ""
             issues = data_evidence_issues(raw_payload, function_id=evidence_id.split(".", 1)[-1], backtest_date=packet_model.meta.get("backtest_date") if isinstance(packet_model.meta, dict) else None) if raw_payload else {"hard_block": [], "degraded": [], "audit_warn": []}
             downgrade_rules = [issue["code"] for issue in issues.get("hard_block", []) + issues.get("degraded", []) if isinstance(issue, dict)]
+            downgrade_rules.extend(
+                str(rule)
+                for rule in quality.get("downgrade_rules", [])
+                if str(rule).strip()
+            )
             item_source_tier = item.get("source_tier") if isinstance(item, dict) else ""
             source_tier = self._normalize_source_tier(
                 quality.get("source_tier") or item_source_tier or raw_payload.get("source_tier")
             )
             field_authority = self._field_authority_from_payload(raw_payload)
             field_usages = self._field_authority_usages(field_authority)
+            availability = str(quality.get("availability") or "").strip().lower()
+            evidence_available = availability not in {"unavailable", "missing", "failed", "error"}
+            observed_value = raw_payload.get("value") if "value" in raw_payload else raw_payload
+            evidence_has_value = has_meaningful_observation_value(observed_value)
             mixed_field_authority = len(field_usages) > 1
             parent_usage = next(iter(field_usages), "") if len(field_usages) == 1 else ""
             parent_downgrade_rules = list(downgrade_rules)
+            if not evidence_available:
+                parent_downgrade_rules.append("evidence_unavailable")
+            if not evidence_has_value:
+                parent_downgrade_rules.append("evidence_value_missing")
             if mixed_field_authority:
                 parent_downgrade_rules.append("mixed_field_authority")
             elif parent_usage and parent_usage != "core_allowed":
@@ -1792,6 +2203,8 @@ class VNextOrchestrator:
                 verified=(
                     source_tier not in {"unknown"}
                     and not issues.get("hard_block")
+                    and evidence_available
+                    and evidence_has_value
                     and not mixed_field_authority
                     and parent_usage != "rejected"
                 ),
@@ -1803,6 +2216,12 @@ class VNextOrchestrator:
                 field_ref = f"{evidence_id}#{field}"
                 usage = str(field_rule.get("usage") or "").strip().lower()
                 field_rules = list(downgrade_rules)
+                value_payload = raw_payload.get("value") if isinstance(raw_payload.get("value"), dict) else {}
+                field_has_value = has_meaningful_observation_value(value_payload.get(field))
+                if not evidence_available:
+                    field_rules.append("evidence_unavailable")
+                if not field_has_value:
+                    field_rules.append("evidence_value_missing")
                 if usage and usage != "core_allowed":
                     field_rules.append(f"field_authority_{usage}")
                 passports[field_ref] = EvidencePassport(
@@ -1825,10 +2244,65 @@ class VNextOrchestrator:
                     verified=(
                         source_tier not in {"unknown"}
                         and not issues.get("hard_block")
+                        and evidence_available
+                        and field_has_value
                         and usage != "rejected"
                     ),
                     limitations=list(item.get("misread_guards") or []) if isinstance(item, dict) else [],
                 )
+
+            # Reader-exit predicates use exact state-variable paths. Register
+            # those paths explicitly so a checklist never points at an ID that
+            # the evidence registry cannot resolve. This remains downstream of
+            # L1-L5 and does not alter the layer payload or prompt.
+            value_payload = raw_payload.get("value") if isinstance(raw_payload.get("value"), dict) else {}
+            for state_spec in STATE_VARIABLE_SPEC_BY_KEY.values():
+                for state_ref in _as_list(state_spec.get("evidence_refs") or state_spec.get("evidence_ref")):
+                    state_ref = str(state_ref)
+                    if "#" not in state_ref or state_ref.split("#", 1)[0] != evidence_id or state_ref in passports:
+                        continue
+                    field_path = [part for part in state_ref.split("#", 1)[1].split(".") if part]
+                    field_value: Any = value_payload
+                    for part in field_path:
+                        field_value = field_value.get(part) if isinstance(field_value, dict) else None
+                    top_rule = field_authority.get(field_path[0], {}) if field_path else {}
+                    top_rule = top_rule if isinstance(top_rule, dict) else {}
+                    usage = str(top_rule.get("usage") or parent_usage or "unknown").strip().lower()
+                    state_rules = list(downgrade_rules)
+                    field_has_value = has_meaningful_observation_value(field_value)
+                    if not evidence_available:
+                        state_rules.append("evidence_unavailable")
+                    if not field_has_value:
+                        state_rules.append("evidence_value_missing")
+                    if usage and usage != "core_allowed":
+                        state_rules.append(f"field_authority_{usage}")
+                    passports[state_ref] = EvidencePassport(
+                        evidence_id=state_ref,
+                        evidence_kind="data",
+                        source_ref=str(quality.get("source_name") or quality.get("provider") or evidence_id),
+                        source_tier=source_tier,
+                        permission_type=permission or None,
+                        authority_model={
+                            "parent_evidence_ref": evidence_id,
+                            "field_name": ".".join(field_path),
+                            "field_usage": usage,
+                            "field_authority": top_rule,
+                            "state_variable_key": state_spec.get("key"),
+                            "can_support": "reader_exit_state_predicate_only",
+                            "cannot_support": ["must_not_backflow_to_l1_l5_bridge_or_thesis"],
+                        },
+                        downgrade_rules=list(dict.fromkeys(state_rules)),
+                        data_quality=quality,
+                        effective_date=str(quality.get("effective_date") or effective_date),
+                        verified=(
+                            source_tier not in {"unknown"}
+                            and not issues.get("hard_block")
+                            and evidence_available
+                            and field_has_value
+                            and usage != "rejected"
+                        ),
+                        limitations=["reader_exit_only", "no_backflow_to_l1_l5"],
+                    )
 
         for event_passport in self._event_passports(effective_date):
             passports[event_passport.evidence_id] = event_passport
@@ -1910,15 +2384,50 @@ class VNextOrchestrator:
         value_field_authority = value.get("MetricAuthority") if isinstance(value.get("MetricAuthority"), dict) else {}
         quality = raw_payload.get("data_quality") if isinstance(raw_payload.get("data_quality"), dict) else {}
         quality_field_authority = quality.get("metric_authority") if isinstance(quality.get("metric_authority"), dict) else {}
-        return value_field_authority or quality_field_authority
+        usage_rank = {"rejected": 0, "audit_only": 1, "supporting_only": 2, "core_allowed": 3}
+
+        def normalized_rule(value: Any) -> Any:
+            if not isinstance(value, dict):
+                return value
+            rule = dict(value)
+            usage = str(rule.get("usage") or "audit_only").strip().lower()
+            rule["usage"] = usage if usage in usage_rank else "audit_only"
+            return rule
+
+        merged: Dict[str, Any] = {}
+        for field in set(value_field_authority) | set(quality_field_authority):
+            value_rule = normalized_rule(value_field_authority.get(field))
+            quality_rule = normalized_rule(quality_field_authority.get(field))
+            if not isinstance(value_rule, dict):
+                merged[field] = quality_rule
+                continue
+            if not isinstance(quality_rule, dict):
+                merged[field] = value_rule
+                continue
+            rule = {**value_rule, **quality_rule}
+            value_usage = str(value_rule.get("usage") or "audit_only").strip().lower()
+            quality_usage = str(quality_rule.get("usage") or "audit_only").strip().lower()
+            rule["usage"] = min(
+                (value_usage, quality_usage),
+                key=lambda usage: usage_rank.get(usage, usage_rank["audit_only"]),
+            )
+            rule["requires_confirmation"] = list(dict.fromkeys(
+                _as_list(value_rule.get("requires_confirmation"))
+                + _as_list(quality_rule.get("requires_confirmation"))
+            ))
+            merged[field] = rule
+        return merged
 
     @staticmethod
     def _field_authority_usages(field_authority: Dict[str, Any]) -> set[str]:
-        return {
-            str(rule.get("usage") or "").strip().lower() or "unknown"
-            for rule in field_authority.values()
-            if isinstance(rule, dict)
-        }
+        allowed = {"rejected", "audit_only", "supporting_only", "core_allowed", "validation_only"}
+        usages = set()
+        for rule in field_authority.values():
+            if not isinstance(rule, dict):
+                continue
+            usage = str(rule.get("usage") or "").strip().lower() or "unknown"
+            usages.add(usage if usage in allowed else "audit_only")
+        return usages
 
     def _normalize_source_tier(self, value: Any) -> str:
         return normalize_source_tier_for_evidence_passport(value)
@@ -2404,32 +2913,65 @@ class VNextOrchestrator:
         return result, "provided_claim_falsifiers" if result else "not_claim_specific"
 
     def _load_user_decision_profile(self) -> UserDecisionProfile:
-        path = Path(__file__).resolve().parents[2] / "config" / "user_decision_profile.json"
-        if path.exists():
+        config_dir = Path(__file__).resolve().parents[2] / "config"
+
+        def read_json(path: Path) -> Dict[str, Any]:
+            if not path.exists():
+                return {}
             try:
-                return UserDecisionProfile.model_validate(json.loads(path.read_text(encoding="utf-8")))
+                value = json.loads(path.read_text(encoding="utf-8"))
+                return value if isinstance(value, dict) else {}
             except Exception as exc:
                 logger.warning("Failed to load user decision profile from %s: %s", path, exc)
-        return UserDecisionProfile(
-            buy_disciplines=[
-                UserDecisionCondition(
-                    condition_id="buy_value_discount_confirmed",
-                    side="buy",
-                    label="价值买入纪律",
-                    discipline="只有当估值安全垫、风险边界和必要的时机证据同时可追问时，才把黄金坑视为候选。",
-                    required_claim_types=["valuation", "risk_boundary", "timing"],
-                )
-            ],
-            sell_disciplines=[
-                UserDecisionCondition(
-                    condition_id="sell_trend_or_risk_breaks",
-                    side="sell",
-                    label="趋势卖出纪律",
-                    discipline="若趋势证据转弱或风险边界被触发，优先保护长期复利基地，不用估值叙事硬扛。",
-                    required_claim_types=["timing", "risk_boundary"],
-                )
-            ],
+                return {}
+
+        return self._decision_profile_from_config_documents(
+            read_json(config_dir / "user_decision_profile.json"),
+            read_json(config_dir / "user_decision_profile.local.json"),
         )
+
+    def _decision_profile_from_config_documents(
+        self,
+        tracked_document: Dict[str, Any],
+        local_document: Optional[Dict[str, Any]] = None,
+    ) -> UserDecisionProfile:
+        """Build the reader-exit profile from an explicit, privacy-bounded subtree.
+
+        The IPS document may contain amounts and holdings.  Only ``reader_exit``
+        fields are selected, so those private values cannot enter an artifact by
+        accident.  Missing or malformed disciplines fail closed instead of
+        silently activating generic defaults.
+        """
+        allowed = {
+            "schema_version", "profile_id", "version", "holding_status", "objective",
+            "risk_tolerance", "decision_frequency", "buy_disciplines", "sell_disciplines",
+            "configuration_status", "configuration_issues",
+        }
+
+        def reader_exit(document: Dict[str, Any]) -> Dict[str, Any]:
+            candidate = document.get("reader_exit") if isinstance(document.get("reader_exit"), dict) else {}
+            if document.get("schema_version") == "user_decision_profile_v1":
+                candidate = document
+            return {key: value for key, value in candidate.items() if key in allowed}
+
+        selected = reader_exit(tracked_document)
+        selected.update(reader_exit(local_document or {}))
+        selected.setdefault("configuration_status", "unconfigured")
+        selected.setdefault("configuration_issues", [])
+        try:
+            profile = UserDecisionProfile.model_validate(selected)
+        except Exception as exc:
+            return UserDecisionProfile(
+                configuration_status="invalid",
+                configuration_issues=[f"reader_exit_profile_validation_failed:{type(exc).__name__}"],
+            )
+        condition_count = len(profile.buy_disciplines) + len(profile.sell_disciplines)
+        if condition_count == 0:
+            issues = list(profile.configuration_issues)
+            if "no_confirmed_buy_or_sell_disciplines" not in issues:
+                issues.append("no_confirmed_buy_or_sell_disciplines")
+            return profile.model_copy(update={"configuration_status": "unconfigured", "configuration_issues": issues})
+        return profile
 
     def _build_golden_pit_checklist(
         self,
@@ -2439,6 +2981,7 @@ class VNextOrchestrator:
         final_adjudication: FinalAdjudication,
         effective_date: str,
         state_variables: Optional[Dict[str, Any]] = None,
+        evidence_registry: Optional[EvidenceRegistry] = None,
     ) -> GoldenPitChecklist:
         selected = [
             entry
@@ -2462,11 +3005,56 @@ class VNextOrchestrator:
             entries.append(item.model_copy(update={"changed_since_last_run": self._deferred_cross_run_change(item)}))
 
         profile_conditions = list(decision_profile.buy_disciplines or []) + list(decision_profile.sell_disciplines or [])
+        if not profile_conditions:
+            item = GoldenPitChecklistItem(
+                condition_id="profile_disciplines_unconfigured",
+                condition="个人买卖阈值尚未由用户确认；本轮只展示研究结论，不生成个性化买卖触发。",
+                discipline_side="hold",
+                current_status="insufficient_evidence",
+                status_method="profile_configuration_gate",
+                status_evidence={
+                    "configuration_status": decision_profile.configuration_status,
+                    "configuration_issues": list(decision_profile.configuration_issues),
+                },
+                falsification_conditions=["用户明确确认阈值、单位与适用条件后，才可解除本闸门。"],
+            )
+            entries.append(item.model_copy(update={"changed_since_last_run": self._deferred_cross_run_change(item)}))
         for condition in profile_conditions:
             matched = [entry for entry in selected if entry.claim_type in set(condition.required_claim_types)]
-            evidence_refs = self._compact_string_refs([ref for entry in matched for ref in entry.evidence_refs], limit=24)
-            falsifiers = self._compact_strings([item for entry in matched for item in entry.falsification_conditions], limit=12)
-            status, status_method, status_evidence = self._profile_condition_status(condition, matched, state_variables or {})
+            predicate_refs, predicate_falsifiers = self._predicate_refs_and_falsifiers(condition)
+            unregistered_predicate_refs: List[str] = []
+            unverified_predicate_refs: List[str] = []
+            if evidence_registry is not None:
+                registered = set(evidence_registry.passports)
+                unregistered_predicate_refs = [ref for ref in predicate_refs if ref not in registered]
+                predicate_refs = [ref for ref in predicate_refs if ref in registered]
+                unverified_predicate_refs = [
+                    ref for ref in predicate_refs
+                    if not bool(evidence_registry.passports[ref].verified)
+                ]
+            evidence_refs = predicate_refs or self._compact_string_refs([ref for entry in matched for ref in entry.evidence_refs], limit=24)
+            falsifiers = predicate_falsifiers or self._compact_strings([item for entry in matched for item in entry.falsification_conditions], limit=12)
+            if unregistered_predicate_refs or unverified_predicate_refs:
+                status, status_method, status_evidence = (
+                    "insufficient_evidence",
+                    "evidence_registry_gate",
+                    {
+                        "unregistered_predicate_refs": unregistered_predicate_refs,
+                        "unverified_predicate_refs": unverified_predicate_refs,
+                    },
+                )
+                evidence_refs = predicate_refs
+            elif decision_profile.configuration_status != "configured":
+                status, status_method, status_evidence = (
+                    "insufficient_evidence",
+                    "profile_configuration_gate",
+                    {
+                        "configuration_status": decision_profile.configuration_status,
+                        "configuration_issues": list(decision_profile.configuration_issues),
+                    },
+                )
+            else:
+                status, status_method, status_evidence = self._profile_condition_status(condition, matched, state_variables or {})
             item = GoldenPitChecklistItem(
                 condition_id=condition.condition_id,
                 condition=f"{condition.label}：{condition.discipline}",
@@ -2490,6 +3078,24 @@ class VNextOrchestrator:
             changed_since_last_run_summary=changed_summary,
             entries=entries,
         )
+
+    def _predicate_refs_and_falsifiers(self, condition: UserDecisionCondition) -> tuple[List[str], List[str]]:
+        expression = condition.metric_predicates if isinstance(condition.metric_predicates, dict) else {}
+        predicates = expression.get("predicates") if isinstance(expression.get("predicates"), list) else []
+        refs: List[str] = []
+        falsifiers: List[str] = []
+        for predicate in predicates:
+            if not isinstance(predicate, dict):
+                continue
+            variable = str(predicate.get("var") or "")
+            spec = STATE_VARIABLE_SPEC_BY_KEY.get(variable, {})
+            refs.extend(str(ref) for ref in _as_list(spec.get("evidence_refs") or spec.get("evidence_ref")) if str(ref))
+            op = str(predicate.get("op") or "")
+            expected = predicate.get("value")
+            unit = str(predicate.get("unit") or spec.get("unit") or "").strip()
+            if variable and op and expected is not None:
+                falsifiers.append(f"若 {variable} 不再满足 {op} {expected} {unit}，则该条件失效。".replace("  ", " "))
+        return self._compact_string_refs(refs, limit=24), self._compact_strings(falsifiers, limit=12)
 
     def _checklist_status_from_claim(self, entry: ClaimLedgerEntry) -> str:
         if entry.verified:
@@ -2560,6 +3166,29 @@ class VNextOrchestrator:
             variable = str(predicate.get("var") or "")
             op = str(predicate.get("op") or "")
             expected = predicate.get("value")
+            threshold_status = str(predicate.get("threshold_status") or "")
+            declared_unit = str(predicate.get("unit") or "")
+            spec = STATE_VARIABLE_SPEC_BY_KEY.get(variable)
+            if threshold_status != "confirmed":
+                results.append({"var": variable, "op": op, "expected": expected, "actual": None, "met": None, "status": "threshold_unconfirmed", "threshold_status": threshold_status})
+                missing = True
+                continue
+            if not spec:
+                results.append({"var": variable, "op": op, "expected": expected, "actual": None, "met": None, "status": "unknown_state_variable", "threshold_status": threshold_status})
+                missing = True
+                continue
+            if declared_unit != str(spec.get("unit") or ""):
+                results.append({"var": variable, "op": op, "expected": expected, "actual": None, "met": None, "status": "unit_mismatch", "declared_unit": declared_unit, "expected_unit": spec.get("unit"), "threshold_status": threshold_status})
+                missing = True
+                continue
+            if op not in list(spec.get("allowed_operators") or []):
+                results.append({"var": variable, "op": op, "expected": expected, "actual": None, "met": None, "status": "operator_not_allowed", "threshold_status": threshold_status})
+                missing = True
+                continue
+            if expected is None:
+                results.append({"var": variable, "op": op, "expected": None, "actual": None, "met": None, "status": "threshold_missing", "threshold_status": threshold_status})
+                missing = True
+                continue
             actual = state_variables.get(variable)
             if actual is None:
                 results.append(
@@ -2720,13 +3349,20 @@ class VNextOrchestrator:
             stage_name="thesis",
             expected_payload=thesis_payload,
         )
-        if checkpoint is not None:
+        if checkpoint is not None and not self._validate_thesis_hypothesis_responses(
+            checkpoint,
+            synthesis_packet,
+        ):
             return checkpoint
         thesis = self._run_stage(
             stage_key="thesis",
             stage_name="thesis",
             model_cls=ThesisDraft,
             payload=thesis_payload,
+            validator=lambda candidate: self._validate_thesis_hypothesis_responses(
+                candidate,
+                synthesis_packet,
+            ),
         )
         self._save_json("thesis_draft.json", thesis)
         self._record_stage_artifact(
@@ -2736,6 +3372,47 @@ class VNextOrchestrator:
             payload=thesis_payload,
         )
         return thesis
+
+    def _validate_thesis_hypothesis_responses(
+        self,
+        thesis: ThesisDraft,
+        synthesis_packet: SynthesisPacket,
+    ) -> List[str]:
+        """Require an auditable response for every candidate, while tolerating extra responses."""
+        errors: List[str] = []
+        candidate_ids = {
+            hypothesis.hypothesis_id
+            for hypothesis in synthesis_packet.competing_hypotheses
+            if hypothesis.status == "candidate"
+        }
+        responses_by_id: Dict[str, List[Any]] = {}
+        for response in thesis.hypothesis_responses:
+            responses_by_id.setdefault(response.hypothesis_id, []).append(response)
+
+        for hypothesis_id in sorted(candidate_ids):
+            responses = responses_by_id.get(hypothesis_id, [])
+            if not responses:
+                errors.append(f"candidate hypothesis {hypothesis_id} is missing from hypothesis_responses.")
+                continue
+            if len(responses) > 1:
+                errors.append(f"candidate hypothesis {hypothesis_id} has duplicate hypothesis_responses.")
+                continue
+            response = responses[0]
+            if response.verdict != "reject":
+                continue
+            refs = [str(ref) for ref in response.evidence_refs]
+            if not refs:
+                errors.append(
+                    f"hypothesis_responses[{hypothesis_id}] reject requires at least one evidence_ref."
+                )
+                continue
+            invalid_refs = [ref for ref in refs if ref not in synthesis_packet.evidence_index]
+            if invalid_refs:
+                errors.append(
+                    f"hypothesis_responses[{hypothesis_id}] reject contains refs outside evidence_index: "
+                    f"{invalid_refs[:5]}"
+                )
+        return errors
 
     def _build_synthesis_packet(
         self,
@@ -3090,9 +3767,12 @@ class VNextOrchestrator:
             all_event_refs.update(bridge_summary.get("event_refs", []) if isinstance(bridge_summary, dict) else getattr(bridge_summary, "event_refs", []) or [])
 
         thesis_key_support_chains = [_model_dump(chain) for chain in thesis.key_support_chains]
+        thesis_hypothesis_responses = list(getattr(thesis, "hypothesis_responses", []) or [])
         for chain in thesis.key_support_chains:
             all_evidence_refs.update(chain.evidence_refs)
             all_event_refs.update(getattr(chain, "event_refs", []) or [])
+        for response in thesis_hypothesis_responses:
+            all_evidence_refs.update(response.evidence_refs)
         for action in getattr(thesis, "portfolio_actions", []) or []:
             all_evidence_refs.update(getattr(action, "evidence_refs", []) or [])
         for view in getattr(thesis, "time_horizon_views", []) or []:
@@ -3188,6 +3868,7 @@ class VNextOrchestrator:
             thesis_confidence=thesis_confidence,
             thesis_dependencies=list(thesis.dependencies) if thesis.dependencies else [],
             thesis_key_support_chains=thesis_key_support_chains,
+            thesis_hypothesis_responses=thesis_hypothesis_responses,
             retained_conflict_types=retained_conflict_types,
             thesis_state_diagnosis=getattr(thesis, "state_diagnosis", "") or "",
             thesis_priced_narrative=getattr(thesis, "priced_narrative", "") or "",
@@ -3676,6 +4357,44 @@ class VNextOrchestrator:
                 f"refs must come from synthesis_packet.evidence_index. Invalid refs: {examples}"
             )
         ]
+
+    def _append_final_quality_note(self, final: FinalAdjudication, note: str) -> None:
+        if final.quality_gate is None:
+            final.quality_gate = QualityGate(
+                approval_status=final.approval_status,
+                blocking_issues=list(final.blocking_issues),
+                notes=note,
+            )
+            return
+        notes = [item for item in str(final.quality_gate.notes or "").split("；") if item]
+        if note not in notes:
+            notes.append(note)
+            final.quality_gate.notes = "；".join(notes)
+
+    def _annotate_reasoned_verdict_refs(
+        self,
+        final: FinalAdjudication,
+        allowed_refs: set[str],
+    ) -> None:
+        verdict = str(final.reasoned_verdict or "").strip()
+        if not verdict:
+            return
+        cited_refs = [item.strip() for item in re.findall(r"\[([^\[\]]+)\]", verdict)]
+        if not cited_refs:
+            self._append_final_quality_note(final, "reasoned_verdict_missing_refs")
+            return
+        lower_key_map = {key.lower(): key for key in allowed_refs}
+        passports = {key: None for key in allowed_refs}
+        unresolved = [
+            ref
+            for ref in cited_refs
+            if self._resolve_claim_evidence_ref(ref, passports, lower_key_map) is None
+        ]
+        if unresolved:
+            self._append_final_quality_note(
+                final,
+                "reasoned_verdict_unresolved_refs:" + ",".join(dict.fromkeys(unresolved)),
+            )
 
     def _validate_layer_card_v2(
         self,

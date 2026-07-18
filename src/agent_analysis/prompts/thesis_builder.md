@@ -72,12 +72,23 @@
 
 只返回一个 JSON 对象，字段必须匹配 `ThesisDraft`。旧字段仍要填写以兼容下游；新 Decision Semantics 字段必须原生填写。
 
+## 对竞争假说的强制回应
+`synthesis_packet.competing_hypotheses` 里每一个 status 为 candidate 的假说，你必须在 `hypothesis_responses` 里逐一回应，三选一：接受并修正判断（accept_and_revise）、部分吸收（absorb_partially）、驳回（reject）。驳回必须引用具体的反证 evidence_ref，不许用"证据不足"四个字一笔带过——证据不足时的诚实选项是 absorb_partially 并写明缺哪条证据。你的主论点如果无法回应某个假说最强的那条证据，就不许假装没看见它。
+
 ```json
 {
   "environment_assessment": "<宏观、信用、广度等环境状态的当日摘要>",
   "valuation_assessment": "<估值、盈利、风险补偿状态的当日摘要>",
   "timing_assessment": "<趋势、量价、确认状态的当日摘要>",
   "main_thesis": "<一句主论点：点名当日主导矛盾，方向与 payoff_assessment 一致>",
+  "hypothesis_responses": [
+    {
+      "hypothesis_id": "<candidate 假说的 hypothesis_id>",
+      "verdict": "accept_and_revise | absorb_partially | reject",
+      "reasoning": "<逐一回应该假说最强证据；若部分吸收，写明还缺哪条证据>",
+      "evidence_refs": ["<reject 时必须引用的具体反证 ref；其他 verdict 可按需引用>"]
+    }
+  ],
   "state_diagnosis": "<当前市场状态的诊断，由当日证据生成>",
   "priced_narrative": "<当前价格正在定价什么，哪些已反映、哪些未反映>",
   "payoff_assessment": "<赔率判断：点名五类中支持与反对的类别，方向由合计决定>",

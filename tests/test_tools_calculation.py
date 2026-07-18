@@ -478,6 +478,16 @@ class TestAnalyzeSeriesMomentumRelativity:
         assert result["relativity"]["percentile_10y"] is None
         assert "不足10年" in result["relativity"]["notes"]
 
+    def test_date_column_with_range_index_still_uses_one_year_window(self):
+        from tools_common import analyze_series_momentum_relativity
+        dates = pd.date_range("2016-01-01", periods=121, freq="MS")
+        df = pd.DataFrame({"date": dates, "value": [float(i) for i in range(121)]})
+
+        result = analyze_series_momentum_relativity(df)
+
+        # 2025-01 through 2026-01 is 13 monthly observations; 12 are lower.
+        assert result["relativity"]["percentile_1y"] == 92.3
+
     def test_empty_input(self):
         from tools_common import analyze_series_momentum_relativity
         assert analyze_series_momentum_relativity(None) == {

@@ -57,17 +57,29 @@ def _localized_title(title: str) -> str:
 def _event_family(event: Dict[str, Any]) -> str:
     event_type = str(event.get("event_type") or "")
     source_id = str(event.get("source_id") or "")
+    source_tier = str(event.get("source_tier") or "")
     title = str(event.get("title") or "").lower()
-    if "sec" in source_id or any(token in title for token in ["10-q", "10-k", "8-k", "earnings", "guidance"]):
+    tags = {str(tag) for tag in _as_list(event.get("relevance_tags"))}
+    if ("sec" in source_id or source_tier in {"official_filing", "company_disclosure"}) and any(
+        token in title for token in ["10-q", "10-k", "8-k", "earnings", "guidance", "filing"]
+    ):
         return "mega_cap_filing"
-    if "policy" in event_type or "fomc" in title or "federal reserve" in title or "monetary" in title:
-        return "policy"
-    if any(token in title for token in ["cpi", "ppi", "inflation", "prices"]):
+    if any(token in title for token in ["cpi", "ppi", "inflation", "prices", "consumer price", "producer price"]):
         return "inflation"
-    if any(token in title for token in ["employment", "payroll", "jobs", "unemployment"]):
+    if any(token in title for token in ["employment", "payroll", "jobs", "unemployment", "real earnings"]):
         return "labor"
-    if any(token in title for token in ["gdp", "income", "spending"]):
+    if any(token in title for token in ["gdp", "gross domestic product", "income", "spending"]):
         return "growth"
+    if "policy" in event_type or "fomc" in title or "federal reserve" in title or "monetary" in title or "topic:macro_rates" in tags:
+        return "policy"
+    if any(token in title for token in ["earnings", "guidance"]) or "topic:valuation_earnings" in tags:
+        return "mega_cap_earnings_news"
+    if "topic:index_structure" in tags:
+        return "index_structure"
+    if "topic:credit_vol" in tags:
+        return "credit_volatility"
+    if "topic:trend_execution" in tags:
+        return "trend_execution"
     return "official_event"
 
 
@@ -81,7 +93,7 @@ def _base_channels(event: Dict[str, Any]) -> List[str]:
         return ["增长韧性", "工资通胀", "降息预期"]
     if family == "growth":
         return ["盈利预期", "经济周期", "风险偏好"]
-    if family == "mega_cap_filing":
+    if family in {"mega_cap_filing", "mega_cap_earnings_news"}:
         return ["龙头盈利", "业绩指引", "指数集中度"]
     return ["信息背景", "风险偏好"]
 
@@ -114,9 +126,18 @@ def _summary_zh(event: Dict[str, Any]) -> str:
     source = _clean_text(event.get("source_name")) or "官方来源"
     title = _localized_title(str(event.get("title") or ""))
     family = _event_family(event)
-    if family == "mega_cap_filing":
-        symbols = ", ".join(str(item) for item in _as_list(event.get("symbols")) if item) or "大型权重公司"
-        return f"这是一条来自 {source} 的公司披露事件，涉及 {symbols}；核心信息是“{title}”。它更适合作为龙头盈利和业绩预期的背景线索。"
+    if event.get("collection_status") == "scheduled_future":
+        event_date = _clean_text(event.get("event_date")) or "待定日期"
+        return f"{source} 日历显示“{title}”计划于 {event_date} 发生；这是未来日程，不是已经发生的事件。"
+    if family in {"mega_cap_filing", "mega_cap_earnings_news"}:
+        symbols = ", ".join(str(item) for item in _as_list(event.get("symbols")) if item)
+        if family == "mega_cap_filing":
+            entity_text = symbols or "未标明公司"
+            return f"这是一条来自 {source} 的公司披露事件，涉及 {entity_text}；核心信息是“{title}”。它更适合作为龙头盈利和业绩预期的背景线索。"
+        entity_text = f"涉及 {symbols}" if symbols else "未确认与 M7 实体直接相关"
+        if event.get("source_tier") == "aggregator_report":
+            return f"这是一条由 {source} 聚合平台转述的公司公告或业绩线索，{entity_text}；核心信息是“{title}”。它不是公司原文，只能作为待复核的背景线索。"
+        return f"这是一条来自 {source} 的盈利相关媒体报道或聚合线索，{entity_text}；核心信息是“{title}”。它不是公司原文，只能作为待复核的背景线索。"
     if family == "policy":
         return f"这是一条来自 {source} 的政策或金融条件事件，核心信息是“{title}”。它主要影响市场对利率路径、流动性和风险偏好的判断。"
     if family == "inflation":
@@ -148,6 +169,21 @@ def _confidence(event: Dict[str, Any], link: Dict[str, Any]) -> str:
     return "low"
 
 
+def _boundary_note(event: Dict[str, Any]) -> str:
+    source_tier = str(event.get("source_tier") or "")
+    if source_tier in {"official", "official_macro", "official_filing", "company_disclosure"}:
+        nature = "官方事件"
+    elif source_tier == "aggregator_report":
+        nature = "聚合平台材料"
+    elif source_tier == "third_party_calendar":
+        nature = "第三方日历材料"
+    elif source_tier in {"reliable_mainstream_report", "market_narrative", "unverified_signal"}:
+        nature = "媒体材料"
+    else:
+        nature = "候选事件材料"
+    return f"这是{nature}的中文解读和股市影响假设，不是证据引用，也不进入 L1-L5。"
+
+
 class NewsLayerAnalyzer:
     """Build a Chinese news interpretation sidecar without polluting L1-L5 context."""
 
@@ -165,7 +201,14 @@ class NewsLayerAnalyzer:
             if isinstance(item, dict)
         }
         events = [item for item in _as_list(event_ledger.get("events")) if isinstance(item, dict)]
-        summaries = [self._event_summary(event, links.get(str(event.get("event_id")), {})) for event in events[:20]]
+        separate_scheduled = [
+            item for item in _as_list(event_ledger.get("scheduled_future_events")) if isinstance(item, dict)
+        ]
+        realized_events = [event for event in events if event.get("collection_status") != "scheduled_future"]
+        scheduled_future_events = [
+            event for event in events if event.get("collection_status") == "scheduled_future"
+        ] + separate_scheduled
+        summaries = [self._event_summary(event, links.get(str(event.get("event_id")), {})) for event in realized_events[:20]]
         payload = {
             "schema_version": "news_layer_analysis_v1",
             "generated_at_utc": _utc_now_iso(),
@@ -177,6 +220,10 @@ class NewsLayerAnalyzer:
             "source_artifacts": source_paths or {},
             "aggregate_analysis": self._aggregate_analysis(summaries),
             "event_summaries": summaries,
+            "scheduled_future_events": [
+                self._event_summary(event, links.get(str(event.get("event_id")), {}))
+                for event in scheduled_future_events[:20]
+            ],
             "source_boundary": "本新闻层只基于官方事件标题、来源元数据和事件日前后市场序列观察生成；它不能替代正式指标证据，也不证明新闻导致了市场变化。",
         }
         if output_path:
@@ -191,6 +238,8 @@ class NewsLayerAnalyzer:
             "event_ref": event.get("event_id"),
             "event_id": event.get("event_id"),
             "published_at": event.get("published_at"),
+            "event_date": event.get("event_date"),
+            "collection_status": event.get("collection_status"),
             "source_name": event.get("source_name"),
             "source_tier": event.get("source_tier"),
             "event_type": event.get("event_type"),
@@ -201,7 +250,7 @@ class NewsLayerAnalyzer:
             "possible_equity_impact_zh": _impact_zh(event, link),
             "pressure_channels": channels,
             "confidence": _confidence(event, link),
-            "boundary_note": "这是官方事件的中文解读和股市影响假设，不是证据引用，也不进入 L1-L5。",
+            "boundary_note": _boundary_note(event),
         }
 
     def _aggregate_analysis(self, summaries: List[Dict[str, Any]]) -> Dict[str, Any]:

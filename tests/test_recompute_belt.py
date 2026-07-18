@@ -130,6 +130,49 @@ def test_percentile_without_raw_series_is_honestly_missing_raw():
         assert finding["recomputed_value"] is None
     # never silently dropped -- coverage math accounts for the gap honestly
     assert report["unrecomputable_missing_raw"] >= 2
+
+
+def test_audit_value_series_recomputes_momentum_and_percentile_fields():
+    raw_series = [
+        {"date": f"{year}-01-02", "value": float(year - 2014)}
+        for year in range(2015, 2026)
+    ] + [
+        {"date": "2026-07-14", "value": 11.0},
+        {"date": "2026-07-15", "value": 13.0},
+        {"date": "2026-07-16", "value": 16.0},
+    ]
+    data = {
+        "recompute_inputs": {
+            "get_fed_funds_rate": {
+                "schema_version": "dated_value_series_v1",
+                "raw_series": raw_series,
+            }
+        },
+        "indicators": [
+            {
+                "layer": 1,
+                "function_id": "get_fed_funds_rate",
+                "raw_data": {
+                    "value": {
+                        "level": 16.0,
+                        "momentum": {"velocity_1d": 3.0, "acceleration_1d": 1.0},
+                        "relativity": {"percentile_1y": 66.7, "percentile_10y": 92.9},
+                    }
+                },
+            }
+        ],
+    }
+
+    report = rb.run(data)
+    findings = {finding["field"]: finding for finding in report["findings"]}
+
+    for field in (
+        "get_fed_funds_rate.momentum.velocity_1d",
+        "get_fed_funds_rate.momentum.acceleration_1d",
+        "get_fed_funds_rate.relativity.percentile_1y",
+        "get_fed_funds_rate.relativity.percentile_10y",
+    ):
+        assert findings[field]["status"] == "match", findings[field]
     assert report["coverage_ratio"] < 1.0
 
 

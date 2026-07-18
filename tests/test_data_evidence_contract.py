@@ -50,6 +50,48 @@ def test_normalizer_backfills_legacy_payload_without_inventing_source_url():
     assert "missing_source_url" in data_quality["anomalies"]
 
 
+def test_normalizer_marks_explicit_legacy_collection_failure_unavailable():
+    payload = normalize_data_evidence(
+        {
+            "name": "Advance/Decline Line (NDX100)",
+            "value": {"level": None, "date": None, "momentum": None, "relativity": None},
+            "notes": "Failed to calculate: Insufficient data returned from yfinance.",
+            "data_quality": {"availability": "available"},
+        },
+        function_id="get_advance_decline_line",
+        layer=3,
+        effective_date="2025-04-09",
+        collected_at_utc="2025-04-10T00:00:00Z",
+    )
+
+    assert payload["data_quality"]["availability"] == "unavailable"
+    assert payload["data_quality"]["fallback_reason"] == "legacy_collection_failure"
+    assert "legacy_available_failure_normalized_to_unavailable" in payload["data_quality"]["anomalies"]
+    issues = data_evidence_issues(payload, function_id="get_advance_decline_line", backtest_date="2025-04-09")
+    assert not any(item["code"] == "available_without_meaningful_value" for item in issues["hard_block"])
+
+
+def test_normalizer_does_not_relax_current_contract_meaningless_available_payload():
+    payload = normalize_data_evidence(
+        {
+            "name": "Current contract bug",
+            "value": {"level": None},
+            "notes": "Failed to calculate: upstream returned an empty frame.",
+            "data_quality": {
+                "contract_version": DATA_EVIDENCE_CONTRACT_VERSION,
+                "availability": "available",
+            },
+        },
+        function_id="get_advance_decline_line",
+        layer=3,
+        effective_date="2026-07-17",
+    )
+
+    assert payload["data_quality"]["availability"] == "available"
+    issues = data_evidence_issues(payload, function_id="get_advance_decline_line")
+    assert any(item["code"] == "available_without_meaningful_value" for item in issues["hard_block"])
+
+
 def test_missing_reference_only_metadata_does_not_degrade_or_block():
     raw = normalize_data_evidence(
         {"name": "Unit Metric", "value": 12.0, "source_name": "Unit Source"},
@@ -257,6 +299,36 @@ def test_collector_attaches_contract_to_every_indicator(monkeypatch, tmp_path):
     raw = data["indicators"][0]["raw_data"]
     assert raw["data_quality"]["contract_version"] == DATA_EVIDENCE_CONTRACT_VERSION
     assert raw["data_quality"]["function_id"] == "get_unit_metric"
+
+
+def test_collector_separates_recompute_inputs_from_layer_raw_data(monkeypatch, tmp_path):
+    monkeypatch.setattr(collector_module.path_config, "data_dir", str(tmp_path))
+    monkeypatch.setattr(
+        collector_module,
+        "TOOLS_REGISTRY",
+        {
+            "get_unit_metric": lambda end_date=None: {
+                "name": "Unit Metric",
+                "value": {"level": 2.0},
+                "date": end_date or "2026-06-16",
+                "source_name": "Unit Source",
+                "recompute_input": {
+                    "schema_version": "dated_value_series_v1",
+                    "raw_series": [{"date": "2026-06-15", "value": 1.0}, {"date": "2026-06-16", "value": 2.0}],
+                },
+            }
+        },
+    )
+    collector = DataCollector()
+    collector.LAYER_FUNCTIONS = {1: ["get_unit_metric"]}
+
+    data = collector.run(backtest_date=None)
+
+    assert "recompute_input" not in data["indicators"][0]["raw_data"]
+    assert data["recompute_inputs"]["get_unit_metric"]["layer"] == 1
+    assert data["recompute_inputs"]["get_unit_metric"]["raw_series"][-1]["value"] == 2.0
+    packet = AnalysisPacketBuilder().build(data, manual_overrides={"active": False, "metrics": {}})
+    assert "recompute_inputs" not in packet.model_dump_json()
 
 
 def test_packet_builder_does_not_pass_hard_blocked_value_into_layer_facts():
