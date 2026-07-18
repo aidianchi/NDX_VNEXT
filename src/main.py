@@ -687,6 +687,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         pure_data_report=pure_data_report_payload,
         data_integrity_report=integrity_report,
         event_narrative_ledger_path=event_narrative_ledger_path or None,
+        llm_caller=orchestrator.llm_engine.call_with_fallback,
     )
 
     report_path = ""

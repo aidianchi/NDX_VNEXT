@@ -2189,6 +2189,10 @@ class VNextReportGenerator:
         object_gate = meta.get("object_run_gate") or analysis_meta.get("object_run_gate") or {}
         object_name = object_gate.get("primary_object") or "NDX"
         reader = self._reader_final(final)
+        # 红队 C1 裁决（2026-07-18）：在语义锚机制补齐前，门脸正文保持第一层
+        # reasoned_verdict（它经过 Critic/Reviser/Final 治理链）；第三层综合正文
+        # 在"第三层·综合裁决"章节完整呈现，署名切换留待后续工单。
+        verdict_signature = ""
         verdict = str(final.get("reasoned_verdict") or "").strip()
         if not verdict:
             verdict_parts = [str(final.get("final_stance") or "").strip(), str(reader.get("one_liner") or "").strip()]
@@ -2224,6 +2228,7 @@ class VNextReportGenerator:
       <p class="kicker">NDX 投资判断书 · {_escape(object_name)}</p>
       <h1>{_escape(final.get('final_stance') or reader.get('one_liner') or '本轮判断')}</h1>
       <p class="reasoned-verdict">{self._reasoned_verdict_html(verdict)}</p>
+      {f'<p class="section-note verdict-signature">{_escape(verdict_signature)}</p>' if verdict_signature else ''}
       <div class="brief-meta-line badges">
         <span class="badge pill">姿态 {_escape(stance)}</span>
         <span class="badge pill">赔率 {_escape(payoff)}</span>
@@ -3714,7 +3719,64 @@ class VNextReportGenerator:
                 if isinstance(event, dict)
             ]
             mechanism = {"news_cards": fallback_cards}
-        return self._event_mechanism_report_section(mechanism, artifacts)
+        return self._event_mechanism_report_section(mechanism, artifacts) + self._integrated_adjudication_block(artifacts)
+
+    def _integrated_adjudication_block(self, artifacts: Dict[str, Any]) -> str:
+        integrated = artifacts.get("integrated_synthesis_report", {})
+        adjudication = integrated.get("integrated_adjudication") if isinstance(integrated, dict) else None
+        if not isinstance(adjudication, dict) or not adjudication.get("llm_adjudicated"):
+            return ""
+        status_labels = {
+            "answered_by_data": ("数据已回答", "good"),
+            "partially_answered": ("部分回答", "watch"),
+            "cannot_answer_yet": ("暂无法回答", "bad"),
+        }
+        qa_rows = ""
+        for answer in _as_list(adjudication.get("question_answers")):
+            if not isinstance(answer, dict):
+                continue
+            label, tone = status_labels.get(str(answer.get("answer_status")), ("未分类", "watch"))
+            refs = "、".join(_as_list(answer.get("data_refs"))[:3] + _as_list(answer.get("investigation_refs"))[:2])
+            missing = "、".join(str(item) for item in _as_list(answer.get("missing_evidence"))[:3])
+            qa_rows += f"""
+      <li>
+        <p><b>问：</b>{_escape(_sentence(answer.get('question'), 120))} <span class="pill {tone}">{label}</span></p>
+        <p><b>答：</b>{_escape(_sentence(answer.get('answer'), 220))}</p>
+        {f'<p class="section-note">依据：{_escape(refs)}</p>' if refs else ''}
+        {f'<p class="section-note">缺口：{_escape(missing)}</p>' if missing else ''}
+      </li>"""
+        relation_labels = {
+            "confirmed_by_data": ("数据证实方向", "good"),
+            "challenged_by_data": ("数据削弱叙事", "bad"),
+            "not_yet_testable": ("当前不可检验", "watch"),
+        }
+        matrix_rows = ""
+        for row in _as_list(adjudication.get("conflict_matrix")):
+            if not isinstance(row, dict):
+                continue
+            label, tone = relation_labels.get(str(row.get("relation")), ("未分类", "watch"))
+            refs = "、".join(_as_list(row.get("data_side_refs"))[:3]) or "—"
+            matrix_rows += f"""
+      <li><span class="pill {tone}">{label}</span> {_escape(_sentence(row.get('event_side'), 110))}
+        <span class="section-note">数据侧：{_escape(refs)}{('；' + _escape(_sentence(row.get('note'), 80))) if str(row.get('note') or '').strip() else ''}</span></li>"""
+        unexplained = "".join(
+            f"<li>{_escape(_sentence(item, 120))}</li>" for item in _as_list(adjudication.get("unexplained"))[:6]
+        )
+        counter = _sentence(adjudication.get("strongest_counterevidence"), 160)
+        return f"""
+<section class="panel sec" id="integrated-adjudication">
+  <div class="sec-head">
+    <span class="kicker section-kicker">第三层 · 综合裁决</span>
+    <h2>数据与外部世界的对质记录</h2>
+  </div>
+  <p class="section-note">姿态以第一层数据判决为锚（不可在本层改判）；本层职责是解释整合与张力登记。</p>
+  {f'<div class="prose"><p class="reasoned-verdict">{self._reasoned_verdict_html(adjudication.get("integrated_verdict"))}</p></div>' if str(adjudication.get("integrated_verdict") or "").strip() else ''}
+  {f'<div class="audit-boundaries"><h3>新闻事件出的题，数据的回答</h3><ul class="qlist">{qa_rows}</ul></div>' if qa_rows else ''}
+  {f'<div class="audit-boundaries"><h3>事件叙事 × 数据检验</h3><ul class="risk-list">{matrix_rows}</ul></div>' if matrix_rows else ''}
+  {f'<div class="audit-boundaries"><h3>当前解释不了的</h3><ul class="risk-list">{unexplained}</ul></div>' if unexplained else ''}
+  {f'<p class="dissent"><b>最强反证</b>：{_escape(counter)}</p>' if counter else ''}
+</section>
+"""
 
     def _news_section(self, artifacts: Dict[str, Any]) -> str:
         ledger = artifacts.get("news_event_ledger", {})
@@ -5866,6 +5928,15 @@ class VNextReportGenerator:
         for match in re.finditer(r"\[([^\[\]]+)\]", text):
             parts.append(_escape(text[cursor:match.start()]))
             raw_ref = match.group(1).strip()
+            if raw_ref.lower().startswith("card:"):
+                card_id = raw_ref.split(":", 1)[-1].strip()
+                short = card_id[-8:] if len(card_id) > 8 else card_id
+                parts.append(
+                    f'<a class="ref-chip card-chip" href="#world" '
+                    f'title="{_escape(card_id)}">事件卡·{_escape(short)}</a>'
+                )
+                cursor = match.end()
+                continue
             canonical = _canonical_ref(raw_ref)
             parts.append(
                 f'<button class="ref-chip" data-ref="{_escape(canonical)}" '

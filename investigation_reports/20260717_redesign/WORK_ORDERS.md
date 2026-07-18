@@ -185,9 +185,15 @@ Phase 0（**已转为 WO-R5 的步骤 0，由 Codex 执行**，2026-07-17 用户
 ③ orchestrator 透传 + schema guard 容忍；④ R2 的反方章节改读该字段（若 R2 未开工，渲染留待 R2）。
 验收标准：单测 + fresh run 中每个 candidate 都有对应 response 且 reject 均带 refs。
 
-## WO-R8 第三层真裁决（范围锁定，暂不开工）
+## WO-R8 第三层真裁决
 
-依赖 R4 + R6 验收。范围：`integrated_synthesis_report.py::_main_judgment`（:238-274）从两句模板改为 LLM 阶段，消费纯数据 final + 事件卡 + 调查回答，按认识论报告 §8.2 标准判断结构输出，显式区分数据支持/事件支持/综合解释/未解释项；`conflict_matrix` 的 `data_side` 从常量改为具体数据引用；降级分支保留（事件材料不足→声明并以数据为主）。提示词由 Fable 在 R4/R6 验收后交付。门脸卡署名从 final_adjudication 切换到第三层裁决的开关也在本单（切换条件：R4+R6+R8 全部验收）。
+状态：✅ **终稿完成（2026-07-18 晚，流程=Fable 亲自实现 → Codex 红队 → Fable 逐条裁决 → 修复终验；用户指定流程）**。
+
+实现：`IntegratedAdjudication`/`IntegratedQuestionAnswer`/`IntegratedConflictRow` 合约（姿态锚、证据联动 validator、占位词拒收）；`integrated_synthesis_report.py` LLM 裁决级（载荷含 effective_date/ref_authority/调查白名单、不可信材料声明、宽容归一化+硬闸门、调用异常降级、invocation 级审计）；提示词 `prompts/integrated_adjudicator.md`（Fable 撰写：数据判决为锚、六档证据分级、逐题作答、PIT 纪律、权限纪律、注入防护）；渲染新增"第三层·综合裁决"章节（综合正文+新闻出题数据回答+事件×数据检验矩阵+未解释项）。
+
+红队（`r8_redteam_report.md`，15 条）裁决记录：**C1-C5 全采纳**——C1 姿态锚不足以防正文实质改判 → 采纳修改版：门脸署名切换暂缓（保持第一层 reasoned_verdict，其经 Critic/Reviser/Final 治理链），第三层正文在本层章节完整呈现，切换待语义锚机制（后续小单）；C2 权限元数据缺失 → ref_authority 进载荷+audit-only 硬降级弱线索+提示词条款；C3 伪引用告警放行 → 全面硬闸门（未知 ref 剔除留痕、confirmed/challenged 无证据自动降 not_yet_testable、answered 无证据降 cannot_answer_yet）；C4 发布闸门不完整 → 合并 claim gate + Final approval，任一 blocked 即 audit_only 且不调用 LLM；C5 无 PIT → effective_date 进载荷+卡片日期一致性剔除+提示词禁用事后知识。**I1-I7 采纳 6.5**（I5 部分采纳：旧字段保留为兼容决定但加 superseded 标记；I7 与 R3 既有"机器带宽于风格带"政策对齐，改越带留痕）。**M1-M4 全采纳**（白名单只收 evidence 子树、card chip 锚点修 #world、env 开关接受 false/off/no、测试补 6 个拒绝路径）。
+
+终验（Fable 亲验）：800 测试全绿（+6 红队回归）；live 三轮迭代（格式漂移归一两轮）后终版 1386 字正文——数据与四张事件卡真实对质、权威纪律进入模型行文（"仅审计参考""supporting_only 不允许独立支撑结论"）、五风险全点名、6 题全答（含诚实降级留痕）、矩阵 7 行、16 条纯净 data_support；渲染三项验证过（第三层区块/门脸保持一层/#world 锚点）。验证件：`output/analysis/vnext/wo_r8_live_verify/`（混合验证：final 为 R3 样本注入，与事件卡差 3 天，如实注明）。遗留小单：门脸署名切换的语义锚机制（如第二模型姿态一致性核验）另行立案。
 
 ---
 

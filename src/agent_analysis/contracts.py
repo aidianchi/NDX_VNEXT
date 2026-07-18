@@ -427,6 +427,88 @@ class EventInterpretationCard(BaseModel):
         return self
 
 
+class IntegratedQuestionAnswer(BaseModel):
+    """第三层对一道跨层问题（新闻给数据层出的题）的正式回答。"""
+    model_config = {"extra": "forbid"}
+
+    question_id: str = Field(..., min_length=1, description="cross_layer_questions 中的问题 id")
+    question: str = Field(..., min_length=1, description="问题原文或紧凑转述")
+    answer_status: Literal["answered_by_data", "partially_answered", "cannot_answer_yet"] = Field(
+        ..., description="数据/调查能否回答该问题"
+    )
+    answer: str = Field(..., min_length=1, description="回答正文；答不了就写明缺什么")
+    data_refs: List[str] = Field(default_factory=list, description="支撑回答的数据 evidence refs")
+    investigation_refs: List[str] = Field(default_factory=list, description="支撑回答的调查报告 id")
+    missing_evidence: List[str] = Field(default_factory=list, description="尚缺的检验数据")
+
+    @model_validator(mode="after")
+    def _validate_answer_evidence_linkage(self):
+        if self.answer_status == "answered_by_data" and not (self.data_refs or self.investigation_refs):
+            raise ValueError("answered_by_data requires at least one data_ref or investigation_ref")
+        if self.answer_status == "partially_answered" and not self.missing_evidence:
+            raise ValueError("partially_answered requires missing_evidence to state the gap")
+        return self
+
+
+class IntegratedConflictRow(BaseModel):
+    """第三层事件-数据交叉质询矩阵的一行；data_side 必须是具体引用。"""
+    model_config = {"extra": "forbid"}
+
+    card_id: str = Field(..., min_length=1, description="事件解读卡 event_id")
+    event_side: str = Field(..., min_length=1, description="事件叙事一句话")
+    relation: Literal["confirmed_by_data", "challenged_by_data", "not_yet_testable"] = Field(
+        ..., description="数据对该事件叙事的检验关系"
+    )
+    data_side_refs: List[str] = Field(default_factory=list, description="具体数据 evidence refs；禁止占位词")
+    note: str = Field("", description="补充说明；not_yet_testable 时必须写明缺哪条数据")
+
+    @model_validator(mode="after")
+    def _validate_concrete_data_side(self):
+        for ref in self.data_side_refs:
+            if str(ref).strip().casefold() in {"pure_data_report", "data", "pure_data"}:
+                raise ValueError("data_side_refs must be concrete evidence refs, not placeholders")
+        if self.relation == "not_yet_testable" and not self.note.strip():
+            raise ValueError("not_yet_testable rows must state the missing data in note")
+        if self.relation in {"confirmed_by_data", "challenged_by_data"} and not self.data_side_refs:
+            raise ValueError("confirmed/challenged rows require concrete data_side_refs")
+        return self
+
+
+class IntegratedAdjudication(BaseModel):
+    """第三层真裁决产物：数据判决为锚的综合解释与对质记录，不回流 L1-L5。"""
+    model_config = {"extra": "forbid"}
+
+    schema_version: str = Field("integrated_adjudication_v1")
+    llm_adjudicated: bool = Field(True, description="是否由模型真实裁决（否则为降级拼装）")
+    judgment_object: str = Field("NDX", description="判断对象")
+    stance_echo: str = Field(..., min_length=1, description="逐字复制第一层 final_stance；不许改判")
+    integrated_verdict: str = Field(..., description="600-1200 字综合判决正文（机器校验带 400-1500）")
+    current_phenomena: List[str] = Field(default_factory=list)
+    possible_mechanisms: List[str] = Field(default_factory=list)
+    principal_contradiction: str = Field("", description="主要矛盾（继承数据判决，可用事件语境丰富表述）")
+    principal_aspect: str = Field("", description="矛盾当前主导面")
+    data_support: List[str] = Field(default_factory=list, description="数据支持档：evidence refs")
+    event_support: List[str] = Field(default_factory=list, description="事件支持档：event_id 列表")
+    integrated_explanations: List[str] = Field(default_factory=list, description="综合解释档")
+    reasonable_assumptions: List[str] = Field(default_factory=list, description="合理假设档")
+    weak_leads: List[str] = Field(default_factory=list, description="弱线索档")
+    unexplained: List[str] = Field(default_factory=list, description="未解释项档")
+    strongest_counterevidence: str = Field("", description="当前最强反证")
+    question_answers: List[IntegratedQuestionAnswer] = Field(default_factory=list)
+    conflict_matrix: List[IntegratedConflictRow] = Field(default_factory=list)
+    falsifiers: List[str] = Field(default_factory=list)
+    watch_next: List[str] = Field(default_factory=list)
+    notes: List[str] = Field(default_factory=list)
+
+    @field_validator("integrated_verdict")
+    @classmethod
+    def _validate_integrated_verdict_length(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if text and not 400 <= len(text) <= 1500:
+            raise ValueError("integrated_verdict must be empty or contain 400-1500 characters")
+        return text
+
+
 class AgentSpec(BaseModel):
     """
     受控调查任务书。
