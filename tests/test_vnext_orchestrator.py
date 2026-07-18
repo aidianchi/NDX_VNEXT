@@ -24,6 +24,7 @@ from agent_analysis.contracts import (
     Critique,
     EvidencePassport,
     EvidenceRegistry,
+    EventInterpretationCard,
     FinalAdjudication,
     GoldenPitChecklist,
     HypothesisCompetition,
@@ -88,6 +89,19 @@ class SequencedFakeLLMEngine(FakeLLMEngine):
         return response
 
 
+class UniformEventCardFakeLLMEngine(FakeLLMEngine):
+    def __init__(self, response):
+        super().__init__({})
+        self.response = response
+        self.calls = []
+        self.prompts = []
+
+    def call_with_fallback(self, prompt, stage_name="", preferred_models=None):
+        self.calls.append(stage_name)
+        self.prompts.append(prompt)
+        return self.response
+
+
 class MiniStageModel(BaseModel):
     value: str
 
@@ -104,6 +118,339 @@ _VALID_REASONED_VERDICT = (
     "综合来看，当前赔率不足以支持激进加仓，等待确认也会付出踏空代价。"
     "最强的反对解释是盈利与趋势会继续压过利率和估值压力，但本轮证据还不足以让它改变判断。"
 )
+
+
+def _event_card_response(event_id="event:abc", tier="official"):
+    interpretation = "该事件可能改变折现率预期，但仍需数据确认。"
+    if tier != "official":
+        interpretation = "据报道，该事件可能改变盈利预期，但仍需正式数据确认。"
+    return json.dumps(
+        {
+            "event_id": event_id,
+            "fact_summary": "材料称公司发布了更新。",
+            "interpretation": interpretation,
+            "entities": ["NVDA"],
+            "event_type": "company_news",
+            "mechanism_hypothesis": {
+                "financial_link": "discount_rate" if tier == "official" else "earnings_path",
+                "hypothesis": "该事件可能通过折现率渠道影响纳指100估值。" if tier == "official" else "该事件可能通过盈利路径渠道影响纳指100。",
+            },
+            "supports_hypotheses": ["hyp_rates"],
+            "refutes_hypotheses": [],
+            "limitations": ["事件材料不能证明指数必须涨跌。"],
+            "needs_data_confirmation": ["正式数据是否同步确认"],
+            "upgrade_candidate": False,
+            "passport": {
+                "source": "模型不得决定",
+                "tier": "模型不得决定",
+                "published_at": "模型不得决定",
+                "event_date": "模型不得决定",
+                "effective_date": "模型不得决定",
+            },
+        },
+        ensure_ascii=False,
+    )
+
+
+def _write_event_card_inputs(run_dir: Path, events, news_card_ids):
+    (run_dir / "news_event_ledger.json").write_text(
+        json.dumps({"events": events}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (run_dir / "event_mechanism_report.json").write_text(
+        json.dumps(
+            {
+                "mainlines": [
+                    {
+                        "mainline_id": "macro_rate_valuation_pressure",
+                        "news_card_ids": news_card_ids,
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_event_card_candidate_selection_uses_only_three_triggers(tmp_path: Path):
+    events = [
+        {
+            "event_id": "event:mainline",
+            "title": "Mainline event",
+            "source_name": "Official Source",
+            "source_tier": "official",
+            "event_type": "policy_news",
+            "published_at": "2026-07-18T09:00:00Z",
+            "event_date": "2026-07-18",
+            "raw_text_available": True,
+            "raw_text_excerpt": "Mainline body.",
+        },
+        {
+            "event_id": "event:challenged",
+            "title": "Challenged event",
+            "source_name": "Media",
+            "source_tier": "reliable_mainstream_report",
+            "event_type": "company_news",
+            "published_at": "2026-07-18T08:00:00Z",
+            "event_date": "2026-07-18",
+        },
+        {
+            "event_id": "event:calendar_today",
+            "title": "Calendar landing",
+            "source_name": "BLS",
+            "source_tier": "official",
+            "event_type": "official_calendar",
+            "published_at": "2026-07-01T00:00:00Z",
+            "event_date": "2026-07-18",
+        },
+        {
+            "event_id": "event:untriggered",
+            "title": "Background only",
+            "source_name": "Media",
+            "source_tier": "reliable_mainstream_report",
+            "event_type": "company_news",
+            "published_at": "2026-07-18T07:00:00Z",
+            "event_date": "2026-07-18",
+        },
+    ]
+    _write_event_card_inputs(tmp_path, events, ["news:mainline"])
+    message = InquiryMessage(
+        message_type=InquiryMessageType.EVENT_CHALLENGE,
+        sender_stage="L2",
+        target_stage="integrated_synthesis",
+        trigger="事件需要追问。",
+        question="这条事件是否有数据确认？",
+        allowed_context_refs=["event_mechanism_report.json"],
+        forbidden_context_refs=["layer_cards"],
+        effective_date="2026-07-18",
+        event_refs=["event:challenged"],
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+
+    selected = orchestrator._select_event_card_candidates(
+        effective_date="2026-07-18",
+        feedback_messages=[message],
+    )
+
+    selected_by_id = {item["event_id"]: item for item in selected}
+    assert set(selected_by_id) == {"event:mainline", "event:challenged", "event:calendar_today"}
+    assert "mainline" in selected_by_id["event:mainline"]["trigger_reasons"]
+    assert "inquiry_reference" in selected_by_id["event:challenged"]["trigger_reasons"]
+    assert "official_calendar_landing" in selected_by_id["event:calendar_today"]["trigger_reasons"]
+
+
+def test_event_card_generation_writes_audited_cards_without_analysis_packet_backflow(tmp_path: Path):
+    event = {
+        "event_id": "event:abc",
+        "title": "Company update",
+        "source_name": "Mainstream Media",
+        "source_tier": "reliable_mainstream_report",
+        "event_type": "company_news",
+        "published_at": "2026-07-18T09:00:00Z",
+        "event_date": "2026-07-18",
+        "symbols": ["NVDA"],
+        "raw_text_available": True,
+        "raw_text_excerpt": "材料称公司发布了更新。",
+    }
+    _write_event_card_inputs(tmp_path, [event], ["news:abc"])
+    (tmp_path / "analysis_packet.json").write_text('{"event_refs": {}}', encoding="utf-8")
+    engine = UniformEventCardFakeLLMEngine(
+        _event_card_response(event_id="event:wrong", tier="reliable_mainstream_report")
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine
+    )
+    competition = HypothesisCompetition(
+        hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_rates",
+                hypothesis_text="利率约束仍是主线。",
+                support_evidence_refs=["L1.rate"],
+                diagnostic_evidence_refs=["L1.rate"],
+                falsification_conditions=["利率回落"],
+            )
+        ]
+    )
+
+    artifact = orchestrator._build_event_interpretation_cards(
+        effective_date="2026-07-18",
+        feedback_messages=[],
+        hypothesis_competition=competition,
+    )
+
+    assert artifact["schema_version"] == "event_interpretation_cards_v1"
+    assert len(artifact["cards"]) == 1
+    card = EventInterpretationCard.model_validate(artifact["cards"][0])
+    assert card.event_id == "event:abc"
+    assert card.passport.source == "Mainstream Media"
+    assert card.passport.tier == "reliable_mainstream_report"
+    assert card.passport.effective_date == "2026-07-18"
+    assert card.interpretation.startswith("据报道")
+    assert (tmp_path / "event_interpretation_cards.json").exists()
+    assert (tmp_path / "event_interpretation_cards" / "event_abc.json").exists()
+    assert json.loads((tmp_path / "analysis_packet.json").read_text(encoding="utf-8"))["event_refs"] == {}
+    assert len(engine.calls) == 1
+    assert "你是外部世界材料层的解读员" in engine.prompts[0]
+
+
+def test_event_card_generation_hard_caps_llm_calls_at_ten(tmp_path: Path):
+    events = [
+        {
+            "event_id": f"event:{index}",
+            "title": f"Event {index}",
+            "source_name": "Official Source",
+            "source_tier": "official",
+            "event_type": "policy_news",
+            "published_at": "2026-07-18T09:00:00Z",
+            "event_date": "2026-07-18",
+            "raw_text_available": True,
+            "raw_text_excerpt": "材料称公司发布了更新。",
+        }
+        for index in range(12)
+    ]
+    _write_event_card_inputs(tmp_path, events, [f"news:{index}" for index in range(12)])
+    engine = UniformEventCardFakeLLMEngine(_event_card_response())
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine
+    )
+
+    artifact = orchestrator._build_event_interpretation_cards(
+        effective_date="2026-07-18",
+        feedback_messages=[],
+        hypothesis_competition=HypothesisCompetition(
+            hypotheses=[
+                CompetingHypothesis(
+                    hypothesis_id="hyp_rates",
+                    hypothesis_text="利率约束仍是主线。",
+                    support_evidence_refs=["L1.rate"],
+                    diagnostic_evidence_refs=["L1.rate"],
+                    falsification_conditions=["利率回落"],
+                )
+            ]
+        ),
+    )
+
+    assert len(artifact["cards"]) == 10
+    assert artifact["selected_count"] == 10
+    assert artifact["candidate_count_before_limit"] == 12
+    assert len(engine.calls) == 10
+
+
+def test_event_card_validator_accepts_equivalent_downgrade_and_translated_month_name(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    card = EventInterpretationCard.model_validate(
+        json.loads(_event_card_response(tier="reliable_mainstream_report"))
+    ).model_copy(
+        update={
+            "fact_summary": "该材料发布于2026年7月18日。",
+            "interpretation": "该报道称事件可能影响盈利预期。",
+            "limitations": ["未读全文，降级阅读：仅依据标题。"],
+        }
+    )
+    event = {
+        "source_tier": "reliable_mainstream_report",
+        "title": "Update",
+        "published_at": "Sat, 18 Jul 2026 09:00:00 GMT",
+        "event_date": "",
+        "raw_text_available": False,
+        "raw_text_excerpt": "",
+    }
+
+    errors = orchestrator._event_card_validation_errors(
+        card,
+        event=event,
+        allowed_hypothesis_ids={"hyp_rates"},
+    )
+
+    assert errors == []
+
+
+def test_event_card_validator_still_rejects_weak_source_without_attribution(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    card = EventInterpretationCard.model_validate(
+        json.loads(_event_card_response(tier="official"))
+    )
+
+    errors = orchestrator._event_card_validation_errors(
+        card,
+        event={
+            "source_tier": "reliable_mainstream_report",
+            "title": "Company update",
+            "published_at": "2026-07-18",
+            "event_date": "2026-07-18",
+            "raw_text_available": True,
+            "raw_text_excerpt": "材料称公司发布了更新。",
+        },
+        allowed_hypothesis_ids={"hyp_rates"},
+    )
+
+    assert any("non-official interpretation" in error for error in errors)
+
+
+def test_event_card_validator_rejects_late_attribution_and_signed_number_reversal(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    card = EventInterpretationCard.model_validate(
+        json.loads(_event_card_response(tier="official"))
+    ).model_copy(
+        update={
+            "fact_summary": "公司股价下跌-10%。",
+            "interpretation": "该事件可能影响盈利预期，据报道仍需确认。",
+        }
+    )
+
+    errors = orchestrator._event_card_validation_errors(
+        card,
+        event={
+            "source_tier": "reliable_mainstream_report",
+            "title": "Company shares rose +10%",
+            "published_at": "2026-07-18",
+            "event_date": "2026-07-18",
+            "raw_text_available": True,
+            "raw_text_excerpt": "Company shares rose +10% after the update.",
+        },
+        allowed_hypothesis_ids={"hyp_rates"},
+    )
+
+    assert any("non-official interpretation" in error for error in errors)
+    assert any("signed number direction" in error for error in errors)
+
+
+def test_event_card_validator_rejects_material_absent_alternative_in_fact_summary(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    card = EventInterpretationCard.model_validate(
+        json.loads(_event_card_response(tier="reliable_mainstream_report"))
+    ).model_copy(
+        update={
+            "fact_summary": "标题称Kimi K3产品（或AI模型）进入美国股市。",
+            "limitations": ["未读全文，降级阅读：仅依据标题。"],
+        }
+    )
+
+    errors = orchestrator._event_card_validation_errors(
+        card,
+        event={
+            "source_tier": "reliable_mainstream_report",
+            "title": "China’s Kimi K3 Hits US Stock Markets",
+            "published_at": "2026-07-18",
+            "event_date": "2026-07-18",
+            "raw_text_available": False,
+            "raw_text_excerpt": "",
+        },
+        allowed_hypothesis_ids={"hyp_rates"},
+    )
+
+    assert any("alternative classification absent from material" in error for error in errors)
 
 
 class RoutingFakeLLMEngine(FakeLLMEngine):

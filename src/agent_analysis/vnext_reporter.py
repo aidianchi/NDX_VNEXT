@@ -1754,6 +1754,7 @@ class VNextReportGenerator:
             "news_layer_analysis": _load_json(run_path / "news_layer_analysis.json", {}),
             "event_narrative_ledger": _load_json(run_path / "event_narrative_ledger.json", {}),
             "event_mechanism_report": _load_json(run_path / "event_mechanism_report.json", {}),
+            "event_interpretation_cards": _load_json(run_path / "event_interpretation_cards.json", {}),
             "event_layer_summary": _load_json(run_path / "event_layer_summary.json", {}),
             "integrated_synthesis_report": _load_json(run_path / "integrated_synthesis_report.json", {}),
             "investigation_reports": investigation_reports,
@@ -3579,6 +3580,11 @@ class VNextReportGenerator:
             if isinstance(card, dict)
         }
         ledger_events = _as_list(((artifacts or {}).get("news_event_ledger") or {}).get("events"))
+        interpretation_cards = {
+            str(card.get("event_id") or "").split(":", 1)[-1]: card
+            for card in _as_list(((artifacts or {}).get("event_interpretation_cards") or {}).get("cards"))
+            if isinstance(card, dict) and card.get("event_id")
+        }
         source_tiers: Dict[str, str] = {}
         source_tiers_by_title: Dict[tuple[str, str], str] = {}
         for event in ledger_events:
@@ -3602,10 +3608,19 @@ class VNextReportGenerator:
                 if key in cards and key not in ordered_card_ids:
                     ordered_card_ids.append(key)
         ordered_card_ids.extend(key for key in cards if key not in ordered_card_ids)
+        interpreted_ids = [
+            key
+            for key in ordered_card_ids
+            if key.split(":", 1)[-1] in interpretation_cards
+        ]
+        ordered_card_ids = interpreted_ids + [
+            key for key in ordered_card_ids if key not in interpreted_ids
+        ]
         news_rows = ""
         for card_id in ordered_card_ids[:16]:
             card = cards[card_id]
             token = card_id.split(":", 1)[-1]
+            interpretation_card = interpretation_cards.get(token)
             source_name = str(card.get("source_name") or "未知来源")
             title = str(card.get("title") or "未命名新闻")
             source_tier = (
@@ -3615,6 +3630,37 @@ class VNextReportGenerator:
                 or "未记录"
             )
             excerpt = _fact_excerpt(card.get("raw_text_excerpt"))
+            if interpretation_card:
+                mechanism_hypothesis = interpretation_card.get("mechanism_hypothesis", {})
+                mechanism_text = (
+                    mechanism_hypothesis.get("hypothesis")
+                    if isinstance(mechanism_hypothesis, dict)
+                    else str(mechanism_hypothesis or "")
+                )
+                confirmation_rows = "".join(
+                    f"<li>{_escape(item)}</li>"
+                    for item in _as_list(interpretation_card.get("needs_data_confirmation"))
+                    if str(item).strip()
+                ) or "<li>未记录明确确认项。</li>"
+                limitation_rows = "".join(
+                    f"<li>{_escape(item)}</li>"
+                    for item in _as_list(interpretation_card.get("limitations"))
+                    if str(item).strip()
+                )
+                news_rows += f"""
+        <li class="news-item">
+          <div class="news-item-head"><b>{_escape(title)}</b></div>
+          <p class="news-fact-meta"><span>来源：{_escape(source_name)}</span><span>source_tier：{_escape(source_tier)}</span><span>日期：{_escape(card.get('published_at') or '未记录')}</span></p>
+          <div class="event-interpretation-card">
+            <p><b>事实摘要</b><span>{_escape(interpretation_card.get('fact_summary') or excerpt)}</span></p>
+            <p><b>事件解读</b><span>{_escape(interpretation_card.get('interpretation') or '')}</span></p>
+            <p><b>机制假设</b><span>{_escape(mechanism_text)}</span></p>
+            <div><b>需要数据确认</b><ul>{confirmation_rows}</ul></div>
+            {f'<div><b>限制</b><ul>{limitation_rows}</ul></div>' if limitation_rows else ''}
+          </div>
+        </li>
+"""
+                continue
             news_rows += f"""
         <li class="news-item">
           <div class="news-item-head"><b>{_escape(title)}</b></div>
@@ -3635,9 +3681,8 @@ class VNextReportGenerator:
         watchlist = "".join(f"<li>{_escape(item)}</li>" for item in watch_items[:6]) or "<li>暂无明确追踪项。</li>"
         return f"""
 <section class="panel" id="event-layer-summary">
-  <div class="section-kicker">05 · 新闻事实底账</div>
-  <h2>外部事件事实底账</h2>
-  <p class="section-note">本区当前只提供事实底账；事件解读功能重建中，重建前不提供机器分析。</p>
+  <div class="section-kicker">05 · 外部事件对照</div>
+  <h2>外部事件事实与解读</h2>
   <ul class="news-list">{news_rows or '<li class="news-item"><p>暂无新闻事实材料。</p></li>'}</ul>
   <div class="audit-boundaries">
     <h3>新闻事件给数据层出的题</h3>
@@ -5749,6 +5794,7 @@ class VNextReportGenerator:
             ("第一层：纯数据研报", str(run_path / "pure_data_report.json")),
             ("第二层：事件摘要", str(run_path / "event_layer_summary.json")),
             ("第二层：新闻事件研报", str(run_path / "event_mechanism_report.json")),
+            ("第二层：LLM 事件解读卡", str(run_path / "event_interpretation_cards.json")),
             ("第二层：新闻事件 HTML", str(run_path / "event_mechanism_report.html")),
             ("第二层：跨层问题", str(run_path / "cross_layer_questions.json")),
             ("第二层：事件与叙事账本", str(run_path / "event_narrative_ledger.json")),

@@ -322,6 +322,11 @@ def test_event_mechanism_report_groups_news_into_plain_language_mainlines(tmp_pa
     assert "美光财测" in ai_cards[0]["one_line_summary"]
     assert len({card["news_id"] for card in mechanism["news_cards"]}) == len(mechanism["news_cards"])
     assert any(item["direction"] == "event_to_data" for item in mechanism["cross_layer_questions"])
+    assert all(
+        item["event_refs"]
+        for item in mechanism["cross_layer_questions"]
+        if item["direction"] == "event_to_data"
+    )
     assert any(item["direction"] == "data_to_event" for item in mechanism["cross_layer_questions"])
     assert "Layer 2 Event Mechanism Report" not in html
     assert "risk_premium" not in html
@@ -618,6 +623,28 @@ def test_integrated_synthesis_report_reads_event_mechanism_report():
 
     assert payload["event_mechanism_report"]["headline_judgment"]["title"] == "新闻事件初步判断"
     assert payload["event_mechanism_report"]["delivery_to_integrated_report"]["one_sentence"] == "新闻事件暂时不支持高把握看多。"
+
+
+def test_integrated_synthesis_report_carries_event_cards_without_using_them_as_data_evidence():
+    payload = IntegratedSynthesisReportBuilder().build(
+        pure_data_report={"schema_version": "pure_data_report_v1", "principal_contradictions": []},
+        event_interpretation_cards={
+            "schema_version": "event_interpretation_cards_v1",
+            "cards": [
+                {
+                    "event_id": "event:fed",
+                    "fact_summary": "Federal Reserve published a statement.",
+                    "interpretation": "该事件可能改变利率预期。",
+                    "upgrade_candidate": False,
+                }
+            ],
+        },
+        data_integrity_report={"publish_status": "publishable"},
+    )
+
+    assert payload["event_interpretation_cards"][0]["event_id"] == "event:fed"
+    assert payload["integrated_judgments"][0]["data_support"] == []
+    assert payload["policy"]["no_backflow_rule"].startswith("This report must not feed back")
 
 
 def test_integrated_synthesis_report_reads_evidence_registry_and_claim_ledger():

@@ -371,6 +371,62 @@ class InquiryMessage(BaseModel):
     effective_date: str = Field(..., min_length=1, description="该追问适用的数据日期或历史可见日期")
 
 
+EventFinancialLink = Literal[
+    "earnings_path",
+    "valuation_multiple",
+    "discount_rate",
+    "risk_premium",
+    "liquidity_condition",
+    "credit_condition",
+    "index_structure",
+    "market_breadth",
+    "technical_flow",
+]
+
+
+class EventMechanismHypothesis(BaseModel):
+    """一条事件对金融链路的待验证机制假设。"""
+    model_config = {"extra": "forbid"}
+
+    financial_link: EventFinancialLink = Field(..., description="九个允许的金融传导渠道之一")
+    hypothesis: str = Field(..., min_length=1, description="必须写成可能性而非已发生因果的一句机制假设")
+
+
+class EventInterpretationPassport(BaseModel):
+    """事件解读卡的来源与时间护照；由代码从事件底账强制写入。"""
+    model_config = {"extra": "forbid"}
+
+    source: str = Field(..., min_length=1, description="事件来源")
+    tier: str = Field(..., min_length=1, description="事件来源等级")
+    published_at: str = Field("", description="材料发布时间")
+    event_date: str = Field("", description="事件发生日期")
+    effective_date: str = Field(..., min_length=1, description="本轮有效日期")
+
+
+class EventInterpretationCard(BaseModel):
+    """第二层事件材料的模型解读卡，不属于 L1-L5 evidence_ref。"""
+    model_config = {"extra": "forbid"}
+
+    event_id: str = Field(..., min_length=1, description="对应新闻事件底账的 event_id")
+    fact_summary: str = Field(..., min_length=1, description="只包含原材料事实的摘要")
+    interpretation: str = Field(..., min_length=1, description="与事实分开的模型解读")
+    entities: List[str] = Field(default_factory=list, description="材料中涉及的实体")
+    event_type: str = Field(..., min_length=1, description="事件类型")
+    mechanism_hypothesis: EventMechanismHypothesis = Field(..., description="金融链路与一句机制假设")
+    supports_hypotheses: List[str] = Field(default_factory=list, description="可提供解释线索的 hypothesis_id")
+    refutes_hypotheses: List[str] = Field(default_factory=list, description="可提出待验证挑战的 hypothesis_id")
+    limitations: List[str] = Field(default_factory=list, description="来源、全文与因果权限限制")
+    needs_data_confirmation: List[str] = Field(default_factory=list, description="需要哪条正式数据确认")
+    upgrade_candidate: bool = Field(False, description="是否值得进入后续正式证据升级流程")
+    passport: EventInterpretationPassport = Field(..., description="来源与时间护照")
+
+    @model_validator(mode="after")
+    def _validate_fact_interpretation_separation(self):
+        if self.fact_summary.strip().casefold() == self.interpretation.strip().casefold():
+            raise ValueError("fact_summary and interpretation must be separate")
+        return self
+
+
 class AgentSpec(BaseModel):
     """
     受控调查任务书。

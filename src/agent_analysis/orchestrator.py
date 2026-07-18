@@ -27,6 +27,8 @@ try:
         CounterThesisDraft,
         Confidence,
         EvidenceSourceAuthority,
+        EventInterpretationCard,
+        EventInterpretationPassport,
         FinalAdjudication,
         GoldenPitChecklist,
         GoldenPitChecklistItem,
@@ -75,6 +77,8 @@ except ImportError:
         CounterThesisDraft,
         Confidence,
         EvidenceSourceAuthority,
+        EventInterpretationCard,
+        EventInterpretationPassport,
         FinalAdjudication,
         GoldenPitChecklist,
         GoldenPitChecklistItem,
@@ -137,6 +141,7 @@ PROMPT_FILES = {
     "reviser": "reviser.md",
     "final": "final_adjudicator.md",
     "controlled_investigation": "controlled_investigator.md",
+    "event_card_interpreter": "event_card_interpreter.md",
 }
 
 PROMPT_AUDIT_BOOKKEEPING_FIELDS = {
@@ -150,6 +155,18 @@ PROMPT_AUDIT_BOOKKEEPING_FIELDS = {
 }
 MANIFEST_DATA_QUALITY_LIST_LIMIT = 10
 MANIFEST_DATA_QUALITY_OBJECT_CHAR_LIMIT = 1200
+EVENT_INTERPRETATION_CARD_LIMIT = 10
+EVENT_FINANCIAL_LINKS = [
+    "earnings_path",
+    "valuation_multiple",
+    "discount_rate",
+    "risk_premium",
+    "liquidity_condition",
+    "credit_condition",
+    "index_structure",
+    "market_breadth",
+    "technical_flow",
+]
 
 INLINE_PROMPTS = {
     "bridge": "你负责显式识别跨层支撑关系、冲突关系与关键不确定性。只返回合法 JSON。",
@@ -336,6 +353,11 @@ class VNextOrchestrator:
             "forbidden_context_refs": list(hypothesis_competition.forbidden_context_refs),
             "independence_verified": "thesis_draft.json" in set(hypothesis_competition.forbidden_context_refs),
         }
+        event_interpretation_cards = self._build_event_interpretation_cards(
+            effective_date=self._effective_date(packet_model),
+            feedback_messages=feedback_messages,
+            hypothesis_competition=hypothesis_competition,
+        )
         evidence_registry = self._build_evidence_registry(
             packet_model=packet_model,
             synthesis_packet=synthesis_packet,
@@ -542,6 +564,7 @@ class VNextOrchestrator:
             "bridge_memos": bridge_memos,
             "synthesis_packet": synthesis_packet,
             "hypothesis_competition": hypothesis_competition,
+            "event_interpretation_cards": event_interpretation_cards,
             "evidence_registry": evidence_registry,
             "thesis_draft": thesis,
             "critique": critique,
@@ -1022,6 +1045,7 @@ class VNextOrchestrator:
                     ],
                     forbidden_context_refs=forbidden_refs,
                     effective_date=effective_date,
+                    event_refs=_as_list(question.get("event_refs")),
                 )
             )
         if messages or not summary_path.exists():
@@ -1077,6 +1101,267 @@ class VNextOrchestrator:
             )
             break
         return messages[:1]
+
+    @staticmethod
+    def _event_ref_token(value: Any) -> str:
+        text = str(value or "").strip()
+        return text.split(":", 1)[-1] if text else ""
+
+    def _select_event_card_candidates(
+        self,
+        *,
+        effective_date: str,
+        feedback_messages: List[InquiryMessage],
+    ) -> List[Dict[str, Any]]:
+        ledger = self._load_local_json(self.output_dir / "news_event_ledger.json", {})
+        mechanism = self._load_local_json(self.output_dir / "event_mechanism_report.json", {})
+        events = [item for item in _as_list(ledger.get("events")) if isinstance(item, dict)]
+
+        mainline_tokens: set[str] = set()
+        for mainline in _as_list(mechanism.get("mainlines")):
+            if not isinstance(mainline, dict) or str(mainline.get("mainline_id")) == "other_watchlist":
+                continue
+            mainline_tokens.update(
+                self._event_ref_token(ref)
+                for ref in _as_list(mainline.get("news_card_ids"))
+                if self._event_ref_token(ref)
+            )
+
+        inquiry_tokens: set[str] = set()
+        for message in feedback_messages:
+            if _enum_value(getattr(message, "message_type", "")) not in {
+                InquiryMessageType.EVENT_CHALLENGE.value,
+                InquiryMessageType.OBSERVATION_INQUIRY.value,
+            }:
+                continue
+            inquiry_tokens.update(
+                self._event_ref_token(ref)
+                for ref in _as_list(getattr(message, "event_refs", []))
+                if self._event_ref_token(ref)
+            )
+
+        selected: List[Dict[str, Any]] = []
+        for event in events:
+            event_token = self._event_ref_token(event.get("event_id") or event.get("dedupe_id"))
+            dedupe_token = self._event_ref_token(event.get("dedupe_id"))
+            tokens = {token for token in (event_token, dedupe_token) if token}
+            reasons: List[str] = []
+            if tokens & mainline_tokens:
+                reasons.append("mainline")
+            if tokens & inquiry_tokens:
+                reasons.append("inquiry_reference")
+            if (
+                str(event.get("event_type") or "") == "official_calendar"
+                and str(event.get("event_date") or "") == str(effective_date)[:10]
+            ):
+                reasons.append("official_calendar_landing")
+            if reasons:
+                selected.append({**event, "trigger_reasons": reasons})
+
+        priority = {"mainline": 0, "inquiry_reference": 1, "official_calendar_landing": 2}
+        return sorted(
+            selected,
+            key=lambda event: min(priority[reason] for reason in event["trigger_reasons"]),
+        )
+
+    def _event_card_validation_errors(
+        self,
+        card: EventInterpretationCard,
+        *,
+        event: Dict[str, Any],
+        allowed_hypothesis_ids: set[str],
+    ) -> List[str]:
+        errors: List[str] = []
+        invalid_hypotheses = (
+            set(card.supports_hypotheses) | set(card.refutes_hypotheses)
+        ) - allowed_hypothesis_ids
+        if invalid_hypotheses:
+            errors.append(f"unknown hypothesis_id: {', '.join(sorted(invalid_hypotheses))}")
+
+        hypothesis_text = card.mechanism_hypothesis.hypothesis.strip()
+        if not hypothesis_text.startswith("该事件可能通过"):
+            errors.append("mechanism_hypothesis must start with 该事件可能通过")
+
+        directional_overreach = ("必然上涨", "必然下跌", "必须上涨", "必须下跌", "一定上涨", "一定下跌")
+        if any(token in f"{card.interpretation} {hypothesis_text}" for token in directional_overreach):
+            errors.append("event card must not claim mandatory market direction")
+
+        official_tiers = {
+            "official",
+            "official_macro",
+            "official_regulatory",
+            "official_filing",
+            "company_disclosure",
+            "primary_market_data_release",
+        }
+        source_tier = str(event.get("source_tier") or "unknown")
+        attribution_markers = ("据报道", "该媒体称", "报道称", "据该媒体", "该报道")
+        first_interpretation_clause = re.split(r"[，。；;]", card.interpretation, maxsplit=1)[0]
+        if (
+            source_tier not in official_tiers
+            and card.interpretation != "与判断对象关联不足"
+            and not any(marker in first_interpretation_clause for marker in attribution_markers)
+        ):
+            errors.append("non-official interpretation must be downgraded with 据报道 or 该媒体称")
+
+        if not bool(event.get("raw_text_available")) and not any(
+            "未读全文，降级阅读" in limitation for limitation in card.limitations
+        ):
+            errors.append("title-only material must declare 未读全文，降级阅读")
+
+        material_text = f"{event.get('title') or ''} {event.get('raw_text_excerpt') or ''}"
+        material_declares_alternative = bool(re.search(r"(?:\bor\b|或)", material_text, flags=re.IGNORECASE))
+        fact_adds_alternative = bool(re.search(r"[（(]\s*或", card.fact_summary))
+        if fact_adds_alternative and not material_declares_alternative:
+            errors.append("fact_summary contains alternative classification absent from material")
+
+        def signed_numbers(text: str) -> Dict[str, str]:
+            values: Dict[str, str] = {}
+            for match in re.finditer(r"(?<!\d)([+-])\s*(\d+(?:[.,]\d+)*)\s*[%％]?", text):
+                magnitude = re.sub(r"[^0-9]", "", match.group(2)).lstrip("0") or "0"
+                values[magnitude] = match.group(1)
+            return values
+
+        material_signed = signed_numbers(
+            f"{event.get('title') or ''} {event.get('raw_text_excerpt') or ''}"
+        )
+        fact_signed = signed_numbers(card.fact_summary)
+        reversed_magnitudes = sorted(
+            magnitude
+            for magnitude, sign in fact_signed.items()
+            if magnitude in material_signed and material_signed[magnitude] != sign
+        )
+        if reversed_magnitudes:
+            errors.append(
+                "fact_summary reverses signed number direction: " + ", ".join(reversed_magnitudes)
+            )
+
+        return errors
+
+    def _build_event_interpretation_cards(
+        self,
+        *,
+        effective_date: str,
+        feedback_messages: List[InquiryMessage],
+        hypothesis_competition: HypothesisCompetition,
+    ) -> Dict[str, Any]:
+        candidates = self._select_event_card_candidates(
+            effective_date=effective_date,
+            feedback_messages=feedback_messages,
+        )
+        selected = candidates[:EVENT_INTERPRETATION_CARD_LIMIT]
+        hypotheses = [
+            {
+                "hypothesis_id": hypothesis.hypothesis_id,
+                "hypothesis_text": hypothesis.hypothesis_text,
+                "status": hypothesis.status,
+            }
+            for hypothesis in list(hypothesis_competition.hypotheses or [])
+        ]
+        allowed_hypothesis_ids = {str(item["hypothesis_id"]) for item in hypotheses}
+        cards: List[EventInterpretationCard] = []
+        failures: List[Dict[str, Any]] = []
+        for event in selected:
+            event_id = str(event.get("event_id") or "")
+            stage_token = re.sub(r"[^A-Za-z0-9_.-]+", "_", event_id).strip("_") or "event"
+            payload = {
+                "event_material": {
+                    "event_id": event_id,
+                    "title": event.get("title"),
+                    "source": event.get("source_name"),
+                    "tier": event.get("source_tier"),
+                    "published_at": event.get("published_at"),
+                    "event_date": event.get("event_date"),
+                    "effective_date": effective_date,
+                    "event_type": event.get("event_type"),
+                    "entities": _as_list(event.get("symbols")),
+                    "raw_text_available": bool(event.get("raw_text_available")),
+                    "raw_text_excerpt": event.get("raw_text_excerpt") or "",
+                    "trigger_reasons": _as_list(event.get("trigger_reasons")),
+                },
+                "allowed_financial_links": EVENT_FINANCIAL_LINKS,
+                "competing_hypotheses": hypotheses,
+                "output_contract": {
+                    "event_id": "event:...",
+                    "fact_summary": "只写材料事实",
+                    "interpretation": "模型解读；弱来源以据报道或该媒体称开头",
+                    "entities": ["材料中的实体"],
+                    "event_type": "事件类型",
+                    "mechanism_hypothesis": {
+                        "financial_link": "从 allowed_financial_links 选择一项",
+                        "hypothesis": "该事件可能通过××渠道影响××",
+                    },
+                    "supports_hypotheses": ["只能引用 competing_hypotheses 中的 hypothesis_id"],
+                    "refutes_hypotheses": ["只能引用 competing_hypotheses 中的 hypothesis_id"],
+                    "limitations": ["限制"],
+                    "needs_data_confirmation": ["要哪条数据来确认"],
+                    "upgrade_candidate": False,
+                    "passport": {
+                        "source": "照抄 event_material.source",
+                        "tier": "照抄 event_material.tier",
+                        "published_at": "照抄 event_material.published_at",
+                        "event_date": "照抄 event_material.event_date",
+                        "effective_date": "照抄 event_material.effective_date",
+                    },
+                },
+                "boundary": {
+                    "event_ref_only": True,
+                    "must_not_become_l1_l5_evidence_ref": True,
+                    "must_not_feed_back": True,
+                },
+            }
+            try:
+                card = self._run_stage(
+                    stage_key="event_card_interpreter",
+                    stage_name=f"event_card_interpreter.{stage_token}",
+                    model_cls=EventInterpretationCard,
+                    payload=payload,
+                    validator=lambda candidate, event=event: self._event_card_validation_errors(
+                        candidate,
+                        event=event,
+                        allowed_hypothesis_ids=allowed_hypothesis_ids,
+                    ),
+                )
+            except Exception as exc:
+                failures.append({"event_id": event_id, "error": f"{type(exc).__name__}: {str(exc)[:600]}"})
+                logger.warning("Event interpretation card failed for %s: %s", event_id, exc)
+                continue
+            passport = EventInterpretationPassport(
+                source=str(event.get("source_name") or "unknown source"),
+                tier=str(event.get("source_tier") or "unknown"),
+                published_at=str(event.get("published_at") or ""),
+                event_date=str(event.get("event_date") or ""),
+                effective_date=effective_date,
+            )
+            finalized_card = card.model_copy(
+                update={
+                    "event_id": event_id,
+                    "event_type": str(event.get("event_type") or card.event_type),
+                    "passport": passport,
+                }
+            )
+            cards.append(finalized_card)
+            self._save_json(
+                self.output_dir / "event_interpretation_cards" / f"{stage_token}.json",
+                finalized_card,
+            )
+
+        artifact = {
+            "schema_version": "event_interpretation_cards_v1",
+            "generated_at": _utc_now().isoformat(),
+            "effective_date": effective_date,
+            "per_run_limit": EVENT_INTERPRETATION_CARD_LIMIT,
+            "candidate_count_before_limit": len(candidates),
+            "selected_count": len(selected),
+            "cards": [_model_dump(card) for card in cards],
+            "failures": failures,
+            "no_backflow_rule": (
+                "EventInterpretationCard is layer-2/layer-3 material only; it must not rewrite or be "
+                "injected into L1-L5, Bridge, Thesis, Risk, Reviser, or Final, and must not become evidence_ref."
+            ),
+        }
+        self._save_json("event_interpretation_cards.json", artifact)
+        return artifact
 
     def _route_feedback_inquiries(self, messages: List[InquiryMessage]) -> InquiryRouterOutput:
         router = InquiryRouter(

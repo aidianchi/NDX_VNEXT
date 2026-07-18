@@ -1098,12 +1098,19 @@ class EventNarrativeLedgerBuilder:
                 continue
             seen_mainlines.add(mainline_id)
             requested = _as_list(card.get("needs_data_confirmation"))
+            event_refs = [
+                f"event:{str(item.get('news_id')).split(':', 1)[-1]}"
+                for item in news_cards
+                if str(item.get("mainline_id") or "other_watchlist") == mainline_id
+                and str(item.get("news_id") or "").strip()
+            ]
             questions.append({
                 "question_id": _hash_id("question", ["event_to_data", mainline_id]),
                 "direction": "event_to_data",
                 "question": self._event_to_data_question(mainline_id),
                 "why_it_matters": "新闻只提出解释线索，必须让数据回答它是否站得住。",
                 "requested_checks": requested,
+                "event_refs": list(dict.fromkeys(event_refs)),
                 "status": "open" if requested else "insufficient_data",
             })
         questions.extend([

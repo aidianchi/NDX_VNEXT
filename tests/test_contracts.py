@@ -29,6 +29,7 @@ from agent_analysis.contracts import (
     EvidencePassport,
     EvidenceRegistry,
     EvidenceSourceAuthority,
+    EventInterpretationCard,
     GoldenPitChecklist,
     GoldenPitChecklistItem,
     HypothesisCompetition,
@@ -65,6 +66,46 @@ def test_conflict_severity_enum_values():
 
 def test_permission_type_enum_values():
     assert PermissionType.PROXY.value == "proxy"
+
+
+def test_event_interpretation_card_separates_fact_and_interpretation_and_validates_channel():
+    payload = {
+        "event_id": "event:fed",
+        "fact_summary": "Federal Reserve published an FOMC statement.",
+        "interpretation": "该事件可能改变市场对利率路径的预期，但仍需数据确认。",
+        "entities": ["Federal Reserve"],
+        "event_type": "official_calendar",
+        "mechanism_hypothesis": {
+            "financial_link": "discount_rate",
+            "hypothesis": "该事件可能通过折现率渠道影响纳指100估值。",
+        },
+        "supports_hypotheses": ["hyp_rates"],
+        "refutes_hypotheses": [],
+        "limitations": ["事件材料不能证明指数必须涨跌。"],
+        "needs_data_confirmation": ["10年期实际利率是否同步变化"],
+        "upgrade_candidate": False,
+        "passport": {
+            "source": "Federal Reserve",
+            "tier": "official",
+            "published_at": "2026-07-18T18:00:00Z",
+            "event_date": "2026-07-18",
+            "effective_date": "2026-07-18",
+        },
+    }
+
+    card = EventInterpretationCard.model_validate(payload)
+
+    assert card.fact_summary != card.interpretation
+    assert card.mechanism_hypothesis.financial_link == "discount_rate"
+    assert card.passport.tier == "official"
+
+    invalid_channel = {**payload, "mechanism_hypothesis": {"financial_link": "price_direction", "hypothesis": "该事件可能影响价格。"}}
+    with pytest.raises(ValueError):
+        EventInterpretationCard.model_validate(invalid_channel)
+
+    duplicated_layers = {**payload, "interpretation": payload["fact_summary"]}
+    with pytest.raises(ValueError, match="fact_summary.*interpretation"):
+        EventInterpretationCard.model_validate(duplicated_layers)
 
 
 def test_feedback_message_types_are_strongly_typed_and_serializable():

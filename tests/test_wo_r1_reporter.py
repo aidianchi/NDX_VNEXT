@@ -96,7 +96,6 @@ def test_event_mechanism_report_brief_renders_facts_only():
     html = reporter._event_mechanism_report_section(mechanism, artifacts)
 
     for expected in (
-        "本区当前只提供事实底账；事件解读功能重建中，重建前不提供机器分析。",
         "美光财测发布",
         "Wind Financial News",
         "reliable_mainstream_report",
@@ -115,6 +114,7 @@ def test_event_mechanism_report_brief_renders_facts_only():
         "固定可以说模板",
         "固定不能说模板",
         "展开 AI 分析",
+        "事件解读功能重建中",
     ):
         assert removed not in html
 
@@ -167,11 +167,112 @@ def test_event_layer_summary_fallback_remains_facts_only():
 
     html = reporter._event_layer_summary_section(artifacts)
 
-    assert "本区当前只提供事实底账；事件解读功能重建中，重建前不提供机器分析。" in html
+    assert "事件解读功能重建中" not in html
     assert all(value in html for value in ("官方日历事实", "Official Source", "official", "2026-07-18"))
     assert "旧 summary 机器判断" not in html
     assert "旧 claim 机器判断" not in html
     assert "旧反证机器判断" not in html
+
+
+def test_event_mechanism_report_renders_full_interpretation_card_and_keeps_other_events_as_facts():
+    reporter = VNextReportGenerator()
+    mechanism = {
+        "news_cards": [
+            {
+                "news_id": "news:with_card",
+                "title": "有解读卡事件",
+                "source_name": "Federal Reserve",
+                "published_at": "2026-07-18",
+                "raw_text_excerpt": "官方发布声明。",
+            },
+            {
+                "news_id": "news:facts_only",
+                "title": "仅事实事件",
+                "source_name": "Other Source",
+                "published_at": "2026-07-18",
+                "raw_text_excerpt": "另一条事实。",
+            },
+        ]
+    }
+    artifacts = {
+        "event_interpretation_cards": {
+            "cards": [
+                {
+                    "event_id": "event:with_card",
+                    "fact_summary": "官方发布声明。",
+                    "interpretation": "该事件可能改变利率预期。",
+                    "mechanism_hypothesis": {
+                        "financial_link": "discount_rate",
+                        "hypothesis": "该事件可能通过折现率渠道影响纳指100估值。",
+                    },
+                    "needs_data_confirmation": ["实际利率是否同步变化"],
+                    "limitations": ["不能证明指数必须涨跌"],
+                }
+            ]
+        }
+    }
+
+    html = reporter._event_mechanism_report_section(mechanism, artifacts)
+
+    assert all(
+        text in html
+        for text in (
+            "有解读卡事件",
+            "事实摘要",
+            "官方发布声明",
+            "事件解读",
+            "该事件可能改变利率预期",
+            "机制假设",
+            "该事件可能通过折现率渠道影响纳指100估值",
+            "需要数据确认",
+            "实际利率是否同步变化",
+            "仅事实事件",
+            "另一条事实",
+        )
+    )
+    assert html.count('class="event-interpretation-card"') == 1
+
+
+def test_event_mechanism_report_prioritizes_generated_cards_within_display_budget():
+    reporter = VNextReportGenerator()
+    news_cards = []
+    mainlines = []
+    for line_index in range(4):
+        ids = []
+        for card_index in range(6):
+            news_id = f"news:{line_index}_{card_index}"
+            ids.append(news_id)
+            news_cards.append(
+                {
+                    "news_id": news_id,
+                    "title": f"事件 {line_index}-{card_index}",
+                    "source_name": "Source",
+                    "published_at": "2026-07-18",
+                    "raw_text_excerpt": "事实。",
+                }
+            )
+        mainlines.append({"mainline_id": f"line_{line_index}", "news_card_ids": ids})
+    target_id = "event:3_5"
+
+    html = reporter._event_mechanism_report_section(
+        {"mainlines": mainlines, "news_cards": news_cards},
+        {
+            "event_interpretation_cards": {
+                "cards": [
+                    {
+                        "event_id": target_id,
+                        "fact_summary": "目标事实。",
+                        "interpretation": "目标解读必须展示。",
+                        "mechanism_hypothesis": {"hypothesis": "该事件可能通过盈利路径影响纳指100。"},
+                        "needs_data_confirmation": ["盈利数据"],
+                    }
+                ]
+            }
+        },
+    )
+
+    assert "目标解读必须展示" in html
+    assert html.count('class="event-interpretation-card"') == 1
 
 
 def test_personal_policy_translation_is_three_row_checklist_without_amounts():

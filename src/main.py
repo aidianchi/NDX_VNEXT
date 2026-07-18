@@ -729,6 +729,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "event_layer_summary": os.path.join(run_dir, "event_layer_summary.json") if event_narrative_ledger_path else "",
         "event_mechanism_report": os.path.join(run_dir, "event_mechanism_report.json") if event_narrative_ledger_path else "",
         "event_mechanism_report_html": os.path.join(run_dir, "event_mechanism_report.html") if event_narrative_ledger_path else "",
+        "event_interpretation_cards": os.path.join(run_dir, "event_interpretation_cards.json"),
         "cross_layer_questions": os.path.join(run_dir, "cross_layer_questions.json") if event_narrative_ledger_path else "",
         "event_mechanism_cards": os.path.join(run_dir, "event_mechanism_cards.json") if event_narrative_ledger_path else "",
         "pure_data_report": pure_data_report_path,

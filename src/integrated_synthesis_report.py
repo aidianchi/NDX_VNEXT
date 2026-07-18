@@ -98,6 +98,7 @@ class IntegratedSynthesisReportBuilder:
         event_narrative_ledger: Optional[Dict[str, Any]] = None,
         event_layer_summary: Optional[Dict[str, Any]] = None,
         event_mechanism_report: Optional[Dict[str, Any]] = None,
+        event_interpretation_cards: Optional[Dict[str, Any]] = None,
         data_integrity_report: Optional[Dict[str, Any]] = None,
         evidence_registry: Optional[Dict[str, Any]] = None,
         final_claim_ledger: Optional[Dict[str, Any]] = None,
@@ -108,6 +109,7 @@ class IntegratedSynthesisReportBuilder:
         event_narrative_ledger = event_narrative_ledger or {}
         event_layer_summary = event_layer_summary or {}
         event_mechanism_report = event_mechanism_report or {}
+        event_interpretation_cards = event_interpretation_cards or {}
         evidence_registry = evidence_registry or {}
         final_claim_ledger = final_claim_ledger or {}
         publish_gate = self._publish_gate(data_integrity_report, event_narrative_ledger)
@@ -124,7 +126,7 @@ class IntegratedSynthesisReportBuilder:
             "schema_version": "integrated_synthesis_report_v1",
             "generated_at_utc": _utc_now_iso(),
             "policy": {
-                "inputs": ["pure_data_report", "event_mechanism_report", "event_layer_summary", "event_narrative_ledger", "evidence_registry", "final_claim_ledger"],
+                "inputs": ["pure_data_report", "event_mechanism_report", "event_interpretation_cards", "event_layer_summary", "event_narrative_ledger", "evidence_registry", "final_claim_ledger"],
                 "no_backflow_rule": "This report must not feed back into L1-L5, Bridge, Thesis, Risk, Reviser, or Final.",
                 "evidence_rule": "Event claims can support explanation grades, not L1-L5 evidence_refs.",
             },
@@ -132,6 +134,11 @@ class IntegratedSynthesisReportBuilder:
             "evidence_registry_summary": self._compact_evidence_registry(evidence_registry),
             "final_claim_ledger_summary": self._compact_claim_ledger(final_claim_ledger),
             "event_mechanism_report": self._compact_event_mechanism_report(event_mechanism_report),
+            "event_interpretation_cards": [
+                card
+                for card in _as_list(event_interpretation_cards.get("cards"))[:10]
+                if isinstance(card, dict)
+            ],
             "event_layer_summary": self._compact_event_summary(event_layer_summary),
             "integrated_judgments": [judgment] if judgment else [],
             "conflict_matrix": self._conflict_matrix(claims),
@@ -336,6 +343,7 @@ def write_integrated_synthesis_report(
     event_narrative_ledger: Optional[Dict[str, Any]] = None,
     event_layer_summary: Optional[Dict[str, Any]] = None,
     event_mechanism_report: Optional[Dict[str, Any]] = None,
+    event_interpretation_cards: Optional[Dict[str, Any]] = None,
     data_integrity_report: Optional[Dict[str, Any]] = None,
     evidence_registry: Optional[Dict[str, Any]] = None,
     final_claim_ledger: Optional[Dict[str, Any]] = None,
@@ -343,6 +351,7 @@ def write_integrated_synthesis_report(
     event_narrative_ledger_path: Optional[str | Path] = None,
     event_layer_summary_path: Optional[str | Path] = None,
     event_mechanism_report_path: Optional[str | Path] = None,
+    event_interpretation_cards_path: Optional[str | Path] = None,
     data_integrity_report_path: Optional[str | Path] = None,
     evidence_registry_path: Optional[str | Path] = None,
     final_claim_ledger_path: Optional[str | Path] = None,
@@ -352,6 +361,7 @@ def write_integrated_synthesis_report(
     event_path = Path(event_narrative_ledger_path) if event_narrative_ledger_path else run_path / "event_narrative_ledger.json"
     summary_path = Path(event_layer_summary_path) if event_layer_summary_path else run_path / "event_layer_summary.json"
     mechanism_path = Path(event_mechanism_report_path) if event_mechanism_report_path else run_path / "event_mechanism_report.json"
+    interpretation_cards_path = Path(event_interpretation_cards_path) if event_interpretation_cards_path else run_path / "event_interpretation_cards.json"
     integrity_path = Path(data_integrity_report_path) if data_integrity_report_path else run_path / "data_integrity_report.json"
     registry_path = Path(evidence_registry_path) if evidence_registry_path else run_path / "evidence_registry.json"
     claim_ledger_path = Path(final_claim_ledger_path) if final_claim_ledger_path else run_path / "final_claim_ledger.json"
@@ -361,6 +371,7 @@ def write_integrated_synthesis_report(
         event_narrative_ledger=event_narrative_ledger if event_narrative_ledger is not None else _load_json(event_path, {}),
         event_layer_summary=event_layer_summary if event_layer_summary is not None else _load_json(summary_path, {}),
         event_mechanism_report=event_mechanism_report if event_mechanism_report is not None else _load_json(mechanism_path, {}),
+        event_interpretation_cards=event_interpretation_cards if event_interpretation_cards is not None else _load_json(interpretation_cards_path, {}),
         data_integrity_report=data_integrity_report if data_integrity_report is not None else _load_json(integrity_path, {}),
         evidence_registry=evidence_registry if evidence_registry is not None else _load_json(registry_path, {}),
         final_claim_ledger=final_claim_ledger if final_claim_ledger is not None else _load_json(claim_ledger_path, {}),
@@ -368,6 +379,7 @@ def write_integrated_synthesis_report(
         source_paths={
             "pure_data_report": str(pure_path),
             "event_mechanism_report": str(mechanism_path),
+            "event_interpretation_cards": str(interpretation_cards_path),
             "event_layer_summary": str(summary_path),
             "event_narrative_ledger": str(event_path),
             "data_integrity_report": str(integrity_path),
