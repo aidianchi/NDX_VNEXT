@@ -12,6 +12,7 @@ from agent_analysis.contracts import (  # noqa: E402
     ApprovalStatus,
     Confidence,
     FinalAdjudication,
+    LongTermAssessment,
 )
 from agent_analysis.vnext_reporter import VNextReportGenerator  # noqa: E402
 
@@ -28,13 +29,13 @@ def _final(**overrides):
     return FinalAdjudication(**payload)
 
 
-def test_numeric_percent_implied_return_requires_evidence_refs():
+def test_direct_construction_still_rejects_numeric_percent_without_refs():
     with pytest.raises(Exception, match="numeric percent requires evidence_refs"):
-        _final(long_term_assessment={
-            "object_quality": "结构质量待观察",
-            "valuation_implied_return": "长期年化回报可能为 8%",
-            "evidence_refs": [" "],
-        })
+        LongTermAssessment(
+            object_quality="结构质量待观察",
+            valuation_implied_return="长期年化回报可能为 8%",
+            evidence_refs=[" "],
+        )
 
     accepted = _final(long_term_assessment={
         "object_quality": "结构质量待观察",
@@ -42,6 +43,44 @@ def test_numeric_percent_implied_return_requires_evidence_refs():
         "evidence_refs": ["L4.get_example"],
     })
     assert accepted.long_term_assessment is not None
+    assert "8%" in accepted.long_term_assessment.valuation_implied_return
+
+
+def test_llm_boundary_degrades_percent_without_refs_instead_of_failing_run():
+    # 真实事故回归样本：run 20260719_130534 final_adjudicator attempt 2 的原文——
+    # 百分比是输入事实（PE 分位、10Y 收益率）而非编造年化，但缺 refs 曾炸掉整次 run。
+    final = _final(long_term_assessment={
+        "object_quality": "NDX成分股科技属性强，盈利能力和护城河深厚，但当前集中度极高（前10权重46%），头部风险突出。",
+        "earnings_compounding": "M7资本开支加速指向AI基础设施投入扩大，但盈利转化路径未证实。",
+        "valuation_implied_return": "当前PE 35.38（71%分位）与10Y名义4.57%的组合暗示长期回报边界受压，简式收益差距为负，安全垫不足。",
+        "permanent_loss_hypotheses": ["利率持续高位导致估值永久性下移，即使盈利增长，PE收缩抵消回报。"],
+    })
+    assessment = final.long_term_assessment
+    assert assessment is not None
+    assert assessment.valuation_implied_return == ""
+    assert any("原文含百分比数字但未附可追溯 evidence_refs" in note for note in assessment.uncertainty_notes)
+    assert "护城河深厚" in assessment.object_quality
+    assert assessment.permanent_loss_hypotheses
+
+
+def test_llm_boundary_coerces_structured_hypotheses_to_sentences():
+    # 真实事故回归样本：attempt 1 按提示词"注明证据状态"合法产出结构体，曾被 List[str] 拒收。
+    final = _final(long_term_assessment={
+        "object_quality": "结构质量待观察",
+        "permanent_loss_hypotheses": [
+            {
+                "hypothesis": "利率长期维持高位导致NDX估值中枢结构性下移",
+                "evidence_status": "有支持：实际利率处于近10年顶尖分位。",
+            },
+            "集中度崩塌导致指数长期表现弱于等权。",
+            {"其他": "无主键结构体也不丢内容"},
+        ],
+        "evidence_refs": ["L4.get_example"],
+    })
+    hypotheses = final.long_term_assessment.permanent_loss_hypotheses
+    assert hypotheses[0] == "利率长期维持高位导致NDX估值中枢结构性下移（证据状态：有支持：实际利率处于近10年顶尖分位。）"
+    assert hypotheses[1] == "集中度崩塌导致指数长期表现弱于等权。"
+    assert hypotheses[2] == "其他: 无主键结构体也不丢内容"
 
 
 def test_all_empty_long_term_fields_normalize_to_none():

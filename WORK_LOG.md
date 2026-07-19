@@ -6,6 +6,13 @@
 
 ## 2026-07-19
 
+### W3 首次 live 实弹暴露三处不优雅：长期评估字段违规炸掉整次 run（Fable 亲自排查修复）
+
+- 事故：run `20260719_130534` 在 final_adjudicator 两次尝试后整次失败。attempt 1 五个校验错误（含假说结构体被 `List[str]` 拒收 + reasoned_verdict 超长）；attempt 2 修复了前述问题，却因 `valuation_implied_return` 含百分比且未附 evidence_refs 触发 W3 硬 validator，run 陪葬。这正是 W3 验收时申报的"未做真实 LLM 在线抽样"剩余风险的实弹兑现。
+- 亲读 prompt_audit 原文后定性为三处设计不优雅，而非模型能力问题：①**提示词与合约打架**——提示词要求每条假说"注明证据状态"，模型合法产出 `{hypothesis, evidence_status}` 结构体，合约却只收纯字符串；②**百分比拦截误伤**——validator 意图是拦"编造年化收益"，正则却打中"PE 71% 分位、10Y 名义 4.57%"这类提示词明确鼓励引用的输入事实；③**爆炸半径失当**——可选辅助字段的违规炸掉整个 run，违背系统"降级不断链"惯例（confirmed 无证据自动降级、audit_only 引用降权、W1 audit_only 同理）。
+- 修复（`contracts.py`，架构对齐既有"宽容归一化 + 硬闸门"分层）：严格核心不动——直接构造 `LongTermAssessment` 时 % 无 refs 依然拒收；`FinalAdjudication` 的 LLM 边界新增 `_normalize_long_term_assessment_payload`：假说结构体归一为"假说（证据状态：…）"句子；含 % 无 refs 的估值隐含回报**字段级 fail-closed**（清空 + uncertainty_notes 留痕注明原文在 prompt_audit），违规数字依然进不了报告，但 run 存活、其余合法内容保留。
+- 验证：用事故 run 的 attempt 2 真实 payload 整体回放 `FinalAdjudication.model_validate` 通过（估值字段清空留痕、三条假说与对象质量全保留）；两份真实事故原文固化为回归测试；全量 **870 passed**（868 + 净增 2）、58 条既有 warning。
+
 ### 第一性原理工单包 W1-W7 全部完工验收（Codex 施工约 2 小时不间断，Fable 逐单亲验，统一提交）
 
 - 施工方式沿用既定分工：Codex 按 `investigation_reports/20260718_first_principles_debate/WORK_ORDERS.md` 逐单顺序施工、逐单更新状态行、全程不提交；Fable 定时验收（监视器盯完工信号），逐单读关键改动、核状态行、亲跑全量测试后统一提交。**868 测试全绿**（基线 800 + 新增 68），与 Codex 自报一致。

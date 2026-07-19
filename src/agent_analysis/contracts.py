@@ -1470,6 +1470,9 @@ class PortfolioAction(BaseModel):
     evidence_refs: List[str] = Field(default_factory=list, description="支撑该动作的证据")
 
 
+_NUMERIC_PERCENT_PATTERN = re.compile(r"[-+]?\d+(?:\.\d+)?\s*%")
+
+
 class LongTermAssessment(BaseModel):
     """Assessment of the asset over 3-5+ years, separate from cyclical views."""
     model_config = {"extra": "allow"}
@@ -1484,7 +1487,7 @@ class LongTermAssessment(BaseModel):
     @model_validator(mode="after")
     def _require_refs_for_numeric_percent_return(self) -> "LongTermAssessment":
         has_concrete_ref = any(str(ref or "").strip() for ref in self.evidence_refs)
-        if re.search(r"[-+]?\d+(?:\.\d+)?\s*%", self.valuation_implied_return) and not has_concrete_ref:
+        if _NUMERIC_PERCENT_PATTERN.search(self.valuation_implied_return) and not has_concrete_ref:
             raise ValueError("valuation_implied_return with a numeric percent requires evidence_refs")
         return self
 
@@ -2031,6 +2034,8 @@ class FinalAdjudication(BaseModel):
     def _empty_long_term_assessment_is_none(cls, value: Any) -> Any:
         if value is None:
             return None
+        if isinstance(value, dict):
+            value = cls._normalize_long_term_assessment_payload(value)
         if isinstance(value, LongTermAssessment):
             substantive = (
                 value.object_quality,
@@ -2050,6 +2055,46 @@ class FinalAdjudication(BaseModel):
         has_text = any(str(item or "").strip() for item in substantive[:3])
         has_hypotheses = any(str(item or "").strip() for item in (substantive[3] or []))
         return value if has_text or has_hypotheses else None
+
+    @staticmethod
+    def _normalize_long_term_assessment_payload(value: Dict[str, Any]) -> Dict[str, Any]:
+        """LLM 边界宽容归一化：提示词要求假说"注明证据状态"，模型合法地产出结构体，
+        这里归一为句子；含百分比却无 refs 的估值隐含回报做字段级 fail-closed（清空并
+        留痕），违规数字进不了报告，但可选辅助字段不再让整次裁决失败。"""
+        normalized = dict(value)
+        hypotheses = normalized.get("permanent_loss_hypotheses")
+        if isinstance(hypotheses, list):
+            coerced: List[str] = []
+            for item in hypotheses:
+                if isinstance(item, dict):
+                    text = str(item.get("hypothesis") or item.get("claim") or item.get("text") or "").strip()
+                    status = str(item.get("evidence_status") or item.get("status") or "").strip()
+                    if text and status:
+                        coerced.append(f"{text}（证据状态：{status}）")
+                    elif text:
+                        coerced.append(text)
+                    else:
+                        compact = "；".join(
+                            f"{key}: {val}" for key, val in item.items() if str(val or "").strip()
+                        )
+                        if compact:
+                            coerced.append(compact)
+                elif str(item or "").strip():
+                    coerced.append(str(item))
+            normalized["permanent_loss_hypotheses"] = coerced
+        refs = normalized.get("evidence_refs")
+        has_concrete_ref = isinstance(refs, list) and any(str(ref or "").strip() for ref in refs)
+        implied = str(normalized.get("valuation_implied_return") or "")
+        if _NUMERIC_PERCENT_PATTERN.search(implied) and not has_concrete_ref:
+            normalized["valuation_implied_return"] = ""
+            notes = normalized.get("uncertainty_notes")
+            notes = list(notes) if isinstance(notes, list) else []
+            notes.append(
+                "估值隐含回报字段已被系统移除：原文含百分比数字但未附可追溯 evidence_refs"
+                "（字段级 fail-closed，原文保留在 prompt_audit 审计件中）"
+            )
+            normalized["uncertainty_notes"] = notes
+        return normalized
 
     @model_validator(mode="after")
     def _note_missing_reasoned_verdict(self) -> "FinalAdjudication":

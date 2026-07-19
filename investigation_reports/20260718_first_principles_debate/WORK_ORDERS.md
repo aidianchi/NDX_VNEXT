@@ -201,3 +201,5 @@
 - **W6**：审计脚本独立于主链；产物无任何收益/胜率/条件分布数字；结论 `rejected_insufficient_clean_pit_history` 属合格产出；HY OAS 的 FRED 三年访问窗如实标为访问边界而非序列起点；Wind/HoM 谱系分开审计、禁止拼接。
 - **W7**：CFTC（周二快照 +3 天可见）与 FINRA（月末 +21 天保守可见）PIT 建模、field-level `supporting_only`、Legacy 不冒充 TFF、断源诚实 unavailable，16 条定向测试全绿；判读卡与工单原文逐字一致入 `RESEARCH_CANON.md`；升级路径入 `DATA_COVERAGE_REVIEW.md`；packet_builder/collector/evidence_families/data_evidence/deep_research_canon 五处登记齐全。
 - **剩余低风险**（各单状态行已如实申报）：W3 未做真实 LLM 在线抽样与视觉回归；W4 未做 FRED 在线抽样；W7 本机 CFTC API TLS 失败（fail-closed 为 unavailable，非造假路径）。均不阻断验收，留待下一次 live run 自然覆盖。
+
+**验收后记（2026-07-19 下午）**：W3 的"未做真实 LLM 在线抽样"风险当天实弹兑现——run `20260719_130534` 因 `long_term_assessment` 合约过严（假说结构体被拒收、百分比拦截误伤输入事实引用、可选字段违规炸整次 run）在 final_adjudicator 阶段失败。Fable 亲自排查修复：严格核心合约不动，`FinalAdjudication` LLM 边界加宽容归一化 + 字段级 fail-closed 留痕。事故原文固化为回归测试，全量 870 passed。详见 `WORK_LOG.md` 当日条目。
