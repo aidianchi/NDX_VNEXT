@@ -377,6 +377,9 @@ class LLMEngine:
         # DeepSeek JSON mode can occasionally end a Chinese string-list item with
         # a full-width bracket instead of the required closing quote/bracket.
         repaired = re.sub(r'(?<!")】\s*([,\r\n])', r'"]\1', repaired)
+        # Model occasionally emits a bare percent value like `"value": -26.58%`;
+        # JSON requires the percent form to be a quoted string.
+        repaired = re.sub(r'(:\s*)(-?\d+(?:\.\d+)?)%(\s*[,}\]])', r'\1"\2%"\3', repaired)
         # Standard JSON does not allow trailing commas.
         repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
         return repaired

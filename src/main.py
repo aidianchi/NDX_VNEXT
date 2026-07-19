@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 try:
     from .agent_analysis import adapt_vnext_to_legacy
     from .agent_analysis.orchestrator import VNextOrchestrator
+    from .agent_analysis.contracts import AnalysisPacket
     from .agent_analysis.packet_builder import AnalysisPacketBuilder
     from .api_config import get_api_key, is_service_enabled
     from .chart_time_series_artifacts import write_chart_time_series_artifact
@@ -28,6 +29,7 @@ try:
 except ImportError:
     from agent_analysis import adapt_vnext_to_legacy
     from agent_analysis.orchestrator import VNextOrchestrator
+    from agent_analysis.contracts import AnalysisPacket
     from agent_analysis.packet_builder import AnalysisPacketBuilder
     from api_config import get_api_key, is_service_enabled
     from chart_time_series_artifacts import write_chart_time_series_artifact
@@ -609,7 +611,12 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     news_event_ledger_payload = None
     if args.enable_news:
         news_event_ledger_path = os.path.join(run_dir, "news_event_ledger.json")
-        news_event_ledger_payload = NewsEventLedgerBuilder(effective_date=backtest_date).build(news_event_ledger_path)
+        if resume_from_existing and os.path.exists(news_event_ledger_path):
+            with open(news_event_ledger_path, "r", encoding="utf-8") as handle:
+                news_event_ledger_payload = json.load(handle)
+            logging.info("断点续跑：复用既有新闻事件底账，不重新采集（保持阶段指纹一致）。")
+        else:
+            news_event_ledger_payload = NewsEventLedgerBuilder(effective_date=backtest_date).build(news_event_ledger_path)
 
     integrity_report = DataIntegrity().run(data_json)
     os.makedirs(run_dir, exist_ok=True)
@@ -684,11 +691,22 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         raise RuntimeError("DataIntegrity blocked this run: " + "；".join(summary["blocking_reasons"]))
     _write_resume_hint(run_dir, args, data_json)
     builder = AnalysisPacketBuilder()
-    packet = builder.build(
-        data_json,
-        context={"news_event_ledger_path": news_event_ledger_path, "event_material_policy": "layer_2_only_not_in_prompt"} if news_event_ledger_path else None,
-        output_path=os.path.join(run_dir, "analysis_packet.json"),
-    )
+    packet_path = os.path.join(run_dir, "analysis_packet.json")
+    packet = None
+    if resume_from_existing and os.path.exists(packet_path):
+        try:
+            with open(packet_path, "r", encoding="utf-8") as handle:
+                packet = AnalysisPacket.model_validate(json.load(handle))
+            logging.info("断点续跑：复用既有 analysis_packet，不重建输入（保持阶段指纹一致）。")
+        except Exception as exc:
+            logging.warning("断点续跑：既有 analysis_packet 不可复用（%s），退回重建。", exc)
+            packet = None
+    if packet is None:
+        packet = builder.build(
+            data_json,
+            context={"news_event_ledger_path": news_event_ledger_path, "event_material_policy": "layer_2_only_not_in_prompt"} if news_event_ledger_path else None,
+            output_path=packet_path,
+        )
     chart_time_series_path = write_chart_time_series_artifact(
         run_dir,
         analysis_packet=packet,

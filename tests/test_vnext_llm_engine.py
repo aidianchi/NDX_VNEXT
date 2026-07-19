@@ -231,3 +231,15 @@ def test_kimi_http_call_loads_system_constraints(monkeypatch):
     assert messages[0]["role"] == "system"
     assert "不得编造" in messages[0]["content"]
     assert messages[1] == {"role": "user", "content": "{}"}
+
+
+def test_extract_json_repairs_bare_percent_value_slip():
+    from agent_analysis.llm_engine import LLMEngine
+
+    engine = LLMEngine(available_models=[])
+    # 真实事故样本：run 20260719_130534 续跑时 L5 输出裸百分比，两次尝试全灭。
+    payload = '{\n  "core_facts": [\n    {\n      "metric": "QQQ OBV 20d Change",\n      "value": -26.58%\n    }\n  ]\n}'
+
+    parsed = engine.extract_json(payload, stage="l5")
+
+    assert parsed == {"core_facts": [{"metric": "QQQ OBV 20d Change", "value": "-26.58%"}]}
