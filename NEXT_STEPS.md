@@ -17,7 +17,7 @@
 - 2026-07-14 完成数据基础三连修与证据菜单再平衡收官（幸存者偏差硬防线、手工槽位边界、fed funds 利率路径、回购/静默期日历、DataIntegrity 家族计分、对称性审计裁决"菜单不再先天偏空"、L3/HoM live 验收），详见 `WORK_LOG.md` 当日条目。
 - 测试基线：**868** 个单测全绿（`.venv/bin/python -m pytest -q`，58 条均为既有第三方弃用/数值精度 warning）。DataIntegrity 现在报两个数字：家族口径 confidence_percent（发布闸门用）与函数口径 function_availability_percent（对照用）。
 - 2026-07-16 已验证 SEC 可通过 YKK 节点访问；Clash Verge 只新增 `data.sec.gov → YKK`，FRED 仍走 YKK，其余外部域名仍走 IPRoyal。项目实际 `_fetch_sec_xbrl_summary("AAPL")` 已恢复成功，M7 capex/buyback 的 live/PIT 主路 smoke 也已通过。
-- **git 状态**：W1-W7 验收批次已提交并推送工作分支 `discuss-l4-redesign`；origin/main 停在 R8 批次（`24698c3` 及其后文档提交），是否快进 main 等用户一句话。仓库定案保持公开。
+- **git 状态**：W1-W7 验收批次已合并进 main（2026-07-19 用户确认，无损快进），工作分支 `discuss-l4-redesign` 与 main 同步，均已推送。仓库定案保持公开。
 - "已经做完的事"的完整记录看 `WORK_LOG.md`（技术记录，按时间倒序）和 `人话进度报告.md`（给项目主人看的白话版，按"封信"倒序）——这两份不用在这里重复，读它们就知道最近做完了什么。
 
 ---
