@@ -157,3 +157,79 @@ def test_console_run_all_supplies_resume_default_to_pipeline(tmp_path, monkeypat
 
     assert console_run_all.main() == 0
     assert captured["resume_from_existing"] is False
+
+
+def test_resolve_resume_source_verifies_snapshot_fingerprint(tmp_path):
+    import hashlib
+    import json
+
+    import pytest
+
+    source = tmp_path / "data.json"
+    source.write_text('{"ok": true}', encoding="utf-8")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    hint = {
+        "source_path": str(source),
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+    }
+    (run_dir / "resume_hint.json").write_text(json.dumps(hint), encoding="utf-8")
+
+    assert console_run_all._resolve_resume_source(str(run_dir)) == str(source)
+
+    source.write_text('{"ok": false}', encoding="utf-8")
+    with pytest.raises(ValueError, match="校验和"):
+        console_run_all._resolve_resume_source(str(run_dir))
+
+    (run_dir / "resume_hint.json").unlink()
+    with pytest.raises(ValueError, match="找不到"):
+        console_run_all._resolve_resume_source(str(run_dir))
+
+
+def test_console_run_all_resume_run_dir_reuses_run_and_snapshot(tmp_path, monkeypatch):
+    import hashlib
+    import json
+
+    source = tmp_path / "data.json"
+    source.write_text('{"ok": true}', encoding="utf-8")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "resume_hint.json").write_text(json.dumps({
+        "source_path": str(source),
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+    }), encoding="utf-8")
+    captured = {}
+
+    monkeypatch.setattr(
+        console_run_all,
+        "parse_args",
+        lambda: SimpleNamespace(
+            date=None,
+            data_json=None,
+            models="deepseek-v4-flash",
+            workbench_modules="price_technical",
+            skip_legacy_report=True,
+            enable_legacy_charts=False,
+            enable_news=False,
+            resume_run_dir=str(run_dir),
+        ),
+    )
+    monkeypatch.setattr(console_run_all, "setup_logging", lambda: None)
+    monkeypatch.setattr(console_run_all, "_maybe_refresh_trendonify_sidecar", lambda: "")
+
+    def fake_run_pipeline(args):
+        captured["resume_from_existing"] = getattr(args, "resume_from_existing", None)
+        captured["output_dir"] = getattr(args, "output_dir", None)
+        captured["data_json"] = getattr(args, "data_json", None)
+        return {"run_dir": str(run_dir), "report_path": ""}
+
+    monkeypatch.setattr(console_run_all, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(console_run_all.PromptInspectorGenerator, "run", lambda self, run_dir: "/tmp/prompt.html")
+    monkeypatch.setattr(console_run_all.VNextReportGenerator, "run", lambda self, run_dir, template="brief": "/tmp/brief.html")
+    monkeypatch.setattr(console_run_all.InteractiveChartWorkbenchGenerator, "run", lambda self, run_dir, modules: "/tmp/workbench.html")
+    monkeypatch.setattr(console_run_all.path_config, "logs_dir", str(tmp_path / "logs"))
+
+    assert console_run_all.main() == 0
+    assert captured["resume_from_existing"] is True
+    assert captured["output_dir"] == str(run_dir)
+    assert captured["data_json"] == str(source)

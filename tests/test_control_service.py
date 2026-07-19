@@ -95,3 +95,50 @@ def test_control_service_records_env_overrides_for_job(tmp_path, monkeypatch):
 
     assert job["env_overrides"] == {"NDX_DISABLE_WIND_L4": "1"}
     assert "noop.py" in " ".join(job["requested_command"])
+
+
+def test_control_service_allows_console_resume_command():
+    args = validate_command(
+        "python3 src/console_run_all.py --resume-run-dir output/analysis/vnext/20260719_130534 --enable-news"
+    )
+
+    assert args[:2] == ["python3", "src/console_run_all.py"]
+    assert "--resume-run-dir" in args
+
+
+def test_resumable_candidates_list_incomplete_runs_and_verify_snapshot(tmp_path):
+    import hashlib
+    import json as json_module
+
+    from control_service import _resumable_candidates
+
+    source = tmp_path / "data.json"
+    source.write_text('{"ok": true}', encoding="utf-8")
+    sha = hashlib.sha256(source.read_bytes()).hexdigest()
+
+    def make_run(name, sha256_value, complete=False):
+        run_dir = tmp_path / "vnext" / name
+        run_dir.mkdir(parents=True)
+        (run_dir / "resume_hint.json").write_text(json_module.dumps({
+            "created_utc": "2026-07-19T05:10:00Z",
+            "source_path": str(source),
+            "source_sha256": sha256_value,
+            "console_command": f"python3 src/console_run_all.py --resume-run-dir {run_dir}",
+        }), encoding="utf-8")
+        if complete:
+            (run_dir / "final_adjudication.json").write_text("{}", encoding="utf-8")
+            (run_dir / "run_summary.json").write_text("{}", encoding="utf-8")
+        return run_dir
+
+    make_run("complete_run", sha, complete=True)
+    make_run("broken_run", sha)
+    make_run("stale_snapshot_run", "deadbeef")
+
+    candidates = _resumable_candidates(root=tmp_path / "vnext")
+    by_id = {item["run_id"]: item for item in candidates}
+
+    assert "complete_run" not in by_id
+    assert by_id["broken_run"]["data_snapshot_intact"] is True
+    assert "final_adjudication.json" in by_id["broken_run"]["missing_artifacts"]
+    assert by_id["broken_run"]["console_command"].startswith("python3 src/console_run_all.py --resume-run-dir")
+    assert by_id["stale_snapshot_run"]["data_snapshot_intact"] is False

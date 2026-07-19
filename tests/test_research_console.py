@@ -68,6 +68,12 @@ def test_research_console_generates_simple_launcher(tmp_path: Path, monkeypatch)
     assert "env_overrides: envOverrides()" in html
     assert "latest-product" in html
     assert "function artifactUrl(path)" in html
+    assert "断点续跑" in html
+    assert 'id="resumeBlock"' in html
+    assert 'id="resumeNow"' in html
+    assert "fetch(`${controlOrigin}/resumable`)" in html
+    assert "不重跑不重付费" in html
+    assert "跨日续跑会被时点闸门降级为审计参考" in html
 
     assert "只生成 brief" not in html
     assert "只生成 workbench" not in html

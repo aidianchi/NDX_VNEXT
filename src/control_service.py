@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import mimetypes
@@ -10,6 +11,7 @@ import shlex
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -80,6 +82,7 @@ ALLOWED_ENTRYPOINTS = {
         "--skip-legacy-report": "flag",
         "--enable-legacy-charts": "flag",
         "--enable-news": "flag",
+        "--resume-run-dir": "path",
     },
 }
 
@@ -172,6 +175,50 @@ def _resolve_repo_path(value: str) -> Path:
     resolved = path.resolve()
     resolved.relative_to(_repo_root())
     return resolved
+
+
+def _resumable_candidates(limit: int = 8, root: str | Path | None = None) -> List[Dict[str, Any]]:
+    """列出可断点续跑的中断 run：有续跑档案、缺终点产物，并核对数据快照指纹。"""
+    base = Path(root) if root else _repo_root() / "output" / "analysis" / "vnext"
+    if not base.is_dir():
+        return []
+    hint_paths = sorted(
+        base.glob("*/resume_hint.json"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )[:limit]
+    today_utc = datetime.now(timezone.utc).date().isoformat()
+    candidates: List[Dict[str, Any]] = []
+    for hint_path in hint_paths:
+        try:
+            hint = json.loads(hint_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(hint, dict):
+            continue
+        run_dir = hint_path.parent
+        missing = [
+            name for name in ("final_adjudication.json", "run_summary.json")
+            if not (run_dir / name).exists()
+        ]
+        if not missing:
+            continue
+        source_path = Path(str(hint.get("source_path") or ""))
+        expected_sha = str(hint.get("source_sha256") or "")
+        intact = False
+        if source_path.is_file() and expected_sha:
+            intact = hashlib.sha256(source_path.read_bytes()).hexdigest() == expected_sha
+        created_utc = str(hint.get("created_utc") or "")
+        candidates.append({
+            "run_id": run_dir.name,
+            "run_dir": str(run_dir),
+            "created_utc": created_utc,
+            "missing_artifacts": missing,
+            "data_snapshot_intact": intact,
+            "cross_day": bool(created_utc[:10] and created_utc[:10] != today_utc),
+            "console_command": str(hint.get("console_command") or ""),
+        })
+    return candidates
 
 
 def _read_latest_console_summary() -> Dict[str, Any]:
@@ -418,6 +465,12 @@ class ControlServiceHandler(BaseHTTPRequestHandler):
                     if summary.get(key):
                         payload[f"{key}_url"] = _artifact_url(self, str(summary[key]))
                 _json_response(self, 200, payload)
+            except Exception as exc:
+                _json_response(self, 500, {"ok": False, "message": str(exc)})
+            return
+        if parsed.path == "/resumable":
+            try:
+                _json_response(self, 200, {"ok": True, "candidates": _resumable_candidates()})
             except Exception as exc:
                 _json_response(self, 500, {"ok": False, "message": str(exc)})
             return

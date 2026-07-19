@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import shlex
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -392,6 +393,62 @@ def _data_quality_summary(data_json: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_LAST_RESUME_HINT: Dict[str, str] = {}
+
+
+def _write_resume_hint(run_dir: str, args: argparse.Namespace, data_json: Dict[str, Any]) -> str:
+    """在 LLM 阶段开始前落盘断点续跑档案：run 中断时凭它可以只补跑缺失阶段。"""
+    audit = data_json.get("source_snapshot") if isinstance(data_json.get("source_snapshot"), dict) else {}
+    source_path = str(audit.get("source_path") or getattr(args, "data_json", "") or "")
+    source_sha256 = str(audit.get("source_sha256") or "")
+    if not source_sha256 and source_path and os.path.isfile(source_path):
+        with open(source_path, "rb") as handle:
+            source_sha256 = hashlib.sha256(handle.read()).hexdigest()
+    main_parts = [
+        "python3", "src/main.py", "--resume-from-existing",
+        "--output-dir", run_dir, "--data-json", source_path,
+    ]
+    console_parts = ["python3", "src/console_run_all.py", "--resume-run-dir", run_dir]
+    if getattr(args, "date", None):
+        main_parts += ["--date", str(args.date)]
+        console_parts += ["--date", str(args.date)]
+    if getattr(args, "models", None):
+        main_parts += ["--models", str(args.models)]
+        console_parts += ["--models", str(args.models)]
+    if getattr(args, "enable_news", False):
+        main_parts.append("--enable-news")
+        console_parts.append("--enable-news")
+    if getattr(args, "skip_report", False):
+        main_parts.append("--skip-report")
+        console_parts.append("--skip-legacy-report")
+    if getattr(args, "official", False):
+        main_parts.append("--official")
+    if getattr(args, "enable_component_model", False):
+        main_parts.append("--enable-component-model")
+    hint = {
+        "schema_version": "resume_hint_v1",
+        "created_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "run_dir": run_dir,
+        "source_path": source_path,
+        "source_sha256": source_sha256,
+        "effective_date": str(audit.get("effective_date") or getattr(args, "date", None) or "live"),
+        "main_command": shlex.join(main_parts),
+        "console_command": shlex.join(console_parts),
+        "notes": [
+            "续跑前会核对数据快照 sha256；对不上说明原始采集文件已被后续采集覆盖，续跑会拒绝执行而不是假装复用。",
+            "跨日续跑会被层间时点一致性闸门降级为 audit_only；正式结论需当日完成或重新采集。",
+        ],
+    }
+    path = os.path.join(run_dir, "resume_hint.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(hint, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    _LAST_RESUME_HINT.clear()
+    _LAST_RESUME_HINT.update({"main_command": hint["main_command"], "console_command": hint["console_command"]})
+    logging.info("断点续跑档案已备好（若本次 run 中断，可直接执行）：%s", hint["console_command"])
+    return path
+
+
 def _write_expectation_ledger_non_blocking(run_dir: str, effective_date: Optional[str]) -> str:
     """Write the supporting ledger without turning an auxiliary failure into a run blocker."""
     resolved_date = effective_date or datetime.now().date().isoformat()
@@ -625,6 +682,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
             json.dump(summary, handle, ensure_ascii=False, indent=2, default=str)
             handle.write("\n")
         raise RuntimeError("DataIntegrity blocked this run: " + "；".join(summary["blocking_reasons"]))
+    _write_resume_hint(run_dir, args, data_json)
     builder = AnalysisPacketBuilder()
     packet = builder.build(
         data_json,
@@ -788,7 +846,13 @@ def main() -> int:
     if args.collect_only:
         run_collect_only(args)
         return 0
-    summary = run_pipeline(args)
+    try:
+        summary = run_pipeline(args)
+    except Exception:
+        if _LAST_RESUME_HINT.get("console_command"):
+            logging.error("run 中断。断点续跑（存档完好的阶段直接复用，不重跑不重付费）：%s", _LAST_RESUME_HINT["console_command"])
+            logging.error("终端直跑版本：%s", _LAST_RESUME_HINT["main_command"])
+        raise
     logging.info("vNext run complete: %s", summary["run_dir"])
     logging.info("Final stance: %s | Approval: %s", summary["final_stance"], summary["approval_status"])
     if summary["report_path"]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -46,7 +47,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-legacy-report", action="store_true")
     parser.add_argument("--enable-legacy-charts", action="store_true")
     parser.add_argument("--enable-news", action="store_true")
+    parser.add_argument(
+        "--resume-run-dir",
+        help="Resume an interrupted run from this existing run directory; verified stage checkpoints are reused.",
+    )
     return parser.parse_args()
+
+
+def _resolve_resume_source(run_dir: str) -> str:
+    """找回中断 run 当时的数据快照并核对指纹；对不上就拒绝，绝不假装复用。"""
+    meta: Dict[str, Any] = {}
+    for candidate in (os.path.join(run_dir, "resume_hint.json"), os.path.join(run_dir, "source_snapshot.json")):
+        if os.path.exists(candidate):
+            with open(candidate, "r", encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, dict) and loaded:
+                meta = loaded
+                break
+    source_path = str(meta.get("source_path") or "")
+    if not source_path or not os.path.isfile(source_path):
+        raise ValueError(
+            f"断点续跑失败：找不到该 run 的原始数据快照（记录为：{source_path or '未记录'}）。请全量重跑。"
+        )
+    expected_sha = str(meta.get("source_sha256") or "")
+    if expected_sha:
+        with open(source_path, "rb") as handle:
+            actual_sha = hashlib.sha256(handle.read()).hexdigest()
+        if actual_sha != expected_sha:
+            raise ValueError(
+                "断点续跑失败：原始数据快照的校验和与当时不一致（文件已被后续采集覆盖），"
+                "续跑会退化成全量重跑。请直接重新运行。"
+            )
+    return source_path
 
 
 def _modules(raw: str) -> List[str]:
@@ -128,14 +160,27 @@ def main() -> int:
     setup_logging()
     trendonify_sidecar_path = _maybe_refresh_trendonify_sidecar()
 
+    resume_run_dir = getattr(args, "resume_run_dir", None)
+    data_json_path = args.data_json
+    if resume_run_dir:
+        resume_run_dir = os.path.abspath(resume_run_dir)
+        if not os.path.isdir(resume_run_dir):
+            raise SystemExit(f"断点续跑失败：run 目录不存在：{resume_run_dir}")
+        try:
+            data_json_path = data_json_path or _resolve_resume_source(resume_run_dir)
+        except ValueError as exc:
+            raise SystemExit(str(exc))
+        logging.info("断点续跑：%s（存档完好的阶段直接复用）", resume_run_dir)
+
     pipeline_args = SimpleNamespace(
         date=args.date,
-        data_json=args.data_json,
+        data_json=data_json_path,
         models=args.models,
         enable_news=args.enable_news,
         skip_report=args.skip_legacy_report,
         disable_charts=not args.enable_legacy_charts,
-        resume_from_existing=False,
+        resume_from_existing=bool(resume_run_dir),
+        output_dir=resume_run_dir,
     )
     summary = run_pipeline(pipeline_args)
     run_dir = summary["run_dir"]

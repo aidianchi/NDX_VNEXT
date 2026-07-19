@@ -215,6 +215,12 @@ class ResearchConsoleGenerator:
           <a class="secondary-link" {self._artifact_link_attrs(latest_workbench)}>打开最新 workbench</a>
           <a class="secondary-link" {self._artifact_link_attrs(latest_log)}>打开最新日志</a>
         </div>
+
+        <div class="resume-block" id="resumeBlock" hidden>
+          <h2>断点续跑</h2>
+          <p id="resumeInfo" class="small-note">检测中……</p>
+          <button class="secondary-button" type="button" id="resumeNow">一键续跑</button>
+        </div>
       </aside>
     </section>
 
@@ -504,6 +510,9 @@ dd {
 }
 .latest-actions { margin-top: 16px; }
 .latest-actions a { flex: 1 1 150px; }
+.resume-block { margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(33, 95, 143, 0.25); }
+.resume-block h2 { font-size: 15px; margin: 0 0 6px; }
+.resume-block button[disabled] { opacity: 0.5; cursor: not-allowed; }
 .advanced-panel {
   margin-top: 14px;
 }
@@ -968,6 +977,46 @@ document.getElementById('saveManual').addEventListener('click', async () => {
   await saveManualData(runStatus);
 });
 
+const resumeBlock = document.getElementById('resumeBlock');
+const resumeInfo = document.getElementById('resumeInfo');
+const resumeNow = document.getElementById('resumeNow');
+let resumeCandidate = null;
+
+async function refreshResumable() {
+  if (!resumeBlock) return;
+  try {
+    const response = await fetch(`${controlOrigin}/resumable`);
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    const candidates = (result.candidates || []).filter((item) => item.console_command);
+    if (!candidates.length) { resumeBlock.hidden = true; return; }
+    const candidate = candidates[0];
+    resumeCandidate = candidate;
+    const missing = (candidate.missing_artifacts || []).join('、') || '未知';
+    if (!candidate.data_snapshot_intact) {
+      resumeInfo.textContent = `发现中断 run：${candidate.run_id}，但原始数据快照已被后续采集覆盖，无法干净续跑，请全量重跑。`;
+      resumeNow.disabled = true;
+    } else {
+      let text = `发现中断 run：${candidate.run_id}（缺：${missing}）。存档完好的阶段直接复用，不重跑不重付费。`;
+      if (candidate.cross_day) text += ' 注意：跨日续跑会被时点闸门降级为审计参考。';
+      resumeInfo.textContent = text;
+      resumeNow.disabled = false;
+    }
+    resumeBlock.hidden = false;
+  } catch (error) {
+    resumeBlock.hidden = true;
+  }
+}
+
+resumeNow.addEventListener('click', async () => {
+  if (!resumeCandidate || resumeNow.disabled) return;
+  activeJobId = await submitControlCommand(resumeCandidate.console_command, runStatus) || activeJobId;
+  if (activeJobId) {
+    refreshJob(activeJobId, runStatus);
+    startJobAutoRefresh(activeJobId, runStatus);
+  }
+});
+
 async function loadManualDataFromService() {
   try {
     const response = await fetch(`${controlOrigin}/manual-data`);
@@ -987,6 +1036,7 @@ loadManualDataFromService().finally(() => {
   updateLatestDataSummary();
   syncManualPreview();
   buildCommand();
+  refreshResumable();
 });
 """
 
