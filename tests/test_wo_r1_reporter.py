@@ -98,7 +98,7 @@ def test_event_mechanism_report_brief_renders_facts_only():
     for expected in (
         "美光财测发布",
         "Wind Financial News",
-        "reliable_mainstream_report",
+        "可靠媒体转述",
         "2026-06-25",
         "股价跌近1。随后公司发布正式财测",
         "新闻事件给数据层出的题",
@@ -168,7 +168,7 @@ def test_event_layer_summary_fallback_remains_facts_only():
     html = reporter._event_layer_summary_section(artifacts)
 
     assert "事件解读功能重建中" not in html
-    assert all(value in html for value in ("官方日历事实", "Official Source", "official", "2026-07-18"))
+    assert all(value in html for value in ("官方日历事实", "Official Source", "官方源", "2026-07-18"))
     assert "旧 summary 机器判断" not in html
     assert "旧 claim 机器判断" not in html
     assert "旧反证机器判断" not in html
@@ -230,7 +230,7 @@ def test_event_mechanism_report_renders_full_interpretation_card_and_keeps_other
             "另一条事实",
         )
     )
-    assert html.count('class="event-interpretation-card"') == 1
+    assert html.count('class="ev-detail"') == 1
 
 
 def test_event_mechanism_report_prioritizes_generated_cards_within_display_budget():
@@ -272,7 +272,7 @@ def test_event_mechanism_report_prioritizes_generated_cards_within_display_budge
     )
 
     assert "目标解读必须展示" in html
-    assert html.count('class="event-interpretation-card"') == 1
+    assert html.count('class="ev-detail"') == 1
 
 
 def test_personal_policy_translation_is_three_row_checklist_without_amounts():

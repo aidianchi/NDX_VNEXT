@@ -1,11 +1,13 @@
 /* ==========================================================================
    slate_v3 — 判断书混排（style-b）正式皮肤
-   作者：Fable 5（2026-07-18，WO-R2 交付件）
+   作者：Fable 5（2026-07-18，WO-R2 交付件；2026-07-20 视觉返工）
    视觉基准：output/reports/demo_20260717_spine.html 的 style-b
    设计契约：令牌名与 slate_v2 完全一致（brief 内嵌组件 CSS 依赖这些令牌）；
-   同时覆盖 R2 新钩子类（facade/dcard/sec-*/gauge/hyp/flip/evrow…）与
-   brief 仍在使用的旧类（panel/chain-card/canon-box/layer-stack…）。
+   同时覆盖 R2 新钩子类（facade、dcard、sec-x、gauge、hyp、flip、evrow）与
+   brief 仍在使用的旧类（panel、chain-card、canon-box、layer-stack）。
    原则：判断正文用文章排版，数据与元信息用卡片排版，两者不互相冒充。
+   注意：本注释内禁止出现「星号+斜杠」相邻的字符序列——它会提前终止注释，
+   吞掉紧随其后的 :root 令牌块（2026-07-20 事故：宋体栈因此从未生效）。
    ========================================================================== */
 
 :root {
@@ -56,6 +58,32 @@
     --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.35);
     --shadow-drawer: -10px 0 34px rgba(0, 0, 0, 0.5);
   }
+}
+
+/* The selected B sample is a warm-paper reading surface, not an app-theme mirror. */
+body.style-b-light {
+  color-scheme: light;
+  --paper: #faf7f2;
+  --paper-raised: #ffffff;
+  --paper-muted: #f3efe7;
+  --ink: #1c1a17;
+  --ink-soft: #5c564e;
+  --ink-muted: #8a8378;
+  --muted: #8a8378;
+  --rule: #e2dcd2;
+  --rule-strong: #c9c1b3;
+  --accent: #8a3b2b;
+  --card-accent: #b06a52;
+  --severity-high: #8a3b2b;
+  --severity-watch: #8a6d1f;
+  --severity-low: #2f6b4f;
+  --shadow-card: 0 1px 3px rgba(60, 50, 30, 0.06);
+  --shadow-drawer: -10px 0 34px rgba(0, 0, 0, 0.14);
+  --card: #ffffff;
+  --card-line: #e6e0d5;
+  --chip: #efe9de;
+  --shade: rgba(138, 59, 43, 0.16);
+  --sans: "PingFang SC", "Helvetica Neue", "Noto Sans SC", sans-serif;
 }
 
 /* ---------- 基础排版：文章优先 ---------- */
@@ -124,9 +152,13 @@ button { font-family: var(--sans); }
   margin-top: 8px;
 }
 .hero .facade, .facade .facade { border: none; box-shadow: none; padding: 0; margin: 0; }
+.sec.facade-section { margin-top: 6px; }
+.facade-section > .facade { margin-top: 0; }
 .brief-verdict h1 { font-size: 31px; }
-.reasoned-verdict { max-width: 70ch; }
 .reasoned-verdict p, .prose p, .brief-verdict p { text-align: justify; }
+body.style-b-light .brief-verdict,
+body.style-b-light .prose,
+body.style-b-light .claim { font-family: var(--serif); }
 .badges { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 6px; font-family: var(--sans); }
 .badge, .pill {
   font-size: 12.5px; border: 1px solid var(--rule-strong); border-radius: var(--radius-chip);
@@ -156,10 +188,28 @@ button { font-family: var(--sans); }
 .sec-grid { display: block; }
 .sec-aside {
   margin-top: 18px; display: grid; gap: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   align-items: stretch;
 }
 .brief-layers-panel, .layers-panel { margin-top: 26px; }
+
+/* B sample fidelity: data surfaces and reference chips use its lighter card rule. */
+body.style-b-light .facade,
+body.style-b-light .dcard,
+body.style-b-light .indicator-card,
+body.style-b-light .hyp,
+body.style-b-light .hypothesis-card,
+body.style-b-light details.fold,
+body.style-b-light .layer-detail,
+body.style-b-light details.layer-detail {
+  background: var(--card);
+  border-color: var(--card-line);
+}
+body.style-b-light .dcard .dv { font-size: 19px; }
+body.style-b-light .ref-chip:not(.dv),
+body.style-b-light .ref-row .ref-chip { background: var(--chip); }
+body.style-b-light .gauge-track,
+body.style-b-light .position-ruler { background: var(--chip); }
 
 /* ---------- 论证块 ---------- */
 .claim { margin: 0 0 22px; }
@@ -179,6 +229,9 @@ button { font-family: var(--sans); }
 }
 .chain-card--plain { box-shadow: none; }
 .chain-card h3, .trigger-card h3 { font-family: var(--serif); font-size: 15.5px; }
+.thesis-prose .claim + .claim { margin-top: 28px; }
+.thesis-prose .decision-map { margin-top: 32px; }
+.prose-ref { display: inline; white-space: normal; }
 
 /* ---------- 反方假说 ---------- */
 .hypothesis-competition { margin-top: 6px; }
@@ -195,12 +248,16 @@ button { font-family: var(--sans); }
 .hrow b { color: var(--ink); }
 
 /* ---------- 改判条件 ---------- */
+.flip-list { margin-top: 4px; }
 .flip {
   display: flex; gap: 10px; align-items: baseline;
   font-family: var(--sans); font-size: 13.5px; line-height: 1.8;
   padding: 10px 0; border-top: 1px solid var(--rule);
 }
 .flip:first-of-type { border-top: none; }
+.boundary-pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 0; }
+.risk-board { margin-top: 22px; }
+.risk-board h3 { font-family: var(--sans); font-size: 14px; color: var(--ink-soft); margin-bottom: 4px; }
 .flip .dir {
   flex: none; font-size: 12px; font-weight: 600; border-radius: 4px; padding: 2px 8px;
 }
@@ -224,11 +281,42 @@ button { font-family: var(--sans); }
   color: var(--ink-muted); font-size: 12px; margin: 2px 0 4px;
   display: flex; flex-wrap: wrap; gap: 4px 14px;
 }
+.ev-list { margin-top: 4px; }
+.evrow { display: flex; gap: 12px; }
+.evrow .ed { flex: none; width: 86px; color: var(--ink-muted); font-size: 12.5px; }
+.evrow .et { min-width: 0; flex: 1; }
+.evrow .et b { font-weight: 600; }
+.evrow .em { color: var(--ink-muted); font-size: 12px; margin-top: 2px; }
+.evrow .ev-excerpt { margin-top: 4px; }
+details.ev-detail { margin-top: 4px; font-size: 13px; }
+details.ev-detail summary {
+  cursor: pointer; list-style: none; color: var(--accent); font-size: 12.5px;
+}
+details.ev-detail summary::-webkit-details-marker { display: none; }
+details.ev-detail summary::before { content: "▸ "; }
+details.ev-detail[open] summary::before { content: "▾ "; }
+details.ev-detail > div {
+  margin: 8px 0 4px; padding: 10px 14px; background: var(--paper-muted);
+  border-radius: 8px; line-height: 1.75; color: var(--ink-soft);
+}
+details.ev-detail b { color: var(--ink); margin-right: 6px; }
+details.ev-detail p { margin: 0 0 6px; }
+details.ev-detail ul { margin: 2px 0 6px; padding-left: 18px; }
+.fbody .evrow:first-of-type { border-top: 1px solid var(--rule); }
 .qlist { font-family: var(--sans); font-size: 13.5px; line-height: 1.8; list-style: none; padding: 0; }
 .qlist li { padding: 7px 0 7px 18px; position: relative; border-top: 1px solid var(--rule); }
 .qlist li:first-child { border-top: none; }
 .qlist li::before { content: "问"; position: absolute; left: 0; top: 9px; font-size: 11px; color: var(--accent); }
+.qlist.qlist-plain li { padding-left: 0; }
+.qlist.qlist-plain li::before { content: none; }
+.qlist.qlist-plain li > b { margin-right: 8px; color: var(--accent); font-weight: 600; }
 .audit-boundaries { margin-top: 18px; font-family: var(--sans); font-size: 13px; }
+.audit-boundaries h3, .audit-boundaries h4 { font-size: 14px; color: var(--ink-soft); margin: 0 0 4px; }
+.audit-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px; font-family: var(--sans); font-size: 13px; line-height: 1.75; color: var(--ink-soft);
+}
+.audit-grid b { color: var(--ink); }
 
 /* ---------- 数据卡与微图 ---------- */
 .dcard, .indicator-card {
@@ -246,6 +334,8 @@ button.ref-chip.dv {
 }
 button.ref-chip.dv:hover { color: var(--card-accent); }
 .dcard .dq, .dq { font-size: 12px; color: var(--ink-soft); line-height: 1.6; }
+.dcard .dv.dv-text, .dv.dv-text { font-size: 14px; line-height: 1.5; }
+button.ref-chip.dv.dv-dash { font-size: 13px; color: var(--ink-muted); border-bottom-color: var(--ink-muted); }
 .dcard.bear .dv, .bear .dv { color: var(--severity-high); }
 .dcard.bull .dv, .bull .dv { color: var(--severity-low); }
 .dcard.watch .dv, .watch .dv { color: var(--severity-watch); }
@@ -299,6 +389,11 @@ details.fold[open] summary::before, .layer-detail[open] summary::before { conten
 .fbody, .layer-detail > div { padding: 2px 16px 14px; font-size: 13.5px; line-height: 1.8; color: var(--ink-soft); }
 .layer-stack { display: grid; gap: 14px; margin-top: 10px; }
 .layer-summary { font-family: var(--serif); font-size: 16px; line-height: 1.9; }
+.layer-brief { padding-top: 26px; margin-top: 26px; border-top: 1px solid var(--rule); }
+.layer-brief:first-child { border-top: none; padding-top: 0; margin-top: 8px; }
+.layer-brief .claim { margin-bottom: 0; }
+.layer-key-readings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.layer-key-readings .dcard { min-width: 0; }
 .canon-box {
   background: var(--paper-muted); border: 1px solid var(--rule);
   border-radius: 8px; padding: 10px 14px; margin-top: 10px;
@@ -324,22 +419,22 @@ details.fold[open] summary::before, .layer-detail[open] summary::before { conten
 }
 .evidence-drawer.open .drawer-panel { transform: translateX(0); }
 .drawer-close, .dx {
-  float: right; border: 1px solid var(--rule); background: var(--paper-raised);
-  padding: 6px 12px; font-family: var(--sans); font-size: 12px; font-weight: 600;
+  position: absolute; top: 14px; right: 16px; border: none; background: transparent;
+  padding: 0; font-family: var(--sans); font-size: 18px; font-weight: 500;
   cursor: pointer; border-radius: var(--radius-chip); color: var(--ink);
 }
-.drawer-close:hover, .dx:hover { background: var(--ink); color: var(--paper-raised); }
+.drawer-close:hover, .dx:hover { color: var(--accent); }
 .drawer-ref { font-family: var(--mono); font-size: 12px; color: var(--accent); word-break: break-all; margin: 12px 0 4px; }
-.drawer-panel h2 { font-family: var(--serif); font-size: 21px; font-weight: 600; margin: 4px 0 12px; }
+.drawer-panel h2 { font-family: var(--sans); font-size: 17px; font-weight: 600; margin: 2px 36px 10px 0; line-height: 1.5; }
 .dlayer { font-size: 11px; letter-spacing: 0.2em; color: var(--ink-muted); }
 .dval { font-size: 26px; font-weight: 700; margin: 2px 0; color: var(--ink); }
 .dsub { font-size: 12px; color: var(--ink-soft); margin-bottom: 14px; }
 .dsec, .drawer-section { border-top: 1px solid var(--rule); padding-top: 12px; margin-top: 14px; }
-.dsec b, .drawer-section h3 {
+.dsec b, .dsec h3, .drawer-section h3 {
   display: block; font-family: var(--sans); font-size: 12px; letter-spacing: 0.1em;
   color: var(--ink-muted); margin: 0 0 4px; text-transform: none; font-weight: 600;
 }
-.drawer-section p, .drawer-section ul { font-size: 13.5px; line-height: 1.75; color: var(--ink-soft); margin: 0 0 8px; }
+.dsec p, .drawer-section p, .drawer-section ul { font-size: 13.5px; line-height: 1.75; color: var(--ink-soft); margin: 0 0 8px; }
 .drawer-section ul { padding-left: 18px; }
 .drawer-spark { display: block; width: 100%; height: 40px; margin-top: 8px; }
 .drawer-spark path { fill: none; stroke: var(--ink-muted); stroke-width: 1.5; }
@@ -348,7 +443,11 @@ details.fold[open] summary::before, .layer-detail[open] summary::before { conten
   padding: 18px; border: 1px dashed var(--rule-strong); border-radius: var(--radius);
   color: var(--muted); font-size: 13px;
 }
-.dfoot { margin-top: 20px; font-size: 12px; color: var(--ink-muted); }
+.dfoot { margin-top: 20px; font-size: 12px; color: var(--ink-muted); display: flex; gap: 14px; align-items: center; }
+.dfoot button {
+  border: 1px solid var(--rule-strong); background: transparent; color: var(--ink-soft);
+  font-size: 11.5px; padding: 2px 10px; border-radius: var(--radius-chip); cursor: pointer;
+}
 .sec-main { min-width: 0; }
 @media (max-width: 720px) {
   .drawer-panel, .drawer { width: calc(100vw - 16px); padding: 20px 18px; }

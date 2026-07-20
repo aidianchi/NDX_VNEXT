@@ -11,8 +11,10 @@ from agent_analysis.vnext_reporter import (
     BRIEF_SECTION_ORDER,
     DRAWER_TREND_WHITELIST,
     INDICATOR_CHARTS,
+    REF_DIGEST_JS,
     REF_DIGEST_FIELDS,
     VNextReportGenerator,
+    _drawer_reading_parts,
     _glossary_term,
     _label,
     _load_local_decision_profile,
@@ -72,8 +74,8 @@ def test_r2_brief_spine_and_layers_template_are_declared():
         "thesis",
         "stress",
         "world",
+        "brief_integrated",
         "risks",
-        "change",
         "brief_layers",
         "brief_audit",
     )
@@ -207,7 +209,8 @@ def test_r2_ref_digest_budget_validator_fails_closed():
             "L1.get_unit": {
                 "metric": "x" * 2000,
                 "layer": "L1",
-                "value_line": "",
+                "display_value": "",
+                "detail": "",
                 "quantile": None,
                 "answers": "",
                 "cannot_prove": "",
@@ -399,12 +402,12 @@ def test_risks_section_shows_upside_triggers_or_honest_placeholder():
         "risk_boundary_report": {},
     }
     html = reporter._risks_section(base)
-    assert "观察条件 1" in html
+    assert '<div class="flip"><span class="dir watch">观察</span><span>信用利差扩大</span></div>' in html
     assert html.count("信用利差扩大") == 1
 
     base["final_adjudication"]["invalidation_conditions"] = ["【转多】盈利预期上修并广度改善"]
     html = reporter._risks_section(base)
-    assert "【转多】条件 1" in html
+    assert '<div class="flip"><span class="dir bull">转多</span><span>盈利预期上修并广度改善</span></div>' in html
     assert html.count("盈利预期上修并广度改善") == 1
 
 
@@ -490,6 +493,7 @@ def test_vnext_reporter_news_section_shows_event_data_links():
 
 def test_brief_hero_renders_reasoned_verdict_with_clickable_refs(tmp_path: Path):
     reporter = VNextReportGenerator()
+    reporter._brief_ref_labels = {"L1.get_10y_real_rate": "L1·10Y Real Rate"}
     final = {
         "approval_status": "approved_with_reservations",
         "final_stance": "中性偏谨慎",
@@ -511,6 +515,84 @@ def test_brief_hero_renders_reasoned_verdict_with_clickable_refs(tmp_path: Path)
     assert 'data-ref="L1.get_10y_real_rate"' in html
     assert "[ l1.get_10y_real_rate ]" not in html
     assert "canonical.split('#', 1)[0]" in reporter._js()
+
+
+def test_reasoned_verdict_splits_real_multi_ref_incident():
+    reporter = VNextReportGenerator()
+    reporter._brief_ref_labels = {
+        "L1.get_10y_real_rate": "L1·10Y Real Rate",
+        "L4.get_ndx_wind_valuation_snapshot": "L4·NDX Wind Valuation",
+    }
+    html = reporter._reasoned_verdict_html(
+        "安全边际极薄 [L1.get_10y_real_rate, L4.get_ndx_wind_valuation_snapshot#PE]。\n\n"
+        "调查仍在继续。"
+    )
+
+    assert html.count('class="ref-chip" data-ref=') == 2
+    assert 'data-ref="L1.get_10y_real_rate"' in html
+    assert 'data-ref="L4.get_ndx_wind_valuation_snapshot#PE"' in html
+    assert "L4·NDX Wind Valuation" in html
+    assert 'data-ref="L1.get_10y_real_rate, L4' not in html
+    assert html.count("<p>") == 2
+
+
+def test_reasoned_verdict_mutes_pseudo_refs():
+    reporter = VNextReportGenerator()
+    reporter._brief_ref_labels = {"L1.get_10y_real_rate": "L1·10Y Real Rate"}
+    html = reporter._reasoned_verdict_html("调查仍在继续 [investigation]，伪造层级 [L9.fake_ref]。")
+
+    # investigation 伪 ref 以人读标签降级展示，不可点击；伪造层级保持原文降级。
+    assert '<span class="ref-chip muted">受控调查</span>' in html
+    assert '<span class="ref-chip muted">L9.fake_ref</span>' in html
+    assert 'data-ref="investigation"' not in html
+
+
+def test_brief_readers_surface_uses_editorial_layers_and_compact_drawer():
+    reporter = VNextReportGenerator()
+    artifacts = {
+        "layers": {
+            "L1": {
+                "layer_synthesis": "实际利率仍是主约束。",
+                "indicator_analyses": [
+                    {"function_id": "get_10y_real_rate", "metric": "10Y Real Rate", "current_reading": "2.35%，10年分位99.3%"},
+                    {"function_id": "get_net_liquidity_momentum", "metric": "Net Liquidity", "current_reading": "5986B美元，10年分位64.7%"},
+                    {"function_id": "get_m2_yoy", "metric": "M2 YoY Growth", "current_reading": "同比5.58%"},
+                ],
+            }
+        }
+    }
+
+    html = reporter._brief_layer_detail("L1", artifacts["layers"]["L1"], artifacts)
+
+    assert 'class="layer-brief"' in html
+    assert 'class="layer-detail"' not in html
+    assert html.count('class="indicator-card dcard"') == 2
+    assert 'class="indicator-card" data-evidence-ref=' not in html
+    assert 'class="canon-box"' not in html
+    assert "10年实际利率" in html
+    assert "净流动性" in html
+    assert "drawerLayerLabel" in REF_DIGEST_JS
+    assert "item.display_value" in REF_DIGEST_JS
+    assert "item.detail" in REF_DIGEST_JS
+    assert _drawer_reading_parts("NO_DATA_AVAILABLE") == ("", "暂无可用数据。")
+    assert _drawer_reading_parts("状态：tightening_priced") == ("", "状态：市场定价偏收紧")
+    assert _drawer_reading_parts("净流动性5986.71B美元，10年分位64.7%") == ("净流动性5986.71B美元", "10年分位64.7%")
+    assert _drawer_reading_parts("555,789,500，20日变化-26.58%") == ("", "555,789,500，20日变化-26.58%")
+    assert _drawer_reading_parts("42.0（中性区间，未超卖）") == ("", "42.0（中性区间，未超卖）")
+    assert _drawer_reading_parts("VWAP_20=717.73（价格695.33，在其下方-3.12%）") == ("", "VWAP_20=717.73（价格695.33，在其下方-3.12%）")
+
+
+def test_brief_world_keeps_expectation_ledger_inside_its_section():
+    reporter = VNextReportGenerator()
+    html = reporter._brief_world_section(
+        {
+            "event_mechanism_report": {"news_cards": []},
+            "expectation_vs_realized": {"status": "available"},
+        }
+    )
+
+    assert html.count("<section") == html.count("</section>") == 1
+    assert html.index('id="expectation-vs-realized"') < html.rindex("</section>")
 
 
 def test_reader_exit_checklist_renders_compact_rows_with_shared_dedup():
@@ -1317,12 +1399,12 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert "NDX 投资判断书" in html
     assert "主论证" in html
     assert "压力测试" in html
-    assert "外部事件事实底账" in html
+    assert "事实对照" in html
     assert "如果发生这些事，我就改判断" in html
     assert "和上次判断比，什么变了" in html
     assert "分层证据" in html
     assert "完整底稿 artifact" in html
-    spine_ids = [html.index(f'id="{section_id}"') for section_id in ("facade", "thesis", "stress", "world", "risks", "change", "layers", "audit")]
+    spine_ids = [html.index(f'id="{section_id}"') for section_id in ("facade", "thesis", "stress", "world", "integrated-adjudication", "risks", "change", "layers", "audit")]
     assert spine_ids == sorted(spine_ids)
     assert "这不是低风险环境，但可能是高风险高赔率候选。" in html
     assert "高风险高赔率候选。" in html
@@ -1330,9 +1412,19 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert "可发布" in html
     assert "Agent IO Audit" not in html
     assert "L1-L5 输入边界卡" not in html
-    assert "style-b micro-1" in html
-    assert 'class="hero sec facade"' in html
-    assert " hyp" in html
+    assert "style-b style-b-light micro-1" in html
+    assert 'class="sec facade-section"' in html
+    assert 'class="facade"' in html
+    assert ".sec.facade-section { margin-top: 6px; }" in html
+    assert ".facade-section > .facade { margin-top: 0; }" in html
+    assert '--sans: "PingFang SC", "Helvetica Neue", "Noto Sans SC", sans-serif;' in html
+    assert "--card-line: #e6e0d5;" in html
+    assert "body.style-b-light .ref-chip:not(.dv)" in html
+    assert 'class="brief-hero-grid"' not in html
+    assert "L1·10年实际利率" in html
+    assert 'class="sec-main prose thesis-prose"' in html
+    assert 'class="layer-brief"' in html
+    assert '<div class="chain-grid">' not in html
     assert " dcard" in html
     assert "skip-link" in html
     assert "Source Serif Pro" in html

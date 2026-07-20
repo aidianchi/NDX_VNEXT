@@ -34,6 +34,57 @@ LAYER_TITLES_ZH = {
     "L5": "价格与执行",
 }
 
+# These are reader-facing names only.  Function ids and provider metric names
+# remain intact in the audit artifacts and ref digest; they should not leak
+# into the reading surface as if they were prose.
+BRIEF_METRIC_LABELS = {
+    "get_10y_real_rate": "10年实际利率",
+    "get_10y_treasury": "10年名义利率",
+    "get_10y2y_spread_bp": "10Y-2Y期限利差",
+    "get_fed_funds_rate": "政策利率（EFFR）",
+    "get_fed_funds_rate_path": "政策路径定价",
+    "get_m2_yoy": "M2同比增速",
+    "get_net_liquidity_momentum": "净流动性",
+    "get_copper_gold_ratio": "铜金比",
+    "get_10y_breakeven": "10年盈亏平衡通胀",
+    "get_hy_oas_bp": "高收益债利差（HY OAS）",
+    "get_ig_oas_bp": "投资级利差（IG OAS）",
+    "get_hy_quality_spread_bp": "高收益债质量利差",
+    "get_hyg_momentum": "高收益债价格动量",
+    "get_vix": "VIX 波动率",
+    "get_vxn": "纳指波动率（VXN）",
+    "get_vxn_vix_ratio": "纳指相对波动溢价",
+    "get_vix_term_structure": "VIX期限结构",
+    "get_advance_decline_line": "腾落线",
+    "get_percent_above_ma": "均线上方股票占比",
+    "get_ndx_ndxe_ratio": "市值加权相对等权",
+    "get_qqq_qqew_ratio": "QQQ相对等权表现",
+    "get_qqq_top10_concentration": "前十大权重集中度",
+    "get_new_highs_lows": "新高新低扩散",
+    "get_mcclellan_oscillator_nasdaq_or_nyse": "麦克莱伦广度动量",
+    "get_ndx_wind_valuation_snapshot": "NDX估值与风险溢价",
+    "get_ndx_pe_and_earnings_yield": "NDX市盈率与盈利收益率",
+    "get_equity_risk_premium": "简式收益差距",
+    "get_damodaran_us_implied_erp": "隐含权益风险溢价参考",
+    "get_m7_capex_cycle": "M7资本开支周期",
+    "get_m7_buyback_flow": "M7实际回购",
+    "get_m7_earnings_blackout_calendar": "M7静默期日历",
+    "get_l5_deterministic_snapshot": "技术面快照",
+    "get_qqq_technical_indicators": "QQQ技术指标",
+    "get_multi_scale_ma_position": "多周期均线位置",
+    "get_macd_qqq": "MACD动量",
+    "get_rsi_qqq": "RSI强弱指标",
+    "get_atr_qqq": "ATR波动幅度",
+    "get_obv_qqq": "OBV量价累计",
+    "get_volume_analysis_qqq": "成交量结构",
+    "get_price_volume_quality_qqq": "量价质量",
+    "get_donchian_channels_qqq": "唐奇安通道位置",
+    "get_crowdedness_dashboard": "拥挤度仪表盘",
+    "get_cftc_nq_positioning": "CFTC纳指期货仓位",
+    "get_finra_margin_debt": "融资余额（FINRA）",
+    "get_cnn_fear_greed_index": "恐惧贪婪指数",
+}
+
 DISPLAY_LABELS = {
     "same_day_or_days": "未来几天",
     "one_to_three_months": "1-3 个月",
@@ -162,8 +213,8 @@ BRIEF_SECTION_ORDER = (
     "thesis",
     "stress",
     "world",
+    "brief_integrated",
     "risks",
-    "change",
     "brief_layers",
     "brief_audit",
 )
@@ -179,7 +230,8 @@ TEMPLATE_ORDER = {
 REF_DIGEST_FIELDS = (
     "metric",
     "layer",
-    "value_line",
+    "display_value",
+    "detail",
     "quantile",
     "answers",
     "cannot_prove",
@@ -465,9 +517,10 @@ def _artifact_href(path: Any) -> str:
 def _artifact_link(label: Any, path: Any) -> str:
     path_text = str(path or "").strip()
     href = _artifact_href(path_text)
+    label_text = str(label or "").strip() or path_text or "未记录"
     if not href:
-        return f"<span>{_escape(path_text or '未记录')}</span>"
-    return f'<a href="{_escape(href)}">{_escape(path_text)}</a>'
+        return f"<span>{_escape(label_text if not path_text else path_text)}</span>"
+    return f'<a href="{_escape(href)}" title="{_escape(path_text)}">{_escape(label_text)}</a>'
 
 
 def _canonical_ref(ref: Any) -> str:
@@ -925,6 +978,52 @@ def _compact_text(value: Any, limit: int = 420) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _drawer_reading_parts(value: Any) -> Tuple[str, str]:
+    """Return a deliberately short drawer value and a plain-language detail.
+
+    The drawer is a narrow verification surface.  It must never promote a
+    multi-sentence metric explanation, an enum, or an unavailable marker into
+    the largest type on the page.
+    """
+    raw = _compact_text(value, 180)
+    if not raw or raw.upper() in {"NO_DATA_AVAILABLE", "UNAVAILABLE", "N/A", "NA"}:
+        return "", "暂无可用数据。"
+    translations = {
+        "tightening_priced": "市场定价偏收紧",
+        "easing_priced": "市场定价偏宽松",
+        "negative": "偏弱",
+        "positive": "改善",
+        "distribution": "派发",
+        "accelerating": "加速",
+        "falling": "下行",
+        "normal": "正常",
+        "short_above_long": "短期高于长期均线",
+        "short_below_long": "短期低于长期均线",
+        "contango": "正挂（无恐慌溢价）",
+        "backwardation": "倒挂（恐慌溢价）",
+    }
+    detail = raw
+    for source, target in translations.items():
+        detail = re.sub(rf"\b{re.escape(source)}\b", target, detail, flags=re.IGNORECASE)
+    if raw.startswith("状态：") or not re.search(r"\d", raw):
+        return "", detail
+    # A display value is opt-in: only a short Chinese/number string ending
+    # before a Chinese punctuation boundary qualifies.  In particular, never
+    # split ASCII commas (thousands separators), parenthetical explanations,
+    # or machine assignments such as ``VWAP_20=...``.
+    first = re.split(r"[，；。]", raw, maxsplit=1)[0].strip()
+    safe_value = re.fullmatch(r"[\u4e00-\u9fff0-9.+\-/% Bbp美元]+", first)
+    if (
+        not first
+        or len(first) > 32
+        or not safe_value
+        or any(token in first for token in (",", "（", "）", "=", "_"))
+    ):
+        return "", detail
+    remainder = detail[len(first):].lstrip("，,；;。 ")
+    return first, remainder
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -1514,6 +1613,11 @@ function sparkline(points) {
   return `<div class="dsec"><h3>走势形状</h3><svg class="drawer-spark" viewBox="0 0 100 32" role="img" aria-label="降采样走势线"><path d="${path}"></path></svg><p class="dsub">仅展示经核验快照中的降采样形状，不据此新增结论。</p></div>`;
 }
 
+function drawerLayerLabel(layer) {
+  const names = {L1: '宏观与利率', L2: '信用与波动', L3: '内部结构', L4: '估值与盈利', L5: '价格与执行'};
+  return `${layer || '证据'} · ${names[layer] || '分层证据'}`;
+}
+
 function showDrawer() {
   if (!drawer) return;
   drawer.classList.add('open');
@@ -1541,10 +1645,12 @@ function openDrawer(ref, label, trigger) {
     return;
   }
   const trend = (digest.trends || {})[baseRef] || [];
+  const title = String(label || item.metric || baseRef).replace(/^L[1-5][·.\s]+/, '');
   drawerContent.innerHTML = `
-    <p class="dlayer">${escapeHtml(item.layer)} · ${escapeHtml(baseRef)}</p>
-    <h2>${escapeHtml(item.metric)}</h2>
-    <p class="dval">${escapeHtml(item.value_line || '本轮没有可展示读数。')}</p>
+    <p class="dlayer">${escapeHtml(drawerLayerLabel(item.layer))}</p>
+    <h2>${escapeHtml(title)}</h2>
+    ${item.display_value ? `<p class="dval">${escapeHtml(item.display_value)}</p>` : ''}
+    ${item.detail ? `<p class="dsub">${escapeHtml(item.detail)}</p>` : ''}
     ${gauge(item.quantile, baseRef)}
     ${sparkline(trend)}
     <div class="dsec"><h3>它回答什么</h3><p>${escapeHtml(item.answers || '未记录')}</p></div>
@@ -1781,16 +1887,27 @@ class VNextReportGenerator:
         synthesis = artifacts["synthesis_packet"]
         meta = synthesis.get("packet_meta", {})
         template_name = TEMPLATE_DESCRIPTIONS[template]["name"]
-        title = f"vNext {template_name} · {final.get('final_stance', 'N/A')}"
+        brief = template == "brief"
+        if brief:
+            analysis_meta = (artifacts.get("analysis_packet", {}) or {}).get("meta", {})
+            title_date = meta.get("data_date") or analysis_meta.get("data_date") or ""
+            title = f"NDX 投资判断书 · {title_date}" if title_date else "NDX 投资判断书"
+        else:
+            title = f"vNext {template_name} · {final.get('final_stance', 'N/A')}"
         payload = (
             self._build_ref_digest(run_path, artifacts, layers_artifact_path or Path("vnext_layers.html"))
             if template == "brief"
             else self._drawer_payload(run_path, artifacts)
         )
+        self._brief_ref_labels = {
+            _canonical_ref(ref): f"{metric.get('layer')}·{BRIEF_METRIC_LABELS.get(_canonical_ref(ref).split('.', 1)[-1].split('#', 1)[0]) or metric.get('metric')}"
+            for ref, metric in (payload.get("metrics") or {}).items()
+            if isinstance(metric, dict) and metric.get("layer") and metric.get("metric")
+        } if brief else self._artifact_ref_labels(artifacts)
+        self._brief_digest_metrics = dict(payload.get("metrics") or {}) if brief else {}
         payload_json = _json_for_script(payload)
         fonts_url = STYLE_FONTS.get(style, STYLE_FONTS["slate_v2"])
-        brief = template == "brief"
-        body_classes = f"template-{_escape(template)} style-{style}" + (" style-b micro-1" if brief else "")
+        body_classes = f"template-{_escape(template)} style-{style}" + (" style-b style-b-light micro-1" if brief else "")
         hero = "" if brief else self._hero(final, meta, run_path, template, artifacts)
         navigation = "" if brief else self._navigation(template)
         payload_id = "ref-digest" if brief else "vnext-data"
@@ -1878,10 +1995,12 @@ class VNextReportGenerator:
                     quantile = _extract_percentile(item.get("current_reading"))
                 cannot = "；".join(str(value) for value in _as_list(item.get("misread_guards"))[:2])
                 falsifier = "；".join(str(value) for value in _as_list(item.get("falsifiers"))[:2])
+                display_value, detail = _drawer_reading_parts(item.get("current_reading"))
                 metric = {
                     "metric": _compact_text(item.get("metric") or function_id, 80),
                     "layer": layer,
-                    "value_line": _compact_text(item.get("current_reading"), 180),
+                    "display_value": display_value,
+                    "detail": detail,
                     "quantile": round(float(quantile), 2) if quantile is not None else None,
                     "answers": _compact_text(item.get("canonical_question"), 160),
                     "cannot_prove": _compact_text(cannot or item.get("permission_type"), 160),
@@ -1890,7 +2009,7 @@ class VNextReportGenerator:
                 }
                 while len(json.dumps(metric, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 1024:
                     changed = False
-                    for key in ("value_line", "answers", "cannot_prove", "falsifier"):
+                    for key in ("detail", "answers", "cannot_prove", "falsifier"):
                         value = str(metric.get(key) or "")
                         if len(value) > 48:
                             metric[key] = _compact_text(value, max(48, len(value) - 24))
@@ -2161,14 +2280,22 @@ class VNextReportGenerator:
             "thesis": lambda: self._brief_thesis_section(artifacts),
             "stress": lambda: self._brief_stress_section(artifacts),
             "world": lambda: self._brief_world_section(artifacts),
-            "change": lambda: self._brief_change_section(artifacts),
+            "brief_integrated": lambda: self._integrated_adjudication_block(
+                artifacts,
+                section_id="integrated-adjudication",
+                section_kicker="04 · 综合裁决",
+            ),
             "brief_layers": lambda: self._brief_layers_section(artifacts),
             "brief_audit": lambda: self._brief_audit_line(run_path, artifacts, audit_index_path),
             "decision": lambda: self._decision_section(artifacts),
             "actions": lambda: self._actions_section(artifacts),
             "evidence": lambda: self._evidence_section(final),
             "news": lambda: self._news_section(artifacts),
-            "risks": lambda: self._risks_section(artifacts),
+            "risks": lambda: self._risks_section(
+                artifacts,
+                section_kicker="05 · 改判条件" if template == "brief" else "04 · 风险边界",
+                include_change_fold=(template == "brief"),
+            ),
             "conflicts": lambda: self._conflicts_section(artifacts),
             "layers": lambda: self._layers_section(artifacts),
             "governance": lambda: self._governance_section(artifacts),
@@ -2203,10 +2330,10 @@ class VNextReportGenerator:
             item for item in _as_list(competition.get("hypotheses"))
             if isinstance(item, dict) and str(item.get("status") or "") == "candidate"
         ]
-        strongest_dissent = _sentence(candidates[0].get("hypothesis_text"), 170) if candidates else "本轮没有结构化候选异议。"
-        payoff = _sentence(final.get("payoff_assessment"), 34) or "赔率未记录"
+        strongest_dissent = _sentence(candidates[0].get("hypothesis_text"), 170) if candidates else ""
+        payoff = self._badge_value(final.get("payoff_assessment"), strip_prefix="赔率") or "未记录"
         confidence = _label(final.get("confidence", "medium"), "confidence")
-        stance = _sentence(final.get("final_stance"), 32) or "姿态未记录"
+        stance_short = self._stance_short(final, reader)
         integrity = artifacts.get("data_integrity_report", {}) if isinstance(artifacts.get("data_integrity_report"), dict) else {}
         publish_status = integrity.get("publish_status") or ("blocked" if integrity.get("blocked") else "not recorded")
         blocking_reasons = [value for value in _as_list(integrity.get("blocking_reasons")) if str(value).strip()]
@@ -2220,32 +2347,44 @@ class VNextReportGenerator:
         publish_note = (
             '<p class="dissent publish-block">发布闸门未通过：本页只能作为内部审阅材料，不能当作可发布结论。</p>'
             if blocked
-            else f'<span class="badge pill">发布 {_escape(_label(publish_status, "publish_status"))}</span>'
+            else f'<span class="badge pill">发布 <b>{_escape(_label(publish_status, "publish_status"))}</b></span>'
+        )
+        data_date = meta.get("data_date") or analysis_meta.get("data_date") or "未记录"
+        hero_refs: List[str] = []
+        principal = final.get("principal_contradiction") if isinstance(final.get("principal_contradiction"), dict) else {}
+        hero_refs.extend(_as_list(principal.get("evidence_refs")))
+        for item in _as_list(final.get("key_support_chains"))[:3]:
+            if isinstance(item, dict):
+                hero_refs.extend(_as_list(item.get("evidence_refs")))
+        self._brief_used_reading_refs: set = set()
+        key_cards = self._brief_key_reading_cards(hero_refs, exclude=self._brief_used_reading_refs, cap=5)
+        dissent_html = (
+            f'<aside class="hero-risks dissent"><b>最强异议</b>：{_escape(strongest_dissent)}</aside>'
+            if strongest_dissent else ""
         )
         return f"""
-<section class="hero sec facade" id="facade">
-  <div class="brief-hero-grid sec-grid">
+<section class="sec facade-section" id="facade">
+  <div class="facade">
+  <div class="sec-grid">
     <div class="brief-verdict sec-main prose">
-      <p class="kicker">NDX 投资判断书 · {_escape(object_name)}</p>
+      <p class="kicker">NDX 投资判断书 · 判断对象：{_escape(object_name)} · 数据截至 {_escape(data_date)} · 运行 {_escape(run_path.name)}</p>
       <h1>{_escape(final.get('final_stance') or reader.get('one_liner') or '本轮判断')}</h1>
-      <p class="reasoned-verdict">{self._reasoned_verdict_html(verdict)}</p>
-      {f'<p class="section-note verdict-signature">{_escape(verdict_signature)}</p>' if verdict_signature else ''}
       <div class="brief-meta-line badges">
-        <span class="badge pill">姿态 {_escape(stance)}</span>
-        <span class="badge pill">赔率 {_escape(payoff)}</span>
-        <span class="badge pill">可信度 {_escape(confidence)}</span>
+        {f'<span class="badge pill">姿态 <b>{_escape(stance_short)}</b></span>' if stance_short else ''}
+        <span class="badge pill">赔率 <b>{_escape(payoff)}</b></span>
+        <span class="badge pill">可信度 <b>{_escape(confidence)}</b></span>
         {publish_note if not blocked else ''}
       </div>
+      <div class="reasoned-verdict">{self._reasoned_verdict_html(verdict)}</div>
+      {f'<p class="section-note verdict-signature">{_escape(verdict_signature)}</p>' if verdict_signature else ''}
       {publish_note if blocked else ''}
-      <aside class="hero-risks dissent"><span>最强异议</span><p>{_escape(strongest_dissent)}</p></aside>
-      <nav class="nav jumplinks" aria-label="判断书内跳转">
-        <a href="#thesis">正方论证</a><a href="#stress">反方压力测试</a><a href="#risks">改判条件</a>
+      {dissent_html}
+      <nav class="jumplinks" aria-label="判断书内跳转">
+        ↓ <a href="#thesis">正方主论证</a><a href="#stress">反方压力测试</a><a href="#world">外部世界对照</a><a href="#integrated-adjudication">综合裁决</a><a href="#risks">改判条件</a><a href="#layers">五层底稿</a>
       </nav>
     </div>
-    <aside class="brief-action-card sec-aside">
-      <article class="boundary-card dcard"><span class="dk">判断对象</span><strong class="dv">{_escape(object_name)}</strong><p class="dq">只回答本 run 的 NDX 判断，不外推到其他资产。</p></article>
-      <article class="boundary-card dcard"><span class="dk">数据日期</span><strong class="dv">{_escape(meta.get('data_date') or analysis_meta.get('data_date') or 'N/A')}</strong><p class="dq">运行目录：{_escape(run_path.name)}</p></article>
-    </aside>
+    {f'<aside class="sec-aside">{key_cards}</aside>' if key_cards else ''}
+  </div>
   </div>
 </section>
 """
@@ -2255,54 +2394,57 @@ class VNextReportGenerator:
         thesis = artifacts.get("thesis_draft", {}) or {}
         surface = self._decision_surface(final, thesis)
         principal = surface.get("principal_contradiction") if isinstance(surface.get("principal_contradiction"), dict) else {}
-        principal_refs = self._ref_chips(principal.get("evidence_refs", []))
+        principal_refs = self._brief_inline_refs(principal.get("evidence_refs", []))
+        principal_summary = str(principal.get("summary") or "")
+        principal_title = "估值压缩风险" if "估值" in principal_summary and "利率" in principal_summary else "本轮主要矛盾"
         chains = []
         for index, item in enumerate(_as_list(final.get("key_support_chains") or thesis.get("key_support_chains"))[:3], 1):
             if not isinstance(item, dict):
                 continue
             refs = _as_list(item.get("evidence_refs"))
-            label = _human_ref_label(refs[0]) if refs else "证据"
             chains.append(f"""
 <article class="claim">
-  <h3>支撑链 {index} · {_escape(label)}</h3>
-  <p>{_escape(item.get('chain_description') or item.get('claim') or '')}</p>
-  <div class="ref-row">{self._ref_chips(refs)}</div>
+  <div class="tag sans">支撑链 {'一二三'[index - 1]}</div>
+  <p>{_escape(item.get('chain_description') or item.get('claim') or '')}{self._brief_inline_refs(refs)}</p>
 </article>""")
         price_rows = []
         for item in _as_list(surface.get("price_reflection_map"))[:6]:
             if not isinstance(item, dict):
                 continue
             price_rows.append(f"""
-<article class="claim">
-  <h3>{_escape(_display_label(item.get('category') or item.get('target') or '定价'))}</h3>
-  <p>{_escape(item.get('rationale') or '')}</p>
-  <small>{_escape(_display_label(item.get('reflected_state') or 'unclear'))}</small>
-  <div class="ref-row">{self._ref_chips(item.get('evidence_refs', []))}</div>
-</article>""")
+<p><b>{_escape(_display_label(item.get('category') or item.get('target') or '定价'))}：</b>{_escape(item.get('rationale') or '')} <span class="reading">{_escape(_display_label(item.get('reflected_state') or 'unclear'))}</span>{self._brief_inline_refs(item.get('evidence_refs', []))}</p>""")
         horizon_rows = []
         for item in _as_list(surface.get("time_horizon_views"))[:3]:
             if not isinstance(item, dict):
                 continue
             horizon_rows.append(f"""
-<article class="claim">
-  <h3>{_escape(_display_label(item.get('horizon') or '时间尺度'))}</h3>
-  <p>{_escape(item.get('view') or '')}</p>
-  <small>{_escape(item.get('action_implication') or '')}</small>
-  <div class="ref-row">{self._ref_chips(item.get('evidence_refs', []))}</div>
-</article>""")
+<p><b>{_escape(_display_label(item.get('horizon') or '时间尺度'))}：</b>{_escape(item.get('view') or '')} {_escape(item.get('action_implication') or '')}{self._brief_inline_refs(item.get('evidence_refs', []))}</p>""")
+        aside_refs: List[str] = []
+        for item in _as_list(surface.get("price_reflection_map"))[:6]:
+            if isinstance(item, dict):
+                aside_refs.extend(_as_list(item.get("evidence_refs")))
+        for item in _as_list(surface.get("time_horizon_views"))[:3]:
+            if isinstance(item, dict):
+                aside_refs.extend(_as_list(item.get("evidence_refs")))
+        aside_cards = self._brief_key_reading_cards(
+            aside_refs, exclude=getattr(self, "_brief_used_reading_refs", set()), cap=5
+        )
         return f"""
 <section class="panel sec" id="thesis">
-  <div class="sec-head"><span class="tag sans">01 · 正方</span><h2>主论证</h2></div>
-  <article class="chain-card chain-card--plain hyp">
-    <span class="hlabel">主要矛盾</span>
-    <div class="hrow"><b>判断</b><p>{_escape(principal.get('summary') or '未形成结构化主要矛盾。')}</p></div>
-    <div class="hrow"><b>为什么是它</b><p>{_escape(principal.get('why_principal') or '')}</p></div>
-    <div class="hrow"><b>动作含义</b><p>{_escape(principal.get('action_implication') or '')}</p></div>
-    <div class="ref-row">{principal_refs}</div>
-  </article>
-  <div class="chain-grid">{''.join(chains) or '<p>暂无结构化支撑链。</p>'}</div>
-  <h3 class="reader-sub">价格反映</h3><div class="chain-grid">{''.join(price_rows) or '<p>暂无结构化价格反映地图。</p>'}</div>
-  <h3 class="reader-sub">三个时间尺度</h3><div class="chain-grid">{''.join(horizon_rows) or '<p>暂无结构化时间尺度判断。</p>'}</div>
+  <div class="sec-head"><span class="kicker">01 · 正方主论证</span><h2>为什么主要矛盾是“{_escape(principal_title)}”</h2></div>
+  <div class="sec-grid"><div class="sec-main prose thesis-prose">
+    <article class="claim">
+      <div class="tag sans">主要矛盾</div>
+      <h3>{_escape(principal_summary or '未形成结构化主要矛盾。')}</h3>
+      <p>{_escape(principal.get('why_principal') or '')}{principal_refs}</p>
+      <p>{'<b>行动含义：</b>' + _escape(principal.get('action_implication')) if principal.get('action_implication') else ''}</p>
+    </article>
+    {''.join(chains) or '<p>暂无结构化支撑链。</p>'}
+    <article class="claim decision-map"><div class="tag sans">价格已计入什么（推断，非事实）</div>{''.join(price_rows) or '<p>暂无结构化价格反映地图。</p>'}</article>
+    <article class="claim decision-map"><div class="tag sans">三个时间尺度</div>{''.join(horizon_rows) or '<p>暂无结构化时间尺度判断。</p>'}</article>
+  </div>
+  {f'<aside class="sec-aside">{aside_cards}</aside>' if aside_cards else ''}
+  </div>
   {self._long_term_assessment_section(final)}
 </section>
 """
@@ -2378,26 +2520,16 @@ class VNextReportGenerator:
 """
 
     def _brief_world_section(self, artifacts: Dict[str, Any]) -> str:
-        section = self._event_layer_summary_section(artifacts)
         expectation = self._expectation_ledger_block(artifacts)
-        if not section:
-            return '<section class="panel sec" id="world"><div class="sec-head"><span class="tag sans">03 · 外部世界</span><h2>事实对照</h2></div><p>本轮没有新闻事实材料。</p>' + expectation + '</section>'
-        section = section.replace('<section class="panel" id="event-layer-summary">', '<section class="panel sec" id="world">', 1)
-        section = section.replace('<div class="section-kicker">05 · 新闻事实底账</div>', '<div class="sec-head"><span class="tag sans">03 · 外部世界</span></div>', 1)
-        if expectation:
-            section = section.replace("</section>", expectation + "</section>", 1)
-        return section
-
-    def _brief_change_section(self, artifacts: Dict[str, Any]) -> str:
-        checklist = artifacts.get("golden_pit_checklist", {}) if isinstance(artifacts.get("golden_pit_checklist"), dict) else {}
-        changes = [str(item) for item in _as_list(checklist.get("changed_since_last_run_summary")) if str(item).strip()]
-        rows = "".join(f"<li>{_escape(item)}</li>" for item in changes[:6]) or "<li>本轮未记录显著变化，或上次 run 不可比。</li>"
-        return f"""
-<section class="panel sec" id="change">
-  <div class="sec-head"><span class="tag sans">05 · 变化</span><h2>和上次判断比，什么变了</h2></div>
-  <ul class="qlist">{rows}</ul>
-</section>
-"""
+        return self._event_layer_summary_section(
+            artifacts,
+            section_id="world",
+            section_kicker="03 · 外部世界",
+            section_title="事实对照",
+            section_class="panel sec",
+            include_integrated=False,
+            section_append=expectation,
+        )
 
     def _brief_audit_line(
         self,
@@ -2415,14 +2547,15 @@ class VNextReportGenerator:
                 layers_stem = audit_index_path.stem.removesuffix("_audit_index") + "_layers"
             layers_path = f"{layers_stem}.html"
         links = [
-            _artifact_link("运行目录", run_path),
-            _artifact_link("Workbench", run_path / "layer_cards"),
+            _artifact_link(f"运行目录 {run_path.name}", run_path),
+            _artifact_link("L1-L5 底稿目录", run_path / "layer_cards"),
             _artifact_link("Prompt Inspector", inspector),
             f'<a href="{_escape(layers_path)}">完整底稿 artifact</a>' if layers_path else "<span>完整底稿 artifact 未生成</span>",
         ]
         return f"""
 <section class="panel sec audit-line" id="audit">
-  <span class="tag sans">07 · 审计</span>{' · '.join(links)}
+  <div class="sec-head"><span class="tag sans">07 · 审计</span><h2>审计入口</h2></div>
+  <div class="section-note">{' · '.join(links)}</div>
 </section>
 """
 
@@ -3684,7 +3817,17 @@ class VNextReportGenerator:
 </section>
 """
 
-    def _event_mechanism_report_section(self, mechanism: Dict[str, Any], artifacts: Optional[Dict[str, Any]] = None) -> str:
+    def _event_mechanism_report_section(
+        self,
+        mechanism: Dict[str, Any],
+        artifacts: Optional[Dict[str, Any]] = None,
+        *,
+        section_id: str = "event-layer-summary",
+        section_kicker: str = "05 · 外部事件对照",
+        section_title: str = "外部事件事实与解读",
+        section_class: str = "panel",
+        section_append: str = "",
+    ) -> str:
         if not isinstance(mechanism, dict) or not mechanism:
             return ""
         delivery = mechanism.get("delivery_to_integrated_report", {}) if isinstance(mechanism.get("delivery_to_integrated_report"), dict) else {}
@@ -3730,8 +3873,7 @@ class VNextReportGenerator:
         ordered_card_ids = interpreted_ids + [
             key for key in ordered_card_ids if key not in interpreted_ids
         ]
-        news_rows = ""
-        for card_id in ordered_card_ids[:16]:
+        def event_row(card_id: str) -> str:
             card = cards[card_id]
             token = card_id.split(":", 1)[-1]
             interpretation_card = interpretation_cards.get(token)
@@ -3741,9 +3883,13 @@ class VNextReportGenerator:
                 card.get("source_tier")
                 or source_tiers.get(token)
                 or source_tiers_by_title.get((title, source_name))
-                or "未记录"
+                or ""
             )
+            date_text = _display_date(card.get("published_at")) or "日期待核"
             excerpt = _fact_excerpt(card.get("raw_text_excerpt"))
+            read_state = "已读正文" if interpretation_card and str(card.get("raw_text_excerpt") or "").strip() else "仅标题与片段 · 降级阅读"
+            meta_line = " · ".join(part for part in (source_name, self._tier_zh(source_tier), read_state) if part)
+            fold = ""
             if interpretation_card:
                 mechanism_hypothesis = interpretation_card.get("mechanism_hypothesis", {})
                 mechanism_text = (
@@ -3753,35 +3899,50 @@ class VNextReportGenerator:
                 )
                 confirmation_rows = "".join(
                     f"<li>{_escape(item)}</li>"
-                    for item in _as_list(interpretation_card.get("needs_data_confirmation"))
-                    if str(item).strip()
-                ) or "<li>未记录明确确认项。</li>"
-                limitation_rows = "".join(
-                    f"<li>{_escape(item)}</li>"
-                    for item in _as_list(interpretation_card.get("limitations"))
+                    for item in _as_list(interpretation_card.get("needs_data_confirmation"))[:4]
                     if str(item).strip()
                 )
-                news_rows += f"""
-        <li class="news-item">
-          <div class="news-item-head"><b>{_escape(title)}</b></div>
-          <p class="news-fact-meta"><span>来源：{_escape(source_name)}</span><span>source_tier：{_escape(source_tier)}</span><span>日期：{_escape(card.get('published_at') or '未记录')}</span></p>
-          <div class="event-interpretation-card">
-            <p><b>事实摘要</b><span>{_escape(interpretation_card.get('fact_summary') or excerpt)}</span></p>
-            <p><b>事件解读</b><span>{_escape(interpretation_card.get('interpretation') or '')}</span></p>
-            <p><b>机制假设</b><span>{_escape(mechanism_text)}</span></p>
-            <div><b>需要数据确认</b><ul>{confirmation_rows}</ul></div>
-            {f'<div><b>限制</b><ul>{limitation_rows}</ul></div>' if limitation_rows else ''}
-          </div>
-        </li>
-"""
-                continue
-            news_rows += f"""
-        <li class="news-item">
-          <div class="news-item-head"><b>{_escape(title)}</b></div>
-          <p class="news-fact-meta"><span>来源：{_escape(source_name)}</span><span>source_tier：{_escape(source_tier)}</span><span>日期：{_escape(card.get('published_at') or '未记录')}</span></p>
-          <p>{_escape(excerpt)}</p>
-        </li>
-"""
+                limitation_rows = "".join(
+                    f"<li>{_escape(item)}</li>"
+                    for item in _as_list(interpretation_card.get("limitations"))[:3]
+                    if str(item).strip()
+                )
+                fold_parts = "".join(
+                    part for part in (
+                        f'<p><b>事实摘要</b>{_escape(interpretation_card.get("fact_summary") or excerpt)}</p>',
+                        f'<p><b>事件解读</b>{_escape(interpretation_card.get("interpretation") or "")}</p>' if str(interpretation_card.get("interpretation") or "").strip() else "",
+                        f'<p><b>机制假设</b>{_escape(mechanism_text)}</p>' if str(mechanism_text or "").strip() else "",
+                        f'<div><b>需要数据确认</b><ul>{confirmation_rows}</ul></div>' if confirmation_rows else "",
+                        f'<div><b>限制</b><ul>{limitation_rows}</ul></div>' if limitation_rows else "",
+                    )
+                )
+                fold = f'<details class="ev-detail"><summary>解读与待确认数据</summary><div>{fold_parts}</div></details>'
+            elif excerpt:
+                fold = f'<div class="em ev-excerpt">{_escape(excerpt)}</div>'
+            return (
+                f'<div class="evrow"><div class="ed">{_escape(date_text)}</div>'
+                f'<div class="et"><b>{_escape(title)}</b><div class="em">{_escape(meta_line)}</div>{fold}</div></div>'
+            )
+
+        visible_rows = "".join(event_row(card_id) for card_id in ordered_card_ids[:8])
+        overflow_ids = ordered_card_ids[8:16]
+        overflow_rows = "".join(event_row(card_id) for card_id in overflow_ids)
+        news_rows = visible_rows + (
+            f'<details class="fold"><summary>其余 {len(overflow_ids)} 条事件底账</summary><div class="fbody">{overflow_rows}</div></details>'
+            if overflow_rows else ""
+        )
+        # R1 裁决：headline_judgment 是模板拼接句，不得作为章节总结正文冒充分析；
+        # 本章节的解释性总结由紧随其后的"综合裁决"（LLM 治理链产物）承担。
+        total_events = len(cards)
+        official_count = 0
+        for event in ledger_events:
+            if isinstance(event, dict) and "official" in str(event.get("source_tier") or ""):
+                official_count += 1
+        ledger_card = (
+            f'<article class="dcard"><span class="dk">本轮事件底账</span>'
+            f'<strong class="dv dv-text">{total_events} 条 · 官方源 {official_count} 条</strong>'
+            f'<p class="dq">事件材料不进入 L1-L5 主证据链；职责是解释与预警。</p></article>'
+        )
         question_rows = "".join(
             f"<li><b>{_escape('新闻问数据' if item.get('direction') == 'event_to_data' else '数据问新闻')}</b><span>{_escape(item.get('question') or '')}</span></li>"
             for item in _as_list(mechanism.get("cross_layer_questions"))[:6]
@@ -3794,22 +3955,35 @@ class VNextReportGenerator:
                 watch_items.append(text)
         watchlist = "".join(f"<li>{_escape(item)}</li>" for item in watch_items[:6]) or "<li>暂无明确追踪项。</li>"
         return f"""
-<section class="panel" id="event-layer-summary">
-  <div class="section-kicker">05 · 外部事件对照</div>
-  <h2>外部事件事实与解读</h2>
-  <ul class="news-list">{news_rows or '<li class="news-item"><p>暂无新闻事实材料。</p></li>'}</ul>
+<section class="{_escape(section_class)}" id="{_escape(section_id)}">
+  <div class="sec-head"><span class="tag sans">{_escape(section_kicker)}</span><h2>{_escape(section_title)}</h2></div>
+  <p class="section-note">事件材料不进入主证据链、不构成判断依据；它们的职责是解释与预警。</p>
+  <div class="sec-grid">
+  <div class="sec-main">
+  <div class="ev-list">{news_rows or '<p>暂无新闻事实材料。</p>'}</div>
   <div class="audit-boundaries">
     <h3>新闻事件给数据层出的题</h3>
-    <ul>{question_rows or '<li>暂无跨层问题。</li>'}</ul>
+    <ul class="qlist qlist-plain">{question_rows or '<li>暂无跨层问题。</li>'}</ul>
   </div>
-  <div class="audit-boundaries">
-    <h3>下一步追踪</h3>
-    <ul>{watchlist}</ul>
+  <details class="fold"><summary>下一步追踪</summary><div class="fbody"><ul>{watchlist}</ul></div></details>
   </div>
+  <aside class="sec-aside">{ledger_card}</aside>
+  </div>
+  {section_append}
 </section>
 """
 
-    def _event_layer_summary_section(self, artifacts: Dict[str, Any]) -> str:
+    def _event_layer_summary_section(
+        self,
+        artifacts: Dict[str, Any],
+        *,
+        section_id: str = "event-layer-summary",
+        section_kicker: str = "05 · 外部事件对照",
+        section_title: str = "外部事件事实与解读",
+        section_class: str = "panel",
+        include_integrated: bool = True,
+        section_append: str = "",
+    ) -> str:
         mechanism = artifacts.get("event_mechanism_report", {})
         if not isinstance(mechanism, dict) or not mechanism:
             integrated = artifacts.get("integrated_synthesis_report", {})
@@ -3828,26 +4002,62 @@ class VNextReportGenerator:
                 if isinstance(event, dict)
             ]
             mechanism = {"news_cards": fallback_cards}
-        return self._event_mechanism_report_section(mechanism, artifacts) + self._integrated_adjudication_block(artifacts)
+        section = self._event_mechanism_report_section(
+            mechanism,
+            artifacts,
+            section_id=section_id,
+            section_kicker=section_kicker,
+            section_title=section_title,
+            section_class=section_class,
+            section_append=section_append,
+        )
+        return section + (self._integrated_adjudication_block(artifacts) if include_integrated else "")
 
-    def _integrated_adjudication_block(self, artifacts: Dict[str, Any]) -> str:
+    def _recollection_fold(self, artifacts: Dict[str, Any]) -> str:
+        """W2 补采清单：人读格式，机器指纹折叠为审计材料。"""
         integrated = artifacts.get("integrated_synthesis_report", {})
-        adjudication = integrated.get("integrated_adjudication") if isinstance(integrated, dict) else None
         recollection = integrated.get("recollection_requests") if isinstance(integrated, dict) else {}
-        recollection_rows = ""
+        trigger_zh = {
+            "partially_answered": "部分回答后仍有缺口",
+            "cannot_answer_yet": "暂无法回答",
+            "not_yet_testable": "当前不可检验",
+        }
+        rows = ""
+        pending_manual = 0
+        total = 0
         for request in _as_list(recollection.get("requests") if isinstance(recollection, dict) else []):
             if not isinstance(request, dict):
                 continue
-            candidates = "、".join(str(item) for item in _as_list(request.get("candidate_function_ids"))) or "待人工确定"
-            recollection_rows += (
-                f"<li><b>{_escape(request.get('source_type'))} · {_escape(request.get('source_id'))}</b>"
-                f"<span>{_escape(request.get('missing'))}</span>"
-                f"<small>候选函数：{_escape(candidates)}；触发：{_escape(request.get('trigger_reason'))}</small></li>"
+            total += 1
+            missing = str(request.get("missing") or "").strip()
+            if not missing or "未由模型明示" in missing:
+                pending_manual += 1
+                continue
+            candidates = "、".join(str(item) for item in _as_list(request.get("candidate_function_ids")))
+            trigger = trigger_zh.get(str(request.get("trigger_reason") or ""), str(request.get("trigger_reason") or ""))
+            rows += (
+                f"<li>{_escape(missing)}"
+                f"<span class=\"section-note\">{_escape(trigger)}{('；候选函数：' + _escape(candidates)) if candidates else ''}</span></li>"
             )
-        recollection_section = (
-            f'<div class="audit-boundaries"><h3>下轮建议补采清单</h3><ul>{recollection_rows}</ul></div>'
-            if recollection_rows else ""
+        if not total:
+            return ""
+        if pending_manual:
+            rows += f'<li class="section-note">另有 {pending_manual} 条缺口未由模型明示，待人工补记（原文见 run 目录 recollection_requests.json）。</li>'
+        return (
+            f'<details class="fold"><summary>下轮建议补采清单（{total} 条）</summary>'
+            f'<div class="fbody"><ul class="risk-list">{rows}</ul></div></details>'
         )
+
+    def _integrated_adjudication_block(
+        self,
+        artifacts: Dict[str, Any],
+        *,
+        section_id: str = "integrated-adjudication",
+        section_kicker: str = "第三层 · 综合裁决",
+    ) -> str:
+        integrated = artifacts.get("integrated_synthesis_report", {})
+        adjudication = integrated.get("integrated_adjudication") if isinstance(integrated, dict) else None
+        recollection_section = self._recollection_fold(artifacts)
         time_consistency = integrated.get("time_consistency") if isinstance(integrated, dict) else None
         time_warning = ""
         if isinstance(time_consistency, dict) and not time_consistency.get("consistent", False):
@@ -3863,12 +4073,17 @@ class VNextReportGenerator:
         if (
             not isinstance(adjudication, dict) or not adjudication.get("llm_adjudicated")
         ) and not time_warning and not recollection_section:
-            return ""
+            return f"""
+<section class="panel sec" id="{_escape(section_id)}">
+  <div class="sec-head"><span class="tag sans">{_escape(section_kicker)}</span><h2>数据与外部世界的对质记录</h2></div>
+  <p>本轮没有可呈现的第三层综合材料。</p>
+</section>
+"""
         if not isinstance(adjudication, dict) or not adjudication.get("llm_adjudicated"):
             return f"""
-<section class="panel sec" id="integrated-adjudication">
+<section class="panel sec" id="{_escape(section_id)}">
   <div class="sec-head">
-    <span class="kicker section-kicker">第三层 · 综合裁决</span>
+    <span class="tag sans">{_escape(section_kicker)}</span>
     <h2>数据与外部世界的对质记录</h2>
   </div>
   {time_warning}
@@ -3885,13 +4100,21 @@ class VNextReportGenerator:
             if not isinstance(answer, dict):
                 continue
             label, tone = status_labels.get(str(answer.get("answer_status")), ("未分类", "watch"))
-            refs = "、".join(_as_list(answer.get("data_refs"))[:3] + _as_list(answer.get("investigation_refs"))[:2])
-            missing = "、".join(str(item) for item in _as_list(answer.get("missing_evidence"))[:3])
+            ref_chips = self._ref_chips(_as_list(answer.get("data_refs"))[:3])
+            investigation_count = len(_as_list(answer.get("investigation_refs")))
+            if investigation_count:
+                ref_chips += '<span class="ref-chip muted">受控调查</span>'
+            missing_items = [
+                str(item).strip()
+                for item in _as_list(answer.get("missing_evidence"))[:3]
+                if str(item).strip() and "未由模型明示" not in str(item)
+            ]
+            missing = "、".join(missing_items)
             qa_rows += f"""
       <li>
         <p><b>问：</b>{_escape(_sentence(answer.get('question'), 120))} <span class="pill {tone}">{label}</span></p>
-        <p><b>答：</b>{_escape(_sentence(answer.get('answer'), 220))}</p>
-        {f'<p class="section-note">依据：{_escape(refs)}</p>' if refs else ''}
+        <p><b>答：</b>{self._inline_ref_html(_sentence(answer.get('answer'), 220))}</p>
+        {f'<p class="section-note">依据：{ref_chips}</p>' if ref_chips else ''}
         {f'<p class="section-note">缺口：{_escape(missing)}</p>' if missing else ''}
       </li>"""
         relation_labels = {
@@ -3900,32 +4123,34 @@ class VNextReportGenerator:
             "not_yet_testable": ("当前不可检验", "watch"),
         }
         matrix_rows = ""
+        matrix_total = 0
         for row in _as_list(adjudication.get("conflict_matrix")):
             if not isinstance(row, dict):
                 continue
+            matrix_total += 1
             label, tone = relation_labels.get(str(row.get("relation")), ("未分类", "watch"))
-            refs = "、".join(_as_list(row.get("data_side_refs"))[:3]) or "—"
+            ref_chips = self._ref_chips(_as_list(row.get("data_side_refs"))[:3]) or "—"
             matrix_rows += f"""
       <li><span class="pill {tone}">{label}</span> {_escape(_sentence(row.get('event_side'), 110))}
-        <span class="section-note">数据侧：{_escape(refs)}{('；' + _escape(_sentence(row.get('note'), 80))) if str(row.get('note') or '').strip() else ''}</span></li>"""
+        <span class="section-note">数据侧：{ref_chips}{('；' + _escape(_sentence(row.get('note'), 80))) if str(row.get('note') or '').strip() else ''}</span></li>"""
         unexplained = "".join(
-            f"<li>{_escape(_sentence(item, 120))}</li>" for item in _as_list(adjudication.get("unexplained"))[:6]
+            f"<li>{self._inline_ref_html(_sentence(item, 160))}</li>" for item in _as_list(adjudication.get("unexplained"))[:6]
         )
         counter = _sentence(adjudication.get("strongest_counterevidence"), 160)
         return f"""
-<section class="panel sec" id="integrated-adjudication">
+<section class="panel sec" id="{_escape(section_id)}">
   <div class="sec-head">
-    <span class="kicker section-kicker">第三层 · 综合裁决</span>
+    <span class="tag sans">{_escape(section_kicker)}</span>
     <h2>数据与外部世界的对质记录</h2>
   </div>
   {time_warning}
   <p class="section-note">姿态以第一层数据判决为锚（不可在本层改判）；本层职责是解释整合与张力登记。</p>
-  {f'<div class="prose"><p class="reasoned-verdict">{self._reasoned_verdict_html(adjudication.get("integrated_verdict"))}</p></div>' if str(adjudication.get("integrated_verdict") or "").strip() else ''}
-  {f'<div class="audit-boundaries"><h3>新闻事件出的题，数据的回答</h3><ul class="qlist">{qa_rows}</ul></div>' if qa_rows else ''}
-  {f'<div class="audit-boundaries"><h3>事件叙事 × 数据检验</h3><ul class="risk-list">{matrix_rows}</ul></div>' if matrix_rows else ''}
-  {recollection_section}
+  {f'<div class="prose reasoned-verdict">{self._reasoned_verdict_html(adjudication.get("integrated_verdict"))}</div>' if str(adjudication.get("integrated_verdict") or "").strip() else ''}
+  {f'<div class="audit-boundaries"><h3>新闻事件出的题，数据的回答</h3><ul class="qlist qlist-plain">{qa_rows}</ul></div>' if qa_rows else ''}
+  {f'<details class="fold"><summary>事件叙事 × 数据检验（{matrix_total} 条逐项核对）</summary><div class="fbody"><ul class="risk-list">{matrix_rows}</ul></div></details>' if matrix_rows else ''}
   {f'<div class="audit-boundaries"><h3>当前解释不了的</h3><ul class="risk-list">{unexplained}</ul></div>' if unexplained else ''}
   {f'<p class="dissent"><b>最强反证</b>：{_escape(counter)}</p>' if counter else ''}
+  {recollection_section}
 </section>
 """
 
@@ -4187,28 +4412,34 @@ class VNextReportGenerator:
 </article>
 """
 
-    def _risks_section(self, artifacts: Dict[str, Any], section_kicker: str = "04 · 风险边界") -> str:
+    def _risks_section(
+        self,
+        artifacts: Dict[str, Any],
+        section_kicker: str = "04 · 风险边界",
+        *,
+        include_change_fold: bool = False,
+    ) -> str:
         final = artifacts.get("final_adjudication", {}) or {}
         risk = artifacts.get("risk_boundary_report", {}) or {}
+        change_fold = ""
+        if include_change_fold:
+            checklist = artifacts.get("golden_pit_checklist", {}) if isinstance(artifacts.get("golden_pit_checklist"), dict) else {}
+            changes = [str(item) for item in _as_list(checklist.get("changed_since_last_run_summary")) if str(item).strip()]
+            change_rows = "".join(f"<li>{_escape(item)}</li>" for item in changes[:6]) or "<li>本轮未记录显著变化，或上次 run 不可比。</li>"
+            change_fold = (
+                '<details class="fold" id="change"><summary>和上次判断比，什么变了</summary>'
+                f'<div class="fbody"><ul class="risk-list">{change_rows}</ul></div></details>'
+            )
         boundary = risk.get("boundary_status", {}) if isinstance(risk.get("boundary_status"), dict) else {}
         invalidations = _as_list(final.get("invalidation_conditions"))
         flip_rows = []
         for index, item in enumerate(invalidations, 1):
             direction, body = _split_invalidation_item(item)
             tone = "bull" if direction == "转多" else "bear" if direction == "转空" else "watch"
-            short_label = f"【{direction}】条件 {index}" if direction else f"观察条件 {index}"
             flip_rows.append(f"""
-<article class="flip dir {tone}">
-  <h3>{_escape(short_label)}</h3>
-  <p>{_escape(body)}</p>
-</article>""")
-        boundary_cards = "".join(
-            f"""
-<article class="boundary-card {_severity_class(status)}">
-  <span>{_escape(_label(name, 'boundary'))}</span>
-  <b>{_escape(_label(status, 'severity'))}</b>
-</article>
-"""
+<div class="flip"><span class="dir {tone}">{_escape(direction or '观察')}</span><span>{_escape(body)}</span></div>""")
+        boundary_pills = "".join(
+            f'<span class="pill {_severity_class(status)}">{_escape(_label(name, "boundary"))} · {_escape(_label(status, "severity"))}</span>'
             for name, status in boundary.items()
         )
         failures = []
@@ -4234,27 +4465,16 @@ class VNextReportGenerator:
         )
         return f"""
 <section class="panel sec" id="risks">
-  <div class="sec-head"><span class="tag sans">{_escape(section_kicker)}</span></div>
-  <h2>如果发生这些事，我就改判断</h2>
-  <p class="section-note">风险不是附录。这里不写泛泛提示，只列当前判断最需要被反驳、复核或降级的条件。</p>
-  <div class="flip-grid">{''.join(flip_rows) or '<p>暂无结构化改判条件。</p>'}</div>
-  <div class="risk-board">
-    <div>
-      <h3>临界观察</h3>
-      <div class="boundary-grid">{boundary_cards or '<p>无临界观察。</p>'}</div>
-    </div>
-    <div class="risk-board">
-      <div class="risk-list">
-        <h3>不能忽视的风险</h3>
-        <ul>{must or '<li>无</li>'}</ul>
-      </div>
-      <div class="risk-list">
-        <h3>改判条件说明</h3>
-        <p>完整条件只在上方正本出现；其他章节只链接到这里，避免同一句话反复放大。</p>
-      </div>
-    </div>
+  <div class="sec-head"><span class="tag sans">{_escape(section_kicker)}</span><h2>如果发生这些事，我就改判断</h2></div>
+  <p class="section-note">改判条件的唯一正本；其他章节只链接到这里，避免同一句话反复放大。</p>
+  <div class="flip-list">{''.join(flip_rows) or '<p>暂无结构化改判条件。</p>'}</div>
+  {f'<div class="risk-board"><h3>临界观察</h3><div class="boundary-pills">{boundary_pills}</div></div>' if boundary_pills else ''}
+  <div class="risk-board risk-list">
+    <h3>不能忽视的风险</h3>
+    <ul>{must or '<li>无</li>'}</ul>
   </div>
-  <div class="trigger-grid">{''.join(failures) or '<p>无触发条件。</p>'}</div>
+  {f'<details class="fold"><summary>压力情景推演（{len(failures)} 条）</summary><div class="fbody"><div class="trigger-grid">{"".join(failures)}</div></div></details>' if failures else ''}
+  {change_fold}
 </section>
 """
 
@@ -4582,14 +4802,13 @@ class VNextReportGenerator:
                 if canonical.startswith(f"{layer}.") and canonical not in priority_refs:
                     priority_refs.append(canonical)
         by_ref = {f"{layer}.{item.get('function_id')}": item for item in indicators}
-        key_items = [by_ref[ref] for ref in priority_refs if ref in by_ref][:5]
+        key_items = [by_ref[ref] for ref in priority_refs if ref in by_ref][:2]
         for item in indicators:
-            if len(key_items) >= min(3, len(indicators)):
+            if len(key_items) >= min(2, len(indicators)):
                 break
             if item not in key_items:
                 key_items.append(item)
-        key_items = key_items[:5]
-        remaining = [item for item in indicators if item not in key_items]
+        key_items = key_items[:2]
         key_cards = "".join(
             self._brief_metric_card(
                 layer,
@@ -4600,19 +4819,19 @@ class VNextReportGenerator:
             )
             for item in key_items
         )
-        remaining_cards = "".join(self._brief_full_indicator_card(layer, item, artifacts) for item in remaining)
-        risks = "".join(
-            f"<span class=\"pill\">{_escape(_label(flag, 'risk_flag'))}</span>"
-            for flag in _as_list(card.get("risk_flags"))[:4]
-        )
         return f"""
-<article class="layer-detail" id="brief-layer-{_escape(layer)}">
-  <div class="sec-head"><span class="tag sans">{_escape(layer)} · {_escape(LAYER_TITLES_ZH.get(layer, ''))}</span><span class="pill {_confidence_class(confidence)}">可信度 {_escape(_label(confidence, 'medium'))}</span></div>
-  <p class="layer-summary">{_escape(full_conclusion or '本层没有形成摘要。')}</p>
-  <div class="meta">{risks}</div>
-  <div class="indicator-grid sec-grid">{key_cards or '<p>本层没有指标卡。</p>'}</div>
-  {f'<details class="fold"><summary>其余 {len(remaining)} 个指标</summary><div class="fbody indicator-grid">{remaining_cards}</div></details>' if remaining else ''}
-</article>
+<section class="layer-brief" id="brief-layer-{_escape(layer)}">
+  <div class="sec-grid">
+    <div class="sec-main prose">
+      <article class="claim">
+        <div class="tag sans">{_escape(layer)} · {_escape(LAYER_TITLES_ZH.get(layer, ''))} · 层级摘要</div>
+        <p>{_escape(full_conclusion or '本层没有形成摘要。')}</p>
+        <details class="fold"><summary>查看 {_escape(layer)} 全部 {len(indicators)} 个指标的审计说明</summary><div class="fbody"><p>完整指标卡、发言权边界、反证条件与推理过程不在阅读页重复展开；请从<a href="#audit">审计入口</a>打开独立底稿。</p></div></details>
+      </article>
+    </div>
+    <aside class="sec-aside layer-key-readings">{key_cards or '<p>本层没有可展示读数。</p>'}</aside>
+  </div>
+</section>
 """
 
     def _brief_metric_card(
@@ -4624,11 +4843,21 @@ class VNextReportGenerator:
         function_id = str(item.get("function_id") or "")
         ref = f"{layer}.{function_id}"
         gauge = self._brief_quantile_gauge(function_id, quantile)
+        digest_item = (getattr(self, "_brief_digest_metrics", {}) or {}).get(ref, {})
+        display_value = str(digest_item.get("display_value") or "").strip()
+        detail = _sentence(digest_item.get("detail"), 72) or _sentence(item.get("current_reading"), 72)
+        if not display_value:
+            display_value = self._fallback_display_value(detail)
+        if display_value:
+            value_html = f'<button type="button" class="ref-chip dv" data-ref="{_escape(ref)}">{_escape(display_value)}</button>'
+        else:
+            value_html = f'<button type="button" class="ref-chip dv dv-text" data-ref="{_escape(ref)}">{_escape(_sentence(detail, 24) or "查看")}</button>'
+            detail = "" if detail and len(detail) <= 24 else detail
         return f"""
 <article class="indicator-card dcard">
-  <span class="dk">{_escape(layer)}</span>
-  <button type="button" class="ref-chip dv" data-ref="{_escape(ref)}">{_escape(item.get('metric') or function_id)}</button>
-  <p class="dq">{_escape(_sentence(item.get('current_reading'), 130) or '本轮没有可展示读数。')}</p>
+  <span class="dk">{_escape(layer)}·{_escape(self._brief_metric_label(layer, item))}</span>
+  {value_html}
+  {f'<p class="dq">{_escape(detail)}</p>' if detail else ''}
   {gauge}
 </article>
 """
@@ -4668,7 +4897,7 @@ class VNextReportGenerator:
         falsifiers = "".join(f"<li>{_escape(value)}</li>" for value in _as_list(item.get("falsifiers")))
         return f"""
 <article class="indicator-card" data-evidence-ref="{_escape(ref)}">
-  <button type="button" class="ref-chip" data-ref="{_escape(ref)}">{_escape(item.get('metric') or function_id)}</button>
+  <button type="button" class="ref-chip" data-ref="{_escape(ref)}">{_escape(self._brief_metric_label(layer, item))}</button>
   <p class="reading">{_escape(item.get('current_reading') or '')}</p>
   {gauge}
   <p>{_escape(item.get('narrative') or '')}</p>
@@ -4684,8 +4913,8 @@ class VNextReportGenerator:
         )
         return f"""
 <section class="panel sec layers-panel brief-layers-panel" id="layers">
-  <div class="sec-head"><span class="tag sans">06 · L1-L5</span><h2>分层证据</h2></div>
-  <p class="section-note">每层先给摘要和 3-5 个被最终推理实际引用的关键指标，其余指标折叠保留。卡内只展示正式分位；走势只在抽屉且必须来自可核验快照。</p>
+  <div class="sec-head"><span class="tag sans">06 · L1-L5 五层底稿</span><h2>分层证据</h2></div>
+  <p class="section-note">每层先给摘要和 2 个被最终推理实际引用的关键指标；完整指标卡与审计说明留在独立底稿，避免正文变成后台工作台。走势只在抽屉且必须来自可核验快照。</p>
   <h3 class="sr-only">五层展开细节</h3>
   <div class="layer-stack">{cards}</div>
 </section>
@@ -6016,13 +6245,12 @@ class VNextReportGenerator:
             ("旧新闻侧边材料", str(run_path / "news_event_ledger.json")),
         ]
         audit_path_rows = "".join(
-            f"<li><b>{_escape(label)}</b>{_artifact_link(label, path)}</li>"
+            f"<li><b>{_escape(label)}</b>{_artifact_link('打开', path)}</li>"
             for label, path in audit_paths
         )
         return f"""
 <section class="panel" id="audit">
-  <div class="section-kicker">07 · 数据与审计</div>
-  <h2>主页面只留索引，完整底稿在外部 artifact</h2>
+  <div class="sec-head"><span class="tag sans">08 · 审计</span><h2>主页面只留索引，完整底稿在外部 artifact</h2></div>
   <p class="section-note">可审计不等于把所有 JSON 塞进正文。这里保留数据包路径、发布闸门、Agent 原文检查器、L1-L5 输出和图表源入口；大文件仍在 run 目录中。</p>
   <div class="audit-grid">
     <div><b>运行目录</b><p>{_escape(run_path)}</p></div>
@@ -6059,13 +6287,135 @@ class VNextReportGenerator:
 </section>
 """
 
+    def _artifact_ref_labels(self, artifacts: Dict[str, Any]) -> Dict[str, str]:
+        labels: Dict[str, str] = {}
+        layers = artifacts.get("layers", {}) if isinstance(artifacts.get("layers"), dict) else {}
+        for layer in ["L1", "L2", "L3", "L4", "L5"]:
+            card = layers.get(layer, {}) if isinstance(layers.get(layer), dict) else {}
+            for item in _as_list(card.get("indicator_analyses")):
+                if not isinstance(item, dict) or not item.get("function_id"):
+                    continue
+                ref = _canonical_ref(f"{layer}.{item['function_id']}")
+                labels[ref] = f"{layer}·{self._brief_metric_label(layer, item)}"
+        return labels
+
+    def _is_known_ref(self, ref: Any) -> bool:
+        labels = getattr(self, "_brief_ref_labels", None)
+        canonical = _canonical_ref(ref)
+        return "." in canonical if labels is None else canonical.split("#", 1)[0] in labels
+
+    def _human_ref_label(self, ref: Any) -> str:
+        canonical = _canonical_ref(ref)
+        labels = getattr(self, "_brief_ref_labels", {})
+        return str(labels.get(canonical) or labels.get(canonical.split("#", 1)[0]) or _human_ref_label(ref))
+
+    def _brief_metric_label(self, layer: str, item: Dict[str, Any]) -> str:
+        function_id = str(item.get("function_id") or "")
+        return BRIEF_METRIC_LABELS.get(function_id) or str(item.get("metric") or function_id)
+
+    @staticmethod
+    def _badge_value(text: Any, *, strip_prefix: str = "") -> str:
+        """Extract the short pre-colon clause of a governed sentence for badge display."""
+        clause = re.split(r"[：:，。；]", str(text or "").strip(), maxsplit=1)[0].strip()
+        if strip_prefix and clause.startswith(strip_prefix) and len(clause) > len(strip_prefix):
+            clause = clause[len(strip_prefix):]
+        return clause if 0 < len(clause) <= 12 else ""
+
+    @staticmethod
+    def _stance_short(final: Dict[str, Any], reader: Dict[str, Any]) -> str:
+        """Derive a short posture label strictly from governed text; empty when unclear."""
+        corpus = " ".join(
+            str(value or "")
+            for value in (final.get("final_stance"), reader.get("one_liner"), final.get("payoff_assessment"))
+        )
+        if ("防守" in corpus or "防御" in corpus) and "等待" in corpus:
+            return "防守等待"
+        if "防守" in corpus or "防御" in corpus:
+            return "偏防守"
+        if "进攻" in corpus:
+            return "偏进攻"
+        return ""
+
+    def _brief_key_reading_cards(self, refs: Any, *, exclude: Optional[set] = None, cap: int = 5) -> str:
+        """Render demo-style key-reading dcards for refs that exist in the ref digest.
+
+        When ``exclude`` is a set it is mutated in place, so successive sections
+        sharing one set never repeat a reading card.
+        """
+        metrics = getattr(self, "_brief_digest_metrics", {}) or {}
+        seen: set = exclude if isinstance(exclude, set) else set()
+        cards: List[str] = []
+        for ref in _as_list(refs):
+            base = _canonical_ref(ref).split("#", 1)[0]
+            if base in seen or base not in metrics:
+                continue
+            seen.add(base)
+            item = metrics[base]
+            function_id = base.split(".", 1)[-1]
+            label = BRIEF_METRIC_LABELS.get(function_id) or str(item.get("metric") or function_id)
+            display_value = str(item.get("display_value") or "").strip()
+            detail = _sentence(item.get("detail"), 64)
+            quantile = item.get("quantile")
+            tone = ""
+            if isinstance(quantile, (int, float)):
+                if function_id in HIGH_QUANTILE_DANGER and quantile >= 90:
+                    tone = " bear"
+                elif function_id in LOW_QUANTILE_DANGER and quantile <= 30:
+                    tone = " bear"
+                elif quantile >= 95 or quantile <= 5:
+                    tone = " watch"
+            if not display_value:
+                display_value = self._fallback_display_value(item.get("detail"))
+            value_html = (
+                f'<button type="button" class="ref-chip dv" data-ref="{_escape(base)}">{_escape(display_value)}</button>'
+                if display_value
+                else f'<button type="button" class="ref-chip dv dv-dash" data-ref="{_escape(base)}">查看</button>'
+            )
+            detail_html = f'<p class="dq">{_escape(detail)}</p>' if detail else ""
+            gauge_html = self._brief_quantile_gauge(function_id, quantile if isinstance(quantile, (int, float)) else None)
+            cards.append(
+                f'<article class="dcard{tone}"><span class="dk">{_escape(item.get("layer") or "")}·{_escape(label)}</span>'
+                f"{value_html}{detail_html}{gauge_html}</article>"
+            )
+            if len(cards) >= cap:
+                break
+        return "".join(cards)
+
+    @staticmethod
+    def _fallback_display_value(detail: Any) -> str:
+        """Pull a short headline number out of a reading line when the digest has none."""
+        text = str(detail or "")
+        match = re.search(r"(PE|PB|PS|比值|利差)[=＝]?\s*([-+]?\d+(?:\.\d+)?)", text)
+        if match:
+            return f"{match.group(1)} {match.group(2)}"
+        match = re.search(r"[-+]?\d+(?:\.\d+)?\s*(?:%|bp|pp|个百分点)", text)
+        if match:
+            return match.group(0).replace(" ", "")
+        return ""
+
+    @staticmethod
+    def _tier_zh(tier: Any) -> str:
+        text = str(tier or "").strip()
+        mapping = {
+            "official": "官方源",
+            "official_macro": "官方源",
+            "official_release_calendar": "官方日历",
+            "reliable_mainstream_report": "可靠媒体转述",
+            "market_narrative": "市场叙事·低可靠",
+        }
+        return mapping.get(text, text or "来源等级未记录")
+
+    def _brief_inline_refs(self, refs: Any) -> str:
+        chips = self._ref_chips(refs)
+        return f'<span class="prose-ref">{chips}</span>' if chips else ""
+
     def _ref_chips(self, refs: Any, *, link: bool = True) -> str:
         chips = []
         for ref in _as_list(refs):
             text = str(ref)
             canonical = _canonical_ref(text)
-            label = _human_ref_label(text)
-            if link and "." in canonical:
+            label = self._human_ref_label(text)
+            if link and self._is_known_ref(canonical):
                 chips.append(
                     f'<button class="ref-chip" data-ref="{_escape(canonical)}" '
                     f'data-label="{_escape(label)}">{_escape(label)}</button>'
@@ -6074,30 +6424,40 @@ class VNextReportGenerator:
                 chips.append(f'<span class="ref-chip muted">{_escape(text)}</span>')
         return "".join(chips)
 
-    def _reasoned_verdict_html(self, verdict: Any) -> str:
-        text = str(verdict or "")
+    def _render_single_ref(self, raw_ref: str) -> str:
+        raw_ref = str(raw_ref).strip()
+        low = raw_ref.lower()
+        if low.startswith("card:"):
+            card_id = raw_ref.split(":", 1)[-1].strip()
+            short = card_id[-8:] if len(card_id) > 8 else card_id
+            return f'<a class="ref-chip card-chip" href="#world" title="{_escape(card_id)}">事件卡·{_escape(short)}</a>'
+        if low.startswith("investigation"):
+            return '<span class="ref-chip muted">受控调查</span>'
+        canonical = _canonical_ref(raw_ref)
+        if not self._is_known_ref(canonical):
+            return f'<span class="ref-chip muted">{_escape(raw_ref)}</span>'
+        label = self._human_ref_label(canonical)
+        return (
+            f'<button class="ref-chip" data-ref="{_escape(canonical)}" '
+            f'data-label="{_escape(label)}">{_escape(label)}</button>'
+        )
+
+    def _inline_ref_html(self, text: Any) -> str:
+        """Render one text fragment, converting [ref] citations into inline chips."""
+        fragment = str(text or "")
         parts = []
         cursor = 0
-        for match in re.finditer(r"\[([^\[\]]+)\]", text):
-            parts.append(_escape(text[cursor:match.start()]))
-            raw_ref = match.group(1).strip()
-            if raw_ref.lower().startswith("card:"):
-                card_id = raw_ref.split(":", 1)[-1].strip()
-                short = card_id[-8:] if len(card_id) > 8 else card_id
-                parts.append(
-                    f'<a class="ref-chip card-chip" href="#world" '
-                    f'title="{_escape(card_id)}">事件卡·{_escape(short)}</a>'
-                )
-                cursor = match.end()
-                continue
-            canonical = _canonical_ref(raw_ref)
-            parts.append(
-                f'<button class="ref-chip" data-ref="{_escape(canonical)}" '
-                f'data-label="{_escape(_human_ref_label(canonical))}">{_escape(_human_ref_label(canonical))}</button>'
-            )
+        for match in re.finditer(r"\[([^\[\]]+)\]", fragment):
+            parts.append(_escape(fragment[cursor:match.start()]))
+            refs = [ref.strip() for ref in re.split(r"[,、]", match.group(1)) if ref.strip()]
+            parts.extend(self._render_single_ref(ref) for ref in refs)
             cursor = match.end()
-        parts.append(_escape(text[cursor:]))
+        parts.append(_escape(fragment[cursor:]))
         return "".join(parts)
+
+    def _reasoned_verdict_html(self, verdict: Any) -> str:
+        paragraphs = [part.strip() for part in re.split(r"\n\s*\n+", str(verdict or "")) if part.strip()]
+        return "".join(f"<p>{self._inline_ref_html(paragraph)}</p>" for paragraph in paragraphs)
 
     def _css(self, style: str = "slate_v2") -> str:
         css_path = STYLES_DIR / f"{style}.css"

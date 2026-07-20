@@ -898,23 +898,14 @@ async function openLatestProductForMode(jobId) {
     const summary = result.summary || {};
     const mode = selectedRunMode();
     const preferred = mode === 'event_only'
-      ? (summary.event_mechanism_report_html || summary.event_narrative_report || summary.event_narrative_ledger || summary.native_brief || summary.report_path || summary.workbench)
-      : (summary.native_brief || summary.report_path || summary.workbench || summary.event_mechanism_report_html || summary.event_narrative_report);
+      ? (summary.native_brief || summary.report_path || summary.workbench)
+      : (summary.native_brief || summary.report_path || summary.workbench);
     if (!preferred) return;
     openedArtifactForJob = jobId;
     const reports = [];
-    if (summary.native_brief) reports.push({ label: 'Brief 报告', path: summary.native_brief });
+    if (summary.native_brief) reports.push({ label: '综合总报告', path: summary.native_brief });
     if (summary.workbench) reports.push({ label: 'Workbench', path: summary.workbench });
     if (summary.report_path && summary.report_path !== summary.native_brief) reports.push({ label: '完整报告', path: summary.report_path });
-    if (summary.pure_data_report) reports.push({ label: '纯数据研报', path: summary.pure_data_report });
-    if (summary.event_mechanism_report_html) reports.push({ label: '新闻事件研报', path: summary.event_mechanism_report_html });
-    if (summary.event_narrative_report) reports.push({ label: '事件新闻报告', path: summary.event_narrative_report });
-    if (summary.event_mechanism_report) reports.push({ label: '新闻事件研报数据', path: summary.event_mechanism_report });
-    if (summary.cross_layer_questions) reports.push({ label: '跨层问题', path: summary.cross_layer_questions });
-    if (summary.event_narrative_ledger) reports.push({ label: '事件与叙事账本', path: summary.event_narrative_ledger });
-    if (summary.integrated_synthesis_report) reports.push({ label: '综合总报告', path: summary.integrated_synthesis_report });
-    if (summary.news_event_ledger) reports.push({ label: '旧事件底账', path: summary.news_event_ledger });
-    if (summary.news_event_data_links) reports.push({ label: '市场连接观察', path: summary.news_event_data_links });
     const linksHtml = reports.map(r =>
       `<a href="${artifactUrl(r.path)}" target="_blank" rel="noopener" style="margin-left:8px;padding:2px 8px;border:1px solid #215f8f;border-radius:4px;text-decoration:none;color:#215f8f;font-size:13px;">${r.label}</a>`
     ).join('');

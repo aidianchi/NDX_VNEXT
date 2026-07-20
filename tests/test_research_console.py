@@ -68,6 +68,12 @@ def test_research_console_generates_simple_launcher(tmp_path: Path, monkeypatch)
     assert "env_overrides: envOverrides()" in html
     assert "latest-product" in html
     assert "function artifactUrl(path)" in html
+    assert "summary.native_brief) reports.push({ label: '综合总报告'" in html
+    assert "summary.workbench) reports.push({ label: 'Workbench'" in html
+    assert "summary.report_path && summary.report_path !== summary.native_brief" in html
+    assert "summary.event_mechanism_report_html ||" not in html
+    for retired_label in ("纯数据研报", "新闻事件研报", "新闻事件研报数据", "跨层问题", "事件与叙事账本", "旧事件底账", "市场连接观察"):
+        assert f"label: '{retired_label}'" not in html
     assert "断点续跑" in html
     assert 'id="resumeBlock"' in html
     assert 'id="resumeNow"' in html
