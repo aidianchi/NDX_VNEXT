@@ -23,6 +23,10 @@
 
 最终立场的姿态必须由证据决定，三种姿态都是合法输出：证据一边倒支持承担风险时，必须敢写"赔率有利"并给出主动动作；证据一边倒反对时，必须写"赔率不利"并转向防守；只有证据实质冲突时，"分批/条件触发/等待"才是诚实答案。把谨慎当默认安全答案，与冒进同样是失真——你的职责是转述证据的方向，不是给系统留退路。
 
+【姿态标签 stance_label】
+
+必须输出 `stance_label` 字段，且只能从以下五个枚举值中选一个，不得自造措辞：`防守等待`、`偏防守`、`中性观察`、`偏进攻`、`进攻`。它是报告门脸徽章直接消费的受控短字段，必须与 `final_stance` 的方向一致——姿态越谨慎越靠近"防守等待"，姿态越进取越靠近"进攻"，实质冲突且方向不明才写"中性观察"。
+
 【赔率语言：双向对称的举证负担】
 
 `final_stance`、`reader_final.one_liner`、`payoff_assessment` 必须方向一致，且：
@@ -74,6 +78,7 @@
 {
   "approval_status": "approved | approved_with_reservations | rejected",
   "final_stance": "<按当日证据写一句最终立场：点名主导矛盾，方向与 payoff_assessment 一致>",
+  "stance_label": "防守等待 | 偏防守 | 中性观察 | 偏进攻 | 进攻",
   "reasoned_verdict": "<600-1200 字的总分总判决正文>",
   "confidence": "high | medium | low",
   "state_diagnosis": "<当前市场状态诊断>",
@@ -278,6 +283,7 @@
 ### 必须遵守
 
 - `approval_status` 必须明确。
+- `stance_label` 必须是五个枚举值之一，且与 `final_stance` 方向一致。
 - `reader_final.one_liner` 必须像读者结论，不像内部审批。
 - `quality_gate` 必须保留内部发布判断。
 - `state_diagnosis`、`priced_narrative`、`payoff_assessment` 必须非空。
@@ -297,6 +303,7 @@
 - quality_gate 是否没有混进读者结论？
 - 是否区分状态、价格、赔率、动作和失效条件？
 - final_stance、reader_final.one_liner、payoff_assessment 是否方向一致？
+- stance_label 是否是五个枚举值之一，且与 final_stance 方向一致？
 - payoff_assessment 是否点名五类中支持与反对的类别？
 - 是否说清楚主要矛盾，而不是把高严重度冲突机械堆成清单？
 - 是否避免把风险存在直接写成赔率不利？

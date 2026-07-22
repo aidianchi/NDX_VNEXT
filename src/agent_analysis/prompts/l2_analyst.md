@@ -96,3 +96,4 @@ L2 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 - 不得把“低波动”直接等同于“低风险”。
 - 不得把“风险偏好强”直接等同于“市场健康”。
 - 极端恐惧和极端贪婪必须说明反向条件。
+- 引用 `get_hy_oas_bp`、`get_ig_oas_bp`、`get_hy_quality_spread_bp` 等信用利差数值时，必须按输入数据的 `unit`/`data_quality` 字段标注单位；这些函数名虽含 `_bp`，但字段值是百分比/百分点，须写成“X.XX%（≈XXXbp）”或“X.XX 个百分点（≈XXXbp）”，禁止把百分比数值直接标成 bp。

@@ -341,6 +341,30 @@ def test_r2_facade_keeps_publish_block_visible(tmp_path: Path):
     assert "发布闸门未通过" in contradictory_gate
 
 
+def test_modern_cleared_stance_label_does_not_fall_back_to_negation_blind_legacy_badge(tmp_path: Path):
+    reporter = VNextReportGenerator()
+    artifacts = {
+        "final_adjudication": {
+            "final_stance": "风险出清，可以加仓，而非继续防守。",
+            "reasoned_verdict": "风险出清，可以加仓，而非继续防守。",
+            "stance_label": None,
+            "confidence": "medium",
+        },
+        "analysis_packet": {"meta": {"data_date": "2026-07-15"}},
+        "synthesis_packet": {"packet_meta": {}},
+        "data_integrity_report": {"publish_status": "publishable"},
+    }
+    html = reporter._brief_facade_section(tmp_path, artifacts)
+    assert '<span class="badge pill">姿态' not in html
+
+    legacy = dict(artifacts)
+    legacy["final_adjudication"] = {
+        "final_stance": "当前应防守等待。", "confidence": "medium",
+    }
+    legacy_html = reporter._brief_facade_section(tmp_path, legacy)
+    assert '<span class="badge pill">姿态 <b>防守等待</b></span>' in legacy_html
+
+
 def test_invalidation_item_direction_badges_and_legacy_text():
     assert '<span class="pill good">转多</span> 盈利预期上修' == _render_invalidation_item("【转多】盈利预期上修")
     assert '<span class="pill bad">转空</span> 信用利差扩大' == _render_invalidation_item("【转空】信用利差扩大")
@@ -567,8 +591,11 @@ def test_brief_readers_surface_uses_editorial_layers_and_compact_drawer():
     assert 'class="layer-brief"' in html
     assert 'class="layer-detail"' not in html
     assert html.count('class="indicator-card dcard"') == 2
-    assert 'class="indicator-card" data-evidence-ref=' not in html
-    assert 'class="canon-box"' not in html
+    # Q4（2026-07-20 用户拍板 A+C）：完整指标卡回到 brief 内，默认折叠在 layer-full 里，
+    # 关键读数卡之外的完整卡不得出现在默认展开面上。
+    assert 'class="fold layer-full"' in html
+    assert html.count('class="indicator-card" data-evidence-ref=') == 3
+    assert html.index('class="fold layer-full"') < html.index('data-evidence-ref=')
     assert "10年实际利率" in html
     assert "净流动性" in html
     assert "drawerLayerLabel" in REF_DIGEST_JS
@@ -580,6 +607,41 @@ def test_brief_readers_surface_uses_editorial_layers_and_compact_drawer():
     assert _drawer_reading_parts("555,789,500，20日变化-26.58%") == ("", "555,789,500，20日变化-26.58%")
     assert _drawer_reading_parts("42.0（中性区间，未超卖）") == ("", "42.0（中性区间，未超卖）")
     assert _drawer_reading_parts("VWAP_20=717.73（价格695.33，在其下方-3.12%）") == ("", "VWAP_20=717.73（价格695.33，在其下方-3.12%）")
+
+
+def test_world_section_renders_governed_summary_only_when_present():
+    reporter = VNextReportGenerator()
+    mechanism = {
+        "news_cards": [
+            {
+                "news_id": "news:abc",
+                "title": "样例事件",
+                "source_name": "Federal Reserve",
+                "published_at": "2026-07-18",
+                "raw_text_excerpt": "官方发布声明。",
+            }
+        ],
+        # 模板拼接句必须继续被拒绝冒充总结（R1 裁决）。
+        "headline_judgment": {"plain_text": "今天最值得盯的是模板句"},
+    }
+    summary_artifacts = {
+        "event_interpretation_cards": {
+            "section_summary": {
+                "summary_text": "据报道，本轮事件围绕利率与AI资本开支 [card:event_abc]。以上事件材料不构成主证据，判断以数据层为准。",
+                "cited_event_ids": ["event_abc"],
+            }
+        }
+    }
+
+    with_summary = reporter._event_mechanism_report_section(mechanism, summary_artifacts)
+    without_summary = reporter._event_mechanism_report_section(mechanism, {})
+
+    assert 'class="prose event-summary"' in with_summary
+    assert "事件卡·abc" in with_summary
+    assert "以上事件材料不构成主证据" in with_summary
+    assert "今天最值得盯的是" not in with_summary
+    assert 'class="prose event-summary"' not in without_summary
+    assert "今天最值得盯的是" not in without_summary
 
 
 def test_brief_world_keeps_expectation_ledger_inside_its_section():

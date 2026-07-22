@@ -1177,7 +1177,7 @@ def get_hy_oas_bp(end_date: str = None) -> Dict[str, Any]:
         return _fred_unavailable_payload(
             name="High Yield OAS",
             series_id="BAMLH0A0HYM2",
-            unit="basis points",
+            unit="percent",
             minimum_points=20,
             series=series,
             calculation="ma5_ma20_trend",
@@ -1187,8 +1187,11 @@ def get_hy_oas_bp(end_date: str = None) -> Dict[str, Any]:
     analysis["relativity"] = stats
     return _attach_recompute_value_series({
         "name": "High Yield OAS", "series_id": "BAMLH0A0HYM2", "value": analysis,
-        "unit": "basis points", "source_name": "FRED",
-        "notes": "ICE BofA US High Yield OAS；分层降噪：MA5 vs MA20 趋势方向。"
+        "unit": "percent", "source_name": "FRED",
+        "notes": (
+            "ICE BofA US High Yield OAS；分层降噪：MA5 vs MA20 趋势方向。"
+            "注：函数名含 _bp 系历史命名，数值与 unit 字段以 percent 为准（如 2.71 即 2.71%≈271bp）。"
+        )
     }, series[["date", "value"]])
 
 
@@ -1199,7 +1202,7 @@ def get_ig_oas_bp(end_date: str = None) -> Dict[str, Any]:
         return _fred_unavailable_payload(
             name="Investment Grade OAS",
             series_id="BAMLC0A0CM",
-            unit="basis points",
+            unit="percent",
             minimum_points=20,
             series=series,
             calculation="ma5_ma20_trend",
@@ -1209,8 +1212,11 @@ def get_ig_oas_bp(end_date: str = None) -> Dict[str, Any]:
     analysis["relativity"] = stats
     return _attach_recompute_value_series({
         "name": "Investment Grade OAS", "series_id": "BAMLC0A0CM", "value": analysis,
-        "unit": "basis points", "source_name": "FRED",
-        "notes": "ICE BofA US Corporate OAS；分层降噪：MA5 vs MA20 趋势方向。"
+        "unit": "percent", "source_name": "FRED",
+        "notes": (
+            "ICE BofA US Corporate OAS；分层降噪：MA5 vs MA20 趋势方向。"
+            "注：函数名含 _bp 系历史命名，数值与 unit 字段以 percent 为准（如 1.20 即 1.20%≈120bp）。"
+        )
     }, series[["date", "value"]])
 
 

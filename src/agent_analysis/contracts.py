@@ -18,6 +18,7 @@ NDX Agent vNext SubAgent 架构 - 数据契约模块
 from datetime import datetime, timezone
 from enum import Enum
 import re
+import unicodedata
 from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import uuid4
 
@@ -426,6 +427,14 @@ class EventInterpretationCard(BaseModel):
         if self.fact_summary.strip().casefold() == self.interpretation.strip().casefold():
             raise ValueError("fact_summary and interpretation must be separate")
         return self
+
+
+class EventSectionSummary(BaseModel):
+    """外部世界章节的 governed 总结（Q3）。只许引用本轮事件卡，失败宁缺毋滥。"""
+    model_config = {"extra": "forbid"}
+
+    summary_text: str = Field(..., min_length=1, description="含 [card:<event_id>] 引用与结尾边界句的总结正文")
+    cited_event_ids: List[str] = Field(default_factory=list, description="正文实际引用的 event_id 列表")
 
 
 class IntegratedQuestionAnswer(BaseModel):
@@ -1472,6 +1481,53 @@ class PortfolioAction(BaseModel):
 
 _NUMERIC_PERCENT_PATTERN = re.compile(r"[-+]?\d+(?:\.\d+)?\s*%")
 
+# Q5：受控短姿态枚举（报告门脸徽章消费，替代对判决长文本做关键词抽取）。
+STANCE_LABEL_ENUM: tuple[str, ...] = ("防守等待", "偏防守", "中性观察", "偏进攻", "进攻")
+_STANCE_LABEL_SYNONYMS: Dict[str, str] = {
+    "防御等待": "防守等待",
+    "防御": "偏防守",
+    "防守": "偏防守",
+    "观望": "中性观察",
+    "中性": "中性观察",
+    "看多": "偏进攻",
+    "偏多": "偏进攻",
+}
+# codex P2 修复：徽章不能和正文判决方向相反。粗粒度关键词校验，只拦最危险的两端
+# 矛盾（"进攻"配"全篇防守正文"这类），不对"中性观察"做二次揣测——它本来就该宽松。
+_DEFENSIVE_DIRECTION_WORDS = ("防守", "防御", "减仓", "谨慎", "回避风险", "risk-off", "risk off")
+_AGGRESSIVE_DIRECTION_WORDS = ("进攻", "加仓", "看多", "做多", "risk-on", "risk on")
+_DIRECTION_NEGATION_SUFFIX = re.compile(
+    r"(?:不宜|不应|不可|不要|不建议|无需|不必|避免|暂缓|停止|拒绝|并非|不是|不再|而非)"
+    r"\s*(?:继续|立即|主动|积极|大幅|全面)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _has_unnegated_direction_word(corpus: str, words: tuple[str, ...]) -> bool:
+    lowered = corpus.lower()
+    for word in words:
+        needle = word.lower()
+        start = 0
+        while True:
+            index = lowered.find(needle, start)
+            if index < 0:
+                break
+            prefix = lowered[max(0, index - 16):index]
+            if not _DIRECTION_NEGATION_SUFFIX.search(prefix):
+                return True
+            start = index + len(needle)
+    return False
+
+
+def _stance_label_direction_conflict(stance_label: str, corpus: str) -> bool:
+    defensive_hit = _has_unnegated_direction_word(corpus, _DEFENSIVE_DIRECTION_WORDS)
+    aggressive_hit = _has_unnegated_direction_word(corpus, _AGGRESSIVE_DIRECTION_WORDS)
+    if stance_label in {"偏进攻", "进攻"} and defensive_hit and not aggressive_hit:
+        return True
+    if stance_label in {"防守等待", "偏防守"} and aggressive_hit and not defensive_hit:
+        return True
+    return False
+
 
 class LongTermAssessment(BaseModel):
     """Assessment of the asset over 3-5+ years, separate from cyclical views."""
@@ -1939,6 +1995,12 @@ class FinalAdjudication(BaseModel):
         max_length=200
     )
 
+    # Q5：受控短姿态字段，供报告门脸徽章直接消费；可选，向后兼容旧档案。
+    stance_label: Optional[str] = Field(
+        None,
+        description="受控短姿态枚举：防守等待/偏防守/中性观察/偏进攻/进攻；与 final_stance 方向一致",
+    )
+
     reasoned_verdict: str = Field(
         "",
         description="给读者看的总分总判决正文",
@@ -2111,6 +2173,41 @@ class FinalAdjudication(BaseModel):
                 item for item in (self.quality_gate.notes.strip(), "判决正文缺失") if item
             )
         return self
+
+    @model_validator(mode="after")
+    def _normalize_stance_label(self) -> "FinalAdjudication":
+        """Q5：LLM 边界宽容归一化。全半角/空白清理 + 同义映射；映射不到的非法值
+        字段级 fail-closed（清空，不炸整次裁决），并把原文留痕写进 quality_gate.notes
+        （该合约内部审计说明的既有落点，遵循 W3 事故修复先例）。"""
+        if self.stance_label is None:
+            return self
+        text = unicodedata.normalize("NFKC", str(self.stance_label)).strip()
+        if not text:
+            self.stance_label = None
+            return self
+        candidate = text if text in STANCE_LABEL_ENUM else _STANCE_LABEL_SYNONYMS.get(text)
+        if candidate is None:
+            self._clear_stance_label("stance_label 非法值已清空（原文见 prompt_audit）")
+            return self
+        corpus = " ".join(str(value or "") for value in (self.final_stance, self.reasoned_verdict, self.payoff_assessment))
+        if _stance_label_direction_conflict(candidate, corpus):
+            self._clear_stance_label(f"stance_label（{candidate}）与判决正文方向冲突，已清空（原文见 prompt_audit）")
+            return self
+        self.stance_label = candidate
+        return self
+
+    def _clear_stance_label(self, note: str) -> None:
+        self.stance_label = None
+        if self.quality_gate is None:
+            self.quality_gate = QualityGate(
+                approval_status=self.approval_status,
+                blocking_issues=list(self.blocking_issues),
+                notes=note,
+            )
+        elif note not in self.quality_gate.notes:
+            self.quality_gate.notes = "；".join(
+                item for item in (self.quality_gate.notes.strip(), note) if item
+            )
 
     model_config = {"extra": "allow"}
 

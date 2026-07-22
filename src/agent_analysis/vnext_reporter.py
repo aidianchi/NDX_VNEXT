@@ -1671,6 +1671,14 @@ if (drawerContent) drawerContent.addEventListener('click', (event) => {
   const copy = event.target.closest('[data-copy-ref]');
   if (copy && navigator.clipboard) navigator.clipboard.writeText(copy.dataset.copyRef);
 });
+
+const layerToggleAll = document.getElementById('layer-toggle-all');
+if (layerToggleAll) layerToggleAll.addEventListener('click', () => {
+  const openAll = layerToggleAll.dataset.state !== 'open';
+  document.querySelectorAll('#layers details.layer-full').forEach((fold) => { fold.open = openAll; });
+  layerToggleAll.dataset.state = openAll ? 'open' : 'closed';
+  layerToggleAll.textContent = openAll ? '全部收起' : '全部展开';
+});
 """
 
 
@@ -2333,7 +2341,12 @@ class VNextReportGenerator:
         strongest_dissent = _sentence(candidates[0].get("hypothesis_text"), 170) if candidates else ""
         payoff = self._badge_value(final.get("payoff_assessment"), strip_prefix="赔率") or "未记录"
         confidence = _label(final.get("confidence", "medium"), "confidence")
-        stance_short = self._stance_short(final, reader)
+        # Q5：优先用合约受控枚举 stance_label；旧档案无此字段时退回治理文本规则抽取。
+        stance_short = (
+            str(final.get("stance_label") or "").strip()
+            if "stance_label" in final
+            else self._stance_short(final, reader)
+        )
         integrity = artifacts.get("data_integrity_report", {}) if isinstance(artifacts.get("data_integrity_report"), dict) else {}
         publish_status = integrity.get("publish_status") or ("blocked" if integrity.get("blocked") else "not recorded")
         blocking_reasons = [value for value in _as_list(integrity.get("blocking_reasons")) if str(value).strip()]
@@ -3931,8 +3944,18 @@ class VNextReportGenerator:
             f'<details class="fold"><summary>其余 {len(overflow_ids)} 条事件底账</summary><div class="fbody">{overflow_rows}</div></details>'
             if overflow_rows else ""
         )
-        # R1 裁决：headline_judgment 是模板拼接句，不得作为章节总结正文冒充分析；
-        # 本章节的解释性总结由紧随其后的"综合裁决"（LLM 治理链产物）承担。
+        # R1 裁决：headline_judgment 是模板拼接句，不得作为章节总结正文冒充分析。
+        # 合规的章节总结只接受 Q3 的 LLM 治理链产物（event_interpretation_cards.section_summary，
+        # 走伪引用闸门与边界句校验）；缺失时宁缺毋滥。
+        section_summary = (
+            ((artifacts or {}).get("event_interpretation_cards") or {}).get("section_summary")
+            if isinstance((artifacts or {}).get("event_interpretation_cards"), dict) else None
+        )
+        summary_text = str((section_summary or {}).get("summary_text") or "").strip()
+        intro_html = (
+            f'<div class="prose event-summary"><p>{self._inline_ref_html(summary_text)}</p></div>'
+            if summary_text else ""
+        )
         total_events = len(cards)
         official_count = 0
         for event in ledger_events:
@@ -3960,6 +3983,7 @@ class VNextReportGenerator:
   <p class="section-note">事件材料不进入主证据链、不构成判断依据；它们的职责是解释与预警。</p>
   <div class="sec-grid">
   <div class="sec-main">
+  {intro_html}
   <div class="ev-list">{news_rows or '<p>暂无新闻事实材料。</p>'}</div>
   <div class="audit-boundaries">
     <h3>新闻事件给数据层出的题</h3>
@@ -4030,7 +4054,13 @@ class VNextReportGenerator:
                 continue
             total += 1
             missing = str(request.get("missing") or "").strip()
-            if not missing or "未由模型明示" in missing:
+            # Q6 起上游带结构化 quality 标记；旧档案无此字段时退回文案匹配。
+            low_quality = (
+                request.get("quality") == "low_quality_placeholder"
+                if request.get("quality") is not None
+                else (not missing or "未由模型明示" in missing)
+            )
+            if low_quality:
                 pending_manual += 1
                 continue
             candidates = "、".join(str(item) for item in _as_list(request.get("candidate_function_ids")))
@@ -4819,6 +4849,12 @@ class VNextReportGenerator:
             )
             for item in key_items
         )
+        full_cards = "".join(self._brief_full_indicator_card(layer, item, artifacts) for item in indicators)
+        full_fold = (
+            f'<details class="fold layer-full"><summary>展开 {_escape(layer)} 全部 {len(indicators)} 个指标卡'
+            f'（含发言权边界与反证）</summary><div class="fbody indicator-grid">{full_cards}</div></details>'
+            if full_cards else ""
+        )
         return f"""
 <section class="layer-brief" id="brief-layer-{_escape(layer)}">
   <div class="sec-grid">
@@ -4826,7 +4862,7 @@ class VNextReportGenerator:
       <article class="claim">
         <div class="tag sans">{_escape(layer)} · {_escape(LAYER_TITLES_ZH.get(layer, ''))} · 层级摘要</div>
         <p>{_escape(full_conclusion or '本层没有形成摘要。')}</p>
-        <details class="fold"><summary>查看 {_escape(layer)} 全部 {len(indicators)} 个指标的审计说明</summary><div class="fbody"><p>完整指标卡、发言权边界、反证条件与推理过程不在阅读页重复展开；请从<a href="#audit">审计入口</a>打开独立底稿。</p></div></details>
+        {full_fold}
       </article>
     </div>
     <aside class="sec-aside layer-key-readings">{key_cards or '<p>本层没有可展示读数。</p>'}</aside>
@@ -4913,8 +4949,8 @@ class VNextReportGenerator:
         )
         return f"""
 <section class="panel sec layers-panel brief-layers-panel" id="layers">
-  <div class="sec-head"><span class="tag sans">06 · L1-L5 五层底稿</span><h2>分层证据</h2></div>
-  <p class="section-note">每层先给摘要和 2 个被最终推理实际引用的关键指标；完整指标卡与审计说明留在独立底稿，避免正文变成后台工作台。走势只在抽屉且必须来自可核验快照。</p>
+  <div class="sec-head"><span class="tag sans">06 · L1-L5 五层底稿</span><h2>分层证据</h2><button type="button" id="layer-toggle-all" class="layer-toggle-all" data-state="closed">全部展开</button></div>
+  <p class="section-note">每层先给摘要和 2 个被最终推理实际引用的关键读数；全部指标卡（含发言权边界与反证）折叠在各层内，右上角可一键全展。走势只在抽屉且必须来自可核验快照。</p>
   <h3 class="sr-only">五层展开细节</h3>
   <div class="layer-stack">{cards}</div>
 </section>
@@ -6429,7 +6465,8 @@ class VNextReportGenerator:
         low = raw_ref.lower()
         if low.startswith("card:"):
             card_id = raw_ref.split(":", 1)[-1].strip()
-            short = card_id[-8:] if len(card_id) > 8 else card_id
+            stem = card_id[6:] if card_id.startswith("event_") else card_id
+            short = stem[-8:] if len(stem) > 8 else stem
             return f'<a class="ref-chip card-chip" href="#world" title="{_escape(card_id)}">事件卡·{_escape(short)}</a>'
         if low.startswith("investigation"):
             return '<span class="ref-chip muted">受控调查</span>'

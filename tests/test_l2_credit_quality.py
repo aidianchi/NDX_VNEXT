@@ -31,8 +31,35 @@ def test_hy_quality_spread_calculates_ccc_lower_minus_bb(monkeypatch):
     assert result["value"]["ccc_oas"] > result["value"]["bb_oas"]
     assert result["data_quality"]["formula"].startswith("ICE BofA CCC & Lower")
     assert result["recompute_input"]["raw_series"][-1]["date"] <= "2026-02-15"
+    # FRED BAMLH0A3HYC/BAMLH0A1HYBB are percent series; the CCC-BB difference
+    # is therefore in percentage points (e.g. 8.09 == 8.09pp =~ 809bp), not
+    # basis points, even though the function name keeps the historical `_bp`
+    # suffix.
+    assert result["unit"] == "percentage points"
+    assert "percentage points" in result["notes"]
 
 
 def test_hy_quality_spread_is_registered_for_l2():
     assert "get_hy_quality_spread_bp" in DataCollector().LAYER_FUNCTIONS[2]
     assert INDICATOR_CANONS["get_hy_quality_spread_bp"].layer.value == "L2"
+
+
+def test_hy_quality_spread_unavailable_payload_unit_is_percentage_points(monkeypatch):
+    """Both the 'missing series' and 'insufficient common dates' unavailable
+    branches must also report the corrected unit."""
+    dates = pd.date_range("2026-01-01", periods=30, freq="B")
+    ccc = pd.DataFrame({"date": dates, "value": [8.0 + i * 0.01 for i in range(30)]})
+
+    def missing_bb(series_id, end_date=None):
+        if series_id == "BAMLH0A3HYC":
+            return ccc
+        if series_id == "BAMLH0A1HYBB":
+            return None
+        raise AssertionError(series_id)
+
+    monkeypatch.setattr(tools_L2, "get_fred_series", missing_bb)
+
+    result = tools_L2.get_hy_quality_spread_bp("2026-02-15")
+
+    assert result["value"] is None
+    assert result["unit"] == "percentage points"

@@ -336,7 +336,12 @@ def test_event_card_generation_hard_caps_llm_calls_at_ten(tmp_path: Path):
     assert len(artifact["cards"]) == 10
     assert artifact["selected_count"] == 10
     assert artifact["candidate_count_before_limit"] == 12
-    assert len(engine.calls) == 10
+    card_calls = [call for call in engine.calls if call.startswith("event_card_interpreter")]
+    summary_calls = [call for call in engine.calls if call.startswith("event_section_summary")]
+    assert len(card_calls) == 10
+    # Q3 章节总结是独立的单一阶段：允许少量重试，但不得放大成逐事件调用。
+    assert len(summary_calls) <= 3
+    assert len(engine.calls) == len(card_calls) + len(summary_calls)
 
 
 def test_event_card_validator_accepts_equivalent_downgrade_and_translated_month_name(tmp_path: Path):
@@ -4454,3 +4459,236 @@ def test_profile_adapter_whitelists_reader_exit_and_drops_private_amounts(tmp_pa
     assert "buckets" not in dumped
     assert "123456789" not in json.dumps(dumped)
     assert "987654" not in json.dumps(dumped)
+
+
+def test_event_section_summary_validator_enforces_citation_and_boundary_contract():
+    from agent_analysis.contracts import EventSectionSummary
+    from agent_analysis.orchestrator import VNextOrchestrator
+
+    validate = VNextOrchestrator._event_section_summary_validation_errors
+    allowed = {"event_aaa11111", "event_bbb22222", "event_ccc33333"}
+    body = "据报道，本轮事件围绕利率预期与AI资本开支展开，事件材料给数据层提出了利率路径与盈利确认两类问题，" \
+        "官方纪要与媒体报道相互补充但均需数据确认，材料质量以标题为主、正文有限，解读均以据报道口径降档处理。"
+
+    good = EventSectionSummary(
+        summary_text=f"{body} [card:event_aaa11111] [card:event_bbb22222]以上事件材料不构成主证据，判断以数据层为准。",
+        cited_event_ids=["event_aaa11111", "event_bbb22222"],
+    )
+    assert validate(good, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=True) == []
+
+    # 引用声明与正文不一致
+    mismatch = good.model_copy(update={"cited_event_ids": ["event_aaa11111"]})
+    assert any("exactly match" in err for err in validate(mismatch, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=True))
+
+    # 引用了本轮不存在的卡
+    foreign = EventSectionSummary(
+        summary_text=f"{body} [card:event_zzz99999] [card:event_aaa11111]以上事件材料不构成主证据，判断以数据层为准。",
+        cited_event_ids=["event_zzz99999", "event_aaa11111"],
+    )
+    assert any("outside this run" in err for err in validate(foreign, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=True))
+
+    # 缺结尾边界句
+    unbounded = EventSectionSummary(
+        summary_text=f"{body} [card:event_aaa11111] [card:event_bbb22222]",
+        cited_event_ids=["event_aaa11111", "event_bbb22222"],
+    )
+    assert any("boundary sentence" in err for err in validate(unbounded, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=True))
+
+    # 越权引用 L1-L5 数据 ref
+    leaking = EventSectionSummary(
+        summary_text=f"{body} L1.get_10y_real_rate [card:event_aaa11111] [card:event_bbb22222]以上事件材料不构成主证据，判断以数据层为准。",
+        cited_event_ids=["event_aaa11111", "event_bbb22222"],
+    )
+    assert any("L1-L5" in err for err in validate(leaking, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=True))
+
+    # codex P1 修复：多数材料仅标题时，总结必须诚实声明质量限制
+    body_no_caveat = "据报道，本轮事件围绕利率预期与AI资本开支展开，两条重要新闻分别涉及美联储表态和芯片出口管制，" \
+        "两者均可能影响科技股估值方向，具体传导路径仍需后续数据确认。"
+    no_caveat = EventSectionSummary(
+        summary_text=f"{body_no_caveat} [card:event_aaa11111] [card:event_bbb22222]以上事件材料不构成主证据，判断以数据层为准。",
+        cited_event_ids=["event_aaa11111", "event_bbb22222"],
+    )
+    assert validate(no_caveat, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=False) == []
+    assert any(
+        "quality limitation" in err
+        for err in validate(no_caveat, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=True)
+    )
+
+    # codex P1 修复：绝不能把 effective_date 之后的日期写进历史总结（事后信息回流）
+    future_leak = EventSectionSummary(
+        summary_text=f"{body} 后续在 2026-07-25 得到证实 [card:event_aaa11111] [card:event_bbb22222]以上事件材料不构成主证据，判断以数据层为准。",
+        cited_event_ids=["event_aaa11111", "event_bbb22222"],
+    )
+    assert any(
+        "beyond effective_date" in err
+        for err in validate(future_leak, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=True)
+    )
+
+    # 少数仅标题/弱来源卡也必须在自己的引用附近降级，不能靠“未过半”逃过全局规则。
+    weak_without_attribution = EventSectionSummary(
+        summary_text=(
+            "某事件必然改变市场定价，另一事件提供补充线索，具体传导仍待数据确认。"
+            " [card:event_aaa11111] [card:event_bbb22222]"
+            "以上事件材料不构成主证据，判断以数据层为准。"
+        ),
+        cited_event_ids=["event_aaa11111", "event_bbb22222"],
+    )
+    errors = validate(
+        weak_without_attribution,
+        allowed_ids=allowed,
+        effective_date="2026-07-19",
+        title_only_majority=False,
+        downgrade_required_ids={"event_aaa11111"},
+    )
+    assert any("downgrade-required card" in err for err in errors)
+
+    attributed = weak_without_attribution.model_copy(update={
+        "summary_text": (
+                "据报道，某事件可能改变市场定价，另一事件提供补充线索；据报道，两张卡共同提出了政策路径、"
+            "盈利兑现与风险偏好能否同步变化的问题，但这些都只是待数据确认的线索，不能据此推导指数方向。"
+            " [card:event_aaa11111] [card:event_bbb22222]"
+            "以上事件材料不构成主证据，判断以数据层为准。"
+        )
+    })
+    assert validate(
+        attributed,
+        allowed_ids=allowed,
+        effective_date="2026-07-19",
+        title_only_majority=False,
+        downgrade_required_ids={"event_aaa11111"},
+    ) == []
+
+    hindsight = attributed.model_copy(update={
+        "summary_text": attributed.summary_text.replace("可能改变", "后来已得到确认并直接导致指数上涨，改变")
+    })
+    assert any(
+        "hindsight or deterministic" in err
+        for err in validate(
+            hindsight,
+            allowed_ids=allowed,
+            effective_date="2026-07-19",
+            title_only_majority=False,
+            downgrade_required_ids={"event_aaa11111"},
+        )
+    )
+
+    chinese_future_date = attributed.model_copy(update={
+        "summary_text": attributed.summary_text.replace("政策路径", "2026年7月25日的后续结果与政策路径")
+    })
+    assert any(
+        "beyond effective_date" in err
+        for err in validate(
+            chinese_future_date,
+            allowed_ids=allowed,
+            effective_date="2026-07-19",
+            title_only_majority=False,
+            downgrade_required_ids={"event_aaa11111"},
+        )
+    )
+
+    slash_future_date = attributed.model_copy(update={
+        "summary_text": attributed.summary_text.replace("政策路径", "2026/07/25 的后续结果与政策路径")
+    })
+    assert any(
+        "beyond effective_date" in err
+        for err in validate(
+            slash_future_date,
+            allowed_ids=allowed,
+            effective_date="2026-07-19",
+            title_only_majority=False,
+            downgrade_required_ids={"event_aaa11111"},
+        )
+    )
+
+    for wording in (
+        "后续结果显示事件甲确实改变了市场定价",
+        "据报道，事件甲直接导致估值重估并压低风险偏好",
+    ):
+        candidate = attributed.model_copy(update={
+            "summary_text": (
+                f"{wording}，另一事件仅提供待确认线索。 [card:event_aaa11111] [card:event_bbb22222]"
+                "以上事件材料不构成主证据，判断以数据层为准。"
+            )
+        })
+        assert any(
+            "hindsight or deterministic" in err
+            for err in validate(
+                candidate,
+                allowed_ids=allowed,
+                effective_date="2026-07-19",
+                title_only_majority=False,
+                downgrade_required_ids={"event_aaa11111"},
+            )
+        )
+
+    attribution_only_in_prior_sentence = attributed.model_copy(update={
+        "summary_text": (
+            "据报道，第一张卡只提供待确认线索。第二张弱来源卡被写成确定事实"
+            " [card:event_aaa11111] [card:event_bbb22222]"
+            "以上事件材料不构成主证据，判断以数据层为准。"
+        )
+    })
+    assert any(
+        "downgrade-required card" in err
+        for err in validate(
+            attribution_only_in_prior_sentence,
+            allowed_ids=allowed,
+            effective_date="2026-07-19",
+            title_only_majority=False,
+            downgrade_required_ids={"event_aaa11111", "event_bbb22222"},
+        )
+    )
+
+    ascii_boundary_bypass = attributed.model_copy(update={
+        "summary_text": (
+            "据报道，第一张卡只供参考 [card:event_aaa11111]. "
+            "第二张弱来源卡被写成确定事实 [card:event_bbb22222]"
+            "以上事件材料不构成主证据，判断以数据层为准。"
+        )
+    })
+    assert any(
+        "downgrade-required card" in err
+        for err in validate(
+            ascii_boundary_bypass,
+            allowed_ids=allowed,
+            effective_date="2026-07-19",
+            title_only_majority=False,
+            downgrade_required_ids={"event_aaa11111", "event_bbb22222"},
+        )
+    )
+
+    for wording in ("后续结果\n显示事件甲改变市场定价", "据报道，事件甲直接\n导致估值重估"):
+        cross_line = attributed.model_copy(update={
+            "summary_text": (
+                f"{wording}，另一事件仅提供待确认线索。 [card:event_aaa11111] [card:event_bbb22222]"
+                "以上事件材料不构成主证据，判断以数据层为准。"
+            )
+        })
+        assert any(
+            "hindsight or deterministic" in err
+            for err in validate(
+                cross_line,
+                allowed_ids=allowed,
+                effective_date="2026-07-19",
+                title_only_majority=False,
+                downgrade_required_ids={"event_aaa11111"},
+            )
+        )
+
+    for wording in ("据报道，随后指数上涨", "据报道，此后市场\n走弱"):
+        hindsight_market_move = attributed.model_copy(update={
+            "summary_text": (
+                f"{wording}，但这一反应仍需正式数据核验。 [card:event_aaa11111] [card:event_bbb22222]"
+                "以上事件材料不构成主证据，判断以数据层为准。"
+            )
+        })
+        assert any(
+            "hindsight or deterministic" in err
+            for err in validate(
+                hindsight_market_move,
+                allowed_ids=allowed,
+                effective_date="2026-07-19",
+                title_only_majority=False,
+                downgrade_required_ids={"event_aaa11111"},
+            )
+        )

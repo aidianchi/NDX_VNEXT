@@ -128,10 +128,10 @@ PROMPT_EXAMPLES: PromptExamplesRegistry = {
     # "high_yield_oas" -> 重命名为 "get_hy_oas_bp"
     "get_hy_oas_bp": [
         {
-            "context": "【语境化解读 + 分层降噪V5.8】高收益信用利差(OAS)是'聪明钱'对风险的真实定价。L1宏观层用 MA5 vs MA20 趋势方向替代日度动量。",
-            "input": {"function_id": "get_hy_oas_bp", "raw_data": {"value": {"level": 620.0, "trend": "short_above_long", "short_ma": 618.0, "long_ma": 595.0, "relativity": {"percentile_10y": 92.3}}}},
-            "reasoning": "1. **语境定位**: 这个指标反映金融体系中最专业资本（债券市场）的态度。2. **水平解读**: 620个基点远高于历史均值，进入经济衰退或金融压力时期的危险区域，10年百分位92.3%确认了极端性。3. **趋势解读**: MA5(618.0)高于MA20(595.0)，trend='short_above_long'表明利差在周度趋势上仍在扩大，信贷环境正在收紧。4. **综合叙事**: '聪明钱'不仅在大声呼喊风险，且趋势方向支持风险正在上升，股市的乐观情绪极其脆弱。",
-            "output_narrative": "作为'聪明钱'风险偏好的领先指标，高收益信用利差已飙升至620个基点的危机水平（10年百分位92.3%），且MA5高于MA20，趋势方向表明利差仍在扩大。信贷市场正在对严重的经济衰退风险进行定价，金融系统压力急剧升高。"
+            "context": "【语境化解读 + 分层降噪V5.8】高收益信用利差(OAS)是'聪明钱'对风险的真实定价。L1宏观层用 MA5 vs MA20 趋势方向替代日度动量。注意：raw_data.value.level 与 short_ma/long_ma 单位均为 percent（FRED 原始口径），行文引用须写成 X.XX%（≈XXXbp），禁止把百分比数值直接当基点数写。",
+            "input": {"function_id": "get_hy_oas_bp", "raw_data": {"value": {"level": 6.20, "trend": "short_above_long", "short_ma": 6.18, "long_ma": 5.95, "relativity": {"percentile_10y": 92.3}}}},
+            "reasoning": "1. **语境定位**: 这个指标反映金融体系中最专业资本（债券市场）的态度。2. **水平解读**: level=6.20%（≈620个基点）远高于历史均值，进入经济衰退或金融压力时期的危险区域，10年百分位92.3%确认了极端性。3. **趋势解读**: short_ma(6.18%)高于long_ma(5.95%)，trend='short_above_long'表明利差在周度趋势上仍在扩大，信贷环境正在收紧。4. **综合叙事**: '聪明钱'不仅在大声呼喊风险，且趋势方向支持风险正在上升，股市的乐观情绪极其脆弱。",
+            "output_narrative": "作为'聪明钱'风险偏好的领先指标，高收益信用利差已飙升至6.20%（约620个基点）的危机水平（10年百分位92.3%），且短均线高于长均线，趋势方向表明利差仍在扩大。信贷市场正在对严重的经济衰退风险进行定价，金融系统压力急剧升高。"
         }
     ],
 
@@ -494,10 +494,10 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
     ],
     "get_ig_oas_bp": [
         {
-            "context": "【高质量信用温度计】投资级OAS反映高质量企业融资环境。它通常比高收益利差更温和，但一旦走阔说明压力开始扩散。",
-            "input": {"function_id": "get_ig_oas_bp", "raw_data": {"value": {"level": 145.0, "trend": "short_above_long", "relativity": {"percentile_10y": 72.0}}}},
-            "reasoning": "1. 水平：145bp处于偏高分位，投资级信用补偿要求不低。2. 趋势：短均线高于长均线，利差边际走阔。3. 机制：高质量信用也要求更高补偿 -> 融资条件收紧范围扩大 -> 股权风险偏好承压。4. 结论：若与HY OAS同步扩大，风险偏好恶化置信度明显提高。",
-            "output_narrative": "投资级信用利差处于偏高分位且边际走阔，说明融资压力并非只局限在高风险债券。若这一信号与高收益利差同步恶化，股权风险偏好会面临更系统性的压力。"
+            "context": "【高质量信用温度计】投资级OAS反映高质量企业融资环境。它通常比高收益利差更温和，但一旦走阔说明压力开始扩散。注意：raw_data.value.level 单位为 percent（FRED 原始口径），行文引用须写成 X.XX%（≈XXXbp），禁止把百分比数值直接当基点数写。",
+            "input": {"function_id": "get_ig_oas_bp", "raw_data": {"value": {"level": 1.45, "trend": "short_above_long", "relativity": {"percentile_10y": 72.0}}}},
+            "reasoning": "1. 水平：level=1.45%（≈145bp）处于偏高分位，投资级信用补偿要求不低。2. 趋势：短均线高于长均线，利差边际走阔。3. 机制：高质量信用也要求更高补偿 -> 融资条件收紧范围扩大 -> 股权风险偏好承压。4. 结论：若与HY OAS同步扩大，风险偏好恶化置信度明显提高。",
+            "output_narrative": "投资级信用利差已达1.45%（约145个基点），处于偏高分位且边际走阔，说明融资压力并非只局限在高风险债券。若这一信号与高收益利差同步恶化，股权风险偏好会面临更系统性的压力。"
         }
     ],
     "get_hyg_momentum": [

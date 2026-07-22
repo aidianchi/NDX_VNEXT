@@ -114,6 +114,10 @@ def test_successful_adjudication_and_unanswered_question_note():
     assert adj["stance_echo"] == FINAL_STANCE
     assert payload["policy"]["llm_note"] == "adjudicated"
     assert any(note.startswith("question_unanswered:q2") for note in adj["notes"])
+    q2 = next(answer for answer in adj["question_answers"] if answer["question_id"] == "q2")
+    assert q2["answer_status"] == "cannot_answer_yet"
+    assert q2["missing_evidence"] == ["缺口未由模型明示，需人工补记"]
+    assert any(request["source_id"] == "q2" for request in payload["recollection_requests"]["requests"])
     assert len(calls) == 1
 
 
@@ -238,6 +242,7 @@ def test_recollection_requests_copy_only_whitelisted_gap_fields():
     requests = payload["recollection_requests"]["requests"]
     assert [request["missing"] for request in requests] == [
         "逐字缺口 L4.get_forward_earnings",
+        "缺口未由模型明示，需人工补记",
         "逐字冲突缺口",
         "逐字调查缺口",
     ]
@@ -254,6 +259,127 @@ def test_recollection_requests_copy_only_whitelisted_gap_fields():
     assert payload["recollection_requests"]["policy"]["no_stance_rule"] == (
         "requests carry only missing-data descriptions; verdict text must never be copied here"
     )
+
+
+def test_low_quality_placeholder_is_marked_and_counted():
+    """Q6: 模型没给具体缺口时，代码侧回填的占位文案必须标记 low_quality_placeholder
+    并计入 low_quality_count，不得悄悄混进"已核实缺口清单"误导下一轮补采。"""
+    data = json.loads(_valid_response())
+    data["question_answers"][0]["missing_evidence"] = []  # 触发 missing_evidence 代码侧占位回填
+    data["conflict_matrix"][0] = {
+        "card_id": "event_abc12345", "event_side": "资本开支加速支持盈利叙事",
+        "relation": "confirmed_by_data", "data_side_refs": [], "note": "",  # 触发 note 代码侧占位回填
+    }
+    payload, _ = _build(json.dumps(data, ensure_ascii=False))
+    requests = payload["recollection_requests"]["requests"]
+    assert len(requests) == 3
+    assert {r["missing"] for r in requests} == {
+        "缺口未由模型明示，需人工补记",
+        "原判定缺乏白名单内数据引用，已降级为不可检验",
+    }
+    assert all(r["quality"] == "low_quality_placeholder" for r in requests)
+    assert payload["recollection_requests"]["low_quality_count"] == 3
+
+
+def test_model_specified_missing_evidence_is_marked_specified():
+    """当模型确实写明具体缺口时，quality 必须是 specified，且不计入 low_quality_count。"""
+    payload, _ = _build(_valid_response())
+    requests = payload["recollection_requests"]["requests"]
+    assert requests
+    q1 = next(r for r in requests if r["source_id"] == "q1")
+    q2 = next(r for r in requests if r["source_id"] == "q2")
+    assert q1["quality"] == "specified"
+    assert q2["quality"] == "low_quality_placeholder"
+    assert payload["recollection_requests"]["low_quality_count"] == 1
+
+
+def test_downgraded_answer_backfills_missing_evidence_instead_of_vanishing():
+    """codex P1 修复：answered_by_data 因无证据被自动降级为 cannot_answer_yet 时，
+    若模型没写 missing_evidence，此前会静默从补采清单里消失（既不提醒也不计数）。
+    现在必须回填占位并计入 low_quality_count，保证"降级"不等于"这道题被系统遗忘"。"""
+    data = json.loads(_valid_response())
+    data["question_answers"][0].update({
+        "answer_status": "answered_by_data",
+        "data_refs": [], "investigation_refs": [], "missing_evidence": [],
+    })
+    payload, _ = _build(json.dumps(data, ensure_ascii=False))
+    answers = payload["integrated_adjudication"]["question_answers"]
+    assert answers[0]["answer_status"] == "cannot_answer_yet"
+    assert answers[0]["missing_evidence"] == ["缺口未由模型明示，需人工补记"]
+    requests = payload["recollection_requests"]["requests"]
+    assert any(r["source_id"] == "q1" and r["quality"] == "low_quality_placeholder" for r in requests)
+
+
+def test_vague_missing_evidence_phrases_are_flagged_low_quality():
+    """codex P1 修复：模型自己写"需要更多数据""待补充"这类空话，此前只做精确字符串匹配、
+    会被误标成 specified；现在这些常见空话短语也要落 low_quality_placeholder。"""
+    from integrated_synthesis_report import _is_low_quality_missing_text
+
+    assert _is_low_quality_missing_text("需要更多数据")
+    assert _is_low_quality_missing_text("待补充")
+    assert _is_low_quality_missing_text("待确认")
+    assert _is_low_quality_missing_text("需要更多数据支持")
+    assert _is_low_quality_missing_text("待补充数据")
+    assert _is_low_quality_missing_text("需更多数据")
+    assert _is_low_quality_missing_text("需更多数据支持")
+    assert _is_low_quality_missing_text("还需更多数据支持")
+    assert not _is_low_quality_missing_text("需 NVDA 2026Q2 财报公布后的营收同比修订值")  # 具体缺口不得误伤
+    assert not _is_low_quality_missing_text("缺 NDX Forward PE 与分析师盈利修正数据")
+    assert not _is_low_quality_missing_text("盈利修正")  # 合法的短而具体的缺口，不得被长度规则误伤
+    assert not _is_low_quality_missing_text("需要更多数据：NVDA 2026Q2 财报公布后的营收同比修订值")
+    assert not _is_low_quality_missing_text("需更多数据：NVDA 2026Q2 财报公布后的营收同比修订值")
+
+    data = json.loads(_valid_response())
+    data["question_answers"][0]["missing_evidence"] = ["需要更多数据"]
+    payload, _ = _build(json.dumps(data, ensure_ascii=False))
+    requests = payload["recollection_requests"]["requests"]
+    assert requests[0]["quality"] == "low_quality_placeholder"
+    assert payload["recollection_requests"]["low_quality_count"] == 2
+
+
+def test_empty_or_explicitly_unanswered_questions_are_reconciled_into_recollection():
+    data = json.loads(_valid_response())
+    data["question_answers"] = []
+    payload, _ = _build(json.dumps(data, ensure_ascii=False))
+    answers = payload["integrated_adjudication"]["question_answers"]
+    assert {answer["question_id"] for answer in answers} == {"q1", "q2"}
+    assert all(answer["answer_status"] == "cannot_answer_yet" for answer in answers)
+    requests = payload["recollection_requests"]["requests"]
+    assert {request["source_id"] for request in requests if request["source_type"] == "question"} == {"q1", "q2"}
+
+    data = json.loads(_valid_response())
+    data["question_answers"][0]["answer"] = "未作答"
+    data["question_answers"][0]["missing_evidence"] = []
+    payload, _ = _build(json.dumps(data, ensure_ascii=False))
+    q1 = next(answer for answer in payload["integrated_adjudication"]["question_answers"] if answer["question_id"] == "q1")
+    assert q1["answer_status"] == "cannot_answer_yet"
+    assert q1["missing_evidence"] == ["缺口未由模型明示，需人工补记"]
+
+
+def test_question_reconciliation_preserves_canonical_order_specific_gaps_and_first_duplicate():
+    data = json.loads(_valid_response())
+    q2 = {
+        "question_id": "q2", "question": "利率叙事是否有信用利差支持？",
+        "answer_status": "cannot_answer_yet", "answer": "未作答",
+        "data_refs": [], "investigation_refs": [],
+        "missing_evidence": ["缺 2026-07-18 当日 HY OAS level 字段"],
+    }
+    duplicate_q2 = dict(q2, answer="重复回答", missing_evidence=["不应覆盖首条"])
+    data["question_answers"] = [q2, duplicate_q2]
+    payload, _ = _build(json.dumps(data, ensure_ascii=False))
+    answers = payload["integrated_adjudication"]["question_answers"]
+    assert [answer["question_id"] for answer in answers] == ["q1", "q2"]
+    assert answers[1]["missing_evidence"] == ["缺 2026-07-18 当日 HY OAS level 字段"]
+    assert any(note == "dropped_duplicate_question:q2" for note in payload["integrated_adjudication"]["notes"])
+
+
+def test_recollection_request_keeps_backward_compatible_keys():
+    """消费方 vnext_reporter._recollection_fold 只读这五个键；新增 quality 必须是纯增量。"""
+    payload, _ = _build(_valid_response())
+    for request in payload["recollection_requests"]["requests"]:
+        for key in ("missing", "source_type", "source_id", "candidate_function_ids", "trigger_reason"):
+            assert key in request
+        assert request["quality"] in {"specified", "low_quality_placeholder"}
 
 
 def test_unknown_candidate_is_not_guessed_and_list_renders_without_adjudication():
@@ -378,6 +504,17 @@ def test_env_disable_accepts_common_false_values(monkeypatch):
         payload, calls = _build(_valid_response())
         assert payload["integrated_adjudication"] is None, value
         assert not calls
+
+
+def test_prompt_requires_specific_missing_evidence_content():
+    """Q6：提示词必须要求缺口写明具体字段/窗口，禁止留空或笼统套话。"""
+    prompt = (
+        Path(__file__).resolve().parents[1]
+        / "src" / "agent_analysis" / "prompts" / "integrated_adjudicator.md"
+    ).read_text(encoding="utf-8")
+    assert "具体缺什么数据、什么字段、什么时间窗口" in prompt
+    assert "具体缺哪条数据、哪个字段、哪个时间窗口" in prompt
+    assert "禁止留空" in prompt
 
 
 def test_superseded_markers_on_legacy_fields():

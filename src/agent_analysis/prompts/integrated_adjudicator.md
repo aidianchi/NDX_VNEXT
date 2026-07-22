@@ -24,8 +24,8 @@
 - `principal_contradiction` / `principal_aspect`：主要矛盾与当前主导面（从数据判决继承，可以用事件语境丰富表述，不可改变实质）。
 - `data_support` / `event_support` / `integrated_explanations` / `reasonable_assumptions` / `weak_leads` / `unexplained`：六档归档。data_support 只放输入"允许引用的 data refs 清单"里出现过的 ref；event_support 只放事件卡的 event_id。
 - `strongest_counterevidence`：当前对综合判断最有杀伤力的一条反证。
-- `question_answers`：对输入里每一道 cross_layer_question 各回答一次。`answer_status` 三选一：answered_by_data（数据或调查报告足以回答）、partially_answered（部分回答，写明缺口）、cannot_answer_yet（答不了，写明缺什么数据）。答案必须引用 data_refs 或 investigation_refs，凭空作答等于违规。
-- `conflict_matrix`：每张事件卡一行。`relation` 三选一：confirmed_by_data（数据证实了事件叙事的方向）、challenged_by_data（数据削弱了事件叙事）、not_yet_testable（当前数据检验不了）。`data_side_refs` 必须是具体的 data ref，禁止写"pure_data_report"这类占位词；not_yet_testable 时 data_side_refs 可为空但 `note` 必须写明缺哪条数据。
+- `question_answers`：对输入里每一道 cross_layer_question 各回答一次。`answer_status` 三选一：answered_by_data（数据或调查报告足以回答）、partially_answered（部分回答，写明缺口）、cannot_answer_yet（答不了，写明缺什么数据）。答案必须引用 data_refs 或 investigation_refs，凭空作答等于违规。凡标记 partially_answered 或 cannot_answer_yet，`missing_evidence` 必须写明**具体缺什么数据、什么字段、什么时间窗口**（例如"缺 NVDA 2026Q2 财报公布后的营收同比修订值"），禁止写笼统套话（如"需更多数据""待补充"），禁止留空——留空或笼统会被系统判定为低质量占位并计入下轮补采清单的质量统计。
+- `conflict_matrix`：每张事件卡一行。`relation` 三选一：confirmed_by_data（数据证实了事件叙事的方向）、challenged_by_data（数据削弱了事件叙事）、not_yet_testable（当前数据检验不了）。`data_side_refs` 必须是具体的 data ref，禁止写"pure_data_report"这类占位词；not_yet_testable 时 data_side_refs 可为空但 `note` 必须写明**具体缺哪条数据、哪个字段、哪个时间窗口**，同样禁止笼统套话或留空。
 - `falsifiers`：会推翻本综合判断的可观察条件。
 - `watch_next`：下一步最值得盯的观察点（数据与事件混排，各自注明类型）。
 - `notes`：任何你需要向读者或审计者坦白的限制。

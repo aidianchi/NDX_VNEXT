@@ -6,6 +6,23 @@
 
 ## 2026-07-20
 
+### 报告质量工单包 Q1/Q3-Q6 完工（Q2 暂缓）：Fable 主刀 + 两个 Sonnet worker 并行，三轮提交前复审后 911 测试全绿
+
+- 用户拍板：除 Q2（透明化与权威性审计）暂缓外全部实施；Q1 选修标签不改数值；Q4 选 A+C；施工不再派 Codex，简单件派 Sonnet subagent、Fable 逐项亲验。工单包 `investigation_reports/20260720_report_quality/WORK_ORDERS.md`。
+- **Q1 利差单位标签修复（worker A 施工，Fable 亲验）**：`tools_L1.py` 的 HY/IG OAS 与 `tools_L2.py` 的质量利差把 FRED 原生百分比值标成 basis points 的病根修正——unit 如实改为 percent / percentage points（正常+unavailable 兜底双路径），notes 补命名史（函数名 `_bp` 保留，系跨 artifact 合约键）；`l2_analyst.md` 加单位纪律（须写 X.XX%（≈XXXbp））；canon HY/IG 判读卡补单位口径；6 条新测试锁定。数值与函数名零改动，历史快照零污染。顺带核实 `get_10y2y_spread_bp` 确有 ×100 换算，非同类病。
+- **Q3 governed 事件总结（Fable 亲做）**：新合约 `EventSectionSummary` + 亲笔提示词 `event_section_summary.md`（只许引用本轮事件卡、[card:] 引用、固定边界句结尾、禁触 L1-L5、150-400 字、弱材料须如实说明）+ orchestrator 独立阶段（校验器五重：引用声明与正文逐一对应、卡片白名单、2-5 张引用带、边界句、禁 L1-L5 ref、长度容忍带；失败宁缺毋滥留痕 section_summary_failure）+ 渲染进外部世界章节顶部。R6"事件卡 10 张硬上限"测试改为按阶段前缀分账（卡片仍严格 10，总结重试 ≤3）。live 验收留待下次真实 run。
+- **Q4 L1-L5 内嵌折叠+全局开关（Fable 亲做，用户拍板 A+C）**：每层"展开全部 N 个指标卡（含发言权边界与反证）"折叠回归 brief 内（完整判读卡：读数/标尺/判读正文/发言权边界/反证）；06 章节头新增"全部展开/收起"开关；Playwright 实测五层全开/全收与文案切换。
+- **Q5 短姿态枚举（worker B 施工合约与提示词，Fable 接线徽章并亲验）**：`FinalAdjudication.stance_label` 可选受控枚举（防守等待/偏防守/中性观察/偏进攻/进攻），NFKC 清理+同义映射+非法值字段级清空且留痕 quality_gate.notes（W3 先例），旧档案整体回放兼容；final_adjudicator 提示词三处要求；门脸徽章优先读枚举、旧档案回退关键词抽取；11 条新测试。
+- **Q6 补采清单质量（worker B 施工，Fable 接线并亲验）**：查明"缺口未由模型明示"占位系 `_parse_and_validate` 代码兜底（模型漏写缺口时避免整次裁决报废），非模型产出；补采条目带 quality=specified/low_quality_placeholder 结构化标记 + 顶层 low_quality_count；integrated_adjudicator 提示词强制写明具体缺什么数据/字段/窗口、禁笼统套话；渲染端优先读 quality 标记（旧档案回退文案匹配）；4 条新测试。
+- 附带小修：事件卡 chip 短 ID 先剥 `event_` 前缀再截尾（不再出现"vent_abc"式切字）。
+- 验证：全量 **903 passed**（基线 881 + 新增 22）；正式报告重生成，Playwright 冒烟（徽章短词、五层开关、移动端 390 无溢出、零 JS 错误）。改动未提交，待用户审阅。
+- **提交前 Codex 复审揪出 4 条真实问题（Fable 逐条核实代码后确认非幻觉，全部修复）**：①事件总结 payload 缺 raw_text_available/effective_date，模型既无法履行"如实说明材料质量"要求，也没有代码防线拦"事后信息回流"进历史报告——payload 改为从原始事件底账代码级富化，新增材料质量豁免句校验+日期泄漏校验；②Q1 单位修对了但 `prompt_examples.py` 里 `get_hy_oas_bp`/`get_ig_oas_bp` 的运行时 few-shot 范例仍是旧的"620.0=620个基点"口径且在 L2 层默认注入列表里，新规则与反例同时喂给模型——范例数值与叙述改成 percent 口径；③Q6 的 `answered_by_data`→`cannot_answer_yet` 自动降级分支不回填缺口，缺口为空时整条从补采清单静默消失（降级越多能看见的问题越少）；空话识别只做两个固定字符串精确匹配——两个降级分支统一回填占位，新增空话短语表（长度阈值试过因误伤"盈利修正"这类合法短缺口被撤销）；④姿态徽章 `stance_label` 只做枚举校验不查方向，"进攻"标签可能配"防守"正文——新增粗粒度方向冲突检测，冲突即清空回退关键词兜底，"中性观察"不做二次揣测避免误伤。新增 8 条测试；全量 **907 passed**；报告二次重生成 Playwright 冒烟结果与第一轮一致。
+- 姿态兼容语义更正：现代产物若 `stance_label` 因非法值或方向冲突被清空，门脸保持不显示，绝不再用旧关键词猜回；只有完全没有该键的旧档案才启用兼容回退。
+- 用户于 2026-07-22 查收修复反馈并确认：复核无阻断后提交整批改动，将 `main` 无损快进为最新主线；本轮不包含远端推送授权。
+- 第二轮独立复审继续复现三条边界绕过并完成加固：①少数仅标题/非官方来源卡也必须在自身引用附近出现降级归因，并拦截无日期的事后确认、确定性因果和中文格式未来日期；②模型省略整题或显式写“未作答”时，系统补成 `cannot_answer_yet` 并进入补采清单与低质量计数；③姿态方向关键词增加常见否定关系识别，`不宜加仓`、`而非防守` 不再被当成正向信号。新增 2 个独立测试函数并扩展 Q3 既有验证器场景；全量 **909 passed**。
+- 第三轮复审继续补齐英文标点/跨行禁句、斜杠与点号日期、现代空标签不得被旧逻辑猜回、补采顺序/去重/具体缺口保留，以及“空话前缀+具体字段”不得误伤。最终以 `.venv/bin/python -m pytest --cache-clear -q` 从头执行：**911 passed，58 warnings**，`lastfailed` 缓存不存在。
+- CLAUDE.md 复核（用户问询）：工作区干净、无手滑改动，最后一次变更为 7-19 有意的括注清理；内容现状良好，不建议为精简而精简。`.codex/config.toml` 与 `docs/4.20 VNEXT_REPORT.md` 两处游离改动经用户确认无所谓后恢复原样。
+
 ### brief 视觉终局返工：Fable 亲自接手，宋体事故根因 + 全脊柱对照样张实测（截图驱动）
 
 - 背景：用户裁定 Codex 两轮视觉返工后"仍远不如 demo"，指定 Fable 亲改。根因盘点发现 Codex 全程无法打开页面（file:// 受限），等于盲改；本轮改为 Playwright 截图驱动，桌面+移动逐屏与 `demo_20260717_spine.html` 对照，改一轮看一轮。

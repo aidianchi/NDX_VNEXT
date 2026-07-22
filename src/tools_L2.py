@@ -539,7 +539,7 @@ def get_hy_quality_spread_bp(end_date: str = None) -> Dict[str, Any]:
             "name": "HY CCC & Lower minus BB OAS",
             "series_id": "BAMLH0A3HYC-BAMLH0A1HYBB",
             "value": None,
-            "unit": "basis points",
+            "unit": "percentage points",
             "source_name": "FRED / ICE BofA",
             "source_tier": "official_provider",
             "notes": "数据不足，无法计算低质高收益债相对 BB 的信用分层压力。",
@@ -553,7 +553,7 @@ def get_hy_quality_spread_bp(end_date: str = None) -> Dict[str, Any]:
             "name": "HY CCC & Lower minus BB OAS",
             "series_id": "BAMLH0A3HYC-BAMLH0A1HYBB",
             "value": None,
-            "unit": "basis points",
+            "unit": "percentage points",
             "source_name": "FRED / ICE BofA",
             "source_tier": "official_provider",
             "notes": "CCC & Lower 和 BB OAS 共同日期不足，无法计算分层利差。",
@@ -575,7 +575,7 @@ def get_hy_quality_spread_bp(end_date: str = None) -> Dict[str, Any]:
         "name": "HY CCC & Lower minus BB OAS",
         "series_id": "BAMLH0A3HYC-BAMLH0A1HYBB",
         "value": analysis,
-        "unit": "basis points",
+        "unit": "percentage points",
         "source_name": "FRED / ICE BofA",
         "source_tier": "official_provider",
         "data_quality": {
@@ -595,6 +595,8 @@ def get_hy_quality_spread_bp(end_date: str = None) -> Dict[str, Any]:
         "notes": (
             "低质高收益债相对 BB 的分层压力。FRED 可得口径是 CCC & Lower，"
             "不是精确 CCC+；应与 HY OAS、IG OAS 和 VIX 联合阅读。"
+            "注：函数名含 _bp 系历史命名，数值与 unit 字段以 percentage points 为准"
+            "（如 8.09 即 8.09 个百分点≈809bp）。"
         ),
     }
     return _attach_recompute_value_series(payload, spread_series[["date", "value"]])

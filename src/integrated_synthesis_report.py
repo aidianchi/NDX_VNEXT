@@ -14,6 +14,46 @@ except ImportError:  # pragma: no cover - direct script execution
 
 _INTEGRATED_PROMPT_PATH = Path(__file__).resolve().parent / "agent_analysis" / "prompts" / "integrated_adjudicator.md"
 
+# W2/Q6：模型未明示缺口时，代码侧补的占位文案；用于识别低质量补采条目（不是模型真实产出）。
+_MISSING_EVIDENCE_PLACEHOLDER = "缺口未由模型明示，需人工补记"
+_NOT_YET_TESTABLE_NOTE_PLACEHOLDER = "原判定缺乏白名单内数据引用，已降级为不可检验"
+_LOW_QUALITY_MISSING_TEXTS = {_MISSING_EVIDENCE_PLACEHOLDER, _NOT_YET_TESTABLE_NOTE_PLACEHOLDER}
+# codex P1 修复：模型自己写的空话（"需要更多数据"之类）此前只被精确字符串匹配挡住，
+# 写法稍有不同就会被误标成 specified。这里补一组常见空话短语，命中即视为低质量。
+_LOW_QUALITY_MISSING_PHRASES = (
+    "需要更多数据",
+    "需更多数据",
+    "待补充",
+    "更多数据",
+    "需要更多信息",
+    "需更多信息",
+    "待确认",
+    "有待确认",
+    "需进一步确认",
+    "待进一步核实",
+)
+_LOW_QUALITY_GENERIC_REMAINDERS = {
+    "", "来确认", "以确认", "才能回答", "后再判断", "相关数据", "相关信息",
+    "具体情况", "进一步判断", "进一步分析", "进一步核实", "支持", "佐证",
+    "判断", "分析", "验证", "核实", "数据", "信息", "补充", "确认", "观察",
+}
+
+
+def _is_low_quality_missing_text(text: str) -> bool:
+    stripped = text.strip()
+    if stripped in _LOW_QUALITY_MISSING_TEXTS:
+        return True
+    # 只把纯空话或“空话 + 通用尾巴”降级；冒号后若已有公司、字段、日期/窗口等
+    # 具体内容，应保留为 specified。也不使用通用长度阈值，避免误伤“盈利修正”。
+    candidate = re.sub(r"^(?:当前|目前)?(?:仍|还)?", "", stripped).strip()
+    for phrase in _LOW_QUALITY_MISSING_PHRASES:
+        if not candidate.startswith(phrase):
+            continue
+        remainder = candidate[len(phrase):].lstrip("：:，,。；;、-— ")
+        if remainder in _LOW_QUALITY_GENERIC_REMAINDERS:
+            return True
+    return False
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -357,7 +397,8 @@ class IntegratedSynthesisReportBuilder:
         data = self._normalize_adjudication_payload(data, cards, questions)
 
         card_ids = {str(card.get("event_id") or "") for card in cards}
-        question_ids = {q["question_id"] for q in questions}
+        question_by_id = {q["question_id"]: q["question"] for q in questions}
+        question_ids = set(question_by_id)
         allowed = set(payload.get("allowed_data_refs") or [])
         allowed_inv = {str(i) for i in payload.get("allowed_investigation_ids") or [] if str(i)}
         authority = payload.get("ref_authority") or {}
@@ -393,7 +434,7 @@ class IntegratedSynthesisReportBuilder:
         data["event_support"] = _split_refs(data.get("event_support"), card_ids, "event_support")
 
         # 问答硬闸门（C3/I2）：伪引用剔除；answered 无证据降级 cannot_answer_yet；partially 无缺口补占位。
-        cleaned_answers = []
+        cleaned_by_id: Dict[str, Dict[str, Any]] = {}
         for answer in data.get("question_answers") or []:
             if not isinstance(answer, dict):
                 continue
@@ -401,21 +442,56 @@ class IntegratedSynthesisReportBuilder:
             if qid not in question_ids:
                 notes.append(f"dropped_unknown_question:{qid}")
                 continue
+            if qid in cleaned_by_id:
+                notes.append(f"dropped_duplicate_question:{qid}")
+                continue
             if not str(answer.get("answer") or "").strip() or str(answer.get("answer")).strip() == "未作答":
                 notes.append(f"question_unanswered:{qid}")
+                missing_evidence = list(answer.get("missing_evidence") or [])
+                if not missing_evidence:
+                    missing_evidence = [_MISSING_EVIDENCE_PLACEHOLDER]
+                    notes.append(f"missing_evidence_placeholder:{qid}")
+                answer = {
+                    "question_id": qid,
+                    "question": question_by_id[qid],
+                    "answer_status": "cannot_answer_yet",
+                    "answer": "未作答",
+                    "data_refs": [],
+                    "investigation_refs": [],
+                    "missing_evidence": missing_evidence,
+                }
+                cleaned_by_id[qid] = answer
                 continue
             answer["data_refs"] = _split_refs(answer.get("data_refs"), allowed, f"qa:{qid}")
             answer["investigation_refs"] = _split_refs(answer.get("investigation_refs"), allowed_inv, f"qa:{qid}")
             if answer.get("answer_status") == "answered_by_data" and not (answer["data_refs"] or answer["investigation_refs"]):
                 answer["answer_status"] = "cannot_answer_yet"
                 notes.append(f"answer_downgraded_no_evidence:{qid}")
-            if answer.get("answer_status") == "partially_answered" and not answer.get("missing_evidence"):
-                answer["missing_evidence"] = ["缺口未由模型明示，需人工补记"]
+            # codex P1 修复：cannot_answer_yet 和 partially_answered 都必须留下缺口描述，
+            # 否则该问题在 _build_recollection_requests 里因 missing_evidence 为空而
+            # 静默消失、既不出现在补采清单也不计入 low_quality_count——降级动作本身
+            # 不能变成"这道题从此没人知道它没被回答"。
+            if answer.get("answer_status") in {"partially_answered", "cannot_answer_yet"} and not answer.get("missing_evidence"):
+                answer["missing_evidence"] = [_MISSING_EVIDENCE_PLACEHOLDER]
                 notes.append(f"missing_evidence_placeholder:{qid}")
-            cleaned_answers.append(answer)
-        data["question_answers"] = cleaned_answers
-        for qid in question_ids - {str(a.get("question_id")) for a in cleaned_answers}:
+            cleaned_by_id[qid] = answer
+        cleaned_answers = []
+        for qid, question_text in question_by_id.items():
+            if qid in cleaned_by_id:
+                cleaned_answers.append(cleaned_by_id[qid])
+                continue
             notes.append(f"question_unanswered:{qid}")
+            notes.append(f"missing_evidence_placeholder:{qid}")
+            cleaned_answers.append({
+                "question_id": qid,
+                "question": question_text,
+                "answer_status": "cannot_answer_yet",
+                "answer": "未作答",
+                "data_refs": [],
+                "investigation_refs": [],
+                "missing_evidence": [_MISSING_EVIDENCE_PLACEHOLDER],
+            })
+        data["question_answers"] = cleaned_answers
 
         # 矩阵硬闸门（C3/I2）：伪引用剔除后，confirmed/challenged 无证据自动降为 not_yet_testable。
         cleaned_rows = []
@@ -430,7 +506,7 @@ class IntegratedSynthesisReportBuilder:
             if row.get("relation") in {"confirmed_by_data", "challenged_by_data"} and not row["data_side_refs"]:
                 row["relation"] = "not_yet_testable"
                 if not str(row.get("note") or "").strip():
-                    row["note"] = "原判定缺乏白名单内数据引用，已降级为不可检验"
+                    row["note"] = _NOT_YET_TESTABLE_NOTE_PLACEHOLDER
                 notes.append(f"relation_downgraded_no_refs:{cid}")
             cleaned_rows.append(row)
         data["conflict_matrix"] = cleaned_rows
@@ -829,12 +905,14 @@ class IntegratedSynthesisReportBuilder:
         def add(source_type: str, source_id: Any, missing: Any, trigger_reason: str) -> None:
             if not isinstance(missing, str) or not missing.strip():
                 return
+            quality = "low_quality_placeholder" if _is_low_quality_missing_text(missing) else "specified"
             requests.append({
                 "source_type": source_type,
                 "source_id": str(source_id or ""),
                 "missing": missing,
                 "candidate_function_ids": self._candidate_function_ids(missing, registry_functions),
                 "trigger_reason": trigger_reason,
+                "quality": quality,
             })
 
         for answer in question_answers:
@@ -867,12 +945,15 @@ class IntegratedSynthesisReportBuilder:
                 for missing in values:
                     add("investigation", source_id, missing, field)
 
+        low_quality_count = sum(1 for request in requests if request.get("quality") == "low_quality_placeholder")
+
         return {
             "schema_version": "recollection_requests_v1",
             "generated_at_utc": _utc_now_iso(),
             "policy": {
                 "no_stance_rule": "requests carry only missing-data descriptions; verdict text must never be copied here",
             },
+            "low_quality_count": low_quality_count,
             "requests": requests,
         }
 

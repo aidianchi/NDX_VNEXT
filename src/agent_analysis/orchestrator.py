@@ -7,7 +7,7 @@ import re
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 try:
     from .contracts import (
@@ -29,6 +29,7 @@ try:
         EvidenceSourceAuthority,
         EventInterpretationCard,
         EventInterpretationPassport,
+        EventSectionSummary,
         FinalAdjudication,
         GoldenPitChecklist,
         GoldenPitChecklistItem,
@@ -79,6 +80,7 @@ except ImportError:
         EvidenceSourceAuthority,
         EventInterpretationCard,
         EventInterpretationPassport,
+        EventSectionSummary,
         FinalAdjudication,
         GoldenPitChecklist,
         GoldenPitChecklistItem,
@@ -142,6 +144,7 @@ PROMPT_FILES = {
     "final": "final_adjudicator.md",
     "controlled_investigation": "controlled_investigator.md",
     "event_card_interpreter": "event_card_interpreter.md",
+    "event_section_summary": "event_section_summary.md",
 }
 
 PROMPT_AUDIT_BOOKKEEPING_FIELDS = {
@@ -1346,6 +1349,10 @@ class VNextOrchestrator:
                 finalized_card,
             )
 
+        events_by_id = {str(event.get("event_id") or ""): event for event in selected}
+        section_summary, summary_failure = self._build_event_section_summary(
+            cards, events_by_id=events_by_id, effective_date=effective_date
+        )
         artifact = {
             "schema_version": "event_interpretation_cards_v1",
             "generated_at": _utc_now().isoformat(),
@@ -1355,6 +1362,8 @@ class VNextOrchestrator:
             "selected_count": len(selected),
             "cards": [_model_dump(card) for card in cards],
             "failures": failures,
+            "section_summary": section_summary,
+            "section_summary_failure": summary_failure,
             "no_backflow_rule": (
                 "EventInterpretationCard is layer-2/layer-3 material only; it must not rewrite or be "
                 "injected into L1-L5, Bridge, Thesis, Risk, Reviser, or Final, and must not become evidence_ref."
@@ -1362,6 +1371,185 @@ class VNextOrchestrator:
         }
         self._save_json("event_interpretation_cards.json", artifact)
         return artifact
+
+    def _build_event_section_summary(
+        self,
+        cards: List["EventInterpretationCard"],
+        *,
+        events_by_id: Dict[str, Dict[str, Any]],
+        effective_date: str,
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        """Q3：外部世界章节的 governed 总结。失败宁缺毋滥，绝不回退到模板句。
+
+        codex 审查（2026-07-20）指出：总结模型此前只拿到 fact_summary/interpretation，
+        看不到 raw_text_available/limitations/发布时间，既无法履行"如实说明材料质量限制"
+        的提示词要求，也没有代码兜底防止把标题材料写实、把事后信息写进历史报告。
+        本版从 selected 事件底账（而非只信任模型自报的 limitations）代码级富化 payload，
+        并新增两条硬校验：材料质量豁免句、日期泄漏。
+        """
+        if len(cards) < 2:
+            return None, "insufficient_cards" if cards else "no_cards"
+        compact_cards = []
+        title_only_count = 0
+        downgrade_required_ids: set[str] = set()
+        official_source_tiers = {"official", "official_macro", "official_filing", "company_disclosure"}
+        for card in cards:
+            event = events_by_id.get(str(card.event_id), {})
+            raw_text_available = bool(event.get("raw_text_available"))
+            source_tier = str(event.get("source_tier") or (card.passport.tier if card.passport else "unknown"))
+            if not raw_text_available:
+                title_only_count += 1
+            if not raw_text_available or source_tier not in official_source_tiers:
+                downgrade_required_ids.add(str(card.event_id))
+            compact_cards.append({
+                "event_id": card.event_id,
+                "fact_summary": card.fact_summary,
+                "interpretation": card.interpretation,
+                "financial_link": card.mechanism_hypothesis.financial_link,
+                "source": card.passport.source if card.passport else "unknown source",
+                "tier": source_tier,
+                "published_at": event.get("published_at") or (card.passport.published_at if card.passport else ""),
+                "event_date": event.get("event_date") or (card.passport.event_date if card.passport else ""),
+                "raw_text_available": raw_text_available,
+                "limitations": list(card.limitations)[:3],
+            })
+        allowed_ids = {str(card.event_id) for card in cards}
+        title_only_majority = title_only_count > len(cards) / 2
+        payload = {
+            "effective_date": effective_date,
+            "event_cards": compact_cards,
+            "card_count": len(compact_cards),
+            "title_only_card_count": title_only_count,
+            "output_contract": {
+                "summary_text": "150-400 字总结正文，含 [card:<event_id>] 引用与结尾边界句",
+                "cited_event_ids": ["正文中实际引用的 event_id"],
+            },
+            "boundary": {
+                "event_material_only": True,
+                "must_not_reference_l1_l5": True,
+                "must_not_exceed_effective_date": effective_date,
+                "must_end_with": "以上事件材料不构成主证据，判断以数据层为准。",
+                "note": (
+                    f"本轮 {len(compact_cards)} 张卡中有 {title_only_count} 张 raw_text_available=false"
+                    "（仅标题，未读全文），引用这些卡时必须带降级措辞（据报道/该媒体称/仅标题）。"
+                ),
+            },
+        }
+        try:
+            summary = self._run_stage(
+                stage_key="event_section_summary",
+                stage_name="event_section_summary",
+                model_cls=EventSectionSummary,
+                payload=payload,
+                validator=lambda candidate: self._event_section_summary_validation_errors(
+                    candidate,
+                    allowed_ids=allowed_ids,
+                    effective_date=effective_date,
+                    title_only_majority=title_only_majority,
+                    downgrade_required_ids=downgrade_required_ids,
+                ),
+            )
+        except Exception as exc:
+            logger.warning("Event section summary failed: %s", exc)
+            return None, f"{type(exc).__name__}: {str(exc)[:300]}"
+        return _model_dump(summary), ""
+
+    _MATERIAL_QUALITY_CAVEAT_PHRASES = ("标题为主", "正文有限", "材料有限", "仅标题", "未读全文", "降级阅读")
+    _DOWNGRADE_ATTRIBUTION_PHRASES = _MATERIAL_QUALITY_CAVEAT_PHRASES + (
+        "据报道", "该媒体称", "媒体报道", "细节未知", "有待核实",
+    )
+    _HINDSIGHT_OR_CAUSAL_PATTERNS = (
+        r"(?:后来|随后|最终|事后|此后).{0,16}(?:结果|进展|显示|表明|证实|确认|证明|兑现)",
+        r"(?:后来|随后|最终|事后|此后).{0,16}(?:上涨|下跌|走强|走弱|反弹|回落|上行|下行)",
+        r"后续(?:结果|进展).{0,8}(?:显示|表明|证实|确认|证明|兑现)",
+        r"(?:结果|进展).{0,8}(?:显示|表明|证实|确认|证明)",
+        r"已经充分解释",
+        r"(?:必然|确定|确实|直接|已经|已).{0,8}(?:推动|导致|造成|引发|改变|改善|恶化|压低|抬升|兑现)",
+        r"(?:因为|由于).{1,40}(?:所以|因此|导致)",
+    )
+
+    @staticmethod
+    def _event_section_summary_validation_errors(
+        candidate: "EventSectionSummary",
+        *,
+        allowed_ids: set,
+        effective_date: str,
+        title_only_majority: bool,
+        downgrade_required_ids: Optional[set] = None,
+    ) -> List[str]:
+        errors: List[str] = []
+        text = str(candidate.summary_text or "")
+        cited_in_text = set(re.findall(r"\[card:([^\[\]]+)\]", text))
+        declared = {str(item).strip() for item in (candidate.cited_event_ids or []) if str(item).strip()}
+        if cited_in_text != declared:
+            errors.append("cited_event_ids must exactly match the [card:...] citations in summary_text")
+        unknown = sorted(declared - allowed_ids)
+        if unknown:
+            errors.append(f"cited_event_ids contain ids outside this run's cards: {unknown[:5]}")
+        if len(declared) < 2:
+            errors.append("summary must cite at least 2 event cards")
+        if len(declared) > 5:
+            errors.append("summary must cite at most 5 event cards")
+        if not text.rstrip().endswith("以上事件材料不构成主证据，判断以数据层为准。"):
+            errors.append("summary_text must end with the fixed boundary sentence")
+        if re.search(r"L[1-5]\.get_", text):
+            errors.append("summary_text must not reference L1-L5 data refs")
+        plain = re.sub(r"\[card:[^\[\]]+\]", "", text)
+        if not 100 <= len(plain) <= 600:
+            errors.append(f"summary_text length {len(plain)} outside tolerant band 100-600")
+        # codex P1：材料以标题为主时，总结必须诚实声明质量限制，不得写得言之凿凿。
+        if title_only_majority and not any(phrase in text for phrase in VNextOrchestrator._MATERIAL_QUALITY_CAVEAT_PHRASES):
+            errors.append("majority of cited materials are title-only; summary_text must state this quality limitation")
+        # 每一张仅标题或非官方来源卡都必须在同一句内带降级措辞；不能用“全局多数”
+        # 规则放过少数弱卡，也不能在前一句笼统写一次“据报道”后把后一句写成确定事实。
+        for event_id in sorted(declared & set(downgrade_required_ids or set())):
+            citation = f"[card:{event_id}]"
+            for match in re.finditer(re.escape(citation), text):
+                statement_prefix = text[:match.start()].rstrip()
+                if statement_prefix.endswith(("。", "！", "？", ".", "!", "?", ";", "；")):
+                    statement_prefix = statement_prefix[:-1].rstrip()
+                sentence_start = max(
+                    statement_prefix.rfind(delimiter)
+                    for delimiter in ("。", "！", "？", ".", "!", "?", ";", "；", "\n")
+                ) + 1
+                attribution_window = statement_prefix[sentence_start:]
+                if not any(
+                    phrase in attribution_window
+                    for phrase in VNextOrchestrator._DOWNGRADE_ATTRIBUTION_PHRASES
+                ):
+                    errors.append(
+                        f"downgrade-required card {event_id} must have attribution/quality caveat near its citation"
+                    )
+                    break
+        # 无日期的“后来已证实”和确定性因果同样属于事后信息/新闻越权，不能靠避开 ISO 日期绕过。
+        semantic_text = re.sub(r"\s+", " ", text)
+        for pattern in VNextOrchestrator._HINDSIGHT_OR_CAUSAL_PATTERNS:
+            if re.search(pattern, semantic_text):
+                errors.append("summary_text contains hindsight or deterministic causal language")
+                break
+        # codex P1：禁止把 effective_date 之后的日期写进历史总结（防止事后信息回流）。
+        if effective_date:
+            try:
+                effective_day = datetime.strptime(str(effective_date)[:10], "%Y-%m-%d").date()
+            except ValueError:
+                errors.append(f"effective_date is not a valid ISO date: {effective_date}")
+            else:
+                date_pattern = re.compile(
+                    r"(20\d{2})\s*(?:[-/.]|年)\s*(\d{1,2})\s*(?:[-/.]|月)\s*(\d{1,2})\s*日?"
+                )
+                for year, month, day in date_pattern.findall(text):
+                    try:
+                        mentioned_day = datetime(int(year), int(month), int(day)).date()
+                    except ValueError:
+                        errors.append(f"summary_text contains an invalid date: {year}-{month}-{day}")
+                        break
+                    if mentioned_day > effective_day:
+                        errors.append(
+                            f"summary_text contains a date ({mentioned_day.isoformat()}) "
+                            f"beyond effective_date ({effective_day.isoformat()})"
+                        )
+                        break
+        return errors
 
     def _route_feedback_inquiries(self, messages: List[InquiryMessage]) -> InquiryRouterOutput:
         router = InquiryRouter(

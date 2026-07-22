@@ -146,7 +146,7 @@ flowchart TD
 
 #### HY OAS 与 IG OAS 信用利差
 
-**判读卡**：名称/英文/代码：高收益期权调整利差 / ICE BofA US High Yield Index OAS / BAMLH0A0HYM2；投资级期权调整利差 / ICE BofA US Corporate Index OAS / BAMLC0A0CM。层级与性质：L2 事实+代理混合；短中；核心。来源：ICE/BofA via FRED。公式与频率：相对 Treasury spot curve 的 OAS，按市值加权构造，日频。IG 代表投资级公司债；HY 代表 BB 及以下。
+**判读卡**：名称/英文/代码：高收益期权调整利差 / ICE BofA US High Yield Index OAS / BAMLH0A0HYM2；投资级期权调整利差 / ICE BofA US Corporate Index OAS / BAMLC0A0CM。层级与性质：L2 事实+代理混合；短中；核心。来源：ICE/BofA via FRED。公式与频率：相对 Treasury spot curve 的 OAS，按市值加权构造，日频。IG 代表投资级公司债；HY 代表 BB 及以下。**单位口径**：`get_hy_oas_bp`/`get_ig_oas_bp` 函数名含 `_bp`，但 FRED 原始数值与返回 payload 的 `unit` 字段是 percent（如 2.71 即 2.71%≈271bp），引用时须按 `unit` 字段标注，不得把百分比数值直接当基点数写。
 
 它真正回答的问题是：**企业融资风险溢价被压缩还是被抬高？** 本质上，信用利差比单纯股指更早反映“资金愿不愿意承担真实风险”。正确读法：先看 HY，再看 IG，再看 HY-IG 差；看绝对值、变化率与历史分位。误读：把“利差窄”理解成绝对安全，它也可能意味着定价过满。必须交叉验证：VIX/VXN、净流动性、FEDFUNDS、A/D、盈利预期。对美国市场：HY 急扩通常是风险偏好恶化或经济压力上升；对 QQQ：若指数仍强但 HY OAS 扩、A/D 走弱，多数时候是结构脆弱。行动边界：核心仓最怕“高估值 + 利差走阔”；战术仓只在信用稳定或修复时做右侧加仓。反证条件：若个别事件驱动信用扰动但 IG 稳、HY 很快回落、股市广度修复，则可视为短期噪音。**B版短提示**：信用利差是股市的“真风险体温计”；QQQ 创新高而 HY OAS 扩张，多半不是健康牛市。
 

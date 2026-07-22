@@ -156,6 +156,63 @@ def test_fed_funds_rate_reports_fred_failure_reason(monkeypatch):
     assert "dns_error" in result["notes"]
 
 
+def test_hy_oas_unit_is_percent_not_basis_points(monkeypatch):
+    """FRED BAMLH0A0HYM2 is published in percent (e.g. 2.71 == 2.71%). The
+    function name keeps the historical `_bp` suffix but the payload's `unit`
+    field and the raw value must not claim basis points — that would make a
+    271bp spread read as "2.71 bp"."""
+    import tools_L1
+
+    dates = pd.date_range("2026-01-01", periods=30, freq="B")
+    series = pd.DataFrame({"date": dates, "value": [2.5 + i * 0.01 for i in range(30)]})
+
+    monkeypatch.setattr(tools_L1, "get_fred_series", lambda *_a, **_kw: series)
+
+    result = tools_L1.get_hy_oas_bp(end_date="2026-02-15")
+
+    assert result["unit"] == "percent"
+    assert "percent" in result["notes"]
+
+
+def test_hy_oas_unavailable_payload_unit_is_percent(monkeypatch):
+    import tools_L1
+
+    empty = pd.DataFrame(columns=["date", "value"])
+    monkeypatch.setattr(tools_L1, "get_fred_series", lambda *_a, **_kw: empty)
+
+    result = tools_L1.get_hy_oas_bp(end_date="2026-02-15")
+
+    assert result["value"] is None
+    assert result["unit"] == "percent"
+
+
+def test_ig_oas_unit_is_percent_not_basis_points(monkeypatch):
+    """Same unit mislabeling risk as HY OAS: BAMLC0A0CM is percent, not bp."""
+    import tools_L1
+
+    dates = pd.date_range("2026-01-01", periods=30, freq="B")
+    series = pd.DataFrame({"date": dates, "value": [1.1 + i * 0.005 for i in range(30)]})
+
+    monkeypatch.setattr(tools_L1, "get_fred_series", lambda *_a, **_kw: series)
+
+    result = tools_L1.get_ig_oas_bp(end_date="2026-02-15")
+
+    assert result["unit"] == "percent"
+    assert "percent" in result["notes"]
+
+
+def test_ig_oas_unavailable_payload_unit_is_percent(monkeypatch):
+    import tools_L1
+
+    empty = pd.DataFrame(columns=["date", "value"])
+    monkeypatch.setattr(tools_L1, "get_fred_series", lambda *_a, **_kw: empty)
+
+    result = tools_L1.get_ig_oas_bp(end_date="2026-02-15")
+
+    assert result["value"] is None
+    assert result["unit"] == "percent"
+
+
 # ---------------------------------------------------------------------------
 # tools_L4 — data cleaning / parsing helpers
 # ---------------------------------------------------------------------------
