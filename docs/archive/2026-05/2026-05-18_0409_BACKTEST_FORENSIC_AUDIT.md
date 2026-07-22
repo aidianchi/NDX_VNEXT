@@ -1,7 +1,7 @@
 # 2025-04-09 回测产物取证审查
 
 调查日期：2026-05-18
-调查对象：[output/analysis/vnext/20250409/](output/analysis/vnext/20250409/) 及对应原生报告 [vnext_brief_20260518_1940_20250409_0000.html](output/reports/vnext_brief_20260518_1940_20250409_0000.html)
+调查对象：[output/analysis/vnext/20250409/](../../../output/analysis/vnext/20250409/) 及对应原生报告 [vnext_brief_20260518_1940_20250409_0000.html](../../../output/reports/vnext_brief_20260518_1940_20250409_0000.html)
 调查目的：在不修改任何代码或数据的前提下，把这次 0409 回测产生的全部问题分门别类列清楚，给后续修复留下完整证据。
 
 > 本报告是按"调查研究"原则、从 `log + JSON artifact + 原生 HTML + 源码`这四条独立证据链交叉重写的取证清单，与根目录其他同主题文件无关，不沿用其结论。
@@ -30,11 +30,11 @@
 
 | 调查动作 | 一手证据 |
 | --- | --- |
-| 必读文档建立基线 | [CLAUDE.md](CLAUDE.md)、[AGENTS.md](AGENTS.md)、[ARCHITECTURE.md](ARCHITECTURE.md)、[NEXT_STEPS.md](NEXT_STEPS.md)、[RUN_REVIEW_CHECKLIST.md](RUN_REVIEW_CHECKLIST.md)、[WORK_LOG.md](WORK_LOG.md) |
+| 必读文档建立基线 | [CLAUDE.md](../../../CLAUDE.md)、[AGENTS.md](../../../AGENTS.md)、[ARCHITECTURE.md](../../../ARCHITECTURE.md)、[NEXT_STEPS.md](https://github.com/aidianchi/NDX_VNEXT/blob/b8395f1/NEXT_STEPS.md)、[RUN_REVIEW_CHECKLIST.md](../../../RUN_REVIEW_CHECKLIST.md)、[WORK_LOG.md](../../../WORK_LOG.md) |
 | 完整阅读 run 产物 | 全部 5 个 layer_cards、bridge_memos/bridge_0.json、synthesis_packet.json、analysis_packet.json、thesis_draft、critique、risk_boundary_report、analysis_revised、final_adjudication、llm_stage_diagnostics、run_summary、console_run_summary、context_brief、logic_vnext、chart_time_series.json |
-| 原生 brief HTML 对照 | [vnext_brief_20260518_1940_20250409_0000.html](output/reports/vnext_brief_20260518_1940_20250409_0000.html)（重点核 evidence ref 按钮、风险卡片、置信度展示、时间戳暴露） |
-| 控制台日志 | [output/logs/control_service/20260518_193311_613.log](output/logs/control_service/20260518_193311_613.log)（81 KB，覆盖采集、L1-L5、Bridge、Thesis、Critic、Risk、Reviser、Final 全链路） |
-| 关键源码 | [src/agent_analysis/packet_builder.py](src/agent_analysis/packet_builder.py)、[src/agent_analysis/orchestrator.py](src/agent_analysis/orchestrator.py)（manual_overrides 注入路径） |
+| 原生 brief HTML 对照 | [vnext_brief_20260518_1940_20250409_0000.html](../../../output/reports/vnext_brief_20260518_1940_20250409_0000.html)（重点核 evidence ref 按钮、风险卡片、置信度展示、时间戳暴露） |
+| 控制台日志 | [output/logs/control_service/20260518_193311_613.log](../../../output/logs/control_service/20260518_193311_613.log)（81 KB，覆盖采集、L1-L5、Bridge、Thesis、Critic、Risk、Reviser、Final 全链路） |
+| 关键源码 | [src/agent_analysis/packet_builder.py](../../../src/agent_analysis/packet_builder.py)、[src/agent_analysis/orchestrator.py](../../../src/agent_analysis/orchestrator.py)（manual_overrides 注入路径） |
 | 工作树校对 | 仅一份未跟踪 md，无其他改动；本审查不修改任何文件 |
 
 下述结论均可在上述材料中复现。本报告所有数字、字段、时间均直接来自上述 artifact，没有任何估算。
@@ -45,7 +45,7 @@
 
 ### P0-1：L1 净流动性使用 2026-05-15 数据（前瞻 13 个月）
 
-- 文件：[analysis_packet.json](output/analysis/vnext/20250409/analysis_packet.json) `raw_data.L1.get_net_liquidity_momentum.value`
+- 文件：[analysis_packet.json](../../../output/analysis/vnext/20250409/analysis_packet.json) `raw_data.L1.get_net_liquidity_momentum.value`
 - 内容：
   ```
   level=5889.27, momentum_4w=-107.17
@@ -54,26 +54,26 @@
   ```
 - 性质：回测日是 2025-04-09，但这一指标的 value.date 是 2026-05-15，比回测日晚 13 个月。
 - 危害链：
-  - [L1.json](output/analysis/vnext/20250409/layer_cards/L1.json) `indicator_analyses.get_net_liquidity_momentum.reasoning_process` 写道："首先注意数据日期（2026-05-15）比大部分指标晚约13个月，视为后续情景"——LLM 已经识别出错位，但仍然把它纳入推理。
-  - [synthesis_packet.json](output/analysis/vnext/20250409/synthesis_packet.json) `evidence_index.L1.get_net_liquidity_momentum.reasoning_process` 同样保留这段话。
-  - [bridge_0.json](output/analysis/vnext/20250409/bridge_memos/bridge_0.json) `resonance_chains[0]` 把它列为"宏观收紧 → 信用恶化 → 下跌趋势强化"链的第一证据：`evidence_refs[0] = L1.get_net_liquidity_momentum`，mechanism 直接引用 `净流动性收缩（4周动量-107B）`。
-  - [thesis_draft.json](output/analysis/vnext/20250409/thesis_draft.json) `environment_assessment` 写 `净流动性4周动量-107B抽水`。
-  - [final_adjudication.json](output/analysis/vnext/20250409/final_adjudication.json) `key_support_chains[0].evidence_refs` 包含 `L1.get_net_liquidity_momentum`，weight=0.35。
+  - [L1.json](../../../output/analysis/vnext/20250409/layer_cards/L1.json) `indicator_analyses.get_net_liquidity_momentum.reasoning_process` 写道："首先注意数据日期（2026-05-15）比大部分指标晚约13个月，视为后续情景"——LLM 已经识别出错位，但仍然把它纳入推理。
+  - [synthesis_packet.json](../../../output/analysis/vnext/20250409/synthesis_packet.json) `evidence_index.L1.get_net_liquidity_momentum.reasoning_process` 同样保留这段话。
+  - [bridge_0.json](../../../output/analysis/vnext/20250409/bridge_memos/bridge_0.json) `resonance_chains[0]` 把它列为"宏观收紧 → 信用恶化 → 下跌趋势强化"链的第一证据：`evidence_refs[0] = L1.get_net_liquidity_momentum`，mechanism 直接引用 `净流动性收缩（4周动量-107B）`。
+  - [thesis_draft.json](../../../output/analysis/vnext/20250409/thesis_draft.json) `environment_assessment` 写 `净流动性4周动量-107B抽水`。
+  - [final_adjudication.json](../../../output/analysis/vnext/20250409/final_adjudication.json) `key_support_chains[0].evidence_refs` 包含 `L1.get_net_liquidity_momentum`，weight=0.35。
 - 关键事实：这条数据在 2025-04-09 当时根本不存在，其推导出的"三重抽水（Fed 缩表 + TGA 回补 + RRP 耗尽）"完全是 2026 年的状态。把它写进 2025-04-09 的回测，等于让模型用未来 13 个月的事实给当时下结论。
 
 ### P0-2：L2 SKEW 数据时间戳为 2026-05-15
 
-- 文件：[analysis_packet.json](output/analysis/vnext/20250409/analysis_packet.json) `raw_data.L2.get_crowdedness_dashboard.value.skew_index`
+- 文件：[analysis_packet.json](../../../output/analysis/vnext/20250409/analysis_packet.json) `raw_data.L2.get_crowdedness_dashboard.value.skew_index`
 - 内容：`{value: 145.77, date: "2026-05-15", source: "yfinance (^SKEW)"}`
 - 性质：父级 date="2025-04-09"，但 SKEW 子项内部 date=2026-05-15——典型的"父级标签合规、子级实际穿越"。
 - 危害链：
-  - [L2.json](output/analysis/vnext/20250409/layer_cards/L2.json) `indicator_analyses.get_crowdedness_dashboard.current_reading` 直接使用 `SKEW=145.77（接近150阈值）`。
+  - [L2.json](../../../output/analysis/vnext/20250409/layer_cards/L2.json) `indicator_analyses.get_crowdedness_dashboard.current_reading` 直接使用 `SKEW=145.77（接近150阈值）`。
   - L2 `layer_synthesis` 把 SKEW 写入 `拥挤度方面，SKEW 接近 150 黑天鹅阈值`。
   - 通过 synthesis_packet 进入下游所有阶段。
 
 ### P0-3：L2 QQQ Put/Call OI 用的是 2026-05-18 到期期权链
 
-- 文件：[analysis_packet.json](output/analysis/vnext/20250409/analysis_packet.json) `raw_data.L2.get_crowdedness_dashboard.value.qqq_put_call_ratio_oi`
+- 文件：[analysis_packet.json](../../../output/analysis/vnext/20250409/analysis_packet.json) `raw_data.L2.get_crowdedness_dashboard.value.qqq_put_call_ratio_oi`
 - 内容：
   ```
   value=2.64
@@ -88,7 +88,7 @@
 
 ### P0-4：Damodaran 月度序列包含 2025-05 至 2026-05 共 13 个月未来行
 
-- 文件：[analysis_packet.json](output/analysis/vnext/20250409/analysis_packet.json) `raw_data.L4.get_damodaran_us_implied_erp.value.monthly_series`
+- 文件：[analysis_packet.json](../../../output/analysis/vnext/20250409/analysis_packet.json) `raw_data.L4.get_damodaran_us_implied_erp.value.monthly_series`
 - 主行：`data_date=2025-04-01, sp500_level=5581.0, us_10y=4.24, erp_t12m_adjusted_payout=4.43, expected_return=8.85` ——**主值正确**。
 - 越界子项（脚本扫描结果）：
 
@@ -105,12 +105,12 @@
 ### P0-5：未启用的 manual_overrides 仍被注入 L4 prompt
 
 - 关键事实：
-  - meta：`manual_override_active=false`, `manual_override_count=0`（[analysis_packet.json](output/analysis/vnext/20250409/analysis_packet.json) `meta`）。
+  - meta：`manual_override_active=false`, `manual_override_count=0`（[analysis_packet.json](../../../output/analysis/vnext/20250409/analysis_packet.json) `meta`）。
   - packet：`manual_overrides.active=false`，但 `manual_overrides.metrics` 完整保留 6 个指标，其中 `get_ndx_pe_and_earnings_yield.value` 含 `PE_TTM=36.6, PE_TTM_percentile_10y=90, PB=10.49, PB_percentile_10y=100`。
 - 注入路径（源码核对）：
-  - [packet_builder.py:232](src/agent_analysis/packet_builder.py#L232) 直接将完整 `manual_overrides` 对象保存进 `AnalysisPacket`，没有按 active 过滤。
-  - [orchestrator.py:286](src/agent_analysis/orchestrator.py#L286) 在每层 prompt 注入 `_build_layer_manual_overrides(packet, layer)`。
-  - [orchestrator.py:753-767](src/agent_analysis/orchestrator.py#L753-L767) 实现只按 layer 过滤 function_id，从不在 `active=false` 时清空 metrics：
+  - [packet_builder.py:232](../../../src/agent_analysis/packet_builder.py#L232) 直接将完整 `manual_overrides` 对象保存进 `AnalysisPacket`，没有按 active 过滤。
+  - [orchestrator.py:286](../../../src/agent_analysis/orchestrator.py#L286) 在每层 prompt 注入 `_build_layer_manual_overrides(packet, layer)`。
+  - [orchestrator.py:753-767](../../../src/agent_analysis/orchestrator.py#L753-L767) 实现只按 layer 过滤 function_id，从不在 `active=false` 时清空 metrics：
     ```python
     return {
         "active": bool(overrides.get("active")),
@@ -123,18 +123,18 @@
     }
     ```
 - 污染传播：
-  - [L4.json](output/analysis/vnext/20250409/layer_cards/L4.json) `layer_synthesis` 写道："若假定 NDX 估值处于历史高位（参考 manual_overrides 中未启用的数据暗示 PE 36.6，10年分位90）"。
-  - L4 这段被原样并入 [synthesis_packet.json](output/analysis/vnext/20250409/synthesis_packet.json) `layer_summaries[3].layer_synthesis`，再喂给 Thesis。
-  - [thesis_draft.json](output/analysis/vnext/20250409/thesis_draft.json) `valuation_assessment` 接力：`若假定 NDX 估值偏高（参考 manual_overrides 暗示 PE 36.6，10年分位 90）`。
-  - [risk_boundary_report.json](output/analysis/vnext/20250409/risk_boundary_report.json) `failure_conditions[2].condition` 写：`若 NDX 核心盈利增速显著低于当前高估值（PE 36.6 约 90%分位）的假设`。
-  - [analysis_revised.json](output/analysis/vnext/20250409/analysis_revised.json) `revised_thesis.valuation_assessment` 仍保留 `manual override 暗示 PE 36.6（90%分位）`。
-  - [final_adjudication.json](output/analysis/vnext/20250409/final_adjudication.json) `must_preserve_risks[0]` 写："估值压缩风险：实际利率 2.07% 高位 + PE 36.6（90%分位，manual override）"。
+  - [L4.json](../../../output/analysis/vnext/20250409/layer_cards/L4.json) `layer_synthesis` 写道："若假定 NDX 估值处于历史高位（参考 manual_overrides 中未启用的数据暗示 PE 36.6，10年分位90）"。
+  - L4 这段被原样并入 [synthesis_packet.json](../../../output/analysis/vnext/20250409/synthesis_packet.json) `layer_summaries[3].layer_synthesis`，再喂给 Thesis。
+  - [thesis_draft.json](../../../output/analysis/vnext/20250409/thesis_draft.json) `valuation_assessment` 接力：`若假定 NDX 估值偏高（参考 manual_overrides 暗示 PE 36.6，10年分位 90）`。
+  - [risk_boundary_report.json](../../../output/analysis/vnext/20250409/risk_boundary_report.json) `failure_conditions[2].condition` 写：`若 NDX 核心盈利增速显著低于当前高估值（PE 36.6 约 90%分位）的假设`。
+  - [analysis_revised.json](../../../output/analysis/vnext/20250409/analysis_revised.json) `revised_thesis.valuation_assessment` 仍保留 `manual override 暗示 PE 36.6（90%分位）`。
+  - [final_adjudication.json](../../../output/analysis/vnext/20250409/final_adjudication.json) `must_preserve_risks[0]` 写："估值压缩风险：实际利率 2.07% 高位 + PE 36.6（90%分位，manual override）"。
   - HTML 报告 hero 区、风险卡、failure_conditions 三处重复展示此条。
 - 性质：违反 CLAUDE.md "不得编造历史胜率、回测收益、样本区间或概率数字，除非 evidence refs 明确提供" 的硬规则。控制台 active=false 应该意味着这条数据完全不存在；现在的实现把它变成了"暗示性事实"，对外行读者就是事实。
 
 ### P0-6：DataIntegrity 自己检测到泄露但不阻断
 
-- 文件：[logic_vnext.json](output/analysis/vnext/20250409/logic_vnext.json) `__LOGIC__.data_integrity_report`
+- 文件：[logic_vnext.json](../../../output/analysis/vnext/20250409/logic_vnext.json) `__LOGIC__.data_integrity_report`
 - 内容：
   ```
   confidence_percent: 84.6
@@ -149,16 +149,16 @@
     L5: 10/10=100%
   ```
 - 性质：检查器看到了 2026-05-15 越界，但只把整体置信度减到 84.6%，没有触发"不可发布"状态；同时它没有递归扫描，没有捕捉 P0-2（SKEW 子项越界）、P0-3（put/call 期权链越界）、P0-4（Damodaran monthly_series 越界）。漏扫范围远大于已扫范围。
-- 同时 [schema_guard_report.json](output/analysis/vnext/20250409/schema_guard_report.json) 显示 `passed=true, structural_issues=[], consistency_issues=[], missing_fields=[]`，但本报告 P1 段会列出多个明显的结构问题它都没看到。
+- 同时 [schema_guard_report.json](../../../output/analysis/vnext/20250409/schema_guard_report.json) 显示 `passed=true, structural_issues=[], consistency_issues=[], missing_fields=[]`，但本报告 P1 段会列出多个明显的结构问题它都没看到。
 
 ### P0-7：L3 全部广度指标失败但 stage 报 ✔（silent failure）
 
-- log 证据（[20260518_193311_613.log](output/logs/control_service/20260518_193311_613.log)）：
+- log 证据（[20260518_193311_613.log](../../../output/logs/control_service/20260518_193311_613.log)）：
   - 49 + 19 + 25 ... 多轮成分股下载失败（`possibly delisted`、`OperationalError('unable to open database file')`、`DNSError`、`Too many open files`、`yfinance returned empty frame (likely silent rate limit)`）。
   - 但每一轮失败后 stage 仍打印：`- 调用 get_advance_decline_line... ✔`、`get_percent_above_ma... ✔`、`get_new_highs_lows... ✔`、`get_mcclellan_oscillator_nasdaq_or_nyse... ✔`。
 - 实际产物：
-  - [L3.json](output/analysis/vnext/20250409/layer_cards/L3.json) `indicator_analyses` 中 4 个广度指标 `current_reading="数据不可用"`、`normalized_state="unknown"`。
-  - [analysis_packet.json](output/analysis/vnext/20250409/analysis_packet.json) `raw_data.L3` 中 4 个广度指标 value=None。
+  - [L3.json](../../../output/analysis/vnext/20250409/layer_cards/L3.json) `indicator_analyses` 中 4 个广度指标 `current_reading="数据不可用"`、`normalized_state="unknown"`。
+  - [analysis_packet.json](../../../output/analysis/vnext/20250409/analysis_packet.json) `raw_data.L3` 中 4 个广度指标 value=None。
   - 但 `facts_by_layer.L3.core_signals` 仍将 `Advance/Decline Line (NDX100) | 值={'level': None, ...}` 当作"关键事实"展示；context_brief 把它们列入 `layer_highlights.L3`。
 - 后果：报告对外说"L3 内部结构呈现极端集中但广度数据缺失"，看起来是诚实的，但 L3 状态在 `context_brief` 中被打成 `neutral`、`facts_by_layer.L3.summary` 写 `内部健康度状态: neutral` — 完全和"数据缺失"自相矛盾。
 
@@ -176,10 +176,10 @@
 
 ### P1-1：Bridge 把 CNN FGI 子指标矛盾错配为跨层冲突
 
-- [bridge_0.json](output/analysis/vnext/20250409/bridge_memos/bridge_0.json) `typed_conflicts[1]` 与 `conflicts[1]`：
+- [bridge_0.json](../../../output/analysis/vnext/20250409/bridge_memos/bridge_0.json) `typed_conflicts[1]` 与 `conflicts[1]`：
   - 标题：`L2_market_momentum_greed_vs_L5_downtrend`
   - 描述："L2 CNN Fear & Greed 子指标市场动量评分为 98.2（极端贪婪），但 L5 QQQ 价格处于强劲下跌趋势"。
-- 实际数据（[analysis_packet.json](output/analysis/vnext/20250409/analysis_packet.json) `raw_data.L2.get_cnn_fear_greed_index.value.sub_metrics`）：
+- 实际数据（[analysis_packet.json](../../../output/analysis/vnext/20250409/analysis_packet.json) `raw_data.L2.get_cnn_fear_greed_index.value.sub_metrics`）：
   - Market Momentum (S&P500) = 98.2
   - Stock Price Strength = 49
   - Stock Price Breadth = 33.2
@@ -195,11 +195,11 @@
 
 ### P1-2：Bridge 的 supporting_facts 用中文短语而非 function_id
 
-- [bridge_0.json](output/analysis/vnext/20250409/bridge_memos/bridge_0.json) `cross_layer_claims[0].supporting_facts`:
+- [bridge_0.json](../../../output/analysis/vnext/20250409/bridge_memos/bridge_0.json) `cross_layer_claims[0].supporting_facts`:
   ```
   ["L1.净流动性收缩", "L1.实际利率高位", "L2.HY OAS极端", "L5.ADX强下跌"]
   ```
-- 影响 HTML：[vnext_brief_20260518_1940_20250409_0000.html](output/reports/vnext_brief_20260518_1940_20250409_0000.html) 中出现这些 ref 按钮：
+- 影响 HTML：[vnext_brief_20260518_1940_20250409_0000.html](../../../output/reports/vnext_brief_20260518_1940_20250409_0000.html) 中出现这些 ref 按钮：
   ```
   data-ref="L1.get_净流动性收缩"
   data-ref="L1.get_实际利率高位"
@@ -213,7 +213,7 @@
 
 ### P1-3：Bridge transmission_path 多个关键字段为空
 
-- [bridge_0.json](output/analysis/vnext/20250409/bridge_memos/bridge_0.json) `transmission_paths`：
+- [bridge_0.json](../../../output/analysis/vnext/20250409/bridge_memos/bridge_0.json) `transmission_paths`：
   - 3 条 path 的 `path_id` 全部等于 `"transmission_path"`（违反唯一性）。
   - 3 条 `evidence_refs` 全是 `[]`。
   - 3 条 `implication` 全是 `""`。
@@ -242,7 +242,7 @@
 
 ### P1-7：HTML 报告显示英文 safe/warning，无解释，视觉无差异
 
-- [risk_boundary_report.json](output/analysis/vnext/20250409/risk_boundary_report.json) `boundary_status`：
+- [risk_boundary_report.json](../../../output/analysis/vnext/20250409/risk_boundary_report.json) `boundary_status`：
   ```
   valuation_compression: warning
   earnings_miss: warning
@@ -263,7 +263,7 @@
 
 ### P1-9：QQQ/QQEW 与 L5 技术指标用的是 2025-04-08，不是 2025-04-09
 
-- [analysis_packet.json](output/analysis/vnext/20250409/analysis_packet.json) 中：
+- [analysis_packet.json](../../../output/analysis/vnext/20250409/analysis_packet.json) 中：
   - `L3.get_qqq_qqew_ratio.value.date = 2025-04-08`
   - `L5.get_rsi_qqq.value.date = 2025-04-08`、`get_atr_qqq=2025-04-08`、`get_adx_qqq=2025-04-08`、`get_macd_qqq=2025-04-08`、`get_obv_qqq=2025-04-08`、`get_volume_analysis_qqq=2025-04-08`、`get_price_volume_quality_qqq=2025-04-08`、`get_donchian_channels_qqq=2025-04-08`、`get_multi_scale_ma_position=2025-04-08`
   - `current_price=416.06`（即 4/8 收盘价）
@@ -274,42 +274,42 @@
 
 ### P1-10：`backtest_data_boundaries` 字段缺失（文档承诺与实现脱节）
 
-- [NEXT_STEPS.md](NEXT_STEPS.md) 和 [WORK_LOG.md](WORK_LOG.md) 2026-05-18 段宣称："`DataCollector.run()` 新增 `backtest_data_boundaries`，集中记录本次回测哪些指标被跳过、为什么跳过、对应的 effective_date"。
-- 实际：在 [analysis_packet.json](output/analysis/vnext/20250409/analysis_packet.json) 中全文搜索 `backtest_data_boundaries`，结果为空；meta 只有 `manual_override_count`、`manual_override_active` 等字段。
+- [NEXT_STEPS.md](https://github.com/aidianchi/NDX_VNEXT/blob/b8395f1/NEXT_STEPS.md) 和 [WORK_LOG.md](../../../WORK_LOG.md) 2026-05-18 段宣称："`DataCollector.run()` 新增 `backtest_data_boundaries`，集中记录本次回测哪些指标被跳过、为什么跳过、对应的 effective_date"。
+- 实际：在 [analysis_packet.json](../../../output/analysis/vnext/20250409/analysis_packet.json) 中全文搜索 `backtest_data_boundaries`，结果为空；meta 只有 `manual_override_count`、`manual_override_active` 等字段。
 - 现状：跳过信息散落在每个指标的 `backtest_skipped: true` 标记中（共 5 个，分布在 L3/L4），没有顶层汇总。
 - 后果：后续 prompt 阶段、HTML 报告无法以一处入口告诉读者"本次跳过了什么、为什么"。
 
 ### P1-11：context_brief / facts_by_layer 把 None 当作"关键事实"展示
 
-- [context_brief.json](output/analysis/vnext/20250409/context_brief.json) `layer_highlights.L3`：
+- [context_brief.json](../../../output/analysis/vnext/20250409/context_brief.json) `layer_highlights.L3`：
   ```
   Advance/Decline Line (NDX100) | 值={'level': None, 'date': None, 'momentum': None}
   McClellan Oscillator | 值={'level': None, 'date': None, 'momentum': None}
   ```
-- [analysis_packet.json](output/analysis/vnext/20250409/analysis_packet.json) `facts_by_layer.L3.core_signals` 与 `facts_by_layer.L3.summary` 同样收录这些 None 值。
+- [analysis_packet.json](../../../output/analysis/vnext/20250409/analysis_packet.json) `facts_by_layer.L3.core_signals` 与 `facts_by_layer.L3.summary` 同样收录这些 None 值。
 - 后果：进入 prompt 时这些"事实"看起来是有效观察对象，模型可能基于"指标存在"做错误推理；HTML 也按"关键事实"展示，让普通读者以为有数据。
 
 ### P1-12：L3 layer state = "neutral" 与实际"4 个广度缺失"自相矛盾
 
-- [context_brief.json](output/analysis/vnext/20250409/context_brief.json)：未直接给 state，但 [analysis_packet.json](output/analysis/vnext/20250409/analysis_packet.json) `facts_by_layer.L3.summary` 写："内部健康度状态: neutral"；`facts_by_layer.L4.summary` 写："估值状态: neutral"。
+- [context_brief.json](../../../output/analysis/vnext/20250409/context_brief.json)：未直接给 state，但 [analysis_packet.json](../../../output/analysis/vnext/20250409/analysis_packet.json) `facts_by_layer.L3.summary` 写："内部健康度状态: neutral"；`facts_by_layer.L4.summary` 写："估值状态: neutral"。
 - 实际：L3 5 个核心广度指标 4 个为 None；L4 4 个核心估值指标 3 个被 skip、剩下 1 个是美国大盘背景锚（非 NDX 专属）。
 - 后果：packet_builder 的 layer state fallback 文本不考虑实际数据完整度，把"无法判断"伪装成"中性"，下游 prompt 接收到错误的层状态。
 
 ### P1-13：L2 第一次 LayerCard 校验失败，第二次才通过（但 evidence_refs 仍是 dict）
 
-- [llm_stage_diagnostics.json](output/analysis/vnext/20250409/llm_stage_diagnostics.json) `stages.l2.attempts=2`，第 1 次报 10 个 `string_type` 错误（evidence_refs 应为字符串，实际为 dict）。
+- [llm_stage_diagnostics.json](../../../output/analysis/vnext/20250409/llm_stage_diagnostics.json) `stages.l2.attempts=2`，第 1 次报 10 个 `string_type` 错误（evidence_refs 应为字符串，实际为 dict）。
 - 第 2 次成功，但 L2 输出 evidence_refs 仍部分是粗糙短语（e.g. `"get_vix"`），不带 `LX.` 前缀，下游 HTML 拼按钮时会出现 `L2.get_get_vix` 形态的混乱链接。
 
 ### P1-14：FedFunds / M2 月度数据 first-reported 风险未处理
 
-- [analysis_packet.json](output/analysis/vnext/20250409/analysis_packet.json) L1：`get_fed_funds_rate.value.date=2025-04-01`、`get_m2_yoy.value.date=2025-04-01`。
+- [analysis_packet.json](../../../output/analysis/vnext/20250409/analysis_packet.json) L1：`get_fed_funds_rate.value.date=2025-04-01`、`get_m2_yoy.value.date=2025-04-01`。
 - 但这些月度数据真实发布日通常滞后 30-60 天；2025-04-09 当时市场不可能看到 2025-04-01 的最终 M2 YoY、FedFunds 月均。
 - WORK_LOG.md 2026-05-18 已经承认 "ALFRED first-vintage、财报 first-reported、point-in-time universe 和 LLM 训练后验知识列为后续严格回测升级"，所以这条不是"修复倒退"，但作为本次审查必须记录的边界事实。
 
 ### P1-15：报告路径在两个 summary 中不一致
 
-- [run_summary.json](output/analysis/vnext/20250409/run_summary.json) `report_path = ""`（空）。
-- [console_run_summary.json](output/analysis/vnext/20250409/console_run_summary.json) `report_path = ".../vnext_brief_20260518_1940_20250409_0000.html"`、`native_brief` 与 `workbench` 字段齐全。
+- [run_summary.json](../../../output/analysis/vnext/20250409/run_summary.json) `report_path = ""`（空）。
+- [console_run_summary.json](../../../output/analysis/vnext/20250409/console_run_summary.json) `report_path = ".../vnext_brief_20260518_1940_20250409_0000.html"`、`native_brief` 与 `workbench` 字段齐全。
 - 后果：审计/外部脚本如果以 `run_summary.json` 为入口，会拿不到产物路径。
 
 ---
@@ -318,12 +318,12 @@
 
 ### P2-1：HTML token usage 暴露原始 Python dict
 
-- [final_adjudication.json](output/analysis/vnext/20250409/final_adjudication.json) `token_usage.total = {prompt: 164817, completion: 45297, total: 210114}`。
+- [final_adjudication.json](../../../output/analysis/vnext/20250409/final_adjudication.json) `token_usage.total = {prompt: 164817, completion: 45297, total: 210114}`。
 - HTML 直接渲染 dict 结构而不是审计表格；普通读者只会看到一堆数字，无法判断"高 token 是否意味着 prompt 异常"。
 
 ### P2-2：logic_vnext.market_regime_analysis.risk_flags 6 项重复
 
-- [logic_vnext.json](output/analysis/vnext/20250409/logic_vnext.json) `__LOGIC__.market_regime_analysis.risk_flags` 有 6 条，但只有 3 个 unique。
+- [logic_vnext.json](../../../output/analysis/vnext/20250409/logic_vnext.json) `__LOGIC__.market_regime_analysis.risk_flags` 有 6 条，但只有 3 个 unique。
 - legacy_adapter 在拼接时没去重。
 
 ### P2-3：logic_vnext.conflict_rationale 文本拼接形式拗口
@@ -405,7 +405,7 @@ logic_vnext.json + vnext_brief HTML
 
 ## 6. 不可发布判定
 
-按 [RUN_REVIEW_CHECKLIST.md](RUN_REVIEW_CHECKLIST.md) "回测与快照专项检查"：
+按 [RUN_REVIEW_CHECKLIST.md](../../../RUN_REVIEW_CHECKLIST.md) "回测与快照专项检查"：
 
 | 检查项 | 应通过标准 | 实际结果 |
 | --- | --- | --- |

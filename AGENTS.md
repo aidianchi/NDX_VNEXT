@@ -34,16 +34,17 @@
 
 ## 按需读
 
-- 当前任务：`NEXT_STEPS.md`
+- 当前状态与待办：`现在.md`（唯一状态源）
+- 用户否决过什么、在乎什么：`人话进度报告.md`
 - 命令入口：`README.md`
 - 架构边界：`ARCHITECTURE.md`
 - 指标标准：`RESEARCH_CANON.md`
 - run / 回测复盘：`RUN_REVIEW_CHECKLIST.md`
 - 数据边界：`DATA_COVERAGE_REVIEW.md`
 - 完成记录：`WORK_LOG.md`
-- 通俗解释风格：`PLAIN_LANGUAGE_*.md`
+- 通俗解释风格：`docs/archive/2026-05/PLAIN_LANGUAGE_*.md`（历史样例，文风可借鉴、内容已过时）
 
-冲突时：`ARCHITECTURE.md` 管长期原则，`NEXT_STEPS.md` 管当前任务，`WORK_LOG.md` 管已完成事实；本文件红线优先。
+冲突时：`ARCHITECTURE.md` 管长期原则，`现在.md` 管事项状态，`WORK_LOG.md` 管已完成事实；本文件红线优先。
 
 ## Codex 调度与成本控制
 
