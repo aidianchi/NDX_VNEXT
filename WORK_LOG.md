@@ -5,7 +5,67 @@
 
 ---
 
-## 2026-07-22
+## 2026-07-24
+
+### 全成分 NTM Forward PE 正式链落地（工单 E4，Codex 施工 + Fable 接线验收）
+
+- 【关闭 T14】L4 forward PE 断供正式补上：`get_ndx_forward_pe_full_constituent`——Invesco 官方全持仓权重（共享模块 `src/qqq_holdings.py`，vintage_archiver 同源改导入）+ yfinance FY1/FY2 一致预期财历感知 NTM 插值（无财历者 0.5/0.5 并披露占比）+ 含亏损成分的调和聚合（1/Σ(w̃ᵢ·NTM盈利收益率ᵢ)，消除剔亏偏差）。时点红线：历史 end_date 一律 `no_point_in_time_consensus_for_backtest`；持仓超 10 天标 stale；覆盖率/排除清单/兜底状态全披露。注册三件套（tools 注册表、collector L4 清单+回测跳过表、evidence_families 新家族 `ndx_full_constituent_forward_pe`）由 Fable 亲手接线。RESEARCH_CANON 新增判读卡（水平证据不得单独证明便宜/贵，须与盈利修正连用）。
+- 验证：live 冒烟 Fable 亲跑——**forward PE 21.698、Invesco 直连成功、覆盖 100%、103 成分零排除**；NVDA NTM 插值手工复算精确吻合；全量 `--cache-clear` **952 passed**（基线 944 + 8 条新 mock 测试）；Codex 沙箱内 Invesco 406 判定为环境（沙箱不继承代理）非代码。关单细节见 `investigation_reports/20260723_l4_earnings_audit/WORK_ORDERS.md` E4。
+
+### 盈利预期修正指标家族落地 + 验收轮抓出并修正符号翻转缺陷（工单 E5，Codex 施工 + Fable 验收亲改）
+
+- 【关闭 T15】`get_ndx_earnings_revision_metrics` 进主链：30/90 日修正斜率（剥离日历漂移的 FY1/FY2 分腿公式）、上修/下修广度、NTM 预期分歧、分析师覆盖；材料双轨**档案优先**（±2 天锚），雅虎回看值只补未覆盖窗口并带 `supplier_lookback` + 逐窗口验证状态；财报周双触发低置信标记；历史 end_date 诚实拒绝。档案隔离声明范围化升格（仅限本指标家族的时点材料，其余用途仍隔离）；expectation_ledger 注记双轨化；注册三件套 + 法典判读卡齐备。
+- **验收轮的关键修正（Fable 亲改）**：首版 live 斜率 −1.35%/30d 被证实由数据残缺统治——LIN 现值归零（−100%）、SPCX 穿零（−514%）、WBD 近零基数（+216%），SPCX 一只即拉反指数符号。加三道防线（近零基数/符号穿越/±100% 单腿 → 无效剔除；幸存极端值 ±50% 温莎化并披露；标记机制不变）后复跑：**30d +2.25%、90d +8.57%**，符号与广度（+56.9pp 净上修）及已知上修周期一致。"无意义"与"真实但嘈杂"不得混同已写入法典。
+- 验证：TSLA 斜率逐值手工复算吻合；防线新增 2 条测试；全量 `--cache-clear` **962 passed**；archiver README 模板同步升格文本防覆盖。细节见工单 E5 关单记录。
+
+### 只读终审退回五处 → 全部修复终验（Codex 审 → Fable 裁 → Codex 修 → Fable 终验放行）
+
+- 用户令 Codex 只读终审 E4/E5，判 Not ready 退回五条；Fable 逐条对代码亲验：四条属实（治理接线七处登记点全缺——比终审所列更大，含 packet L4 成员表缺席；覆盖率硬门缺失；±100% 一刀切误杀可靠基数真实修正；divergence 口径混用系 Fable 上轮遗留），一条（Invesco 406）裁为环境差异非代码缺陷。
+- 修复：治理九文件接线齐（data_evidence 四表、packet L4 成员、canon 双判读卡、l4_analyst 菜单、state_ledger 四键）；E4 <90% 与 E5 各子块 <70% 覆盖硬门；ill-defined 判定只留近零基数+符号穿越（精确 −100% 仍被覆盖，测试锁定）；divergence 原始值同口径。新增 5 组测试。
+- 终验（Fable）：治理面 grep 横扫九文件齐；全量 **967 passed** 复跑；live 冒烟两指标 availability/覆盖/温莎化正常（30d +2.38%、90d +9.70% 保持正号）；终验冒烟出现一次带代理环境 406 走兜底（2 天新鲜、门内可用），实证健壮性保障为"兜底+新鲜度门"。经用户授权整批提交推送。
+
+
+
+
+
+
+
+### 盈利预期缺口终审 + E1/E2/E3 三线施工收口（双 AI 报告对比核验 → Fable 终审裁决 → 并行派工）
+
+背景：用户提交 ChatGPT 审计与 WorkBuddy 调查两份 L4 盈利预期缺口报告，委托 Fable 终审。对比核验（`investigation_reports/20260723_l4_earnings_audit/COMPARISON.md`）与终审裁决（同目录 `DECISION.md`：七项分歧逐条裁决、P0-P3 施工顺序、两条两份报告都漏掉的决定性证据——前 15 否决条款的重估条件已触发、雅虎回看值角色已有决策记录）。用户批准 P0-P2 拆单（工单包 E1-E6，同目录 `WORK_ORDERS.md`），并修复 Clash 分流使 Invesco 持仓接口恢复直连。
+
+- 【关闭 T13】P0 语义与守恒修复（工单 E1）：①final_stance claim gate——"证据缺失"与"放大×风险方向"子句级共现即 raise（fail-closed 触发重生成），反事实句放行，落位 `contracts.py` model_validator（循 stance_label 方向冲突检测真实先例）；`final_adjudicator.md` 补"缺失证据不得定方向"纪律；末次 run 事故原句作反例测试。②过期分位退出核心摘要——根因是 `packet_builder` 深扫描兜底绕过门控直读 `HistoryOfMarket` 原始子字段，修复为深扫描排除该键（68.5 陈旧分位不再冒充摘要）。③`hom_available` 保留 presence 分支语义（回测下 eligibility 恒 False，改定义会静默抹掉诚实降级呈报），另立 `hom_decision_eligible` 与顶层 `availability=available/stale` 修覆盖率失真。④sidecar daemon 报错归因修正，fail-closed 不变。两处偏离字面工单均经 Fable 拍板，细节见工单关单记录。
+- E2 档案宇宙扩容（T15 子件，T15 继续开放）：vintage 每日快照从前 15 扩到 Invesco 全持仓——实跑 108 条过滤 5 条得 103 只（含 3 只 ADR），权重覆盖 99.86%，yfinance 103/103 零失败，耗时 384s；schema_version 1→2，隔离声明保留，静态兜底同步扩容；实跑写临时路径，当日正式快照确认未覆盖。
+- E3 供应商回看值对账（T15 子件）：纯档案脚本 `scripts/validate_supplier_lookback.py` 对 292 对"雅虎 7daysAgo vs 自建档案当日实拍"——中位偏差 0.0034%、≤1% 容差占比 96.92%、9 条离群集中于财报周的 TSLA/GOOG/GOOGL（最大 +12.99%，方向为低估修正斜率、偏保守）。Fable 复跑脚本+手工复算后**闸门裁决：有限通过**——档案优先、雅虎只填未覆盖窗口、`supplier_lookback` 标签+逐窗口验证状态、财报周低置信标记、回测只用档案；30/60/90 天窗口 08-11/09-10/10-10 补验（工单初稿 90 天日期算错，worker 纠正）。裁决全文在工单 E3 节。
+
+### 验证
+
+- 全量测试：`.venv/bin/python -m pytest --cache-clear -q` **944 passed，58 warnings**（前日基线 921；warnings 同类既有）。
+- 定向：E1 五个相关测试文件 83 passed；E2 `test_vintage_archiver.py`+`test_expectation_ledger.py` 29 passed；均 Fable 复跑。
+- claim gate 另由 Fable 用五个边界探针直接调用验证（拦截/放行全部符合设计）。
+- E3 脚本确定性：两次运行输出逐字节一致；最大离群对（TSLA +1q）由 Fable 对原始档案手工复算吻合。
+- `tests/test_docs_consistency.py` 7 passed。
+
+
+
+### 十项未完成重新裁决：关闭重复/低价值项，HoM 体检完成
+
+- 用户逐项听取人话解释后拍板重排队列：只保留可选个人阈值、缩小版透明化审计、到期成绩单和下次真实运行验收四项。“等你决定”降为 0；个人阈值可以永久不配置，不阻断市场分析。
+- 【关闭 T01】状态纠错：旧快照兼容修复与 20240805 / 20250409 / 20260509 三份复核已在 2026-07-17 完成，`WORK_LOG.md` 当日记录明确三份仍为 `blocked + unpublishable`。`8cf2f49` 重建《现在》时从过期工单误复活了该项，本次不重复施工。
+- 【关闭 T02】取消第三层接管首页：第三层只负责事件与数据对质解释，继续由经过 Critic/Reviser/Final 治理的第一层判断坐首页，不为了署名切换新建一个难以可靠证明的自然语言语义检测器。
+- 【关闭 T03】HoM 真实接口体检完成：HTTP 200；trailing 32.58 与 2026-07-22 尾值一致；forward 24.29 与 2026-05-18 尾值一致但已陈旧。独立复核发现上游覆盖率与总权重自报 110.4%–112.88%，口径未解释；新增百分比合理性门，超界即将 HoM 全部字段降为 `audit_only`，并移除简化路径中写死的 `market_cap_coverage=100.0%`。历史 `end_date` 路径因没有当时留存 vintage/PIT 覆盖率，也固定降为 `audit_only`，防止用今天看到的回溯曲线伪装成历史当时事实。trailing 50 点不报分位；forward 298 点计算为 68.5 分位，但只作陈旧审计参考。完整记录见 `investigation_reports/20260722_hom_source_audit/REPORT.md`。
+- 【关闭 T05】取消“纳指集中度书面论证”必交作业：查明 `concentration_argument_status/note` 只存在公开结构占位，运行时没有消费路径，原完成判据无法产生声称的系统效果。报告中的强制催促文案改为“如未来真改个人政策上限，按正常政策复审”，不再列为当前作业。
+- 【关闭 T07】取消独立巨型文件拆分：用户可见收益低、回归面大；未来功能必须触及相关区域时就地拆分，不再单独立项。
+- 【关闭 T08】从未完成计数中移除：数据史审计已判定干净 PIT 历史不足，“历史上像今天”引擎继续冻结且不施工。如未来数据条件实质改变，必须以新编号重新立项，不复活 T08。
+- T09 时间语义更正：20 个自然日只是让打分器不再跳过 run；真正的首份完整成绩需要 T+20 个交易日数据齐全，不再宣称 7 月 27 日必然出结论。
+
+### 验证
+
+- HoM API 直连与项目函数各实跑一次，两路值、尾值日期、样本数与时效状态一致。
+- 定向测试：`tests/test_docs_consistency.py tests/test_vnext_reporter.py tests/test_l4_external_valuation_sources.py` 共 **112 passed，4 warnings**。
+- 全量测试：`.venv/bin/python -m pytest --cache-clear -q` 从头执行，**921 passed，58 warnings**。warning 与改动前基线同类，为第三方弃用提示和既有精度提示。
+- `git diff --check` 通过。
+- 独立 reviewer 两轮复核：先发现 HoM 自报覆盖率/总权重超过 100% 仍可穿透，以及历史 `end_date` 会把今天取得的回溯数组当成当时可见数据；两项均已修复并补回归测试。最终复核无新的 Critical / Important 发现。
 
 ### 文档体系重建：状态单点收归 `现在.md`，`TASKS.md` / `NEXT_STEPS.md` 废止（用户发起审计，Fable 主刀）
 

@@ -70,6 +70,8 @@ TOOLS_REGISTRY = {
     "get_ndx_wind_point_in_time_earnings_expectations": get_ndx_wind_point_in_time_earnings_expectations,
     "get_ndx_pe_and_earnings_yield": get_ndx_pe_and_earnings_yield,
     "get_ndx_forward_earnings_quality": get_ndx_forward_earnings_quality,
+    "get_ndx_forward_pe_full_constituent": get_ndx_forward_pe_full_constituent,
+    "get_ndx_earnings_revision_metrics": get_ndx_earnings_revision_metrics,
     "get_equity_risk_premium": get_equity_risk_premium,
     "get_m7_capex_cycle": get_m7_capex_cycle,
     "get_m7_earnings_blackout_calendar": get_m7_earnings_blackout_calendar,

@@ -28,6 +28,8 @@ L4 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 - `get_ndx_wind_valuation_snapshot`: Wind NDX 指数级 PE/PB/PS、历史分位和 Wind 标注的 NDX 风险溢价值。PE/PB/PS 可按各自数据权限作为 L4 估值位置主锚；风险溢价绝对值能否解释，必须另行服从其字段定义、公式、单位和 `MetricAuthority`。
 - `get_ndx_wind_point_in_time_earnings_expectations`: Wind NDX 指数级、历史时点可见的同口径一致预期 EPS 修正。只有 `point_in_time_verified=true` 且当前/30日前的预测口径一致时，修正幅度和修正斜率才可用于判断高估值是否有盈利预期支撑。
 - `get_ndx_forward_earnings_quality`: NDX/M7 盈利预期变化与利润率质量代理。优先看同一预测口径随时间的修正方向、修正广度和覆盖率；`forward/trailing` 盈利差只能叫“前瞻相对历史差距”，不能叫盈利增长率。样本不足时只报告缺口，不得外推为全指数或 M7 结论。
+- `get_ndx_forward_pe_full_constituent`: NDX 全成分 NTM Forward PE 水平证据。不得单独证明便宜或昂贵；必须与盈利修正动力学连用以区分盈利消化和价值陷阱，历史分位缺失或样本不足时不做分位判断，也不得用 trailing PE 分位冒充。
+- `get_ndx_earnings_revision_metrics`: NDX 全成分盈利预期修正动力学证据。必须与全成分 Forward PE 连用；`supplier_lookback` 表示自产档案缺口下的待验证补位，不表示已错或已验证，财报周和绝对斜率超过 20% 只降置信并保留入算，基数近零或符号穿越才作无效剔除。
 - `get_equity_risk_premium`: NDX 简式收益差距。它只等于 `earnings_yield - 10Y` 或 `fcf_yield - 10Y`，衡量当前盈利/现金流收益率相对无风险利率的粗略安全垫；不得写成 Damodaran 式 implied ERP。
 - `get_m7_capex_cycle`: M7/超大规模云厂商资本开支周期，SEC XBRL 官方申报事实（单季值由同一财年内累计申报值逐季相减得到，附带申报日）。只回答"头部公司资本开支是在加速还是减速"，不得用于证明估值便宜、盈利已兑现，也不得单独推翻 L1/L2 给出的压力信号。覆盖不足 5/7 家公司的日历季度，其 M7 合计同比必须标记为不可比。
 - `get_m7_earnings_blackout_calendar`: M7 规则估算财报静默期日历。窗口固定为 [财报日前21个自然日, 财报日后2个自然日]，不是公司官方披露政策。只能作为“回购支撑可能暂时减弱/恢复”的 `supporting_only` 时间上下文：处于静默窗不等于必跌，结束不等于利多，禁止用于精确择时。M7 是诚实缩水宇宙，等权占比不得冒充 NDX 市值加权结论。

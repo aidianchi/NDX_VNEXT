@@ -24,8 +24,13 @@ from agent_analysis.contracts import (  # noqa: E402
 
 _ARCHIVE_PATH = (
     Path(__file__).resolve().parents[1]
-    / "output" / "analysis" / "vnext" / "20260719_130534" / "final_adjudication.json"
+    / "output" / "analysis" / "vnext" / "20260607_2154_component_root_cause" / "final_adjudication.json"
 )
+# Note: the 20260719_130534 archive (previously used here) predates stance_label
+# too, but its final_stance is the exact "盈利证据缺失放大下行风险" claim-gate
+# violation fixed under E1 (see test_final_stance_claim_gate.py) — it now
+# correctly fails replay, so it is no longer a valid fixture for "legacy
+# archives replay cleanly".
 
 
 def _final(**overrides):

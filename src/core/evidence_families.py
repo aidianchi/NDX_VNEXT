@@ -145,6 +145,16 @@ EVIDENCE_FAMILIES: Dict[str, str] = {
     # production default, so the static mapping follows the default paths.
     "get_ndx_pe_and_earnings_yield": "ndx_history_of_market_valuation",
     "get_ndx_forward_earnings_quality": "ndx_component_self_computed_valuation",
+    # Full-constituent NTM forward PE self-computed from official Invesco QQQ
+    # holdings weights + yfinance FY1/FY2 consensus (fiscal-calendar NTM
+    # interpolation, loss-makers retained). A third evidence stream, distinct
+    # both from HoM's third-party attribution above and from the disabled
+    # component audit path: different universe source, different aggregation,
+    # live-only with an explicit point-in-time refusal for backtests.
+    "get_ndx_forward_pe_full_constituent": "ndx_full_constituent_forward_pe",
+    # Separate from the forward-PE level family: this answers revision-direction
+    # dynamics, using a dual-track material policy with the self archive first.
+    "get_ndx_earnings_revision_metrics": "ndx_earnings_revision_dynamics",
     # Anchored: one of the three independent ERP voices -- NDX's own simple
     # yield gap (earnings/FCF yield minus 10Y Treasury). Kept independent of
     # the Wind snapshot's risk_premium field and of Damodaran's academic

@@ -101,6 +101,8 @@ LAYER_FUNCTIONS = {
         "get_ndx_wind_point_in_time_earnings_expectations",
         "get_ndx_pe_and_earnings_yield",
         "get_ndx_forward_earnings_quality",
+        "get_ndx_forward_pe_full_constituent",
+        "get_ndx_earnings_revision_metrics",
         "get_equity_risk_premium",
         "get_m7_capex_cycle",
         "get_m7_earnings_blackout_calendar",
@@ -757,7 +759,20 @@ class AnalysisPacketBuilder:
             return self._extract_percentile(value)
 
         checks = value.get("ThirdPartyChecks")
-        root_value = {key: item for key, item in value.items() if key != "ThirdPartyChecks"}
+        # "HistoryOfMarket"/"StaleReferences" carry HoM's raw, ungated percentile
+        # fields (e.g. trailing_percentile/forward_percentile) alongside their own
+        # eligibility flags (trailing_decision_eligible/forward_decision_eligible,
+        # trailing_percentile_status/forward_percentile_status). tools_L4.py already
+        # projects those into gated top-level fields (TrailingPEHistoricalPercentile/
+        # ForwardPEHistoricalPercentile, correctly None when stale or insufficient
+        # history). A generic deep scan of root_value must not reach past that gate
+        # into the raw sub-dicts, or a stale/insufficient-history percentile leaks
+        # into the core summary as if it were decision-eligible.
+        root_value = {
+            key: item
+            for key, item in value.items()
+            if key not in {"ThirdPartyChecks", "HistoryOfMarket", "StaleReferences"}
+        }
         payload = payload or {}
         source_tier = str(payload.get("source_tier") or payload.get("data_quality", {}).get("source_tier") or "").lower()
         source_name = str(payload.get("source_name") or "").lower()

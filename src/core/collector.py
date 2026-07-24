@@ -164,6 +164,8 @@ class DataCollector:
                 "get_ndx_wind_point_in_time_earnings_expectations",
                 "get_ndx_pe_and_earnings_yield",
                 "get_ndx_forward_earnings_quality",
+                "get_ndx_forward_pe_full_constituent",
+                "get_ndx_earnings_revision_metrics",
                 "get_equity_risk_premium",
                 "get_m7_capex_cycle",
                 "get_m7_earnings_blackout_calendar",
@@ -265,6 +267,14 @@ class DataCollector:
         "get_equity_risk_premium": {
             "reason": "该简式收益差距依赖 NDX 成分股估值收益率；回测自动路径不可用时不再间接触发批量 yfinance",
             "anomalies": ["dependent_on_skipped_ndx_component_valuation"],
+        },
+        "get_ndx_forward_pe_full_constituent": {
+            "reason": "全成分 forward PE 依赖当前 yfinance 一致预期与最新官方持仓，无法证明回测日当时可见；函数本身对历史 end_date 也返回 no_point_in_time_consensus_for_backtest",
+            "anomalies": ["latest_only_consensus_not_used_in_backtest"],
+        },
+        "get_ndx_earnings_revision_metrics": {
+            "reason": "修正指标依赖当前一致预期与短史档案，无法证明回测日当时可见",
+            "anomalies": ["latest_only_consensus_not_used_in_backtest"],
         },
     }
 

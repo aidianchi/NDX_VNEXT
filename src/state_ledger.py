@@ -35,6 +35,10 @@ STATE_VARIABLE_SPECS: List[Dict[str, Any]] = [
     {"key": "valuation.forward_pe", "layer": "L4", "function_id": "get_ndx_pe_and_earnings_yield", "path": ["ForwardPE"], "unit": "pe_multiple"},
     {"key": "valuation.forward_earnings_yield_pct", "layer": "L4", "function_id": "get_ndx_pe_and_earnings_yield", "path": ["ForwardEarningsYield"], "unit": "percent"},
     {"key": "valuation.forward_eps_growth_proxy_pct", "layer": "L4", "function_id": "get_ndx_forward_earnings_quality", "path": ["ndx", "forward_eps_growth_proxy_pct"], "unit": "percent"},
+    {"key": "valuation.ndx_forward_pe_full_constituent", "layer": "L4", "function_id": "get_ndx_forward_pe_full_constituent", "path": ["value"], "path_root": "payload", "unit": "ratio"},
+    {"key": "valuation.ndx_forward_earnings_yield_full_constituent", "layer": "L4", "function_id": "get_ndx_forward_pe_full_constituent", "path": ["forward_earnings_yield"], "path_root": "payload", "unit": "decimal"},
+    {"key": "earnings_revision.ndx_slope_30d", "layer": "L4", "function_id": "get_ndx_earnings_revision_metrics", "path": ["value", "slope_30d", "value"], "path_root": "payload", "unit": "decimal_change"},
+    {"key": "earnings_revision.ndx_slope_90d", "layer": "L4", "function_id": "get_ndx_earnings_revision_metrics", "path": ["value", "slope_90d", "value"], "path_root": "payload", "unit": "decimal_change"},
     {"key": "liquidity.net_liquidity_level_bn", "layer": "L1", "function_id": "get_net_liquidity_momentum", "path": ["level"], "unit": "usd_billions"},
     {"key": "liquidity.net_liquidity_momentum_4w_bn", "layer": "L1", "function_id": "get_net_liquidity_momentum", "path": ["momentum_4w"], "unit": "usd_billions"},
     {"key": "risk_appetite.vix_level", "layer": "L2", "function_id": "get_vix", "path": ["level"], "unit": "index_points"},
@@ -104,7 +108,11 @@ def extract_state_variables(analysis_packet: Dict[str, Any]) -> Tuple[Dict[str, 
     for spec in STATE_VARIABLE_SPECS:
         layer_data = raw_data.get(spec["layer"], {}) if isinstance(raw_data.get(spec["layer"]), dict) else {}
         payload = layer_data.get(spec["function_id"], {}) if isinstance(layer_data.get(spec["function_id"]), dict) else {}
-        value = _dig(payload.get("value"), spec["path"]) if isinstance(payload.get("value"), dict) else None
+        # Most legacy paths are relative to the nested value object. Newer
+        # payloads can explicitly opt into root-relative paths when they expose
+        # deterministic siblings beside a scalar `value`.
+        path_root = payload if spec.get("path_root") == "payload" else payload.get("value")
+        value = _dig(path_root, spec["path"])
         variables[spec["key"]] = value
         if value is None:
             missing.append(spec["key"])

@@ -89,7 +89,15 @@ def collect_page_text_with_bb_browser(
 
     daemon = run_step(["bb-browser", "daemon", "start", "--json"], timeout)
     daemon_text = f"{daemon.stderr or ''}\n{daemon.stdout or ''}".lower()
-    if daemon.returncode != 0 and "already" not in daemon_text and "cdp is reachable" not in daemon_text:
+    # E1 P0 fix: a non-zero daemon-start return code must be reported here, at
+    # the daemon step, as a daemon failure. Previously, error text merely
+    # mentioning "cdp is reachable" (which can appear inside a failure message
+    # explaining *why* CDP is not reachable) was treated the same as "already
+    # running" and let the raise slide — the real daemon failure only
+    # surfaced later, misattributed, when the subsequent `open` step also
+    # failed with an unrelated-looking error. "already" (daemon already
+    # running) remains the only benign non-zero case.
+    if daemon.returncode != 0 and "already" not in daemon_text:
         raise RuntimeError(f"bb-browser daemon start failed: {(daemon.stderr or daemon.stdout)[-500:]}")
 
     opened = run_step(["bb-browser", "open", url, "--json"], timeout)

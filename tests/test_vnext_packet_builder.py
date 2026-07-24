@@ -277,6 +277,63 @@ def test_l4_state_uses_real_percentile_not_yfinance_current_pe_alone():
     assert packet.facts_by_layer["L4"].state == "neutral"
 
 
+def test_l4_state_suppresses_stale_hom_percentile_leaking_through_history_of_market():
+    """Regression for the 20260719_130534 run: HoM's own gated top-level fields
+    (TrailingPEHistoricalPercentile/ForwardPEHistoricalPercentile) already
+    correctly return None when the source is stale or insufficient_history,
+    but a generic deep scan of the payload could still reach past that gate
+    into the raw, ungated `HistoryOfMarket.trailing_percentile` sub-field and
+    surface it in the core summary as a bare "分位=68.5" number. E1 P0 fix:
+    the summary must never show that bare number; it must say the historical
+    percentile is unavailable instead, while the raw value stays in the
+    payload/audit area untouched.
+    """
+    data = _mock_data_json()
+    for indicator in data["indicators"]:
+        if indicator["function_id"] == "get_ndx_pe_and_earnings_yield":
+            indicator["raw_data"] = {
+                "name": "NDX Valuation",
+                "source_tier": "third_party_estimate",
+                "source_name": "History of Market",
+                "value": {
+                    "PE": 34.39,
+                    "TrailingPE": 34.39,
+                    "ForwardPE": None,
+                    "TrailingPEHistoricalPercentile": None,
+                    "ForwardPEHistoricalPercentile": None,
+                    "ThirdPartyChecks": [
+                        {"source_id": "worldperatio_pe", "availability": "unavailable"},
+                        {"source_id": "danjuan_ndx_valuation", "availability": "unavailable"},
+                    ],
+                    "HistoryOfMarket": {
+                        "trailing_percentile": 68.5,
+                        "forward_percentile": None,
+                        "trailing_percentile_status": "insufficient_history",
+                        "forward_percentile_status": "unavailable",
+                        "trailing_decision_eligible": True,
+                        "forward_decision_eligible": False,
+                    },
+                    "StaleReferences": {},
+                },
+            }
+        if indicator["function_id"] == "get_equity_risk_premium":
+            indicator["raw_data"] = {"name": "NDX Simple Yield Gap", "value": {"level": 2.2}}
+
+    packet = AnalysisPacketBuilder().build(data, manual_overrides={"active": False, "metrics": {}})
+    valuation_signal = next(
+        signal for signal in packet.facts_by_layer["L4"].core_signals if signal["metric"] == "get_ndx_pe_and_earnings_yield"
+    )
+
+    assert valuation_signal["historical_percentile"] is None
+    assert "68.5" not in valuation_signal["summary"]
+    assert "历史分位缺失" in valuation_signal["summary"]
+    # The raw stale value must still be reachable in the untouched payload/audit
+    # area (packet.raw_data), not silently deleted.
+    raw_hom = packet.raw_data["L4"]["get_ndx_pe_and_earnings_yield"]["value"]["HistoryOfMarket"]
+    assert raw_hom["trailing_percentile"] == 68.5
+    assert raw_hom["trailing_percentile_status"] == "insufficient_history"
+
+
 def test_l4_signal_carries_worldperatio_relative_position_without_percentile():
     data = _mock_data_json()
     for indicator in data["indicators"]:

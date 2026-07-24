@@ -944,6 +944,8 @@ def test_get_ndx_valuation_history_of_market_returns_valid_forward_pe(monkeypatc
     )
     if end_date:
         assert value.get("forward_coverage_pct") is None
+        assert value.get("coverage_sanity", {}).get("status") == "not_point_in_time_verified"
+        assert value.get("trailing_decision_eligible") is False
         assert value.get("forward_decision_eligible") is False
     else:
         assert value.get("forward_coverage_pct") == 100.0
@@ -952,6 +954,119 @@ def test_get_ndx_valuation_history_of_market_returns_valid_forward_pe(monkeypatc
     assert value.get("forward_percentile_context", {}).get("sample_count") == 5
     assert len(value.get("forward_percentile_context", {}).get("raw_series", [])) == 5
     assert "unverified attribution" in result.get("source_name", "")
+
+
+def test_history_of_market_retrospective_api_history_never_becomes_pit_decision_evidence(monkeypatch):
+    _install_history_of_market_fixture(monkeypatch)
+
+    result = tools_L4.get_ndx_valuation_history_of_market(end_date="2022-01-31")
+    value = result["value"]
+
+    assert value["forward_pe"] == 24.0
+    assert value["coverage_sanity"]["status"] == "not_point_in_time_verified"
+    assert value["forward_decision_eligible"] is False
+    assert result["availability"] == "stale"
+
+
+def test_history_of_market_coverage_above_100_forces_all_fields_to_audit_only(monkeypatch):
+    _install_history_of_market_fixture(monkeypatch)
+    original_get = tools_L4.requests.get
+
+    def anomalous_get(*args, **kwargs):
+        response = original_get(*args, **kwargs)
+        original_json = response.json
+
+        def anomalous_json():
+            payload = original_json()
+            payload["current"].update({
+                "trailingCoverage": 110.4,
+                "forwardCoverage": 112.88,
+                "totalWeight": 112.88,
+            })
+            return payload
+
+        response.json = anomalous_json
+        return response
+
+    monkeypatch.setattr(tools_L4.requests, "get", anomalous_get)
+    monkeypatch.setattr(
+        tools_L4,
+        "_apply_valuation_freshness",
+        lambda *args, **kwargs: {"freshness_status": "current", "usage": "validation_only"},
+    )
+
+    result = tools_L4.get_ndx_valuation_history_of_market()
+    value = result["value"]
+    sanity = value["coverage_sanity"]
+
+    assert sanity["status"] == "invalid"
+    assert {item["field"] for item in sanity["anomalies"]} == {
+        "trailingCoverage", "forwardCoverage", "totalWeight"
+    }
+    assert value["trailing_freshness_status"] == "current"
+    assert value["trailing_decision_eligible"] is False
+    assert value["forward_decision_eligible"] is False
+    assert result["availability"] == "stale"
+
+
+def test_history_of_market_invalid_coverage_is_not_rendered_as_full_market_coverage(monkeypatch):
+    _install_history_of_market_fixture(monkeypatch)
+    original_get = tools_L4.requests.get
+
+    def anomalous_get(*args, **kwargs):
+        response = original_get(*args, **kwargs)
+        original_json = response.json
+
+        def anomalous_json():
+            payload = original_json()
+            payload["current"].update({"trailingCoverage": 110.4, "totalWeight": 112.88})
+            return payload
+
+        response.json = anomalous_json
+        return response
+
+    monkeypatch.setattr(tools_L4.requests, "get", anomalous_get)
+    monkeypatch.setattr(tools_L4, "get_ndx_valuation_third_party_checks", lambda: {})
+    monkeypatch.delenv("NDX_ENABLE_COMPONENT_MODEL", raising=False)
+
+    result = tools_L4.get_ndx_pe_and_earnings_yield()
+
+    assert result["value"]["TrailingPE"] is None
+    assert result["value"]["ForwardPE"] is None
+    assert result["value"]["MetricAuthority"]["TrailingPE"]["usage"] == "audit_only"
+    assert result["value"]["Coverage"]["market_cap_coverage"].startswith("unverified:")
+    # E1 P0 fix: raw presence must not stand in for decision usability at the
+    # top level either — a caller checking `availability` generically (the
+    # way every other L4 source is checked) must see "stale" here, even
+    # though the HoM branch is still structurally reported (source_name,
+    # MetricAuthority, StaleReferences all present above).
+    assert result["availability"] == "stale"
+
+
+def test_get_ndx_pe_and_earnings_yield_top_level_availability_reflects_hom_decision_eligibility(monkeypatch):
+    """`hom_available` (branch selection) intentionally stays presence-based —
+    see the comment at its definition for why (backtests always report
+    coverage_sanity == "not_point_in_time_verified", so eligibility-gating the
+    branch itself would silently drop HoM's Bloomberg BEst caveat labeling for
+    every backtest). The new top-level `availability` field is where decision
+    eligibility must actually surface."""
+    _install_history_of_market_fixture(monkeypatch)
+    monkeypatch.setattr(tools_L4, "get_ndx_valuation_third_party_checks", lambda: [])
+    monkeypatch.delenv("NDX_ENABLE_COMPONENT_MODEL", raising=False)
+
+    # Default fixture dates are stale relative to "today" -> nothing eligible.
+    result_stale = tools_L4.get_ndx_pe_and_earnings_yield()
+    assert result_stale["availability"] == "stale"
+    assert result_stale["value"]["HistoryOfMarket"] is not None  # still structurally reported
+
+    # Force freshness to "current" so at least one side becomes decision-eligible.
+    monkeypatch.setattr(
+        tools_L4,
+        "_apply_valuation_freshness",
+        lambda *args, **kwargs: {"freshness_status": "current", "usage": "validation_only"},
+    )
+    result_available = tools_L4.get_ndx_pe_and_earnings_yield()
+    assert result_available["availability"] == "available"
 
 
 def test_history_of_market_bloomberg_best_labels_are_always_caveated(monkeypatch):

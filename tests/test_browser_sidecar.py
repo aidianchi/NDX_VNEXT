@@ -3,9 +3,12 @@ import json
 import subprocess
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from browser_sidecar import (
+    collect_page_text_with_bb_browser,
     collect_trendonify_valuation_sidecar,
     has_available_trendonify_sidecar_payload,
     merge_trendonify_sidecar_payload,
@@ -45,6 +48,49 @@ Since Jun 2002 21.24 63.5% Overvalued
     assert forward["parse_status"] == "ok"
     assert forward["parsed"]["percentile_10y"] == 57.5
     assert forward["parsed"]["historical_percentiles"]["5y"]["percentile"] == 40.0
+
+
+def test_daemon_failure_mentioning_cdp_is_reachable_raises_at_daemon_step():
+    """E1 P0 fix regression: a failed daemon-start whose stderr happens to
+    mention "cdp is reachable" (explaining *why* CDP is unreachable, not that
+    it succeeded) must raise immediately with the daemon's own error text, not
+    be waved through only to fail later, misattributed, at the `open` step."""
+
+    def fake_runner(args, timeout):
+        if args[:2] == ["bb-browser", "daemon"]:
+            return subprocess.CompletedProcess(
+                args, 1, stdout="", stderr="daemon start failed: cdp is reachable check timed out"
+            )
+        raise AssertionError(f"open/eval step must not run after a daemon failure: {args}")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        collect_page_text_with_bb_browser(
+            "https://trendonify.com/united-states/stock-market/nasdaq-100/pe-ratio",
+            wait_seconds=0,
+            runner=fake_runner,
+        )
+    assert "bb-browser daemon start failed" in str(excinfo.value)
+    assert "cdp is reachable" in str(excinfo.value)
+
+
+def test_daemon_already_running_is_not_treated_as_a_failure():
+    """The only benign non-zero daemon-start case: it was already running."""
+
+    def fake_runner(args, timeout):
+        if args[:2] == ["bb-browser", "daemon"]:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="daemon already running")
+        if args[:2] == ["bb-browser", "open"]:
+            return subprocess.CompletedProcess(args, 0, stdout="{}", stderr="")
+        if args[:3] == ["bb-browser", "eval", "document.body ? document.body.innerText : ''"]:
+            return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"data": {"result": "ok"}}), stderr="")
+        raise AssertionError(f"unexpected step: {args}")
+
+    result = collect_page_text_with_bb_browser(
+        "https://trendonify.com/united-states/stock-market/nasdaq-100/pe-ratio",
+        wait_seconds=0,
+        runner=fake_runner,
+    )
+    assert result["text"] == "ok"
 
 
 def test_trendonify_sidecar_payload_available_guard():

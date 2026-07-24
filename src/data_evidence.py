@@ -67,6 +67,8 @@ CORE_EVIDENCE_FUNCTIONS = {
     "get_ndx_wind_point_in_time_earnings_expectations",
     "get_ndx_pe_and_earnings_yield",
     "get_ndx_forward_earnings_quality",
+    "get_ndx_forward_pe_full_constituent",
+    "get_ndx_earnings_revision_metrics",
     "get_equity_risk_premium",
     "get_m7_capex_cycle",
     "get_m7_earnings_blackout_calendar",
@@ -82,6 +84,8 @@ LATEST_ONLY_FUNCTIONS = {
     "get_ndx_wind_valuation_snapshot",
     "get_ndx_pe_and_earnings_yield",
     "get_ndx_forward_earnings_quality",
+    "get_ndx_forward_pe_full_constituent",
+    "get_ndx_earnings_revision_metrics",
     "get_equity_risk_premium",
 }
 
@@ -224,6 +228,8 @@ COVERAGE_REQUIRED_FUNCTIONS = {
     "get_ndx_wind_point_in_time_earnings_expectations",
     "get_ndx_pe_and_earnings_yield",
     "get_ndx_forward_earnings_quality",
+    "get_ndx_forward_pe_full_constituent",
+    "get_ndx_earnings_revision_metrics",
     "get_m7_capex_cycle",
     "get_m7_earnings_blackout_calendar",
     "get_m7_buyback_flow",
@@ -240,6 +246,8 @@ BACKTEST_VINTAGE_REQUIRED_FUNCTIONS = {
     "get_finra_margin_debt",
     "get_ndx_wind_point_in_time_earnings_expectations",
     "get_ndx_forward_earnings_quality",
+    "get_ndx_forward_pe_full_constituent",
+    "get_ndx_earnings_revision_metrics",
     "get_m7_capex_cycle",
     "get_m7_buyback_flow",
 }

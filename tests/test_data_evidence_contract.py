@@ -10,7 +10,11 @@ from agent_analysis.vnext_reporter import VNextReportGenerator
 from core.checker import DataIntegrity
 from core.collector import DataCollector
 from data_evidence import (
+    BACKTEST_VINTAGE_REQUIRED_FUNCTIONS,
+    CORE_EVIDENCE_FUNCTIONS,
+    COVERAGE_REQUIRED_FUNCTIONS,
     DATA_EVIDENCE_CONTRACT_VERSION,
+    LATEST_ONLY_FUNCTIONS,
     data_evidence_issues,
     normalize_data_evidence,
     normalize_source_tier_for_evidence_passport,
@@ -26,6 +30,21 @@ def _indicator(function_id, raw_data, layer=1):
         "error": raw_data.get("error"),
         "collection_timestamp_utc": "2026-06-16T00:00:00Z",
     }
+
+
+def test_new_l4_earnings_metrics_are_registered_in_all_governance_sets():
+    expected = {
+        "get_ndx_forward_pe_full_constituent",
+        "get_ndx_earnings_revision_metrics",
+    }
+
+    for governance_set in (
+        CORE_EVIDENCE_FUNCTIONS,
+        LATEST_ONLY_FUNCTIONS,
+        COVERAGE_REQUIRED_FUNCTIONS,
+        BACKTEST_VINTAGE_REQUIRED_FUNCTIONS,
+    ):
+        assert expected <= governance_set
 
 
 def test_normalizer_backfills_legacy_payload_without_inventing_source_url():

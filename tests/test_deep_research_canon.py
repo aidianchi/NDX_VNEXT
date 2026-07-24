@@ -56,6 +56,29 @@ def test_indicator_canon_covers_all_packet_builder_functions():
     assert expected <= set(INDICATOR_CANONS)
 
 
+def test_new_l4_forward_pe_and_revision_canons_preserve_joint_reading_rules():
+    forward_pe = get_indicator_canon("get_ndx_forward_pe_full_constituent")
+    revisions = get_indicator_canon("get_ndx_earnings_revision_metrics")
+
+    assert forward_pe.layer == "L4"
+    assert revisions.layer == "L4"
+    assert "get_ndx_earnings_revision_metrics" in forward_pe.cross_validation_targets
+    assert "get_ndx_forward_pe_full_constituent" in revisions.cross_validation_targets
+    for target in ("get_ndx_pe_and_earnings_yield", "get_equity_risk_premium"):
+        assert target in forward_pe.cross_validation_targets
+        assert target in revisions.cross_validation_targets
+    assert any("不得单独证明便宜或昂贵" in item for item in forward_pe.interpretation_rules)
+    assert any("历史分位缺失" in item for item in forward_pe.interpretation_rules)
+    assert any("supplier_lookback" in item for item in revisions.interpretation_rules)
+    assert any("财报日" in item and "标记" in item for item in revisions.interpretation_rules)
+
+    valuation = get_indicator_canon("get_ndx_pe_and_earnings_yield")
+    yield_gap = get_indicator_canon("get_equity_risk_premium")
+    for canon in (valuation, yield_gap):
+        assert "get_ndx_forward_pe_full_constituent" in canon.cross_validation_targets
+        assert "get_ndx_earnings_revision_metrics" in canon.cross_validation_targets
+
+
 def test_price_volume_quality_canon_keeps_l5_boundary():
     canon = get_indicator_canon("get_price_volume_quality_qqq")
 

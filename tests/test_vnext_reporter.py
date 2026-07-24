@@ -2433,6 +2433,8 @@ def test_personal_policy_translation_constructive_stance_uses_constructive_copy(
     )
     assert "本轮偏乐观的判断不改变战略权益的常规节奏" in html
     assert "本轮判断不改变战略权益（纳指/标普/红利低波）的常规定投节奏" not in html
+    assert "系统既不会替你批准，也不会把一页集中度论证列成当前必须完成的作业" in html
+    assert "政策书要求你先完成'纳指集中度'的书面论证" not in html
     assert "本轮系统判断在多空之间没有明确倾向" not in html
 
 

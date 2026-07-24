@@ -1529,6 +1529,59 @@ def _stance_label_direction_conflict(stance_label: str, corpus: str) -> bool:
     return False
 
 
+# E1 P0 claim gate: 证据缺失只能映射为置信度折减与数据边界记录，永远不能映射为
+# 方向（利多或利空）。真实事故句子："盈利证据缺失放大下行风险"——"缺失"在同一句
+# 里给"放大…风险"当理由，这是推理缺陷，不是数据缺口，与数据何时接上无关。
+_MISSING_EVIDENCE_TERMS: tuple[str, ...] = ("缺失", "缺乏", "不可用", "没有数据")
+_DIRECTION_AMPLIFY_TERMS: tuple[str, ...] = ("放大", "加剧", "增加", "恶化")
+_DIRECTION_RISK_TERMS: tuple[str, ...] = ("风险", "下行", "上行")
+# 反事实/条件句保护："若/如果/一旦…缺口补齐后风险仍会放大"讨论的是假设情形下
+# 的风险演变，不是"当前证据缺失导致方向性结论"，不得误伤。
+_COUNTERFACTUAL_MARKERS: tuple[str, ...] = ("若", "如果", "假如", "假使", "倘若", "一旦", "即便", "即使", "纵使")
+# 分句边界含分号：中文分号习惯上分隔并列的独立分句（"A；B；C"式并列观点列表），
+# 逗号才是同一从句内的紧密连接（brief 给出的反例"盈利证据缺失，同时…放大…风险"
+# 正是逗号连接）。只在逗号范围内做"子句级"共现，分号两侧视为不同论点，避免把
+# 一句里并列的多个互不相关的风险点误判为同一条因果链。
+_SENTENCE_SPLIT_PATTERN = re.compile(r"[。！？；\n]+")
+
+
+def _split_into_sentences(text: str) -> List[str]:
+    return [sentence.strip() for sentence in _SENTENCE_SPLIT_PATTERN.split(text) if sentence.strip()]
+
+
+def _sentence_has_amplify_risk_pattern(sentence: str) -> bool:
+    has_amplify = any(term in sentence for term in _DIRECTION_AMPLIFY_TERMS)
+    has_risk_direction = any(term in sentence for term in _DIRECTION_RISK_TERMS)
+    return has_amplify and has_risk_direction
+
+
+def _missing_evidence_term_is_counterfactual(sentence: str, term: str) -> bool:
+    index = sentence.find(term)
+    if index < 0:
+        return False
+    prefix = sentence[:index]
+    return any(marker in prefix for marker in _COUNTERFACTUAL_MARKERS)
+
+
+def _missing_evidence_as_direction_claim(corpus: str) -> Optional[str]:
+    """子句级（逗号连接的同一从句组内，不要求相邻词匹配）检测"缺失类"措辞与
+    "放大×风险方向"措辞共现——隔从句写法（"盈利证据缺失，同时高估值放大下行
+    风险"）也必须命中。以句号/问号/感叹号/分号/换行分句：句号类和分号是并列
+    独立论点的边界，逗号才是同一条因果链内部的紧密连接，不切断检测范围。命中
+    则返回违规句子片段用于报错定位；反事实/条件句（缺失措辞被"若/如果/一旦…"
+    引导）放行。"""
+    for sentence in _split_into_sentences(corpus):
+        hit_term = next((term for term in _MISSING_EVIDENCE_TERMS if term in sentence), None)
+        if hit_term is None:
+            continue
+        if not _sentence_has_amplify_risk_pattern(sentence):
+            continue
+        if _missing_evidence_term_is_counterfactual(sentence, hit_term):
+            continue
+        return sentence
+    return None
+
+
 class LongTermAssessment(BaseModel):
     """Assessment of the asset over 3-5+ years, separate from cyclical views."""
     model_config = {"extra": "allow"}
@@ -2208,6 +2261,30 @@ class FinalAdjudication(BaseModel):
             self.quality_gate.notes = "；".join(
                 item for item in (self.quality_gate.notes.strip(), note) if item
             )
+
+    @model_validator(mode="after")
+    def _reject_missing_evidence_as_direction_claim(self) -> "FinalAdjudication":
+        """E1 P0 claim gate. 证据缺失/不可用只能映射为置信度折减与数据边界记录，
+        永远不能映射为方向（利多或利空）——真实事故句子"盈利证据缺失放大下行
+        风险"必须被拦截。这里不能像 stance_label 冲突那样"清空字段、留痕继续
+        放行"：违规内容就是 final_stance/reasoned_verdict/payoff_assessment 本身
+        的自然语言论证，没有安全的字段可清空，清空会留空必填字段，改写会等于
+        代系统编造措辞。因此选择 fail-closed：raise 触发 _run_stage 的校验失败
+        重试循环（把这条错误原文喂回给模型，要求换一种不违反 claim gate 的写法
+        重新生成），且 _load_stage_checkpoint 对已落盘 artifact 重新 model_validate
+        时同样会因此失败并判定 checkpoint 不可复用，不会让旧的违规产物绕过重跑
+        直接进入下一阶段。"""
+        corpus = " ".join(
+            str(value or "") for value in (self.final_stance, self.reasoned_verdict, self.payoff_assessment)
+        )
+        offending_sentence = _missing_evidence_as_direction_claim(corpus)
+        if offending_sentence:
+            raise ValueError(
+                "final_stance_claim_gate violation: 证据缺失/不可用只能映射为置信度折减"
+                "与数据边界记录，不得作为方向性理由（利多或利空）。命中句子："
+                f"{offending_sentence}"
+            )
+        return self
 
     model_config = {"extra": "allow"}
 

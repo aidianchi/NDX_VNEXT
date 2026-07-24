@@ -111,6 +111,48 @@ def test_nested_and_derived_state_variables_declare_complete_evidence_refs():
     ]
 
 
+def test_new_l4_state_variables_follow_actual_payload_paths_and_units():
+    packet = {
+        "raw_data": {
+            "L4": {
+                "get_ndx_forward_pe_full_constituent": {
+                    "value": 24.5,
+                    "forward_earnings_yield": 0.0408163265,
+                },
+                "get_ndx_earnings_revision_metrics": {
+                    "value": {
+                        "slope_30d": {"value": 0.025},
+                        "slope_90d": {"value": -0.01},
+                    }
+                },
+            }
+        }
+    }
+
+    variables, missing = extract_state_variables(packet)
+
+    assert variables["valuation.ndx_forward_pe_full_constituent"] == 24.5
+    assert (
+        variables["valuation.ndx_forward_earnings_yield_full_constituent"]
+        == 0.0408163265
+    )
+    assert variables["earnings_revision.ndx_slope_30d"] == 0.025
+    assert variables["earnings_revision.ndx_slope_90d"] == -0.01
+    assert "valuation.ndx_forward_pe_full_constituent" not in missing
+    assert (
+        STATE_VARIABLE_SPEC_BY_KEY[
+            "valuation.ndx_forward_earnings_yield_full_constituent"
+        ]["unit"]
+        == "decimal"
+    )
+    assert (
+        STATE_VARIABLE_SPEC_BY_KEY["earnings_revision.ndx_slope_30d"][
+            "evidence_ref"
+        ]
+        == "L4.get_ndx_earnings_revision_metrics#value.slope_30d.value"
+    )
+
+
 def test_build_state_ledger_entry_is_deterministic_and_bounded(tmp_path: Path):
     run_dir = _write_run_dir(tmp_path)
     entry = build_state_ledger_entry(run_dir, official=True)

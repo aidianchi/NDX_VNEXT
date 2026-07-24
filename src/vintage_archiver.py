@@ -31,6 +31,22 @@ USAGE
 Writes output/vintage_archive/<YYYYMMDD>/eps_consensus.json (UTC date by
 default). Idempotent: rerunning on the same UTC day overwrites that day's
 file rather than accumulating duplicates.
+
+SCHEMA_VERSION 2 (2026-07-23)
+------------------------------
+The collection universe was expanded from the top-15 QQQ weights to ALL
+valid equity holdings reported by the Invesco QQQ holdings API (108 raw
+rows as of 2026-07-22; ~103 are real equities after filtering out
+cash/derivative/receivable lines — see `_classify_holding`). `--top-n` is
+now an optional cap (default: no cap, archive everything); the per_ticker
+record shape is unchanged, so downstream readers keyed by ticker (e.g.
+src/expectation_ledger.py) need no changes. New additive fields:
+`universe.fallback_used`, `universe.total_holdings_selected`,
+`universe.filtered_out` / `filtered_out_count`, `universe.weight_pct_sum`,
+and a top-level `collection_summary` block listing failed tickers / missing
+fields for the day. yfinance fetches now retry transient whole-ticker
+failures (see `_fetch_yfinance_estimates(attempts=...)`); a single bad
+ticker no longer aborts the run.
 """
 
 from __future__ import annotations
@@ -70,56 +86,46 @@ except ImportError:  # pragma: no cover
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("vintage_archiver")
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_ARCHIVE_ROOT = os.path.join(BASE_DIR, "output", "vintage_archive")
 
 ISOLATION_NOTICE = (
-    "isolated observation data; NOT promoted to a formal data source; "
-    "MUST NOT be used as evidence_ref; MUST NOT enter the L1-L5 evidence chain"
+    "Promoted (2026-07-24, T15) as point-in-time material for NDX "
+    "earnings-revision metrics; all other uses remain isolated observation "
+    "data, NOT evidence_ref, and MUST NOT enter other L1-L5 evidence chains"
 )
 
-# Official Invesco QQQ holdings API — same public endpoint already used by
-# src/tools_L3.py's get_qqq_top10_concentration(). Re-implemented standalone
-# here on purpose so this archiver has zero import dependency on the vNext
-# pipeline (see BOUNDARY above).
-INVESCO_QQQ_HOLDINGS_URL = (
-    "https://dng-api.invesco.com/cache/v1/accounts/en_US/shareclasses/QQQ/"
-    "holdings/fund?idType=ticker&interval=monthly&productType=ETF"
-)
-INVESCO_QQQ_HOLDINGS_PAGE = "https://www.invesco.com/qqq-etf/en/about.html#top-10-holdings"
+try:
+    from .qqq_holdings import (
+        EQUITY_SECURITY_TYPE_MARKERS,
+        INVESCO_QQQ_HOLDINGS_PAGE,
+        INVESCO_QQQ_HOLDINGS_URL,
+        STATIC_FULL_FALLBACK,
+        STATIC_FULL_FALLBACK_DATED,
+        _classify_holding,
+        _fetch_qqq_top_holdings,
+    )
+except ImportError:
+    from qqq_holdings import (
+        EQUITY_SECURITY_TYPE_MARKERS,
+        INVESCO_QQQ_HOLDINGS_PAGE,
+        INVESCO_QQQ_HOLDINGS_URL,
+        STATIC_FULL_FALLBACK,
+        STATIC_FULL_FALLBACK_DATED,
+        _classify_holding,
+        _fetch_qqq_top_holdings,
+    )
 
-# Static fallback used only if the live Invesco holdings fetch fails. Sourced
-# from a live pull of INVESCO_QQQ_HOLDINGS_URL on 2026-07-12 (holdings
-# effective date reported as 2026-07-10). Update this list if the script has
-# been failing over to it for a while — it will go stale.
-STATIC_TOP15_FALLBACK = [
-    {"rank": 1, "ticker": "NVDA", "issuer_name": "NVIDIA Corp", "weight_pct": 8.015779},
-    {"rank": 2, "ticker": "AAPL", "issuer_name": "Apple Inc", "weight_pct": 7.271526},
-    {"rank": 3, "ticker": "MU", "issuer_name": "Micron Technology Inc", "weight_pct": 4.787834},
-    {"rank": 4, "ticker": "MSFT", "issuer_name": "Microsoft Corp", "weight_pct": 4.491608},
-    {"rank": 5, "ticker": "AMZN", "issuer_name": "Amazon.com Inc", "weight_pct": 4.143754},
-    {"rank": 6, "ticker": "AMD", "issuer_name": "Advanced Micro Devices Inc", "weight_pct": 3.943158},
-    {"rank": 7, "ticker": "GOOGL", "issuer_name": "Alphabet Inc Class A", "weight_pct": 3.266173},
-    {"rank": 8, "ticker": "TSLA", "issuer_name": "Tesla Inc", "weight_pct": 3.198246},
-    {"rank": 9, "ticker": "META", "issuer_name": "Meta Platforms Inc", "weight_pct": 3.111561},
-    {"rank": 10, "ticker": "GOOG", "issuer_name": "Alphabet Inc Class C", "weight_pct": 3.041380},
-    {"rank": 11, "ticker": "AVGO", "issuer_name": "Broadcom Inc", "weight_pct": 2.977513},
-    {"rank": 12, "ticker": "WMT", "issuer_name": "Walmart Inc", "weight_pct": 2.408404},
-    {"rank": 13, "ticker": "INTC", "issuer_name": "Intel Corp", "weight_pct": 2.392936},
-    {"rank": 14, "ticker": "CSCO", "issuer_name": "Cisco Systems Inc", "weight_pct": 2.079934},
-    {"rank": 15, "ticker": "AMAT", "issuer_name": "Applied Materials Inc", "weight_pct": 2.073488},
-]
-STATIC_TOP15_FALLBACK_DATED = "2026-07-12 (holdings effective 2026-07-10)"
 
 README_TEXT = """# vintage_archive — isolated EPS-consensus observation store
 
 ## What this is
 
 A daily raw snapshot of "current consensus" earnings/revenue estimates for
-the top-weight NDX/QQQ constituents, pulled from yfinance
-(`Ticker.eps_trend` / `eps_revisions` / `earnings_estimate` /
+ALL valid equity holdings of NDX/QQQ (not just the top weights), pulled from
+yfinance (`Ticker.eps_trend` / `eps_revisions` / `earnings_estimate` /
 `revenue_estimate`) and, when available, FMP's `analyst-estimates` endpoint.
 
 Produced by `src/vintage_archiver.py`.
@@ -132,14 +138,34 @@ history. Snapshotting today's consensus every day is a zero-cost way to
 build our own point-in-time vintage series going forward — but only if we
 start now, since a snapshot taken today can never be reconstructed later.
 
+## schema_version 2 (2026-07-23) — full-constituent expansion
+
+The collection universe was expanded from the top-15 QQQ weights to ALL
+valid equity holdings reported by the Invesco QQQ holdings API (103 equity
+rows out of 108 raw holdings as of 2026-07-22; the other 5 rows are
+cash/currency/futures/collateral lines, filtered out and recorded in
+`universe.filtered_out`). `per_ticker` keeps the same per-ticker shape as
+schema_version 1 — there are just more tickers in it — so any reader keyed
+by ticker (e.g. `src/expectation_ledger.py`) needs no changes. New fields
+added on top of the v1 shape:
+  - `universe.fallback_used` (bool), `universe.total_holdings_selected`,
+    `universe.filtered_out` / `filtered_out_count`, `universe.weight_pct_sum`
+    (sum of archived weight_pct — a coverage check).
+  - top-level `collection_summary`: per-day counts of yfinance ok/empty/error
+    tickers, the failed-ticker list, and a missing-field list per ticker.
+A static fallback (`STATIC_FULL_FALLBACK`, ~103 tickers) is still used if the
+live Invesco holdings fetch fails; `universe.fallback_reason` and
+`universe.fallback_dated` record why and how stale it is.
+
 ## Boundary — isolated observation data, not a data source
 
-This archive is **isolated observation data**. It is **NOT** promoted to a
-formal data source. It **MUST NOT** be used as an `evidence_ref`, and it
-**MUST NOT** enter the L1-L5 evidence chain. No `tools_*.py` module may
-import or reference it. Promotion to a real data source requires a separate,
-explicit decision (see CLAUDE.md 常驻边界 and
-investigation_reports/20260711_first_principles/WORK_ORDERS.md, queue item 4).
+This archive is **isolated observation data** with exactly one scoped
+promotion (see "Scoped promotion for T15" below). Outside that scope it is
+**NOT** a formal data source: it **MUST NOT** be used as a general-purpose
+`evidence_ref` and **MUST NOT** enter other L1-L5 evidence chains. Any
+further promotion requires a separate, explicit decision (see CLAUDE.md
+常驻边界 and investigation_reports/20260723_l4_earnings_audit/WORK_ORDERS.md
+E3/E5).
 
 ## Layout
 
@@ -156,6 +182,17 @@ Run once per trading day after US market close, e.g. via crontab:
 
 (21:30 local is a placeholder — pick a time after both US close and FMP/Yahoo
 data refresh in your timezone. Not installed automatically by this script.)
+
+## Scoped promotion for T15 (2026-07-24)
+
+The daily snapshots are promoted only as point-in-time material for the NDX
+earnings-revision metrics (`NDX_EARNINGS_REVISION_METRICS`). Within that
+family, a usable self-archive snapshot within ±2 calendar days of a 30/90-day
+target anchor takes priority; supplier-reported lookbacks may only fill
+uncovered ticker-windows and must retain their `supplier_lookback` label and
+window-level validation status. All other uses remain isolated observation
+data: the archive is not a general-purpose `evidence_ref` and must not enter
+other L1-L5 evidence chains.
 """
 
 
@@ -197,88 +234,17 @@ def _df_to_records(df: Any, index_name: str = "period") -> List[Dict[str, Any]]:
     return records
 
 
-def _fetch_qqq_top_holdings(top_n: int = 15, timeout: int = 15) -> Dict[str, Any]:
-    """Fetch official Invesco QQQ holdings and return the top-N by weight.
+def _fetch_yfinance_estimates(ticker: str, attempts: int = 2, pause_seconds: float = 1.5) -> Dict[str, Any]:
+    """Fetch eps_trend / eps_revisions / earnings_estimate / revenue_estimate.
 
-    Falls back to STATIC_TOP15_FALLBACK (truncated/padded to top_n) if the
-    live fetch fails for any reason. Always returns a dict describing which
-    path was taken.
+    Retries the whole ticker (up to `attempts` times, with linear backoff)
+    only when EVERY field errors out — that pattern indicates a transient
+    network/rate-limit failure, not a ticker that legitimately lacks analyst
+    coverage (which yfinance reports as empty-but-not-error and is not worth
+    retrying). A single ticker's exhausted retries never raises — it is
+    recorded as status="error" so the rest of the day's tickers still get
+    fetched.
     """
-    try:
-        response = requests.get(
-            INVESCO_QQQ_HOLDINGS_URL,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-                ),
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Origin": "https://www.invesco.com",
-                "Referer": "https://www.invesco.com/qqq-etf/en/about.html",
-            },
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        data = response.json()
-        holdings_raw = data.get("holdings") if isinstance(data, dict) else None
-        if not isinstance(holdings_raw, list) or not holdings_raw:
-            raise ValueError("Invesco response missing holdings list")
-
-        normalized = []
-        for row in holdings_raw:
-            ticker = str(row.get("ticker") or "").strip().upper()
-            try:
-                weight_pct = float(row.get("percentageOfTotalNetAssets"))
-            except (TypeError, ValueError):
-                continue
-            if not ticker or weight_pct <= 0:
-                continue
-            normalized.append(
-                {
-                    "ticker": ticker,
-                    "issuer_name": row.get("issuerName"),
-                    "weight_pct": round(weight_pct, 6),
-                    "security_type": row.get("securityTypeName"),
-                }
-            )
-        normalized.sort(key=lambda item: item["weight_pct"], reverse=True)
-        top = normalized[:top_n]
-        for rank, item in enumerate(top, start=1):
-            item["rank"] = rank
-
-        effective_date = data.get("effectiveBusinessDate") or data.get("effectiveDate")
-        return {
-            "status": "ok",
-            "method": "live_invesco_qqq_holdings_api",
-            "source_name": "Invesco QQQ official holdings API",
-            "source_url": INVESCO_QQQ_HOLDINGS_URL,
-            "source_authority": "official_provider",
-            "effective_date": str(effective_date)[:10] if effective_date else None,
-            "total_holdings": data.get("totalNumberOfHoldings"),
-            "fund_name": data.get("fundName") or data.get("shareClassName"),
-            "constituents": top,
-        }
-    except Exception as exc:
-        logger.warning("Live QQQ holdings fetch failed, using static fallback: %s", exc)
-        fallback = [dict(item) for item in STATIC_TOP15_FALLBACK[:top_n]]
-        return {
-            "status": "fallback_used",
-            "method": "static_fallback",
-            "source_name": "Invesco QQQ official holdings API (static fallback, not live)",
-            "source_url": INVESCO_QQQ_HOLDINGS_PAGE,
-            "source_authority": "official_provider",
-            "effective_date": None,
-            "fallback_dated": STATIC_TOP15_FALLBACK_DATED,
-            "fallback_reason": str(exc)[:200],
-            "total_holdings": None,
-            "fund_name": None,
-            "constituents": fallback,
-        }
-
-
-def _fetch_yfinance_estimates(ticker: str) -> Dict[str, Any]:
-    """Fetch eps_trend / eps_revisions / earnings_estimate / revenue_estimate."""
     result: Dict[str, Any] = {
         "source_name": "yfinance Ticker estimates modules",
         "source_authority": "third_party_unofficial",
@@ -291,28 +257,59 @@ def _fetch_yfinance_estimates(ticker: str) -> Dict[str, Any]:
         return result
 
     fields = ["eps_trend", "eps_revisions", "earnings_estimate", "revenue_estimate"]
-    try:
-        yf_ticker = yf.Ticker(ticker)
-    except Exception as exc:
+    attempts = max(1, attempts)
+    last_error: Optional[str] = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            yf_ticker = yf.Ticker(ticker)
+        except Exception as exc:
+            last_error = f"yf.Ticker init failed: {str(exc)[:200]}"
+            if attempt < attempts:
+                time.sleep(pause_seconds * attempt)
+                continue
+            result["status"] = "error"
+            result["reason"] = last_error
+            result["attempts"] = attempt
+            return result
+
+        field_results: Dict[str, Any] = {}
+        any_ok = False
+        any_error = False
+        for field in fields:
+            try:
+                df = getattr(yf_ticker, field)
+                records = _df_to_records(df)
+                if records:
+                    field_results[field] = {"status": "ok", "records": records}
+                    any_ok = True
+                else:
+                    field_results[field] = {"status": "empty", "records": []}
+            except Exception as exc:
+                field_results[field] = {"status": "error", "reason": str(exc)[:200], "records": []}
+                any_error = True
+
+        if any_ok or not any_error:
+            # Either got real data, or every field is a benign "empty" (no
+            # coverage) — not a transient failure, so don't retry.
+            result["fields"] = field_results
+            result["status"] = "ok" if any_ok else "empty"
+            result["attempts"] = attempt
+            return result
+
+        last_error = "; ".join(
+            sorted({v["reason"] for v in field_results.values() if v.get("reason")})
+        )[:200]
+        if attempt < attempts:
+            time.sleep(pause_seconds * attempt)
+            continue
+        result["fields"] = field_results
         result["status"] = "error"
-        result["reason"] = f"yf.Ticker init failed: {str(exc)[:200]}"
+        result["reason"] = last_error
+        result["attempts"] = attempt
         return result
 
-    any_ok = False
-    for field in fields:
-        try:
-            df = getattr(yf_ticker, field)
-            records = _df_to_records(df)
-            if records:
-                result["fields"][field] = {"status": "ok", "records": records}
-                any_ok = True
-            else:
-                result["fields"][field] = {"status": "empty", "records": []}
-        except Exception as exc:
-            result["fields"][field] = {"status": "error", "reason": str(exc)[:200], "records": []}
-
-    result["status"] = "ok" if any_ok else "empty"
-    return result
+    return result  # pragma: no cover - loop always returns above
 
 
 def _fetch_fmp_estimates(ticker: str, api_key: Optional[str], timeout: int = 15) -> Dict[str, Any]:
@@ -367,12 +364,19 @@ def _fetch_fmp_estimates(ticker: str, api_key: Optional[str], timeout: int = 15)
 
 def build_archive(
     tickers: Optional[List[str]] = None,
-    top_n: int = 15,
+    top_n: Optional[int] = None,
     use_fmp: bool = True,
     fmp_api_key: Optional[str] = None,
     request_delay_sec: float = 0.4,
+    yf_retry_attempts: int = 2,
+    yf_retry_pause_sec: float = 1.5,
 ) -> Dict[str, Any]:
-    """Build the full archive payload for the given (or auto-discovered) tickers."""
+    """Build the full archive payload for the given (or auto-discovered) tickers.
+
+    Default universe (top_n=None) is ALL valid equity holdings reported by
+    the Invesco QQQ holdings API — see _fetch_qqq_top_holdings. `top_n` is an
+    optional cap kept for quick manual/test runs.
+    """
     now = datetime.now(timezone.utc)
     holdings = None
     if tickers:
@@ -397,16 +401,54 @@ def build_archive(
         fmp_api_key = os.environ.get("FMP_API_KEY") or None
 
     per_ticker: Dict[str, Any] = {}
+    failed_tickers: List[str] = []
+    missing_fields_by_ticker: Dict[str, List[str]] = {}
     for idx, ticker in enumerate(ticker_list):
         entry: Dict[str, Any] = {}
-        entry["yfinance"] = _fetch_yfinance_estimates(ticker)
+        try:
+            entry["yfinance"] = _fetch_yfinance_estimates(
+                ticker, attempts=yf_retry_attempts, pause_seconds=yf_retry_pause_sec
+            )
+        except Exception as exc:  # belt-and-suspenders: one ticker must never abort the run
+            entry["yfinance"] = {
+                "source_name": "yfinance Ticker estimates modules",
+                "source_authority": "third_party_unofficial",
+                "collected_at_utc": _now_utc_iso(),
+                "status": "error",
+                "reason": f"unexpected exception: {str(exc)[:200]}",
+                "fields": {},
+            }
         if use_fmp:
-            entry["fmp"] = _fetch_fmp_estimates(ticker, fmp_api_key)
+            try:
+                entry["fmp"] = _fetch_fmp_estimates(ticker, fmp_api_key)
+            except Exception as exc:
+                entry["fmp"] = {"status": "error", "reason": f"unexpected exception: {str(exc)[:200]}"}
         else:
             entry["fmp"] = {"status": "skipped", "reason": "use_fmp=False"}
         per_ticker[ticker] = entry
+
+        yf_status = entry["yfinance"].get("status")
+        if yf_status == "error":
+            failed_tickers.append(ticker)
+        missing = [
+            field
+            for field, payload in entry["yfinance"].get("fields", {}).items()
+            if not isinstance(payload, dict) or payload.get("status") != "ok"
+        ]
+        if missing:
+            missing_fields_by_ticker[ticker] = missing
+
         if idx < len(ticker_list) - 1 and request_delay_sec > 0:
             time.sleep(request_delay_sec)
+
+    collection_summary = {
+        "ticker_count": len(ticker_list),
+        "yfinance_ok_count": sum(1 for e in per_ticker.values() if e["yfinance"].get("status") == "ok"),
+        "yfinance_empty_count": sum(1 for e in per_ticker.values() if e["yfinance"].get("status") == "empty"),
+        "yfinance_error_count": len(failed_tickers),
+        "yfinance_failed_tickers": failed_tickers,
+        "yfinance_missing_fields_by_ticker": missing_fields_by_ticker,
+    }
 
     archive_date = now.strftime("%Y%m%d")
     payload: Dict[str, Any] = {
@@ -417,6 +459,7 @@ def build_archive(
         "generator": "src/vintage_archiver.py",
         "universe": universe,
         "per_ticker": per_ticker,
+        "collection_summary": collection_summary,
     }
     return payload
 
@@ -445,12 +488,19 @@ def write_archive(payload: Dict[str, Any], archive_root: str = DEFAULT_ARCHIVE_R
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Snapshot today's EPS/revenue consensus for top NDX/QQQ weights.")
+    parser = argparse.ArgumentParser(description="Snapshot today's EPS/revenue consensus for all valid QQQ holdings.")
     parser.add_argument("--tickers", type=str, default=None, help="Comma-separated ticker override, e.g. NVDA,AAPL,MSFT")
-    parser.add_argument("--top-n", type=int, default=15, help="How many top-weight constituents to archive (default 15)")
+    parser.add_argument(
+        "--top-n",
+        type=int,
+        default=None,
+        help="Optional cap on how many top-weight constituents to archive (default: no cap, archive all valid equity holdings)",
+    )
     parser.add_argument("--skip-fmp", action="store_true", help="Skip FMP calls entirely (yfinance only)")
     parser.add_argument("--out-dir", type=str, default=DEFAULT_ARCHIVE_ROOT, help="Override archive root directory (mainly for tests)")
     parser.add_argument("--request-delay", type=float, default=0.4, help="Seconds to sleep between tickers")
+    parser.add_argument("--yf-retry-attempts", type=int, default=2, help="Max attempts per ticker for yfinance when every field fails")
+    parser.add_argument("--yf-retry-pause", type=float, default=1.5, help="Base seconds to back off between yfinance retry attempts")
     args = parser.parse_args(argv)
 
     tickers = [t.strip() for t in args.tickers.split(",") if t.strip()] if args.tickers else None
@@ -461,12 +511,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         top_n=args.top_n,
         use_fmp=not args.skip_fmp,
         request_delay_sec=args.request_delay,
+        yf_retry_attempts=args.yf_retry_attempts,
+        yf_retry_pause_sec=args.yf_retry_pause,
     )
     out_path = write_archive(payload, archive_root=args.out_dir)
     logger.info("Wrote %s", out_path)
 
-    ok_count = sum(1 for v in payload["per_ticker"].values() if v["yfinance"].get("status") == "ok")
-    logger.info("yfinance ok for %d/%d tickers; universe status=%s", ok_count, len(payload["per_ticker"]), payload["universe"]["status"])
+    summary = payload["collection_summary"]
+    logger.info(
+        "yfinance ok for %d/%d tickers (empty=%d, error=%d); universe status=%s",
+        summary["yfinance_ok_count"],
+        summary["ticker_count"],
+        summary["yfinance_empty_count"],
+        summary["yfinance_error_count"],
+        payload["universe"]["status"],
+    )
     return 0
 
 

@@ -4592,6 +4592,40 @@ def _current_value_matches_history_tail(
     return abs(current_value - history_value) / abs(history_value) * 100 <= tolerance_pct
 
 
+def _history_of_market_coverage_sanity(current: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate source-reported percentage fields before granting decision use.
+
+    HoM's public payload can update successfully while reporting constituent
+    coverage above 100%.  That may reflect an undocumented weight convention,
+    but until it is explained it is a source-internal contradiction, not valid
+    evidence of complete coverage.
+    """
+    raw = {
+        "trailingCoverage": current.get("trailingCoverage"),
+        "forwardCoverage": current.get("forwardCoverage"),
+        "totalWeight": current.get("totalWeight"),
+    }
+    anomalies: List[Dict[str, Any]] = []
+    reported = 0
+    for field, value in raw.items():
+        if value is None:
+            continue
+        reported += 1
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            anomalies.append({"field": field, "value": value, "reason": "not_numeric"})
+            continue
+        if not np.isfinite(numeric) or numeric < 0 or numeric > 100:
+            anomalies.append({"field": field, "value": value, "reason": "outside_0_100_pct"})
+    return {
+        "status": "invalid" if anomalies else ("valid" if reported else "not_reported"),
+        "reported_fields": raw,
+        "anomalies": anomalies,
+        "decision_rule": "any reported percentage outside [0,100] forces all HoM fields to audit_only",
+    }
+
+
 def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
     if end_date:
         try:
@@ -4710,6 +4744,24 @@ def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
     )
     trailing_coverage = current.get("trailingCoverage") if not end_date else None
     forward_coverage = current.get("forwardCoverage") if not end_date else None
+    total_weight = current.get("totalWeight") if not end_date else None
+    coverage_sanity = (
+        _history_of_market_coverage_sanity(current)
+        if not end_date
+        else {
+            "status": "not_point_in_time_verified",
+            "reported_fields": {},
+            "anomalies": [],
+            "decision_rule": "live source coverage is not reused for historical dates",
+        }
+    )
+    # Decision use requires affirmative coverage evidence.  Historical calls
+    # fetch today's HoM history array, not a vintage archived at `end_date`, so
+    # `not_point_in_time_verified` must fail closed rather than treating the
+    # current API's retrospective series as facts visible at the time.
+    coverage_allows_decision = coverage_sanity["status"] == "valid"
+    trailing_decision_eligible = trailing_freshness.get("usage") != "audit_only" and coverage_allows_decision
+    forward_decision_eligible = forward_freshness.get("usage") != "audit_only" and coverage_allows_decision
     api_note = _caveat_history_of_market_text(data.get("note", ""))
     source_info = data.get("source", {})
     source_method = _caveat_history_of_market_text(source_info.get("method", "History of Market")) if isinstance(source_info, dict) else "History of Market"
@@ -4721,6 +4773,8 @@ def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
             "forward_pe": round(forward, 2) if forward_ok else None,
             "trailing_coverage_pct": trailing_coverage,
             "forward_coverage_pct": forward_coverage,
+            "total_weight_pct": total_weight,
+            "coverage_sanity": coverage_sanity,
             "trailing_percentile": trailing_percentile,
             "forward_percentile": forward_percentile,
             "trailing_percentile_status": trailing_percentile_context["status"],
@@ -4733,14 +4787,14 @@ def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
             "forward_data_date": forward_data_date,
             "trailing_freshness_status": trailing_freshness.get("freshness_status"),
             "forward_freshness_status": forward_freshness.get("freshness_status"),
-            "trailing_decision_eligible": trailing_freshness.get("usage") != "audit_only",
-            "forward_decision_eligible": forward_freshness.get("usage") != "audit_only",
+            "trailing_decision_eligible": trailing_decision_eligible,
+            "forward_decision_eligible": forward_decision_eligible,
             "api_updated_at": updated,
         },
         "unit": "ratio",
         "date": forward_data_date or trailing_data_date or updated,
         "availability": "available" if (
-            trailing_freshness.get("usage") != "audit_only" or forward_freshness.get("usage") != "audit_only"
+            trailing_decision_eligible or forward_decision_eligible
         ) else "stale",
         "source_tier": SOURCE_TIER_THIRD_PARTY,
         "source_name": HISTORY_OF_MARKET_SOURCE_LABEL,
@@ -4761,6 +4815,8 @@ def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
                 "forward_data_date": forward_data_date,
                 "trailing_freshness_status": trailing_freshness.get("freshness_status"),
                 "forward_freshness_status": forward_freshness.get("freshness_status"),
+                "total_weight_pct": total_weight,
+                "coverage_sanity": coverage_sanity,
             },
             fallback_chain=[SOURCE_TIER_THIRD_PARTY, SOURCE_TIER_COMPONENT_MODEL, SOURCE_TIER_UNAVAILABLE],
         ),
@@ -4768,6 +4824,7 @@ def get_ndx_valuation_history_of_market(end_date: str = None) -> Dict[str, Any]:
             f"Source: {source_method}. "
             f"Trailing history starts {data.get('historyStarts', {}).get('trailing', 'unknown')}; "
             f"forward history starts {data.get('historyStarts', {}).get('forward', 'unknown')}. "
+            f"Coverage sanity={coverage_sanity.get('status')}; invalid source-reported percentages force audit_only. "
             f"{api_note}"
         ),
     }
@@ -4794,7 +4851,18 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
     hom_trailing_percentile = hom_value.get("trailing_percentile")
     hom_forward_eligible = bool(hom_value.get("forward_decision_eligible"))
     hom_trailing_eligible = bool(hom_value.get("trailing_decision_eligible"))
+    # `hom_available` stays presence-based: it selects whether HoM is
+    # structurally reported as the source at all (labeled, audited, with
+    # per-field values already correctly nulled out below when ineligible).
+    # This also covers backtests, where coverage_sanity is always
+    # "not_point_in_time_verified" (time-point discipline) so eligibility is
+    # always False by design — that must not silently drop the HoM branch's
+    # Bloomberg BEst caveat labeling and fall through further than intended.
+    # A separate decision-eligibility signal is what the reporting layer
+    # actually needs (see `hom_decision_eligible` / the `availability` field
+    # added to the simplified-path payload below).
     hom_available = hom_forward_pe is not None or hom_trailing_pe is not None
+    hom_decision_eligible = hom_forward_eligible or hom_trailing_eligible
 
     # Fall back to component model only when explicitly enabled
     component_enabled = _component_model_enabled()
@@ -5080,12 +5148,18 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
                 "Coverage": {
                     "stocks_analyzed": 100,
                     "total_stocks": 100,
-                    "market_cap_coverage": "100.0%",
+                    "market_cap_coverage": (
+                        f"{hom_value.get('total_weight_pct')}% (source claim)"
+                        if hom_value.get("coverage_sanity", {}).get("status") == "valid"
+                        and hom_value.get("total_weight_pct") is not None
+                        else "unverified: source coverage is missing or failed the 0-100% sanity gate"
+                    ),
                     "trailing_source": f"cap-weighted {hom_value.get('trailing_coverage_pct', 'N/A')}% of NDX mcap",
                     "forward_source": (
                         f"{HISTORY_OF_MARKET_BEST_CAVEAT}; "
                         f"{hom_value.get('forward_coverage_pct', 'N/A')}% of NDX mcap"
                     ),
+                    "coverage_sanity": hom_value.get("coverage_sanity", {}),
                 },
                 "ThirdPartyChecks": third_party,
                 "HistoryOfMarket": hom_value,
@@ -5093,6 +5167,14 @@ def get_ndx_pe_and_earnings_yield(end_date: str = None) -> Dict[str, Any]:
             },
             "unit": "ratio/percent",
             "date": hom_value.get("trailing_data_date") or hom_value.get("forward_data_date") or date_str,
+            # E1 P0 fix: the simplified path previously had no top-level
+            # `availability`, so a caller checking this field generically (the
+            # way every other L4 source is checked) could not tell "HoM
+            # collection succeeded but nothing is decision-eligible" apart
+            # from "HoM is genuinely available" — collection success was
+            # silently standing in for decision usability. This mirrors
+            # get_ndx_valuation_history_of_market's own top-level field.
+            "availability": "available" if hom_decision_eligible else "stale",
             "source_tier": SOURCE_TIER_THIRD_PARTY,
             "source_name": HISTORY_OF_MARKET_SOURCE_LABEL,
             "data_quality": hom.get("data_quality", {}),
@@ -6548,6 +6630,1576 @@ def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:
         "data_quality": data_quality,
         "notes": "该指标只衡量当前盈利/现金流收益率相对10年期美债的简式差距，未包含未来增长、回购、现金流路径或终值假设，不能当作 Damodaran 式 implied ERP。"
     }
+
+try:
+    from .qqq_holdings import _fetch_qqq_top_holdings
+except ImportError:
+    from qqq_holdings import _fetch_qqq_top_holdings
+
+
+def get_ndx_forward_pe_full_constituent(end_date: str = None) -> Dict[str, Any]:
+    """Build live NDX/QQQ NTM forward PE from official weights and FY1/FY2 EPS.
+
+    This is deliberately live-only. yfinance exposes the latest consensus,
+    not a reconstructable point-in-time historical consensus.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from datetime import date as date_type
+
+    source_tier = SOURCE_TIER_MIXED_OFFICIAL_AND_THIRD_PARTY
+    source_name = "Invesco QQQ official holdings + yfinance analyst consensus"
+    formula = (
+        "NTM EPS = w*FY1 EPS + (1-w)*FY2 EPS, "
+        "w=clip(days to FY1 fiscal year end/365,0,1); "
+        "index forward PE = 1/sum(normalized included official weight*NTM EPS/current price); "
+        "non-positive NTM EPS constituents remain in the sum"
+    )
+    collected_at = _utc_timestamp()
+    today = datetime.now(timezone.utc).date()
+
+    def unavailable(reason: str, notes: str) -> Dict[str, Any]:
+        return {
+            "name": "NDX Full-Constituent NTM Forward P/E",
+            "series_id": "NDX_FORWARD_PE_FULL_CONSTITUENT",
+            "value": None,
+            "forward_earnings_yield": None,
+            "unit": "ratio",
+            "availability": "unavailable",
+            "unavailable_reason": reason,
+            "source_tier": (
+                SOURCE_TIER_UNAVAILABLE
+                if reason != "no_point_in_time_consensus_for_backtest"
+                else source_tier
+            ),
+            "source_name": source_name,
+            "collected_at": collected_at,
+            "effective_date": None,
+            "fallback_used": None,
+            "weight_coverage_pct": 0.0,
+            "excluded": [],
+            "approx_equal_weight_pct": 0.0,
+            "components": {
+                "top_10": [],
+                "remaining": {
+                    "component_count": 0,
+                    "included_count": 0,
+                    "excluded_count": 0,
+                    "official_weight_pct": 0.0,
+                },
+            },
+            "notes": notes,
+            "data_quality": _quality_block(
+                source_tier=SOURCE_TIER_UNAVAILABLE,
+                data_date=today.isoformat(),
+                update_frequency="live only",
+                formula=formula,
+                coverage={"included_weight_pct": 0.0},
+                anomalies=[reason],
+                fallback_chain=[source_tier, SOURCE_TIER_UNAVAILABLE],
+            ),
+        }
+
+    if end_date:
+        try:
+            requested_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return unavailable("invalid_end_date", f"Invalid end_date={end_date!r}; expected YYYY-MM-DD.")
+        if requested_date != today:
+            return unavailable(
+                "no_point_in_time_consensus_for_backtest",
+                "Historical reconstruction is unavailable: current yfinance consensus must not be presented as facts visible on another date.",
+            )
+
+    try:
+        holdings = _fetch_qqq_top_holdings(top_n=None)
+    except Exception as exc:
+        return unavailable(
+            "holdings_fetch_failed",
+            f"Official QQQ holdings could not be loaded and no fallback payload was returned: {str(exc)[:200]}",
+        )
+
+    constituents = (
+        holdings.get("constituents", []) if isinstance(holdings, dict) else []
+    )
+    constituents = [
+        item
+        for item in constituents
+        if isinstance(item, dict)
+        and _safe_float(item.get("weight_pct")) is not None
+        and _safe_float(item.get("weight_pct")) > 0
+        and str(item.get("ticker") or "").strip()
+    ]
+    constituents.sort(
+        key=lambda item: _safe_float(item.get("weight_pct")) or 0.0, reverse=True
+    )
+    total_valid_weight = sum(
+        _safe_float(item.get("weight_pct")) or 0.0 for item in constituents
+    )
+    if not constituents or total_valid_weight <= 0:
+        return unavailable(
+            "no_valid_holdings",
+            "The holdings payload contained no positive-weight equity constituents.",
+        )
+
+    def parse_date(value: Any) -> Optional[date_type]:
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date_type):
+            return value
+        if isinstance(value, (int, float)) and np.isfinite(value):
+            try:
+                return datetime.fromtimestamp(float(value), tz=timezone.utc).date()
+            except (OverflowError, OSError, ValueError):
+                return None
+        try:
+            parsed = pd.to_datetime(value, errors="coerce")
+            if pd.isna(parsed):
+                return None
+            return parsed.date()
+        except Exception:
+            return None
+
+    def estimate_value(table: Any, period: str) -> Optional[float]:
+        if table is None:
+            return None
+        raw = None
+        try:
+            if isinstance(table, pd.DataFrame):
+                if period in table.index and "avg" in table.columns:
+                    raw = table.loc[period, "avg"]
+            elif isinstance(table, dict):
+                row = table.get(period)
+                raw = row.get("avg") if isinstance(row, dict) else row
+        except Exception:
+            raw = None
+        value = _safe_float(raw)
+        return value if value is not None and np.isfinite(value) else None
+
+    def fetch_component(holding: Dict[str, Any]) -> Dict[str, Any]:
+        ticker = str(holding.get("ticker") or "").strip().upper()
+        weight_pct = _safe_float(holding.get("weight_pct")) or 0.0
+        base = {
+            "rank": holding.get("rank"),
+            "ticker": ticker,
+            "issuer_name": holding.get("issuer_name"),
+            "weight_pct": round(weight_pct, 6),
+        }
+        fetch_errors: List[str] = []
+        try:
+            yf_ticker = yf.Ticker(ticker)
+        except Exception as exc:
+            return {
+                **base,
+                "included": False,
+                "reason": "fetch_failed",
+                "fetch_error": f"ticker_init:{str(exc)[:160]}",
+            }
+
+        try:
+            estimates = yf_ticker.earnings_estimate
+        except Exception as exc:
+            return {
+                **base,
+                "included": False,
+                "reason": "fetch_failed",
+                "fetch_error": f"earnings_estimate:{str(exc)[:160]}",
+            }
+        fy1_eps = estimate_value(estimates, "0y")
+        fy2_eps = estimate_value(estimates, "+1y")
+        if fy1_eps is None or fy2_eps is None:
+            return {**base, "included": False, "reason": "no_estimate"}
+
+        info: Dict[str, Any] = {}
+        try:
+            raw_info = yf_ticker.info
+            if isinstance(raw_info, dict):
+                info = raw_info
+        except Exception as exc:
+            fetch_errors.append(f"info:{str(exc)[:120]}")
+
+        price = None
+        for key in ("currentPrice", "regularMarketPrice", "previousClose"):
+            candidate = _safe_float(info.get(key))
+            if candidate is not None and np.isfinite(candidate) and candidate > 0:
+                price = candidate
+                break
+        if price is None:
+            try:
+                fast_info = yf_ticker.fast_info
+                for key in ("last_price", "regular_market_price", "previous_close"):
+                    try:
+                        candidate = _safe_float(fast_info.get(key))
+                    except Exception:
+                        candidate = None
+                    if candidate is not None and np.isfinite(candidate) and candidate > 0:
+                        price = candidate
+                        break
+            except Exception as exc:
+                fetch_errors.append(f"fast_info:{str(exc)[:120]}")
+        if price is None:
+            result = {**base, "included": False, "reason": "no_price"}
+            if fetch_errors:
+                result["fetch_error"] = "; ".join(fetch_errors)
+            return result
+
+        fiscal_year_end = parse_date(info.get("nextFiscalYearEnd"))
+        if fiscal_year_end is None:
+            try:
+                calendar = yf_ticker.calendar
+                if isinstance(calendar, dict):
+                    for key in (
+                        "Next Fiscal Year End",
+                        "Fiscal Year End",
+                        "Fiscal Year Ends",
+                    ):
+                        fiscal_year_end = parse_date(calendar.get(key))
+                        if fiscal_year_end is not None:
+                            break
+            except Exception:
+                fiscal_year_end = None
+
+        if fiscal_year_end is None:
+            fy1_weight = 0.5
+            ntm_method = "approx_equal_weight"
+        else:
+            fy1_weight = min(
+                1.0, max(0.0, (fiscal_year_end - today).days / 365.0)
+            )
+            ntm_method = "fiscal_calendar"
+        ntm_eps = fy1_weight * fy1_eps + (1.0 - fy1_weight) * fy2_eps
+        earnings_yield = ntm_eps / price
+        return {
+            **base,
+            "included": True,
+            "fy1_eps": round(fy1_eps, 6),
+            "fy2_eps": round(fy2_eps, 6),
+            "fiscal_year_end": (
+                fiscal_year_end.isoformat() if fiscal_year_end is not None else None
+            ),
+            "ntm_method": ntm_method,
+            "fy1_weight": round(fy1_weight, 8),
+            "ntm_eps": round(ntm_eps, 6),
+            "price": round(price, 6),
+            "earnings_yield": round(earnings_yield, 10),
+        }
+
+    records_by_ticker: Dict[str, Dict[str, Any]] = {}
+    worker_count = min(12, max(1, len(constituents)))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(fetch_component, holding): holding
+            for holding in constituents
+        }
+        for future in as_completed(futures):
+            holding = futures[future]
+            ticker = str(holding.get("ticker") or "").strip().upper()
+            try:
+                records_by_ticker[ticker] = future.result()
+            except Exception as exc:
+                records_by_ticker[ticker] = {
+                    "rank": holding.get("rank"),
+                    "ticker": ticker,
+                    "issuer_name": holding.get("issuer_name"),
+                    "weight_pct": round(
+                        _safe_float(holding.get("weight_pct")) or 0.0, 6
+                    ),
+                    "included": False,
+                    "reason": "fetch_failed",
+                    "fetch_error": str(exc)[:160],
+                }
+
+    component_records = [
+        records_by_ticker[str(item.get("ticker") or "").strip().upper()]
+        for item in constituents
+    ]
+    included = [item for item in component_records if item.get("included")]
+    excluded = [
+        {"ticker": item["ticker"], "reason": item.get("reason", "fetch_failed")}
+        for item in component_records
+        if not item.get("included")
+    ]
+    included_weight = sum(item["weight_pct"] for item in included)
+    weight_coverage_pct = (
+        100.0 * included_weight / total_valid_weight
+        if total_valid_weight > 0
+        else 0.0
+    )
+    approx_weight = sum(
+        item["weight_pct"]
+        for item in included
+        if item.get("ntm_method") == "approx_equal_weight"
+    )
+    approx_equal_weight_pct = (
+        100.0 * approx_weight / included_weight if included_weight > 0 else 0.0
+    )
+
+    if included_weight <= 0:
+        result = unavailable(
+            "no_usable_component_inputs",
+            "No constituent had both FY1/FY2 consensus EPS and a positive current price.",
+        )
+        result.update(
+            {
+                "effective_date": holdings.get("effective_date"),
+                "fallback_used": bool(holdings.get("fallback_used")),
+                "excluded": excluded,
+            }
+        )
+        return result
+
+    weighted_earnings_yield = 0.0
+    for item in included:
+        normalized_weight = item["weight_pct"] / included_weight
+        contribution = normalized_weight * item["earnings_yield"]
+        item["normalized_weight_pct"] = round(normalized_weight * 100.0, 8)
+        item["weighted_earnings_yield_contribution"] = round(contribution, 12)
+        weighted_earnings_yield += contribution
+    for item in component_records:
+        if not item.get("included"):
+            item["normalized_weight_pct"] = None
+            item["weighted_earnings_yield_contribution"] = None
+
+    fallback_used = bool(holdings.get("fallback_used"))
+    effective_date = holdings.get("effective_date")
+    if not effective_date and fallback_used:
+        match = re.search(
+            r"effective\s+(\d{4}-\d{2}-\d{2})",
+            str(holdings.get("fallback_dated") or ""),
+            flags=re.IGNORECASE,
+        )
+        effective_date = match.group(1) if match else None
+    holdings_date = parse_date(effective_date)
+    freshness_days = (
+        max(0, (today - holdings_date).days) if holdings_date is not None else None
+    )
+    coverage_sufficient = weight_coverage_pct >= 90.0
+    availability = (
+        "unavailable"
+        if not coverage_sufficient
+        else (
+            "stale"
+            if freshness_days is None or freshness_days > 10
+            else "available"
+        )
+    )
+
+    computed_value = (
+        round(1.0 / weighted_earnings_yield, 4)
+        if weighted_earnings_yield > 0
+        else None
+    )
+    value = computed_value if coverage_sufficient else None
+    published_forward_earnings_yield = (
+        round(weighted_earnings_yield, 10) if coverage_sufficient else None
+    )
+    non_positive_count = sum(
+        1 for item in included if item.get("ntm_eps", 0.0) <= 0
+    )
+    notes_parts = [
+        formula,
+        f"Included {len(included)}/{len(constituents)} constituents covering {weight_coverage_pct:.4f}% of valid official holding weight.",
+        f"Retained {non_positive_count} included constituents with NTM EPS <= 0 in the aggregate.",
+        f"Approximate 0.5/0.5 interpolation represents {approx_equal_weight_pct:.4f}% of included normalized weight.",
+        f"Holdings effective date={effective_date or 'unknown'}; freshness={freshness_days if freshness_days is not None else 'unknown'} days; fallback_used={fallback_used}.",
+    ]
+    if not coverage_sufficient:
+        notes_parts.append(
+            "Constituent weight coverage is below the frozen 90% publication gate; "
+            "forward PE and forward earnings yield are null while coverage and "
+            "component details remain available for audit."
+        )
+    elif weighted_earnings_yield <= 0:
+        notes_parts.append(
+            "Weighted forward earnings yield is non-positive, so forward PE is undefined and value is null."
+        )
+    elif availability == "stale":
+        notes_parts.append(
+            "Holdings are older than the 10-calendar-day freshness gate (or their effective date is unavailable); the computed value is retained but marked stale."
+        )
+
+    remaining = component_records[10:]
+    remaining_included = [item for item in remaining if item.get("included")]
+    remaining_weighted_contribution = sum(
+        item.get("weighted_earnings_yield_contribution") or 0.0
+        for item in remaining_included
+    )
+    components = {
+        "top_10": component_records[:10],
+        "remaining": {
+            "component_count": len(remaining),
+            "included_count": len(remaining_included),
+            "excluded_count": len(remaining) - len(remaining_included),
+            "official_weight_pct": round(
+                sum(item["weight_pct"] for item in remaining), 6
+            ),
+            "included_weight_pct": round(
+                sum(item["weight_pct"] for item in remaining_included), 6
+            ),
+            "weighted_earnings_yield_contribution": round(
+                remaining_weighted_contribution, 12
+            ),
+            "non_positive_ntm_eps_count": sum(
+                1
+                for item in remaining_included
+                if item.get("ntm_eps", 0.0) <= 0
+            ),
+        },
+    }
+    anomalies = []
+    if fallback_used:
+        anomalies.append(f"holdings_fallback_used:{holdings.get('fallback_reason')}")
+    if not coverage_sufficient:
+        anomalies.append(
+            f"insufficient_constituent_coverage:{weight_coverage_pct:.6f}%<90%"
+        )
+    if availability == "stale":
+        anomalies.append(
+            f"holdings_stale:{freshness_days if freshness_days is not None else 'unknown'}d"
+        )
+    if excluded:
+        anomalies.append(f"excluded_components:{len(excluded)}")
+    if weighted_earnings_yield <= 0:
+        anomalies.append("non_positive_weighted_forward_earnings_yield")
+
+    result = {
+        "name": "NDX Full-Constituent NTM Forward P/E",
+        "series_id": "NDX_FORWARD_PE_FULL_CONSTITUENT",
+        "value": value,
+        "forward_earnings_yield": published_forward_earnings_yield,
+        "unit": "ratio",
+        "availability": availability,
+        "source_tier": source_tier,
+        "source_name": source_name,
+        "collected_at": collected_at,
+        "effective_date": effective_date,
+        "holdings_freshness_days": freshness_days,
+        "holdings_freshness_threshold_days": 10,
+        "fallback_used": fallback_used,
+        "fallback_reason": holdings.get("fallback_reason") if fallback_used else None,
+        "weight_coverage_pct": round(weight_coverage_pct, 6),
+        "excluded": excluded,
+        "approx_equal_weight_pct": round(approx_equal_weight_pct, 6),
+        "components": components,
+        "data_quality": _quality_block(
+            source_tier=source_tier,
+            data_date=effective_date or today.isoformat(),
+            update_frequency="live; official holdings daily/monthly endpoint plus latest yfinance consensus",
+            formula=formula,
+            coverage={
+                "total_valid_holdings": len(constituents),
+                "included_holdings": len(included),
+                "total_valid_weight_pct": round(total_valid_weight, 6),
+                "included_weight_pct": round(included_weight, 6),
+                "weight_coverage_pct": round(weight_coverage_pct, 6),
+                "approx_equal_weight_pct_of_included": round(
+                    approx_equal_weight_pct, 6
+                ),
+                "excluded": excluded,
+            },
+            anomalies=anomalies,
+            fallback_chain=[source_tier, SOURCE_TIER_UNAVAILABLE],
+        ),
+        "notes": " ".join(notes_parts),
+    }
+    if not coverage_sufficient:
+        result["unavailable_reason"] = "insufficient_constituent_coverage"
+    return result
+
+
+# Ratio revisions lose meaning when the prior-consensus base is near zero or
+# either EPS leg crosses zero inside the window (including an exact -100%
+# revision whose current value is zero). Such rows carry no revision
+# information and are excluded as invalid. Large revisions on reliable,
+# same-sign bases remain valid; surviving outliers are winsorized so one name
+# cannot dominate the weighted mean.
+_REVISION_RATIO_BASE_FLOOR = 0.25  # USD EPS; below this a ratio base is unreliable
+_REVISION_SLOPE_WINSOR_LIMIT = 0.50  # per-constituent slope clamp in the aggregate
+
+
+def get_ndx_earnings_revision_metrics(end_date: str = None) -> Dict[str, Any]:
+    """Build live NDX earnings-revision dynamics from official QQQ weights.
+
+    The 30/90-day slope is calendar-drift neutral: FY1 and FY2 are revised
+    separately, then mixed with today's fiscal-calendar weight.  A
+    point-in-time self archive is preferred ticker-by-ticker; Yahoo's
+    supplier-reported lookback columns only fill archive gaps.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from datetime import date as date_type, timedelta
+
+    source_tier = SOURCE_TIER_MIXED_OFFICIAL_AND_THIRD_PARTY
+    source_name = (
+        "Invesco QQQ official holdings + point-in-time EPS vintage archive "
+        "+ yfinance analyst consensus"
+    )
+    collected_at = _utc_timestamp()
+    today = datetime.now(timezone.utc).date()
+    formula = (
+        "constituent slope = current_fiscal_weight*(FY1_now/FY1_then-1) + "
+        "(1-current_fiscal_weight)*(FY2_now/FY2_then-1); index metrics use "
+        "normalized effective official QQQ weights"
+    )
+
+    def coverage_block(
+        included_count: int,
+        included_weight: float,
+        total_count: int,
+        total_weight: float,
+        **extra: Any,
+    ) -> Dict[str, Any]:
+        result = {
+            "included_constituents": included_count,
+            "total_constituents": total_count,
+            "included_official_weight_pct": round(included_weight, 6),
+            "total_valid_official_weight_pct": round(total_weight, 6),
+            "weight_coverage_pct": round(
+                100.0 * included_weight / total_weight if total_weight > 0 else 0.0,
+                6,
+            ),
+        }
+        result.update(extra)
+        return result
+
+    def unavailable(reason: str, notes: str) -> Dict[str, Any]:
+        empty_coverage = coverage_block(0, 0.0, 0, 0.0)
+        return {
+            "name": "NDX Earnings Revision Metrics",
+            "series_id": "NDX_EARNINGS_REVISION_METRICS",
+            "value": None,
+            "unit": "mixed",
+            "availability": "unavailable",
+            "unavailable_reason": reason,
+            "source_tier": (
+                source_tier
+                if reason == "insufficient_point_in_time_archive_for_backtest"
+                else SOURCE_TIER_UNAVAILABLE
+            ),
+            "source_name": source_name,
+            "collected_at": collected_at,
+            "effective_date": None,
+            "flagged_weight_pct": {"30d": 0.0, "90d": 0.0},
+            "flagged": {"30d": [], "90d": []},
+            "window_effective_coverage_pct": {"30d": 0.0, "90d": 0.0},
+            "divergence": {
+                "7d": {"status": "not_comparable"},
+                "30d": {"status": "not_comparable"},
+                "90d": {"status": "not_comparable"},
+            },
+            "notes": notes,
+            "data_quality": _quality_block(
+                source_tier=SOURCE_TIER_UNAVAILABLE,
+                data_date=today.isoformat(),
+                update_frequency="live only; daily archive material",
+                formula=formula,
+                coverage=empty_coverage,
+                anomalies=[reason],
+                fallback_chain=[source_tier, SOURCE_TIER_UNAVAILABLE],
+            ),
+        }
+
+    if end_date:
+        try:
+            requested_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return unavailable(
+                "invalid_end_date",
+                f"Invalid end_date={end_date!r}; expected YYYY-MM-DD.",
+            )
+        if requested_date != today:
+            return unavailable(
+                "insufficient_point_in_time_archive_for_backtest",
+                "The archive begins on 2026-07-12 and does not yet contain a complete "
+                "historical 30/90-day decision-time window. Current supplier lookbacks "
+                "are never reused as facts visible on a historical date.",
+            )
+
+    try:
+        holdings = _fetch_qqq_top_holdings(top_n=None)
+    except Exception as exc:
+        return unavailable(
+            "holdings_fetch_failed",
+            "Official QQQ holdings could not be loaded and no fallback payload was "
+            f"returned: {str(exc)[:200]}",
+        )
+
+    constituents = (
+        holdings.get("constituents", []) if isinstance(holdings, dict) else []
+    )
+    constituents = [
+        item
+        for item in constituents
+        if isinstance(item, dict)
+        and str(item.get("ticker") or "").strip()
+        and _safe_float(item.get("weight_pct")) is not None
+        and (_safe_float(item.get("weight_pct")) or 0.0) > 0
+    ]
+    constituents.sort(
+        key=lambda item: _safe_float(item.get("weight_pct")) or 0.0,
+        reverse=True,
+    )
+    total_weight = sum(
+        _safe_float(item.get("weight_pct")) or 0.0 for item in constituents
+    )
+    if not constituents or total_weight <= 0:
+        return unavailable(
+            "no_valid_holdings",
+            "The holdings payload contained no positive-weight equity constituents.",
+        )
+
+    def parse_date(value: Any) -> Optional[date_type]:
+        if value in (None, ""):
+            return None
+        if isinstance(value, pd.Timestamp):
+            return value.date()
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date_type):
+            return value
+        if isinstance(value, (int, float)) and np.isfinite(value):
+            try:
+                return datetime.fromtimestamp(float(value), tz=timezone.utc).date()
+            except (OverflowError, OSError, ValueError):
+                return None
+        try:
+            parsed = pd.to_datetime(value, errors="coerce")
+            if pd.isna(parsed):
+                return None
+            if isinstance(parsed, pd.DatetimeIndex):
+                return parsed[0].date() if len(parsed) else None
+            return parsed.date()
+        except Exception:
+            return None
+
+    def rows_by_period(table: Any) -> Dict[str, Dict[str, Any]]:
+        if table is None:
+            return {}
+        if isinstance(table, pd.DataFrame):
+            records: Dict[str, Dict[str, Any]] = {}
+            for period, row in table.iterrows():
+                records[str(period)] = {
+                    str(key): value for key, value in row.to_dict().items()
+                }
+            return records
+        if isinstance(table, dict):
+            if isinstance(table.get("records"), list):
+                return {
+                    str(row.get("period")): row
+                    for row in table["records"]
+                    if isinstance(row, dict) and row.get("period") is not None
+                }
+            return {
+                str(period): (
+                    dict(row) if isinstance(row, dict) else {"current": row}
+                )
+                for period, row in table.items()
+                if period not in {"status", "currency"}
+            }
+        if isinstance(table, list):
+            return {
+                str(row.get("period")): row
+                for row in table
+                if isinstance(row, dict) and row.get("period") is not None
+            }
+        return {}
+
+    def finite_value(row: Optional[Dict[str, Any]], key: str) -> Optional[float]:
+        if not isinstance(row, dict):
+            return None
+        value = _safe_float(row.get(key))
+        return value if value is not None and np.isfinite(value) else None
+
+    def extract_earnings_dates(calendar: Any) -> List[date_type]:
+        values: List[Any] = []
+        if isinstance(calendar, pd.DataFrame):
+            for label, row in calendar.iterrows():
+                if "earning" in str(label).lower():
+                    values.extend(row.tolist())
+            for column in calendar.columns:
+                if "earning" in str(column).lower():
+                    values.extend(calendar[column].tolist())
+        elif isinstance(calendar, dict):
+            for key, value in calendar.items():
+                if "earning" not in str(key).lower() or "date" not in str(key).lower():
+                    continue
+                if isinstance(value, (list, tuple, set, pd.Series, np.ndarray)):
+                    values.extend(list(value))
+                else:
+                    values.append(value)
+        dates = []
+        for value in values:
+            parsed = parse_date(value)
+            if parsed is not None:
+                dates.append(parsed)
+        return sorted(set(dates))
+
+    def fiscal_year_end_from(
+        info: Dict[str, Any], calendar: Any
+    ) -> Optional[date_type]:
+        fiscal_end = parse_date(info.get("nextFiscalYearEnd"))
+        if fiscal_end is not None:
+            return fiscal_end
+        if isinstance(calendar, dict):
+            for key in (
+                "Next Fiscal Year End",
+                "Fiscal Year End",
+                "Fiscal Year Ends",
+            ):
+                fiscal_end = parse_date(calendar.get(key))
+                if fiscal_end is not None:
+                    return fiscal_end
+        return None
+
+    def fetch_component(holding: Dict[str, Any]) -> Dict[str, Any]:
+        ticker = str(holding.get("ticker") or "").strip().upper()
+        weight_pct = _safe_float(holding.get("weight_pct")) or 0.0
+        result: Dict[str, Any] = {
+            "ticker": ticker,
+            "issuer_name": holding.get("issuer_name"),
+            "rank": holding.get("rank"),
+            "weight_pct": round(weight_pct, 6),
+            "fetch_errors": [],
+        }
+        try:
+            yf_ticker = yf.Ticker(ticker)
+        except Exception as exc:
+            result["fetch_errors"].append(f"ticker_init:{str(exc)[:160]}")
+            return result
+
+        for attribute, target in (
+            ("eps_trend", "eps_trend"),
+            ("eps_revisions", "eps_revisions"),
+            ("earnings_estimate", "earnings_estimate"),
+        ):
+            try:
+                result[target] = rows_by_period(getattr(yf_ticker, attribute))
+            except Exception as exc:
+                result[target] = {}
+                result["fetch_errors"].append(f"{attribute}:{str(exc)[:120]}")
+
+        info: Dict[str, Any] = {}
+        try:
+            raw_info = yf_ticker.info
+            if isinstance(raw_info, dict):
+                info = raw_info
+        except Exception as exc:
+            result["fetch_errors"].append(f"info:{str(exc)[:120]}")
+
+        calendar: Any = {}
+        try:
+            calendar = yf_ticker.calendar
+        except Exception as exc:
+            result["fetch_errors"].append(f"calendar:{str(exc)[:120]}")
+
+        fiscal_end = fiscal_year_end_from(info, calendar)
+        if fiscal_end is None:
+            fiscal_weight = 0.5
+            fiscal_weight_method = "approx_equal_weight"
+        else:
+            fiscal_weight = min(
+                1.0, max(0.0, (fiscal_end - today).days / 365.0)
+            )
+            fiscal_weight_method = "fiscal_calendar"
+        result.update(
+            {
+                "fiscal_year_end": (
+                    fiscal_end.isoformat() if fiscal_end is not None else None
+                ),
+                "fy1_weight": fiscal_weight,
+                "fiscal_weight_method": fiscal_weight_method,
+                "earnings_dates": [
+                    day.isoformat() for day in extract_earnings_dates(calendar)
+                ],
+            }
+        )
+        return result
+
+    records_by_ticker: Dict[str, Dict[str, Any]] = {}
+    worker_count = min(12, max(1, len(constituents)))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(fetch_component, holding): holding
+            for holding in constituents
+        }
+        for future in as_completed(futures):
+            holding = futures[future]
+            ticker = str(holding.get("ticker") or "").strip().upper()
+            try:
+                records_by_ticker[ticker] = future.result()
+            except Exception as exc:
+                records_by_ticker[ticker] = {
+                    "ticker": ticker,
+                    "issuer_name": holding.get("issuer_name"),
+                    "rank": holding.get("rank"),
+                    "weight_pct": round(
+                        _safe_float(holding.get("weight_pct")) or 0.0, 6
+                    ),
+                    "eps_trend": {},
+                    "eps_revisions": {},
+                    "earnings_estimate": {},
+                    "fy1_weight": 0.5,
+                    "fiscal_weight_method": "approx_equal_weight",
+                    "fiscal_year_end": None,
+                    "earnings_dates": [],
+                    "fetch_errors": [f"worker:{str(exc)[:160]}"],
+                }
+
+    component_records = [
+        records_by_ticker[str(item.get("ticker") or "").strip().upper()]
+        for item in constituents
+    ]
+
+    archive_root = (
+        Path(__file__).resolve().parents[1] / "output" / "vintage_archive"
+    )
+    archive_files: List[Tuple[date_type, Path]] = []
+    if archive_root.exists():
+        for path in archive_root.glob("*/eps_consensus.json"):
+            try:
+                archive_files.append(
+                    (datetime.strptime(path.parent.name, "%Y%m%d").date(), path)
+                )
+            except ValueError:
+                continue
+    archive_cache: Dict[Path, Dict[str, Any]] = {}
+
+    def load_archive(path: Path) -> Dict[str, Any]:
+        if path not in archive_cache:
+            try:
+                with path.open("r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                archive_cache[path] = payload if isinstance(payload, dict) else {}
+            except (OSError, ValueError, TypeError):
+                archive_cache[path] = {}
+        return archive_cache[path]
+
+    def archive_then_values(
+        ticker: str, target_date: date_type
+    ) -> Optional[Dict[str, Any]]:
+        candidates = sorted(
+            (
+                (abs((day - target_date).days), -day.toordinal(), day, path)
+                for day, path in archive_files
+                if abs((day - target_date).days) <= 2
+            ),
+        )
+        for _, _, day, path in candidates:
+            payload = load_archive(path)
+            fields = (
+                payload.get("per_ticker", {})
+                .get(ticker, {})
+                .get("yfinance", {})
+                .get("fields", {})
+            )
+            trend = fields.get("eps_trend", {})
+            if not isinstance(trend, dict) or trend.get("status") != "ok":
+                continue
+            period_rows = rows_by_period(trend)
+            fy1 = finite_value(period_rows.get("0y"), "current")
+            fy2 = finite_value(period_rows.get("+1y"), "current")
+            if fy1 is None or fy2 is None:
+                continue
+            return {
+                "fy1": fy1,
+                "fy2": fy2,
+                "anchor_date": day,
+                "archive_path": str(path.relative_to(Path(__file__).resolve().parents[1])),
+            }
+        return None
+
+    def fiscal_rollover(
+        record: Dict[str, Any], anchor_date: date_type
+    ) -> bool:
+        fiscal_end = parse_date(record.get("fiscal_year_end"))
+        if fiscal_end is None:
+            return False
+        try:
+            previous_fiscal_end = fiscal_end.replace(year=fiscal_end.year - 1)
+        except ValueError:
+            previous_fiscal_end = fiscal_end.replace(
+                year=fiscal_end.year - 1, day=28
+            )
+        # `nextFiscalYearEnd` normally labels today's 0y estimate. If Yahoo
+        # has already rolled, the immediately preceding same month/day is the
+        # boundary that separates today's FY1 label from the anchor-date FY1
+        # label. The direct fiscal_end check also catches a provider record
+        # that has not yet advanced after the boundary.
+        return bool(
+            anchor_date < previous_fiscal_end <= today
+            or anchor_date < fiscal_end <= today
+        )
+
+    def slope_value(
+        now_fy1: float,
+        now_fy2: float,
+        then_fy1: float,
+        then_fy2: float,
+        fiscal_weight: float,
+    ) -> Optional[float]:
+        if then_fy1 == 0 or then_fy2 == 0:
+            return None
+        return fiscal_weight * (now_fy1 / then_fy1 - 1.0) + (
+            1.0 - fiscal_weight
+        ) * (now_fy2 / then_fy2 - 1.0)
+
+    slope_blocks: Dict[int, Dict[str, Any]] = {}
+    divergence: Dict[str, Dict[str, Any]] = {}
+    top_flagged: Dict[str, List[Dict[str, Any]]] = {}
+    top_flagged_weight_pct: Dict[str, float] = {}
+
+    for window in (7, 30, 90):
+        target_date = today - timedelta(days=window)
+        supplier_key = f"{window}daysAgo"
+        included: List[Dict[str, Any]] = []
+        invalid: List[Dict[str, Any]] = []
+        comparable: List[Dict[str, Any]] = []
+        archive_count = 0
+        archive_weight = 0.0
+        supplier_count = 0
+        supplier_weight = 0.0
+
+        for record in component_records:
+            ticker = record["ticker"]
+            weight_pct = record["weight_pct"]
+            trend = record.get("eps_trend", {})
+            now_fy1 = finite_value(trend.get("0y"), "current")
+            now_fy2 = finite_value(trend.get("+1y"), "current")
+            if now_fy1 is None or now_fy2 is None:
+                invalid.append({"ticker": ticker, "reason": "missing_current_eps_trend"})
+                continue
+
+            supplier_fy1 = finite_value(trend.get("0y"), supplier_key)
+            supplier_fy2 = finite_value(trend.get("+1y"), supplier_key)
+            archive_values = archive_then_values(ticker, target_date)
+            material = "self_archive" if archive_values is not None else "supplier_lookback"
+            if archive_values is not None:
+                then_fy1 = archive_values["fy1"]
+                then_fy2 = archive_values["fy2"]
+                anchor_date = archive_values["anchor_date"]
+            elif supplier_fy1 is not None and supplier_fy2 is not None:
+                then_fy1 = supplier_fy1
+                then_fy2 = supplier_fy2
+                anchor_date = target_date
+            else:
+                invalid.append(
+                    {
+                        "ticker": ticker,
+                        "reason": "missing_archive_and_supplier_lookback",
+                    }
+                )
+                continue
+
+            if fiscal_rollover(record, anchor_date):
+                invalid.append(
+                    {
+                        "ticker": ticker,
+                        "reason": "fiscal_rollover",
+                        "fiscal_year_end": record.get("fiscal_year_end"),
+                        "actual_anchor_date": anchor_date.isoformat(),
+                        "material": material,
+                    }
+                )
+                continue
+
+            fiscal_weight = float(record.get("fy1_weight", 0.5))
+            slope = slope_value(
+                now_fy1, now_fy2, then_fy1, then_fy2, fiscal_weight
+            )
+            if slope is None or not np.isfinite(slope):
+                invalid.append(
+                    {"ticker": ticker, "reason": "zero_or_invalid_prior_eps"}
+                )
+                continue
+
+            fy1_revision = now_fy1 / then_fy1 - 1.0
+            fy2_revision = now_fy2 / then_fy2 - 1.0
+            if (
+                min(abs(then_fy1), abs(then_fy2)) < _REVISION_RATIO_BASE_FLOOR
+                or now_fy1 * then_fy1 <= 0
+                or now_fy2 * then_fy2 <= 0
+            ):
+                invalid.append(
+                    {
+                        "ticker": ticker,
+                        "reason": "ill_defined_ratio_base",
+                        "weight_pct": weight_pct,
+                        "then_fy1": then_fy1,
+                        "then_fy2": then_fy2,
+                        "fy1_revision": round(fy1_revision, 6),
+                        "fy2_revision": round(fy2_revision, 6),
+                        "material": material,
+                    }
+                )
+                continue
+            slope_raw = slope
+            winsorized = abs(slope) > _REVISION_SLOPE_WINSOR_LIMIT
+            if winsorized:
+                slope = (
+                    _REVISION_SLOPE_WINSOR_LIMIT
+                    if slope > 0
+                    else -_REVISION_SLOPE_WINSOR_LIMIT
+                )
+
+            earnings_dates = [
+                parsed
+                for parsed in (
+                    parse_date(value) for value in record.get("earnings_dates", [])
+                )
+                if parsed is not None
+            ]
+            earnings_window_dates = [
+                day
+                for day in earnings_dates
+                if target_date <= day <= today + timedelta(days=7)
+            ]
+            flag_reasons = []
+            if earnings_window_dates:
+                flag_reasons.append("earnings_date_in_lookback_or_next_7d")
+            if abs(slope) > 0.20:
+                flag_reasons.append("absolute_slope_above_20pct")
+
+            item = {
+                "ticker": ticker,
+                "weight_pct": weight_pct,
+                "slope": slope,
+                "slope_raw": slope_raw,
+                "winsorized": winsorized,
+                "fy1_revision": fy1_revision,
+                "fy2_revision": fy2_revision,
+                "fy1_weight": fiscal_weight,
+                "fiscal_weight_method": record.get("fiscal_weight_method"),
+                "fiscal_year_end": record.get("fiscal_year_end"),
+                "material": material,
+                "target_anchor_date": target_date.isoformat(),
+                "actual_anchor_date": anchor_date.isoformat(),
+                "anchor_offset_days": (anchor_date - target_date).days,
+                "flagged": bool(flag_reasons),
+                "flag_reasons": flag_reasons,
+                "earnings_dates_in_flag_window": [
+                    day.isoformat() for day in earnings_window_dates
+                ],
+            }
+            if archive_values is not None:
+                item["archive_path"] = archive_values["archive_path"]
+                archive_count += 1
+                archive_weight += weight_pct
+            else:
+                supplier_count += 1
+                supplier_weight += weight_pct
+            included.append(item)
+
+            if (
+                archive_values is not None
+                and supplier_fy1 is not None
+                and supplier_fy2 is not None
+            ):
+                supplier_slope = slope_value(
+                    now_fy1,
+                    now_fy2,
+                    supplier_fy1,
+                    supplier_fy2,
+                    fiscal_weight,
+                )
+                if supplier_slope is not None and np.isfinite(supplier_slope):
+                    comparable.append(
+                        {
+                            "ticker": ticker,
+                            "weight_pct": weight_pct,
+                            "archive_slope": slope_raw,
+                            "supplier_slope": supplier_slope,
+                            "difference": supplier_slope - slope_raw,
+                            "archive_anchor_date": anchor_date.isoformat(),
+                        }
+                    )
+
+        included_weight = sum(item["weight_pct"] for item in included)
+        aggregate_slope = (
+            sum(
+                item["weight_pct"] / included_weight * item["slope"]
+                for item in included
+            )
+            if included_weight > 0
+            else None
+        )
+        flagged = [item for item in included if item["flagged"]]
+        flagged_weight = sum(item["weight_pct"] for item in flagged)
+        flagged_weight_pct = (
+            100.0 * flagged_weight / included_weight
+            if included_weight > 0
+            else 0.0
+        )
+        winsorized_items = [item for item in included if item["winsorized"]]
+        winsorized_weight_pct = (
+            100.0
+            * sum(item["weight_pct"] for item in winsorized_items)
+            / included_weight
+            if included_weight > 0
+            else 0.0
+        )
+        material = (
+            "supplier_lookback"
+            if supplier_count > 0
+            else ("self_archive" if archive_count > 0 else "unavailable")
+        )
+        verification_status = (
+            "pending_validation"
+            if supplier_count > 0
+            else "not_applicable_self_archive"
+        )
+        window_label = f"{window}d"
+        block_coverage = coverage_block(
+            len(included),
+            included_weight,
+            len(component_records),
+            total_weight,
+            self_archive_constituents=archive_count,
+            self_archive_official_weight_pct=round(archive_weight, 6),
+            supplier_lookback_constituents=supplier_count,
+            supplier_lookback_official_weight_pct=round(supplier_weight, 6),
+        )
+        window_block = {
+            "value": round(aggregate_slope, 10) if aggregate_slope is not None else None,
+            "unit": "decimal_change",
+            "availability": "available" if aggregate_slope is not None else "unavailable",
+            "material": material,
+            "verification_status": verification_status,
+            "coverage": block_coverage,
+            "winsorized_count": len(winsorized_items),
+            "winsorized_weight_pct": round(winsorized_weight_pct, 6),
+            "flagged_weight_pct": round(flagged_weight_pct, 6),
+            "flagged": [
+                {
+                    "ticker": item["ticker"],
+                    "weight_pct": item["weight_pct"],
+                    "slope": round(item["slope"], 10),
+                    "reasons": item["flag_reasons"],
+                    "earnings_dates_in_flag_window": item[
+                        "earnings_dates_in_flag_window"
+                    ],
+                }
+                for item in flagged
+            ],
+            "constituents": [
+                {
+                    **item,
+                    "slope": round(item["slope"], 10),
+                    "fy1_revision": round(item["fy1_revision"], 10),
+                    "fy2_revision": round(item["fy2_revision"], 10),
+                    "fy1_weight": round(item["fy1_weight"], 8),
+                }
+                for item in included
+            ],
+            "invalid": invalid,
+        }
+        if window in (30, 90):
+            slope_blocks[window] = window_block
+            top_flagged[window_label] = window_block["flagged"]
+            top_flagged_weight_pct[window_label] = round(flagged_weight_pct, 6)
+
+        comparable_weight = sum(item["weight_pct"] for item in comparable)
+        if comparable_weight > 0:
+            archive_aggregate = sum(
+                item["weight_pct"] / comparable_weight * item["archive_slope"]
+                for item in comparable
+            )
+            supplier_aggregate = sum(
+                item["weight_pct"] / comparable_weight * item["supplier_slope"]
+                for item in comparable
+            )
+            divergence[window_label] = {
+                "status": "comparable",
+                "supplier_verification_status": (
+                    "verified_with_earnings_week_caveat"
+                    if window == 7
+                    else "pending_validation"
+                ),
+                "comparable_constituents": len(comparable),
+                "comparable_official_weight_pct": round(comparable_weight, 6),
+                "weight_coverage_pct": round(
+                    100.0 * comparable_weight / total_weight, 6
+                ),
+                "self_archive_slope": round(archive_aggregate, 10),
+                "supplier_lookback_slope": round(supplier_aggregate, 10),
+                "supplier_minus_archive": round(
+                    supplier_aggregate - archive_aggregate, 10
+                ),
+                "constituents": [
+                    {
+                        **item,
+                        "archive_slope": round(item["archive_slope"], 10),
+                        "supplier_slope": round(item["supplier_slope"], 10),
+                        "difference": round(item["difference"], 10),
+                    }
+                    for item in comparable
+                ],
+            }
+        else:
+            divergence[window_label] = {
+                "status": "not_comparable",
+                "supplier_verification_status": (
+                    "verified_with_earnings_week_caveat"
+                    if window == 7
+                    else "pending_validation"
+                ),
+                "reason": "no_ticker_has_both_a_valid_self_archive_anchor_and_supplier_lookback",
+                "comparable_constituents": 0,
+                "comparable_official_weight_pct": 0.0,
+                "weight_coverage_pct": 0.0,
+            }
+
+    breadth_periods: Dict[str, Dict[str, Any]] = {}
+    for period in ("0y", "+1y"):
+        breadth_rows = []
+        raw_up = 0
+        raw_down = 0
+        for record in component_records:
+            revision = record.get("eps_revisions", {}).get(period)
+            up = finite_value(revision, "upLast30days")
+            down = finite_value(revision, "downLast30days")
+            if up is None or down is None:
+                continue
+            raw_up += int(round(up))
+            raw_down += int(round(down))
+            direction = 1 if up > down else (-1 if down > up else 0)
+            breadth_rows.append(
+                {
+                    "ticker": record["ticker"],
+                    "weight_pct": record["weight_pct"],
+                    "upLast30days": int(round(up)),
+                    "downLast30days": int(round(down)),
+                    "net_direction": direction,
+                }
+            )
+        breadth_weight = sum(item["weight_pct"] for item in breadth_rows)
+        up_weight = sum(
+            item["weight_pct"] for item in breadth_rows if item["net_direction"] > 0
+        )
+        down_weight = sum(
+            item["weight_pct"] for item in breadth_rows if item["net_direction"] < 0
+        )
+        neutral_weight = breadth_weight - up_weight - down_weight
+        breadth_value = (
+            100.0 * (up_weight - down_weight) / breadth_weight
+            if breadth_weight > 0
+            else None
+        )
+        breadth_periods[period] = {
+            "value": round(breadth_value, 6) if breadth_value is not None else None,
+            "unit": "percentage_points",
+            "up_direction_weight_pct": round(
+                100.0 * up_weight / breadth_weight if breadth_weight else 0.0, 6
+            ),
+            "down_direction_weight_pct": round(
+                100.0 * down_weight / breadth_weight if breadth_weight else 0.0, 6
+            ),
+            "neutral_direction_weight_pct": round(
+                100.0 * neutral_weight / breadth_weight if breadth_weight else 0.0,
+                6,
+            ),
+            "raw_up_revision_count": raw_up,
+            "raw_down_revision_count": raw_down,
+            "coverage": coverage_block(
+                len(breadth_rows),
+                breadth_weight,
+                len(component_records),
+                total_weight,
+            ),
+            "constituents": breadth_rows,
+        }
+    breadth_coverage_weight = min(
+        (
+            period["coverage"]["included_official_weight_pct"]
+            for period in breadth_periods.values()
+        ),
+        default=0.0,
+    )
+    breadth_block = {
+        "value": {
+            "0y": breadth_periods["0y"]["value"],
+            "+1y": breadth_periods["+1y"]["value"],
+        },
+        "unit": "percentage_points",
+        "availability": (
+            "available"
+            if any(item["value"] is not None for item in breadth_periods.values())
+            else "unavailable"
+        ),
+        "material": "supplier",
+        "verification_status": "supplier_reported_counts",
+        "coverage": {
+            "weight_coverage_pct": round(
+                100.0 * breadth_coverage_weight / total_weight
+                if total_weight > 0
+                else 0.0,
+                6,
+            ),
+            "by_period": {
+                period: item["coverage"]
+                for period, item in breadth_periods.items()
+            },
+        },
+        "periods": breadth_periods,
+    }
+
+    dispersion_rows = []
+    for record in component_records:
+        estimate = record.get("earnings_estimate", {})
+        fy1 = estimate.get("0y")
+        fy2 = estimate.get("+1y")
+        fy1_avg = finite_value(fy1, "avg")
+        fy1_low = finite_value(fy1, "low")
+        fy1_high = finite_value(fy1, "high")
+        fy2_avg = finite_value(fy2, "avg")
+        fy2_low = finite_value(fy2, "low")
+        fy2_high = finite_value(fy2, "high")
+        if (
+            fy1_avg in (None, 0)
+            or fy1_low is None
+            or fy1_high is None
+            or fy2_avg in (None, 0)
+            or fy2_low is None
+            or fy2_high is None
+        ):
+            continue
+        fy1_dispersion = (fy1_high - fy1_low) / abs(fy1_avg)
+        fy2_dispersion = (fy2_high - fy2_low) / abs(fy2_avg)
+        fiscal_weight = float(record.get("fy1_weight", 0.5))
+        ntm_dispersion = (
+            fiscal_weight * fy1_dispersion
+            + (1.0 - fiscal_weight) * fy2_dispersion
+        )
+        if not np.isfinite(ntm_dispersion):
+            continue
+        dispersion_rows.append(
+            {
+                "ticker": record["ticker"],
+                "weight_pct": record["weight_pct"],
+                "fy1_dispersion": fy1_dispersion,
+                "fy2_dispersion": fy2_dispersion,
+                "fy1_weight": fiscal_weight,
+                "dispersion_ntm": ntm_dispersion,
+            }
+        )
+    dispersion_weight = sum(item["weight_pct"] for item in dispersion_rows)
+    dispersion_value = (
+        sum(
+            item["weight_pct"] / dispersion_weight * item["dispersion_ntm"]
+            for item in dispersion_rows
+        )
+        if dispersion_weight > 0
+        else None
+    )
+    dispersion_block = {
+        "value": round(dispersion_value, 10) if dispersion_value is not None else None,
+        "unit": "ratio",
+        "availability": "available" if dispersion_value is not None else "unavailable",
+        "material": "supplier",
+        "verification_status": "current_consensus_cross_section",
+        "coverage": coverage_block(
+            len(dispersion_rows),
+            dispersion_weight,
+            len(component_records),
+            total_weight,
+        ),
+        "constituents": [
+            {
+                **item,
+                "fy1_dispersion": round(item["fy1_dispersion"], 10),
+                "fy2_dispersion": round(item["fy2_dispersion"], 10),
+                "fy1_weight": round(item["fy1_weight"], 8),
+                "dispersion_ntm": round(item["dispersion_ntm"], 10),
+            }
+            for item in dispersion_rows
+        ],
+    }
+
+    analyst_rows = []
+    for record in component_records:
+        analyst_count = finite_value(
+            record.get("earnings_estimate", {}).get("0y"),
+            "numberOfAnalysts",
+        )
+        if analyst_count is None or analyst_count < 0:
+            continue
+        analyst_rows.append(
+            {
+                "ticker": record["ticker"],
+                "weight_pct": record["weight_pct"],
+                "numberOfAnalysts": int(round(analyst_count)),
+            }
+        )
+    analyst_weight = sum(item["weight_pct"] for item in analyst_rows)
+    weighted_analysts = (
+        sum(
+            item["weight_pct"] / analyst_weight * item["numberOfAnalysts"]
+            for item in analyst_rows
+        )
+        if analyst_weight > 0
+        else None
+    )
+    analyst_block = {
+        "value": {
+            "weighted_mean": (
+                round(weighted_analysts, 6)
+                if weighted_analysts is not None
+                else None
+            ),
+            "minimum": (
+                min(item["numberOfAnalysts"] for item in analyst_rows)
+                if analyst_rows
+                else None
+            ),
+        },
+        "unit": "analysts",
+        "availability": (
+            "available" if weighted_analysts is not None else "unavailable"
+        ),
+        "material": "supplier",
+        "verification_status": "current_consensus_cross_section",
+        "coverage": coverage_block(
+            len(analyst_rows),
+            analyst_weight,
+            len(component_records),
+            total_weight,
+        ),
+        "constituents": analyst_rows,
+    }
+
+    for block in (
+        slope_blocks[30],
+        slope_blocks[90],
+        breadth_block,
+        dispersion_block,
+        analyst_block,
+    ):
+        if block["coverage"]["weight_coverage_pct"] < 70.0:
+            block["availability"] = "unavailable"
+            block["value"] = None
+            block["reason"] = "insufficient_constituent_coverage"
+
+    fallback_used = bool(holdings.get("fallback_used"))
+    effective_date = holdings.get("effective_date")
+    if not effective_date and fallback_used:
+        match = re.search(
+            r"effective\s+(\d{4}-\d{2}-\d{2})",
+            str(holdings.get("fallback_dated") or ""),
+            flags=re.IGNORECASE,
+        )
+        effective_date = match.group(1) if match else None
+    holdings_date = parse_date(effective_date)
+    freshness_days = (
+        max(0, (today - holdings_date).days) if holdings_date is not None else None
+    )
+    value = {
+        "slope_30d": slope_blocks[30],
+        "slope_90d": slope_blocks[90],
+        "breadth_30d": breadth_block,
+        "dispersion_ntm": dispersion_block,
+        "analyst_coverage": analyst_block,
+    }
+    availability = (
+        "available"
+        if any(
+            slope_blocks[window].get("availability") == "available"
+            for window in (30, 90)
+        )
+        else "unavailable"
+    )
+    anomalies = []
+    if fallback_used:
+        anomalies.append(f"holdings_fallback_used:{holdings.get('fallback_reason')}")
+    if freshness_days is None or freshness_days > 10:
+        anomalies.append(
+            f"holdings_stale:{freshness_days if freshness_days is not None else 'unknown'}d"
+        )
+    for block_name, block in value.items():
+        if block.get("reason") == "insufficient_constituent_coverage":
+            anomalies.append(
+                f"{block_name}_insufficient_constituent_coverage:"
+                f"{block['coverage']['weight_coverage_pct']:.6f}%<70%"
+            )
+    for window in (30, 90):
+        if slope_blocks[window]["material"] == "supplier_lookback":
+            anomalies.append(f"{window}d_supplier_lookback_pending_validation")
+        fiscal_rollovers = sum(
+            1
+            for item in slope_blocks[window]["invalid"]
+            if item.get("reason") == "fiscal_rollover"
+        )
+        if fiscal_rollovers:
+            anomalies.append(f"{window}d_fiscal_rollover_invalid:{fiscal_rollovers}")
+
+    notes = (
+        "Slope removes mechanical NTM calendar drift by revising FY1 and FY2 "
+        "separately and mixing both revisions with today's fiscal-calendar weight. "
+        "The self archive is selected ticker-by-ticker only when a usable snapshot "
+        "is within ±2 calendar days of the target anchor; supplier lookbacks fill "
+        "only uncovered ticker-windows. A mixed window is conservatively labelled "
+        "supplier_lookback and its material coverage is split out. Fiscal-rollover "
+        "protection uses the simplest reliable observable test: a ticker is invalid "
+        "when either its currently reported FY1 end or the immediately preceding "
+        "same fiscal-year boundary falls after the actual prior anchor and on/before "
+        "today; no rollover is guessed when that boundary cannot be observed. "
+        "Earnings-week and >20% flags reduce confidence "
+        "but do not remove otherwise valid constituents. Yahoo lookback anchors can "
+        "partly absorb dense earnings-week revisions, which biases measured slopes "
+        "toward zero (conservative)."
+    )
+    return {
+        "name": "NDX Earnings Revision Metrics",
+        "series_id": "NDX_EARNINGS_REVISION_METRICS",
+        "value": value,
+        "unit": "mixed",
+        "availability": availability,
+        "source_tier": source_tier,
+        "source_name": source_name,
+        "collected_at": collected_at,
+        "effective_date": effective_date,
+        "holdings_freshness_days": freshness_days,
+        "holdings_freshness_threshold_days": 10,
+        "fallback_used": fallback_used,
+        "fallback_reason": holdings.get("fallback_reason") if fallback_used else None,
+        "flagged_weight_pct": top_flagged_weight_pct,
+        "flagged": top_flagged,
+        "window_effective_coverage_pct": {
+            "30d": slope_blocks[30]["coverage"]["weight_coverage_pct"],
+            "90d": slope_blocks[90]["coverage"]["weight_coverage_pct"],
+        },
+        "divergence": divergence,
+        "notes": notes,
+        "data_quality": _quality_block(
+            source_tier=source_tier,
+            data_date=effective_date or today.isoformat(),
+            update_frequency="live; daily point-in-time archive plus current supplier consensus",
+            formula=formula,
+            coverage={
+                "total_constituents": len(component_records),
+                "total_valid_official_weight_pct": round(total_weight, 6),
+                "window_effective_coverage_pct": {
+                    "30d": slope_blocks[30]["coverage"]["weight_coverage_pct"],
+                    "90d": slope_blocks[90]["coverage"]["weight_coverage_pct"],
+                },
+                "breadth_weight_coverage_pct": breadth_block["coverage"][
+                    "weight_coverage_pct"
+                ],
+                "dispersion_weight_coverage_pct": dispersion_block["coverage"][
+                    "weight_coverage_pct"
+                ],
+                "analyst_coverage_weight_pct": analyst_block["coverage"][
+                    "weight_coverage_pct"
+                ],
+                "flagged_weight_pct": top_flagged_weight_pct,
+            },
+            anomalies=anomalies,
+            fallback_chain=[
+                "self_archive",
+                "supplier_lookback",
+                SOURCE_TIER_UNAVAILABLE,
+            ],
+        ),
+    }
+
 
 # =====================================================
 # 第五层：技术指标（*本轮修改部分*）

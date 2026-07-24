@@ -117,7 +117,7 @@ def _earnings_book(vintage_root: Path, effective_date: date) -> Dict[str, Any]:
                 "available_days": available_days,
                 "shortfall_days": max(0, days - available_days),
                 "ticker_changes": [],
-                "note": "自建跨日 vintage 尚未积累到目标窗口；未使用供应商回看字段替代。",
+                "note": "live 修正指标按档案优先、供应商回看值补未覆盖窗口并带 supplier_lookback 标签；本台账与回测仍只用自建档案。",
             })
             continue
         prior_date, prior_snapshot = eligible[-1]
