@@ -119,8 +119,18 @@ def _install(monkeypatch, tmp_path, rows, payloads):
     fake_module.parent.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(tools_L4, "__file__", str(fake_module))
 
+    # get_yf_ticker_info_with_retry now backs fetch_component's .info lookup
+    # with a persistent cache + in-run memo (both keyed only by ticker); the
+    # same synthetic ticker ("AAA", ...) is reused across tests with
+    # different payloads, so each test needs its own cache dir and a cleared
+    # memo to avoid reading another test's cached .info.
+    cache_dir = tmp_path / "yf_info_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(tools_L4.path_config, "cache_dir", str(cache_dir))
+    tools_L4.reset_yf_info_run_memo()
+
     class FakeTicker:
-        def __init__(self, ticker):
+        def __init__(self, ticker, session=None):
             self.data = payloads[ticker]
 
         @property
@@ -555,3 +565,101 @@ def test_winsorized_divergence_uses_raw_archive_slope(monkeypatch, tmp_path):
     assert row["difference"] == pytest.approx(
         row["supplier_slope"] - row["archive_slope"]
     )
+
+
+def test_metric_authority_registers_five_supporting_only_fields_and_wires_data_quality(
+    monkeypatch, tmp_path
+):
+    """P0 修复回归：slope_30d/slope_90d/breadth_30d/dispersion_ntm/analyst_coverage
+    这五个顶层字段必须有 MetricAuthority 登记（usage=supporting_only），且同时接到
+    data_quality.metric_authority，否则 evidence_index 不会为它们生成 #field 子引用，
+    reviser 引用这些字段时会被判非法（真实事故：L4.get_ndx_earnings_revision_metrics
+    #slope_30d/#slope_90d 未登记导致 RuntimeError）。"""
+    _install(
+        monkeypatch,
+        tmp_path,
+        [("AAA", 60.0), ("BBB", 40.0)],
+        {
+            "AAA": _payload(
+                revisions=((5, 1), (2, 0)),
+                estimates=((10.0, 8.0, 12.0, 10), (20.0, 18.0, 24.0, 12)),
+            ),
+            "BBB": _payload(
+                revisions=((0, 3), (1, 0)),
+                estimates=((20.0, 10.0, 30.0, 5), (40.0, 36.0, 44.0, 8)),
+            ),
+        },
+    )
+
+    result = tools_L4.get_ndx_earnings_revision_metrics()
+    expected_fields = {
+        "slope_30d",
+        "slope_90d",
+        "breadth_30d",
+        "dispersion_ntm",
+        "analyst_coverage",
+    }
+
+    value_authority = result["value"]["MetricAuthority"]
+    assert set(value_authority.keys()) == expected_fields
+    for field, rule in value_authority.items():
+        assert rule["usage"] == "supporting_only", field
+        assert "revision" in rule["reason"] or "momentum" in rule["reason"], field
+        assert "core" in rule["reason"], field  # must spell out "not core" style guard
+
+    # Must also be wired onto data_quality.metric_authority so
+    # _field_authority_from_payload (orchestrator side) can find it.
+    quality_authority = result["data_quality"]["metric_authority"]
+    assert quality_authority == value_authority
+
+
+def test_metric_authority_is_readable_by_orchestrator_field_authority_helpers(
+    monkeypatch, tmp_path
+):
+    """端到端确认：orchestrator 用来构建 evidence_index #field 子引用的两个静态
+    helper（_field_authority_from_payload / _field_authority_usages）能从这个
+    payload 里读到全部 5 个 supporting_only 字段——这正是 evidence_index 会为
+    slope_30d/slope_90d 等生成合法 #field 子引用、修好真实事故（reviser 引用
+    L4.get_ndx_earnings_revision_metrics#slope_30d 被判非法）的前提。
+
+    这 5 个字段全部登记为同一档 usage=supporting_only，orchestrator 按
+    `len(field_usages) > 1` 计算 mixed_field_authority，此处应为 False（单一档
+    位，不是像 get_m7_buyback_flow 那样字段散落在子数组里的 mixed 容器场景）。"""
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+    from agent_analysis.orchestrator import VNextOrchestrator
+
+    _install(
+        monkeypatch,
+        tmp_path,
+        [("AAA", 60.0), ("BBB", 40.0)],
+        {
+            "AAA": _payload(
+                revisions=((5, 1), (2, 0)),
+                estimates=((10.0, 8.0, 12.0, 10), (20.0, 18.0, 24.0, 12)),
+            ),
+            "BBB": _payload(
+                revisions=((0, 3), (1, 0)),
+                estimates=((20.0, 10.0, 30.0, 5), (40.0, 36.0, 44.0, 8)),
+            ),
+        },
+    )
+    result = tools_L4.get_ndx_earnings_revision_metrics()
+
+    field_authority = VNextOrchestrator._field_authority_from_payload(result)
+    assert set(field_authority.keys()) == {
+        "slope_30d",
+        "slope_90d",
+        "breadth_30d",
+        "dispersion_ntm",
+        "analyst_coverage",
+    }
+    for field, rule in field_authority.items():
+        assert rule["usage"] == "supporting_only", field
+
+    field_usages = VNextOrchestrator._field_authority_usages(field_authority)
+    assert field_usages == {"supporting_only"}
+    mixed_field_authority = len(field_usages) > 1
+    assert mixed_field_authority is False

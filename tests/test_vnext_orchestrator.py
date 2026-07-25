@@ -12,6 +12,7 @@ import tools_L4
 from agent_analysis.contracts import (
     AgentBudget,
     AgentSpec,
+    AnalysisRevised,
     ApprovalStatus,
     BridgeMemo,
     ClaimLedger,
@@ -2473,6 +2474,157 @@ def test_reviser_final_evidence_refs_outside_index_trigger_retry(tmp_path: Path)
     assert engine.calls["final_adjudicator"] == 2
     assert diagnostics["stages"]["final_adjudicator"]["errors"][0]["kind"] == "contract_validation_error"
     assert "evidence_ref_source_validation failed" in diagnostics["stages"]["final_adjudicator"]["errors"][0]["message"]
+
+
+def test_sanitize_reviser_ref_list_covers_coerce_drop_mixed_and_unknown_parent(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    evidence_index = {
+        "L1.get_fed_funds_rate": {"mixed_field_authority": False},
+        "L4.get_ndx_earnings_revision_metrics": {"mixed_field_authority": True},
+    }
+    warnings: list[str] = []
+
+    # Case 1: parent non-mixed and present -> coerce to parent.
+    sanitized = orchestrator._sanitize_reviser_ref_list(
+        ["L1.get_fed_funds_rate#some_field"], evidence_index, "owner1", warnings
+    )
+    assert sanitized == ["L1.get_fed_funds_rate"]
+    assert any("coerced" in w for w in warnings)
+
+    # Case 2: parent mixed_field_authority -> must be dropped, never coerced.
+    warnings.clear()
+    sanitized = orchestrator._sanitize_reviser_ref_list(
+        ["L4.get_ndx_earnings_revision_metrics#yoy_pct"], evidence_index, "owner2", warnings
+    )
+    assert sanitized == []
+    assert any("dropped" in w and "mixed_field_authority" in w for w in warnings)
+
+    # Case 3: parent does not exist in evidence_index -> dropped.
+    warnings.clear()
+    sanitized = orchestrator._sanitize_reviser_ref_list(
+        ["L9.get_totally_fake_metric#nope"], evidence_index, "owner3", warnings
+    )
+    assert sanitized == []
+    assert any("dropped" in w for w in warnings)
+
+    # Legal refs pass through untouched, no warnings.
+    warnings.clear()
+    sanitized = orchestrator._sanitize_reviser_ref_list(
+        ["L1.get_fed_funds_rate"], evidence_index, "owner4", warnings
+    )
+    assert sanitized == ["L1.get_fed_funds_rate"]
+    assert warnings == []
+
+
+def test_reviser_illegal_refs_are_sanitized_and_do_not_raise_runtime_error(tmp_path: Path):
+    """真实事故复现的最小化回归：reviser 幻觉出非法 parent#field 引用时，净化逻辑
+    必须在结构校验之前把可退回的退回、把不可退回的丢弃，让 stage 一次通过而不是
+    RuntimeError 中止；mixed_field_authority 的父级绝不能被 coerce。"""
+    evidence_index = {
+        "L4.get_ndx_earnings_revision_metrics": {
+            "layer": "L4",
+            "function_id": "get_ndx_earnings_revision_metrics",
+            "mixed_field_authority": True,
+        },
+        "L4.get_ndx_earnings_revision_metrics#slope_30d": {
+            "layer": "L4",
+            "parent_evidence_ref": "L4.get_ndx_earnings_revision_metrics",
+            "field_name": "slope_30d",
+        },
+        "L1.get_fed_funds_rate": {
+            "layer": "L1",
+            "function_id": "get_fed_funds_rate",
+            "mixed_field_authority": False,
+        },
+    }
+    reviser_payload = {
+        "revision_summary": "修订说明。",
+        "accepted_critiques": [],
+        "rejected_critiques": [],
+        "revised_thesis": {
+            "environment_assessment": "环境评估。",
+            "valuation_assessment": "估值评估。",
+            "timing_assessment": "时机评估。",
+            "main_thesis": "主论点。",
+            "overall_confidence": "medium",
+            "key_support_chains": [
+                {
+                    "chain_description": "链条A_可退回",
+                    "evidence_refs": ["L1.get_fed_funds_rate#some_field"],
+                    "weight": 0.5,
+                },
+                {
+                    "chain_description": "链条B_混合父级只能丢弃",
+                    "evidence_refs": ["L4.get_ndx_earnings_revision_metrics#yoy_pct"],
+                    "weight": 0.3,
+                },
+                {
+                    "chain_description": "链条C_父级不存在但保留合法ref",
+                    "evidence_refs": [
+                        "L9.get_totally_fake_metric#nope",
+                        "L1.get_fed_funds_rate",
+                    ],
+                    "weight": 0.2,
+                },
+            ],
+            "reader_conclusion": {
+                "one_liner": "读者结论。",
+                "evidence_refs": ["L4.get_ndx_earnings_revision_metrics#yoy_pct"],
+            },
+        },
+    }
+    engine = SequencedFakeLLMEngine(
+        {"reviser": [json.dumps(reviser_payload, ensure_ascii=False)]}
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="reviser",
+        stage_name="reviser",
+        model_cls=AnalysisRevised,
+        payload={"example": "payload"},
+        pre_validate_transform=lambda parsed: orchestrator._sanitize_reviser_evidence_refs(
+            parsed, evidence_index
+        ),
+        validator=lambda candidate: orchestrator._validate_stage_evidence_refs(
+            candidate, set(evidence_index.keys()), "reviser"
+        ),
+    )
+
+    # No retry was needed: sanitization made the first attempt pass structural + contract validation.
+    assert engine.calls["reviser"] == 1
+
+    chains = result.revised_thesis.key_support_chains
+    chain_a = next(c for c in chains if c.chain_description == "链条A_可退回")
+    assert chain_a.evidence_refs == ["L1.get_fed_funds_rate"]
+
+    # Mixed-authority parent must never be coerced -> chain B has zero legal refs left
+    # and is dropped entirely, not just left with an empty (or coerced-parent) ref list.
+    assert not any(c.chain_description == "链条B_混合父级只能丢弃" for c in chains)
+
+    chain_c = next(c for c in chains if c.chain_description == "链条C_父级不存在但保留合法ref")
+    assert chain_c.evidence_refs == ["L1.get_fed_funds_rate"]
+
+    # reader_conclusion is a singleton (not a list item) so it cannot be dropped wholesale;
+    # its illegal mixed-parent ref is sanitized down to an empty list instead.
+    assert result.revised_thesis.reader_conclusion.evidence_refs == []
+
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["stages"]["reviser"]["status"] == "ok"
+    sanitization_log = diagnostics.get("reviser_evidence_ref_sanitization", [])
+    assert any("coerced" in entry for entry in sanitization_log)
+    assert any(
+        "mixed_field_authority" in entry and "dropped" in entry for entry in sanitization_log
+    )
 
 
 def test_final_stage_retries_after_overlong_reasoned_verdict(tmp_path: Path):

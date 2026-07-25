@@ -118,11 +118,68 @@ _YF_RUNTIME_LOCK = threading.Lock()
 _SAFE_REQUEST_LAST_ERROR: Optional[Dict[str, Any]] = None
 _FRED_SERIES_LAST_DIAGNOSTICS: Dict[str, Dict[str, Any]] = {}
 
+# yf.Ticker(...) 在不传 session 时会各自新建 curl_cffi 原生会话（见
+# get_shared_yf_ticker_session 的说明）；这里做成进程内单例，配合下面的
+# in-run info memo，把全成分并发扫描的原生句柄数与网络扇出都收敛住。
+_YF_TICKER_SESSION: Optional[Any] = None
+_YF_TICKER_SESSION_LOCK = threading.Lock()
+_YF_INFO_RUN_MEMO: Dict[str, Dict[str, Any]] = {}
+_YF_INFO_RUN_MEMO_LOCKS: Dict[str, threading.Lock] = {}
+_YF_INFO_RUN_MEMO_LOCKS_GUARD = threading.Lock()
+
 
 def reset_yfinance_runtime_diagnostics() -> None:
     """Clear per-run yfinance diagnostics before a collector run."""
     with _YF_RUNTIME_LOCK:
         _YF_RUNTIME_EVENTS.clear()
+
+
+def get_shared_yf_ticker_session() -> Any:
+    """进程内单例 curl_cffi 会话，供全部 yf.Ticker(...) 抓取复用。
+
+    yfinance(curl_cffi 后端)在不传 session 时，会为 TickerBase 和其内部
+    的 YfData 各自新建一个 requests.Session(impersonate="chrome")，对应
+    新建原生 curl 连接；在 ThreadPoolExecutor 并发扫描全成分股时这些会话
+    来不及被及时回收，是 L4 全成分抓取一次性打崩进程文件句柄上限
+    （[Errno 24] Too many open files）的根因之一。这里改为显式单例会话，
+    curl_cffi 的 Session 线程安全（内部用 threading.local 为每个线程各持
+    一份原生句柄），把原生句柄数量的上限从"每次调用各建两个"收敛为
+    "并发线程数"。
+    """
+    global _YF_TICKER_SESSION
+    if _YF_TICKER_SESSION is not None:
+        return _YF_TICKER_SESSION
+    with _YF_TICKER_SESSION_LOCK:
+        if _YF_TICKER_SESSION is None:
+            from curl_cffi import requests as _curl_requests
+            _YF_TICKER_SESSION = _curl_requests.Session(impersonate="chrome")
+        return _YF_TICKER_SESSION
+
+
+def reset_yf_info_run_memo() -> None:
+    """Clear the in-run yfinance .info memo; call once per collector run."""
+    _YF_INFO_RUN_MEMO.clear()
+    with _YF_INFO_RUN_MEMO_LOCKS_GUARD:
+        _YF_INFO_RUN_MEMO_LOCKS.clear()
+
+
+def _yf_info_memo_lock(ticker: str) -> threading.Lock:
+    with _YF_INFO_RUN_MEMO_LOCKS_GUARD:
+        lock = _YF_INFO_RUN_MEMO_LOCKS.get(ticker)
+        if lock is None:
+            lock = threading.Lock()
+            _YF_INFO_RUN_MEMO_LOCKS[ticker] = lock
+        return lock
+
+
+def _yf_info_cache_prefer_max_age_seconds() -> float:
+    """前瞻 EPS/基本面数天到数周才变，缓存新鲜度跟随美股交易日收盘边界，
+    而不是固定 24h：收盘后写入的缓存在下一次收盘前都算新鲜，避免非交易
+    时段/周末反复判定过期，从而触发不必要的限流请求。
+    """
+    now_et = pd.Timestamp.now(tz="America/New_York")
+    boundary = _latest_completed_us_daily_date(now_et).tz_localize("America/New_York") + pd.Timedelta(hours=17)
+    return max((now_et - boundary).total_seconds(), 60.0)
 
 
 def _classify_yfinance_failure(message: Optional[str]) -> str:
@@ -821,6 +878,7 @@ def cached_yf_download(
                     interval=interval,
                     progress=progress,
                     auto_adjust=auto_adjust,
+                    threads=False,
                 )
                 if _yf_frame_cache_usable(frame, requested_tickers=requested_tickers):
                     frame = _tag_yf_frame_source(
@@ -945,53 +1003,80 @@ def get_yf_ticker_info_with_retry(ticker: str, attempts: int = 2, pause_seconds:
         })
         raise RuntimeError("yfinance not available")
 
+    memoized = _YF_INFO_RUN_MEMO.get(ticker)
+    if memoized:
+        return memoized
+
     cache_key = f"yf.info:{ticker}"
-    last_error: Optional[Exception] = None
-    started = time.monotonic()
-    for attempt in range(attempts):
-        try:
-            info = yf.Ticker(ticker).info
-            if info and isinstance(info, dict):
-                _write_yf_info_cache(cache_key, info)
-                _record_yfinance_runtime_event({
-                    "operation": "ticker.info",
-                    "ticker": ticker,
-                    "status": "provider_success",
-                    "source": "yfinance",
-                    "attempt": attempt + 1,
-                    "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
-                })
-                return info
-            raise ValueError(f"Empty info for {ticker}")
-        except Exception as exc:
-            last_error = exc
+    with _yf_info_memo_lock(ticker):
+        memoized = _YF_INFO_RUN_MEMO.get(ticker)
+        if memoized:
+            return memoized
+
+        # 缓存优先：命中新鲜缓存（跟随交易日收盘边界，见
+        # _yf_info_cache_prefer_max_age_seconds）直接返回，跳过网络。这是
+        # 三处全成分 sweep 共用的入口，配合下面的 run memo 把 ~3x 扇出收敛
+        # 到 ~1x，同时缓解 Yahoo 限流。
+        fresh_cached_info = _read_yf_info_cache(cache_key, max_age_seconds=_yf_info_cache_prefer_max_age_seconds())
+        if fresh_cached_info:
             _record_yfinance_runtime_event({
                 "operation": "ticker.info",
                 "ticker": ticker,
-                "status": "retry_scheduled" if attempt < attempts - 1 else "failed",
-                "source": "yfinance",
-                "attempt": attempt + 1,
-                "failure_type": _classify_yfinance_failure(exc),
-                "failure_reason": str(exc)[:240],
-                "backoff_seconds": pause_seconds if attempt < attempts - 1 else 0,
+                "status": "cache_hit_fresh",
+                "source": "persistent_cache",
+                "elapsed_ms": 0.0,
+            })
+            _YF_INFO_RUN_MEMO[ticker] = fresh_cached_info
+            return fresh_cached_info
+
+        last_error: Optional[Exception] = None
+        started = time.monotonic()
+        for attempt in range(attempts):
+            try:
+                info = yf.Ticker(ticker, session=get_shared_yf_ticker_session()).info
+                if info and isinstance(info, dict):
+                    _write_yf_info_cache(cache_key, info)
+                    _record_yfinance_runtime_event({
+                        "operation": "ticker.info",
+                        "ticker": ticker,
+                        "status": "provider_success",
+                        "source": "yfinance",
+                        "attempt": attempt + 1,
+                        "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                    })
+                    _YF_INFO_RUN_MEMO[ticker] = info
+                    return info
+                raise ValueError(f"Empty info for {ticker}")
+            except Exception as exc:
+                last_error = exc
+                _record_yfinance_runtime_event({
+                    "operation": "ticker.info",
+                    "ticker": ticker,
+                    "status": "retry_scheduled" if attempt < attempts - 1 else "failed",
+                    "source": "yfinance",
+                    "attempt": attempt + 1,
+                    "failure_type": _classify_yfinance_failure(exc),
+                    "failure_reason": str(exc)[:240],
+                    "backoff_seconds": pause_seconds if attempt < attempts - 1 else 0,
+                    "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                })
+                if attempt < attempts - 1:
+                    time.sleep(pause_seconds)
+
+        cached_info = _read_yf_info_cache(cache_key, max_age_seconds=60 * 60 * 24)
+        if cached_info:
+            _record_yfinance_runtime_event({
+                "operation": "ticker.info",
+                "ticker": ticker,
+                "status": "cache_fallback",
+                "source": "persistent_cache",
+                "failure_type": _classify_yfinance_failure(last_error),
+                "failure_reason": str(last_error)[:240] if last_error else "",
                 "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
             })
-            if attempt < attempts - 1:
-                time.sleep(pause_seconds)
-
-    cached_info = _read_yf_info_cache(cache_key, max_age_seconds=60 * 60 * 24)
-    if cached_info:
-        _record_yfinance_runtime_event({
-            "operation": "ticker.info",
-            "ticker": ticker,
-            "status": "cache_fallback",
-            "source": "persistent_cache",
-            "failure_type": _classify_yfinance_failure(last_error),
-            "failure_reason": str(last_error)[:240] if last_error else "",
-            "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
-        })
-        return cached_info
-    raise last_error or RuntimeError(f"Failed to fetch info for {ticker}")
+            _YF_INFO_RUN_MEMO[ticker] = cached_info
+            return cached_info
+        raise last_error or RuntimeError(f"Failed to fetch info for {ticker}")
 
 
 def get_yf_ticker_history_with_retry(

@@ -521,7 +521,7 @@ def test_l4_component_model_degraded_outputs_explain_fallback_reason(monkeypatch
     assert "fallback_without_reason" not in forward_codes
 
 
-def test_realtime_forward_earnings_does_not_request_historical_constituents(monkeypatch):
+def test_realtime_forward_earnings_does_not_request_historical_constituents(monkeypatch, tmp_path):
     requested = {}
 
     def fake_components(end_date=None):
@@ -540,9 +540,10 @@ def test_realtime_forward_earnings_does_not_request_historical_constituents(monk
             "operatingMargins": 0.3,
         }
 
+    monkeypatch.setattr(tools_L4.path_config, "cache_dir", str(tmp_path))
     monkeypatch.setattr(tools_L4, "YF_AVAILABLE", True)
     monkeypatch.setattr(tools_L4, "get_ndx100_components", fake_components)
-    monkeypatch.setattr(tools_L4.yf, "Ticker", lambda ticker: FakeTicker())
+    monkeypatch.setattr(tools_L4.yf, "Ticker", lambda ticker, session=None: FakeTicker())
     monkeypatch.setattr(tools_L4, "_fetch_yahoo_quote_summary_direct", lambda ticker: ({}, "skipped"))
     monkeypatch.setattr(
         tools_L4,
@@ -553,6 +554,7 @@ def test_realtime_forward_earnings_does_not_request_historical_constituents(monk
         ),
     )
     tools_L4.reset_l4_component_snapshot_cache()
+    tools_L4.reset_yf_info_run_memo()
 
     df, stats = tools_L4.get_ndx_components_data_yf_v5()
 

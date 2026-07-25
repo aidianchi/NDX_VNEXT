@@ -449,6 +449,14 @@ class VNextOrchestrator:
             model_cls=AnalysisRevised,
             payload={"governance_input": _model_dump(gov_input_reviser)},
             filename="analysis_revised.json",
+            # 优雅降级：reviser 幻觉出的非法 parent#field 引用先净化（可退回父级的退回，
+            # 混合权威父级或彻底无法解析的直接丢弃），避免整跑仅因个别幻觉 ref 就
+            # RuntimeError 中止。净化不放松下方 _validate_stage_evidence_refs 的合法性
+            # 判定——净化后仍残留的非法 ref 依旧会被拦下并走既有重试路径。
+            pre_validate_transform=lambda parsed: self._sanitize_reviser_evidence_refs(
+                parsed,
+                synthesis_packet.evidence_index,
+            ),
             validator=lambda candidate: (
                 self._validate_stage_evidence_refs(
                     candidate,
@@ -4566,6 +4574,7 @@ class VNextOrchestrator:
         model_cls: Type[Any],
         payload: Dict[str, Any],
         validator: Optional[Callable[[Any], List[str]]] = None,
+        pre_validate_transform: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
     ) -> Any:
         prompt = self._compose_prompt(stage_key, model_cls, payload)
         preferred_models = self._preferred_models_for_stage(stage_key)
@@ -4650,6 +4659,15 @@ class VNextOrchestrator:
                 self._save_stage_diagnostics()
                 continue
             parsed = self._normalize_payload(stage_key, parsed)
+            if pre_validate_transform is not None:
+                try:
+                    parsed = pre_validate_transform(parsed)
+                except Exception as exc:
+                    logger.warning(
+                        "%s pre_validate_transform raised, continuing with unsanitized payload: %s",
+                        stage_name,
+                        exc,
+                    )
             self._save_prompt_audit_json(stage_name, f"attempt_{attempt}.parsed.normalized.json", parsed)
             attempt_record["parsed_response_file"] = self._prompt_audit_relpath(
                 stage_name,
@@ -4889,6 +4907,130 @@ class VNextOrchestrator:
         path = self.output_dir / "llm_stage_diagnostics.json"
         path.write_text(json.dumps(self.stage_diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
         self._record_stage_artifact(path)
+
+    # Field keys that carry evidence_ref-style citations inside reviser JSON output;
+    # kept in sync with the key set _validate_stage_evidence_refs walks below.
+    _REVISER_REF_LIST_KEYS = ("evidence_refs", "counterevidence_refs", "counter_evidence_refs")
+
+    def _sanitize_reviser_ref_list(
+        self,
+        raw_refs: Any,
+        evidence_index: Dict[str, Any],
+        owner_desc: str,
+        warnings: List[str],
+    ) -> List[str]:
+        """净化单个 evidence_refs 列表（reviser 专用降级，不改变全局合法性判定）。
+
+        规则：
+        - ref 本身在 evidence_index 中 → 原样保留。
+        - ref 形如 parent#field 且不在 evidence_index，但 parent 在 evidence_index 且
+          parent 非 mixed_field_authority → 退回为 parent（coerce），记 warning。
+        - parent 是 mixed_field_authority，或 parent 本身也不在 evidence_index，或 ref
+          不含 '#' 且不在 evidence_index → 丢弃该 ref，记 warning。
+        """
+        sanitized: List[str] = []
+        seen: set[str] = set()
+        for ref in self._coerce_string_list(raw_refs):
+            if ref in evidence_index:
+                if ref not in seen:
+                    sanitized.append(ref)
+                    seen.add(ref)
+                continue
+            parent = ref.split("#", 1)[0] if "#" in ref else ""
+            parent_entry = evidence_index.get(parent) if parent else None
+            if (
+                parent
+                and isinstance(parent_entry, dict)
+                and not parent_entry.get("mixed_field_authority")
+            ):
+                warnings.append(
+                    f"{owner_desc}: coerced illegal ref '{ref}' -> parent '{parent}' "
+                    "(parent in evidence_index, not mixed_field_authority)"
+                )
+                if parent not in seen:
+                    sanitized.append(parent)
+                    seen.add(parent)
+                continue
+            if parent and isinstance(parent_entry, dict) and parent_entry.get("mixed_field_authority"):
+                warnings.append(
+                    f"{owner_desc}: dropped illegal ref '{ref}' "
+                    f"(parent '{parent}' is mixed_field_authority; refusing to coerce to parent)"
+                )
+                continue
+            warnings.append(f"{owner_desc}: dropped illegal ref '{ref}' (not resolvable in evidence_index)")
+        return sanitized
+
+    def _sanitize_reviser_evidence_refs(
+        self,
+        parsed: Dict[str, Any],
+        evidence_index: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Reviser 产出证据引用的优雅降级净化，只在 reviser 阶段的 pre_validate_transform
+        中调用。在 pydantic 校验之前，把可退回/需丢弃的非法 ref 处理掉，避免一次真实
+        run 仅因幻觉 ref 而 RuntimeError 整体中止；不放松 `_validate_stage_evidence_refs`
+        本身的合法性判定——净化失败的残留非法 ref 仍会被该函数拦下并触发既有重试路径。
+
+        若某个结构性元素（support_chain / time_horizon_view / portfolio_action 等，位于
+        某个 list 内的 dict 项）净化后所有 evidence_ref 类字段都清空，且清空是净化动作
+        造成的（净化前非空），则整条元素从其所在 list 中剔除，视为"无证据支撑降级"。
+        单例字段（如 reader_conclusion 本身）无法整体剔除，只保留净化后的空列表。
+        """
+        warnings: List[str] = []
+
+        def process(node: Any, path: str) -> bool:
+            """原地净化 node；返回 True 表示调用方应把该 dict 从其所在 list 中剔除。"""
+            if isinstance(node, dict):
+                had_refs_before = False
+                has_refs_after = False
+                touched = False
+                for key in self._REVISER_REF_LIST_KEYS:
+                    if key not in node or not isinstance(node[key], list):
+                        continue
+                    raw = node[key]
+                    if raw:
+                        had_refs_before = True
+                    sanitized = self._sanitize_reviser_ref_list(
+                        raw, evidence_index, f"{path}.{key}", warnings
+                    )
+                    if sanitized != self._coerce_string_list(raw):
+                        touched = True
+                    node[key] = sanitized
+                    if sanitized:
+                        has_refs_after = True
+                for key, value in list(node.items()):
+                    if key in self._REVISER_REF_LIST_KEYS:
+                        continue
+                    process(value, f"{path}.{key}")
+                return touched and had_refs_before and not has_refs_after
+            if isinstance(node, list):
+                survivors: List[Any] = []
+                for index, item in enumerate(node):
+                    if isinstance(item, dict):
+                        if process(item, f"{path}[{index}]"):
+                            warnings.append(
+                                f"{path}[{index}]: dropped entire element — all evidence_refs "
+                                "were sanitized away, no legal ref remains"
+                            )
+                            continue
+                        survivors.append(item)
+                    else:
+                        process(item, f"{path}[{index}]")
+                        survivors.append(item)
+                node[:] = survivors
+                return False
+            return False
+
+        process(parsed, "reviser")
+        if warnings:
+            logger.warning(
+                "reviser evidence_ref sanitization applied (%d action(s)): %s",
+                len(warnings),
+                "; ".join(warnings[:20]) + (" ..." if len(warnings) > 20 else ""),
+            )
+            self.stage_diagnostics.setdefault("reviser_evidence_ref_sanitization", [])
+            self.stage_diagnostics["reviser_evidence_ref_sanitization"].extend(warnings)
+            self._save_stage_diagnostics()
+        return parsed
 
     def _validate_stage_evidence_refs(self, candidate: Any, allowed_refs: set[str], stage_key: str) -> List[str]:
         payload = _model_dump(candidate)
@@ -5770,6 +5912,7 @@ class VNextOrchestrator:
         payload: dict,
         filename: str,
         validator: Optional[Callable[[Any], List[str]]] = None,
+        pre_validate_transform: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
     ) -> Any:
         checkpoint = self._load_stage_checkpoint(
             filename,
@@ -5786,6 +5929,7 @@ class VNextOrchestrator:
             model_cls=model_cls,
             payload=payload,
             validator=validator,
+            pre_validate_transform=pre_validate_transform,
         )
         self._save_json(filename, result)
         path = Path(filename)

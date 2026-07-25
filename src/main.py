@@ -678,6 +678,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
             "chart_time_series": "",
             "final_stance": "",
             "approval_status": "blocked_by_data_integrity",
+            "process_status": "completed_with_data_integrity_block",
             "models": available_models,
             "blocked": True,
             "blocking_reasons": integrity_report.get("blocking_reasons", []),
@@ -688,7 +689,11 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         with open(os.path.join(run_dir, "run_summary.json"), "w", encoding="utf-8") as handle:
             json.dump(summary, handle, ensure_ascii=False, indent=2, default=str)
             handle.write("\n")
-        raise RuntimeError("DataIntegrity blocked this run: " + "；".join(summary["blocking_reasons"]))
+        logging.warning(
+            "DataIntegrity blocked publication; preserving audit-only artifacts: %s",
+            "；".join(summary["blocking_reasons"]),
+        )
+        return summary
     _write_resume_hint(run_dir, args, data_json)
     builder = AnalysisPacketBuilder()
     packet_path = os.path.join(run_dir, "analysis_packet.json")

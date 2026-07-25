@@ -1,5 +1,6 @@
 """Offline contract tests for the full-constituent NTM forward-PE source."""
 
+import tempfile
 from datetime import datetime as real_datetime, timezone
 
 import pandas as pd
@@ -53,8 +54,16 @@ def _estimate_frame(fy1, fy2):
 
 
 def _install_yfinance(monkeypatch, payloads):
+    # get_yf_ticker_info_with_retry now backs fetch_component's .info lookup
+    # with a persistent cache + in-run memo (both keyed only by ticker); the
+    # same synthetic ticker ("AAA", ...) is reused across tests with
+    # different payloads, so each test needs its own cache dir and a cleared
+    # memo to avoid reading another test's cached .info.
+    monkeypatch.setattr(tools_L4.path_config, "cache_dir", tempfile.mkdtemp())
+    tools_L4.reset_yf_info_run_memo()
+
     class FakeTicker:
-        def __init__(self, ticker):
+        def __init__(self, ticker, session=None):
             self.payload = payloads[ticker]
             if self.payload.get("init_error"):
                 raise RuntimeError(self.payload["init_error"])

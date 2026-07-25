@@ -30,9 +30,19 @@ except ImportError:
     from config import path_config
 
 try:
-    from ..tools_common import classify_yfinance_failure, get_yfinance_runtime_diagnostics, reset_yfinance_runtime_diagnostics
+    from ..tools_common import (
+        classify_yfinance_failure,
+        get_yfinance_runtime_diagnostics,
+        reset_yfinance_runtime_diagnostics,
+        reset_yf_info_run_memo,
+    )
 except ImportError:
-    from tools_common import classify_yfinance_failure, get_yfinance_runtime_diagnostics, reset_yfinance_runtime_diagnostics
+    from tools_common import (
+        classify_yfinance_failure,
+        get_yfinance_runtime_diagnostics,
+        reset_yfinance_runtime_diagnostics,
+        reset_yf_info_run_memo,
+    )
 
 try:
     from ..data_availability import normalize_no_data_payload, no_data_reason
@@ -446,6 +456,7 @@ class DataCollector:
             enable_news: 是否启用新闻采集（默认False，非侵入性）
         """
         reset_yfinance_runtime_diagnostics()
+        reset_yf_info_run_memo()
         if reset_ndx100_price_panel_run_cache is not None:
             reset_ndx100_price_panel_run_cache()
         if reset_l4_component_snapshot_cache is not None:

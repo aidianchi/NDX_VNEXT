@@ -6788,7 +6788,7 @@ def get_ndx_forward_pe_full_constituent(end_date: str = None) -> Dict[str, Any]:
         }
         fetch_errors: List[str] = []
         try:
-            yf_ticker = yf.Ticker(ticker)
+            yf_ticker = yf.Ticker(ticker, session=get_shared_yf_ticker_session())
         except Exception as exc:
             return {
                 **base,
@@ -6813,7 +6813,11 @@ def get_ndx_forward_pe_full_constituent(end_date: str = None) -> Dict[str, Any]:
 
         info: Dict[str, Any] = {}
         try:
-            raw_info = yf_ticker.info
+            # 走共用的缓存/单次运行 memo 入口，而不是裸 yf_ticker.info：
+            # 让本 sweep 与 get_ndx_pe_and_earnings_yield /
+            # get_ndx_forward_earnings_quality 共用同一份 info，把 ~3x
+            # 扇出收敛到 ~1x。
+            raw_info = get_yf_ticker_info_with_retry(ticker, attempts=2, pause_seconds=0.5)
             if isinstance(raw_info, dict):
                 info = raw_info
         except Exception as exc:
@@ -6886,7 +6890,7 @@ def get_ndx_forward_pe_full_constituent(end_date: str = None) -> Dict[str, Any]:
         }
 
     records_by_ticker: Dict[str, Dict[str, Any]] = {}
-    worker_count = min(12, max(1, len(constituents)))
+    worker_count = min(4, max(1, len(constituents)))
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {
             executor.submit(fetch_component, holding): holding
@@ -7362,7 +7366,7 @@ def get_ndx_earnings_revision_metrics(end_date: str = None) -> Dict[str, Any]:
             "fetch_errors": [],
         }
         try:
-            yf_ticker = yf.Ticker(ticker)
+            yf_ticker = yf.Ticker(ticker, session=get_shared_yf_ticker_session())
         except Exception as exc:
             result["fetch_errors"].append(f"ticker_init:{str(exc)[:160]}")
             return result
@@ -7380,7 +7384,11 @@ def get_ndx_earnings_revision_metrics(end_date: str = None) -> Dict[str, Any]:
 
         info: Dict[str, Any] = {}
         try:
-            raw_info = yf_ticker.info
+            # 走共用的缓存/单次运行 memo 入口，而不是裸 yf_ticker.info：
+            # 让本 sweep 与 get_ndx_pe_and_earnings_yield /
+            # get_ndx_forward_earnings_quality 共用同一份 info，把 ~3x
+            # 扇出收敛到 ~1x。
+            raw_info = get_yf_ticker_info_with_retry(ticker, attempts=2, pause_seconds=0.5)
             if isinstance(raw_info, dict):
                 info = raw_info
         except Exception as exc:
@@ -7416,7 +7424,7 @@ def get_ndx_earnings_revision_metrics(end_date: str = None) -> Dict[str, Any]:
         return result
 
     records_by_ticker: Dict[str, Dict[str, Any]] = {}
-    worker_count = min(12, max(1, len(constituents)))
+    worker_count = min(4, max(1, len(constituents)))
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {
             executor.submit(fetch_component, holding): holding
@@ -8097,6 +8105,53 @@ def get_ndx_earnings_revision_metrics(end_date: str = None) -> Dict[str, Any]:
         "breadth_30d": breadth_block,
         "dispersion_ntm": dispersion_block,
         "analyst_coverage": analyst_block,
+        "MetricAuthority": {
+            "slope_30d": _component_metric_authority(
+                usage="supporting_only",
+                authority="revision_momentum_proxy",
+                reason=(
+                    "30-day earnings-revision slope is an expectation-direction and momentum "
+                    "proxy derived from component EPS revisions; supporting_only, must not be "
+                    "upgraded to a core valuation conclusion."
+                ),
+            ),
+            "slope_90d": _component_metric_authority(
+                usage="supporting_only",
+                authority="revision_momentum_proxy",
+                reason=(
+                    "90-day earnings-revision slope is an expectation-direction and momentum "
+                    "proxy derived from component EPS revisions; supporting_only, must not be "
+                    "upgraded to a core valuation conclusion."
+                ),
+            ),
+            "breadth_30d": _component_metric_authority(
+                usage="supporting_only",
+                authority="revision_momentum_proxy",
+                reason=(
+                    "Share of covered NDX weight with positive 30-day EPS revisions is a "
+                    "breadth/momentum proxy; supporting_only, must not be upgraded to a core "
+                    "valuation conclusion."
+                ),
+            ),
+            "dispersion_ntm": _component_metric_authority(
+                usage="supporting_only",
+                authority="revision_momentum_proxy",
+                reason=(
+                    "Weighted analyst NTM EPS estimate dispersion is an expectation-uncertainty "
+                    "and momentum proxy, not an official valuation input; supporting_only, must "
+                    "not be upgraded to a core valuation conclusion."
+                ),
+            ),
+            "analyst_coverage": _component_metric_authority(
+                usage="supporting_only",
+                authority="revision_momentum_proxy",
+                reason=(
+                    "Weighted analyst coverage count is a revision/momentum context proxy, not "
+                    "a valuation metric; supporting_only, must not be upgraded to a core "
+                    "valuation conclusion."
+                ),
+            ),
+        },
     }
     availability = (
         "available"
@@ -8146,6 +8201,37 @@ def get_ndx_earnings_revision_metrics(end_date: str = None) -> Dict[str, Any]:
         "partly absorb dense earnings-week revisions, which biases measured slopes "
         "toward zero (conservative)."
     )
+    data_quality = _quality_block(
+        source_tier=source_tier,
+        data_date=effective_date or today.isoformat(),
+        update_frequency="live; daily point-in-time archive plus current supplier consensus",
+        formula=formula,
+        coverage={
+            "total_constituents": len(component_records),
+            "total_valid_official_weight_pct": round(total_weight, 6),
+            "window_effective_coverage_pct": {
+                "30d": slope_blocks[30]["coverage"]["weight_coverage_pct"],
+                "90d": slope_blocks[90]["coverage"]["weight_coverage_pct"],
+            },
+            "breadth_weight_coverage_pct": breadth_block["coverage"][
+                "weight_coverage_pct"
+            ],
+            "dispersion_weight_coverage_pct": dispersion_block["coverage"][
+                "weight_coverage_pct"
+            ],
+            "analyst_coverage_weight_pct": analyst_block["coverage"][
+                "weight_coverage_pct"
+            ],
+            "flagged_weight_pct": top_flagged_weight_pct,
+        },
+        anomalies=anomalies,
+        fallback_chain=[
+            "self_archive",
+            "supplier_lookback",
+            SOURCE_TIER_UNAVAILABLE,
+        ],
+    )
+    data_quality["metric_authority"] = value["MetricAuthority"]
     return {
         "name": "NDX Earnings Revision Metrics",
         "series_id": "NDX_EARNINGS_REVISION_METRICS",
@@ -8168,36 +8254,7 @@ def get_ndx_earnings_revision_metrics(end_date: str = None) -> Dict[str, Any]:
         },
         "divergence": divergence,
         "notes": notes,
-        "data_quality": _quality_block(
-            source_tier=source_tier,
-            data_date=effective_date or today.isoformat(),
-            update_frequency="live; daily point-in-time archive plus current supplier consensus",
-            formula=formula,
-            coverage={
-                "total_constituents": len(component_records),
-                "total_valid_official_weight_pct": round(total_weight, 6),
-                "window_effective_coverage_pct": {
-                    "30d": slope_blocks[30]["coverage"]["weight_coverage_pct"],
-                    "90d": slope_blocks[90]["coverage"]["weight_coverage_pct"],
-                },
-                "breadth_weight_coverage_pct": breadth_block["coverage"][
-                    "weight_coverage_pct"
-                ],
-                "dispersion_weight_coverage_pct": dispersion_block["coverage"][
-                    "weight_coverage_pct"
-                ],
-                "analyst_coverage_weight_pct": analyst_block["coverage"][
-                    "weight_coverage_pct"
-                ],
-                "flagged_weight_pct": top_flagged_weight_pct,
-            },
-            anomalies=anomalies,
-            fallback_chain=[
-                "self_archive",
-                "supplier_lookback",
-                SOURCE_TIER_UNAVAILABLE,
-            ],
-        ),
+        "data_quality": data_quality,
     }
 
 
