@@ -5,6 +5,254 @@
 
 ---
 
+## 2026-07-27
+
+### 输入瘦身的受控复核：撤销 0.40% 的那一半、保留 72.71% 的那一半（用户逐条裁决后施工）
+
+用户读 brief 后反馈两点疑虑（改判条件变少、开头段语气变了），要求**从第一性原理判断瘦身合不合理，不许臆断**。
+
+**方法论更正（先于任何结论）**：用户原本拿 `20260719_130534` 对比 `20260725_232410`，该对照组不成立——数据日不同（07-19 vs 07-25），且中间夹杂多批不相关改动。改用**同数据日**的 `20260725_145833`（瘦身前）vs `20260725_232410`（瘦身后），两者 `function_availability_percent` 均 93.9%。
+
+**重复采样实验**（复用 `_compose_prompt("thesis", ThesisDraft, payload)` 真实组装路径，固定 `deepseek-v4-pro`，同一份 `synthesis_packet.json`）：
+
+| 条件 | `invalidation_conditions` 条数 |
+|---|---|
+| 现状瘦身 | **[2, 2, 2]**（+ 原跑 232410 = 2，共 **4/4 恒为 2**） |
+| 仅保留 `hypothesis_competition_summary`，其余不变 | **[4, 5, 3]** |
+| 未瘦身历史基线 145833 | 4 |
+
+两组区间**零重叠**。推翻此前"倾向于是 LLM 采样方差"的判断——是系统性偏移。
+
+**省量分解**（`_sanitize_prompt_payload("thesis", ...)` 逐步拆解，基准 516,085 字符）：丢弃四字段仅省 **0.40%**（2,074 字符），压缩证据索引明细省 **72.71%**（375,269 字符）。73% 的收益里 99.5% 来自后者。
+
+**机制**：`hypothesis_competition_summary.retained_disputes` 装的是 **11 条未解决争议**（"盈利修正供应商数据待验证""实际利率极值是结构性还是周期性"等）。改判条件本就是从"我哪里还不确定"推导出来的；把不确定清单从 thesis 眼前拿走，它只能退化成"多条件同时成立才算失效"的复合 AND 条件——概率上近乎永不触发，等于把确认偏误制度化，且删掉了「HY OAS 走阔 >3.5% 即转空」这类**单信号独立触发通道**。
+
+**施工**：
+- `NARRATIVE_STAGE_PROMPT_DROP_FIELDS["thesis"]` 撤出 `hypothesis_competition_summary` 与 `adjudication_history`（后者 403 字符，是 `candidate → kept_unresolved` 的降级审计链）；保留 `counter_thesis_boundary` / `evidence_registry_summary`（纯记账元数据）。改后**仍省 73.03%**，94 个 evidence ref 一个不少，11 条未解决争议全部回到 thesis 视野。
+- `_validate_reasoned_verdict_refs` 从"至少一条引用"收紧为"**至少三条不同引用**"。依据不是新拍数字：`final_adjudicator.md:243-245` 已写死"总-分-总"结构与"三条主要理由每条必须至少带一个方括号 evidence_ref"，此前只查 ≥1 条，放过了 20260725_232410 的真实事故形态——514 字单段连续文字把状态/矛盾/风险/定价/赔率/仓位/失效条件全部压进一段，零层级。`STAGE_CONTRACT_PROMPT_REQUIREMENTS["final"]` 同步登记 `三条主要理由`。
+
+**订正两处此前表述**：(1) 先前称"去掉 max_length 上限本应更长却更短、反直觉"——前提不成立，去上限改动日期为 2026-07-26，晚于两次 run，两次 `reasoned_verdict`（1259/514 字）均落在当时的 300–1300 区间内，从未触及上限。(2) 先前称判决正文"腰斩=变空"——不准确：232410 的 514 字承载的主张数其实更多，真正丢的是**总分层级结构与可追溯引用**，非信息量。
+
+**验证**：新增 `test_reasoned_verdict_requires_three_distinct_citations_for_three_reasons`（单引用/双引用/同一引用重复三次均须拦下；三条不同引用通过；越界引用仍优先拦下），改写 `test_thesis_prompt_drops_low_value_fields_and_keeps_required_ones` 断言两字段必须保留。全量 `--cache-clear` 1000 → **1001 passed**，零回归。
+
+**未查清、已交接**：`price_reflection_map` 的 `not_reflected` 计数瘦身前为 3、瘦身后为 0，且 A/B 两组共 6 次采样**全部为 0**——恢复 disputes 字段不能解释，根因未定位（T27）；「必须回应竞争假说」合约因 `candidate → kept_unresolved` 降级而空转，越有争议越不被要求回应（T28）。细节见 `investigation_reports/20260727_handoff_open_threads/HANDOFF.md`。
+
+---
+
+## 2026-07-26
+
+### T26 后续：真实 run 证伪了首版的 anyOf 判断，修正两处真实 bug（原判断错误，已如实记录）
+
+用户让 Codex 用 T26 首版代码跑了一次真实 run（`output/analysis/vnext/codex_strict_bridge_20260726_2032/`）：数据采集和 L1-L5 全部跑通，bridge 站点两次尝试均 `empty_response`（`llm_stage_diagnostics.json` 记录），用户反馈 DeepSeek 报错"anyOf 节点缺少顶层 type"，并明确指出这与首版 WORK_LOG 里"anyOf 官方支持、原样保留即可"的判断不一致。
+
+**订正**：那条判断错了。用真实 API 直接复现（不是猜测），逐个排查：
+
+1. **真实报错 1**（用户指出的那条，直接复现验证）：`{'error': {'message': "Invalid tool parameters schema : field \`anyOf\`: missing field \`type\`", ...}}`。逐个 schema 形态用真实 API 测试后确认：pydantic 给 `Optional[原始类型]` 生成的 `anyOf:[{type:T},{type:"null"}]`，DeepSeek strict 模式要求这类节点同级必须有 `type`；`Optional[嵌套模型]` 生成的 `anyOf:[{$ref:...},{type:"null"}]`，正确修法是把 `$ref` 解析并内联展开（不是加 sibling type——实测加了会撞另一条"An object with no properties is not allowed"）。
+2. **真实报错 2**（诊断过程中额外发现，用户未提及但更早触发、掩盖了报错 1 的真实验证）：`{'error': {'message': 'Thinking mode does not support this tool_choice', ...}}`。DeepSeek v4 系列默认开启思考模式（即使不显式请求），首版代码强制指定单个函数名的 `tool_choice` 与思考模式不兼容；改成 `tool_choice="auto"` 后思考模式下可正常调用唯一注册的工具。**这条 bug 比报错 1 更早触发**，意味着首版代码的 anyOf 判断实际上从未在真实 API 上被验证过——Codex 那次真实跑到的报错，很可能是报错 2 掩盖后报错 1 才露出来的（或两者交替），首版 WORK_LOG 里"anyOf 原样可用"完全是未经真实调用验证的文档字面推断，这次才是真正对照真实 API 行为核实。
+
+**修复**：
+- `llm_engine.py` 的 `sanitize_json_schema_for_strict_tool_calling` 重写为两遍处理：第一遍不变（`additionalProperties`/`required`/剥离不支持约束）；第二遍新增 `anyOf` 修正——collapse 纯原始类型的 Optional 为 `type` 数组去掉 `anyOf`；`$ref` 分支解析并内联展开、保留 `anyOf` 结构但不加 sibling type。
+- `_call_ai` 的 `tool_choice` 从强制指定函数名改为 `"auto"`（唯一注册一个工具时行为等价，且思考模式下才真正可用）。
+
+**验证**（真实 API 调用，非 mock）：
+- 用真实 `BridgeMemo.model_json_schema()` 走完整 `sanitize_json_schema_for_strict_tool_calling` → 真实调用 DeepSeek → **HTTP 200，返回完整合法 JSON，17 个必填字段齐全**，`principal_contradiction: null` 正确输出（证明 `$ref`+`null` 分支修法成立）。
+- 返回结果进一步过 `BridgeMemo.model_validate()`：pydantic 校验通过，`layers_connected` 正确解析为 `Layer` 枚举。
+- 单测更新：`test_sanitize_json_schema_for_strict_tool_calling_meets_deepseek_requirements` 改为锁定修正后的真实规则（不再断言"anyOf 原样保留"，改为断言"裸 anyOf 不能 survive、`$ref` 不能留在 anyOf 分支里"），并显式核实测试前提（原始 schema 确实是被拒绝的形态）；`test_call_ai_uses_strict_tool_calling_when_schema_provided` 的 `tool_choice` 断言同步更新为 `"auto"`。
+- 全量 `--cache-clear` **1000 passed**（净增 0——本轮是修正既有测试的错误断言，不是新增测试面）。
+
+**给用户的诚实说明**：首版 WORK_LOG 写的"anyOf 官方支持、不需要处理"是没有对照真实 API 验证过的判断，这次真实跑直接证伪了它，是真实的错误而不是配置问题——用户的怀疑是对的。这次的修复是逐条用真实 API 调用验证过的（不是又一轮文档字面推断），且额外挖出了一个用户没提到、但同样会导致 bridge 失败的独立 bug（思考模式与强制 tool_choice 不兼容）。
+
+**未完成**：仍需要一次真实完整 pipeline run（走 `_run_bridge` 真实 L1-L5 数据，而不是本轮这种孤立的 schema 验证调用）确认桥接站点在严格模式下产出的叙事实质内容不打折、`_validate_bridge_memo_v2` 业务校验能正常通过，见 `现在.md` T26。
+
+---
+
+### T26：DeepSeek 严格函数调用（Strict Function Calling）试点落地——桥接站点单点，代码+单测完工，未关单
+
+用户批准按此前提出的方案动手：捡起 `docs/2026-05-10_BRIDGE_JSON_RESILIENCE_AI_AUDIT.md` 第8节"阶段 C"被搁置两个半月的建议——把 bridge 站点从 `response_format=json_object`（只保证合法 JSON、不保证 schema）切换到 DeepSeek 官方的 strict function calling（服务端保证 100% 命中 schema）。
+
+**关键发现（施工过程中，改变了原计划的改动范围）**：原方案设想需要改造 `contracts.py` 里 `BridgeMemo` 及其 7 个嵌套类（移除 `extra="allow"`、把 `Optional` 字段转成带默认值的必填）。实际检查 `BridgeMemo.model_json_schema()` 的真实输出后发现不需要——strict 模式的"schema 层面要求"（`additionalProperties:false`、字段全部进 `required`）只约束**发给 API 的那份 JSON Schema**，不要求 Python 侧的 pydantic 模型本身做对应改动；`anyOf`/`$ref`/`$def` 官方明确支持，Optional 字段在 pydantic 里生成的 `anyOf:[{type},{type:null}]` 结构原样可用。于是把改动收敛成：只在**发送给 API 前**对 schema 做一次无损的净化转换，`contracts.py` 一行未动——比原计划更小、更安全。
+
+**实现**：
+- `llm_engine.py` 新增 `sanitize_json_schema_for_strict_tool_calling(schema)`：递归给每个 object 类型补 `additionalProperties:false` + 补全 `required`，剥离 `minLength`/`maxLength`/`minItems`/`maxItems`/`format`（后者不在官方支持类型清单内，且这类字段的值本来就会被 orchestrator 代码强制覆盖，模型输出什么不影响结果）。
+- `_call_ai`/`call_with_fallback` 新增 `strict_tool_schema`/`strict_tool_name` 两个可选参数：**只在显式传入时**才走 `tools`/`tool_choice` 路径（解析 `tool_calls[0].function.arguments` 作为返回文本，不再是 `message.content`），不传时的调用形态和试点之前逐字节相同——这是本次改动唯一的分叉点，经全量测试验证不影响其余任何 stage。
+- `orchestrator.py` 新增 `_STRICT_TOOL_CALLING_ELIGIBLE_STAGES = {"bridge"}`（试点范围收窄到代码里显式列出的白名单）+ `_strict_tool_schema_for_stage`：按环境变量 `NDX_STRICT_TOOL_CALLING_STAGES`（逗号分隔）决定是否为某次调用启用，默认不设置环境变量、行为完全不变。`_run_bridge` 接入该开关。
+
+**验证**：
+- `sanitize_json_schema_for_strict_tool_calling` 用 `BridgeMemo` 的真实 schema（含 7 层嵌套 `$defs`）端到端断言：净化前确认原始输入确实带着 `additionalProperties:true`/`minItems` 等不合规项（证明测试前提成立，不是测一个已经干净的输入），净化后逐层核对全部合规，且 `anyOf`/`$ref` 结构原样保留。
+- `_call_ai` 新增 mock 测试验证：传 `strict_tool_schema` 时发送 `tools`/`tool_choice`、不发送 `response_format`，返回值取自 `tool_calls[0].function.arguments`；不传时的调用与试点前完全一致（新增专门的回归测试锁定这一点）。
+- `_run_stage`/`_strict_tool_schema_for_stage` 新增 4 条测试：默认关闭、环境变量无法越权启用白名单外的站点、bridge 显式开启后返回已净化的 schema、`_run_stage` 只在传入 schema 时才把它递给引擎（其余调用完全收不到这个参数）。
+- 全量 `--cache-clear` 由 993 passed 增至 **1000 passed**，零回归。
+
+**未完成——不能靠单测替代的一条**：这套改动"能不能跑通"已经证明，"效果好不好"没法证明——是否真的减少了桥接站点的重试、token 花费会不会异常、桥接产出的叙事实质内容会不会因为约束更严而变差，这些只有真实调用一次 DeepSeek 才能回答。需要用户设置环境变量 `NDX_STRICT_TOOL_CALLING_STAGES=bridge` 跑一次真实完整 run 并与不开启的版本对比，见 `现在.md` T26。
+
+---
+
+### 数字规则重构：字数上限系统性审计 + 全面放宽/移除
+
+用户追问：这套系统是自己 vibe coding 出来的，很多规则自己都不知道有哪些，怀疑字数类上限"没有参考意义"，要求列举全部数字规则并判断哪些合理。核实后用户明确指示：`overall_assessment` 直接不设限、`revision_direction` 放宽到 500；并纠正了 Fable 此前"没出过事就先不动"的保守判断——"没出过事不代表合理"，要求从这个角度全面重构，"字多一点并不会有什么坏处"。
+
+**审计方法**：脚本提取 `contracts.py` 全部 `Field(max_length=/min_length=)`（52 处）+ 手工核查自定义 `field_validator`（`reasoned_verdict` 的 300-1300 双边界）+ `orchestrator.py` 内非 Field 的数量阈值（`event_section_summary` 的引用数量 2-5、`summary_text` 字符带 100-600）。分三类：结构完整性（"不许留空"，未动）、证据诚信（`_reject_missing_evidence_as_direction_claim` 等非长度型语义校验，未动——这些是"不得编造""指标不得越权"的具体落地，不是随手定的数字）、数量上限（本条处理的对象）。
+
+**逐字段复核方法**：不是无脑全删，而是先查每个字段是否喂进 `vnext_reporter.py` 的固定宽度展示位（`grep` 渲染代码里是否出现在 `<h1>`/hero title/卡片头部 `<span>` 这类位置）。查到两处**有真实下游依据、明确保留**：
+
+- `FinalAdjudication.final_stance`（200字）——渲染进报告 `<h1>` 主标题和 hero title，无限长会直接破坏报告首屏排版，这是真实约束不是随手数字，维持不变。
+- `LayerCard.local_conclusion`（500字）——渲染进层卡片头部 `<span class="layer-summary">`，与其它徽章同行展示，维持不变。
+
+其余全部确认"不进入任何固定宽度展示位、纯属人为限制"，处理方式：
+
+| 字段 | 原上限 | 新状态 |
+|---|---|---|
+| `Critique.overall_assessment` | 200 | **移除**（用户明确指示；真实事故已复现） |
+| `Critique.revision_direction` | 300 | **放宽到 500**（用户明确指示） |
+| `CrossLayerClaim.mechanism` | 300 | 移除 |
+| `Conflict.implication` | 300 | 移除 |
+| `BridgeMemo.implication_for_ndx` | 500 | 移除 |
+| `ThesisDraft.environment/valuation/timing_assessment` | 各300 | 移除 |
+| `ThesisDraft.main_thesis` | 500 | 移除 |
+| `ThesisDraft.state_diagnosis` | 600 | 移除 |
+| `ThesisDraft.priced_narrative` | 800 | 移除 |
+| `ThesisDraft.payoff_assessment` | 600 | 移除 |
+| `ThesisDraft.confirmation_cost` | 600 | 移除 |
+| `AnalysisRevised.revision_summary` | 500 | 移除 |
+| `FinalAdjudication.adjudicator_notes` | 500 | 移除 |
+| `FinalAdjudication.reasoned_verdict` | 300-1300 | 下限 300 保留（强制"总-分-总+三条理由+引用"实质内容，非任意数字），上限放宽到 3000 |
+| `ContextBrief.data_summary` | 300 | 移除 |
+| `event_section_summary.summary_text`（`orchestrator.py` 校验，非 pydantic Field） | 100-600 | 下限 100 保留（同理强制实质总结），上限放宽到 1500 |
+
+同步更新 `critic.md`（移除 200 字提示、更新为 500 字）、`event_section_summary.md`（150-400 → 100-1500 并注明"上限宽松，不必刻意压缩"）、`orchestrator.py` 里 event_section_summary payload 模板文案、`STAGE_CONTRACT_PROMPT_REQUIREMENTS["critic"]` 登记（从 `("200 字符","300 字符")` 改为 `("500",)`，因 overall_assessment 已无约束可登记）。
+
+**测试处理**：`test_critic_stage_retries_after_overlong_overall_assessment` 的前提已失效（该字段不再有上限），拆成两条——`test_critic_overall_assessment_has_no_length_cap`（锁定移除生效，超长文本一次通过不重试）+ `test_critic_stage_retries_after_overlong_revision_direction`（锁定 revision_direction 新上限仍能触发重试自愈）。`tests/test_contracts.py` 与 `tests/test_vnext_orchestrator.py` 里两处 `"过长" * 651`（对应旧 1300 上限）改为 `"过长" * 1501`（对应新 3000 上限）。
+
+**验证**：全量 `--cache-clear` 由 992 passed 增至 **993 passed**（净增 1：移除 1 条失效测试、新增 2 条），零回归；`tests/test_governance_input.py`（含防漂移闸门）与 `tests/test_docs_consistency.py` 共 15 passed。
+
+**给用户的说明**：这次审计确认了用户的怀疑——所有 max_length 数字本身都没有找到任何文档化的依据（没有"界面只能显示多少字"或"下游系统装不下"这类理由）。但两个例外（`final_stance`、`local_conclusion`）不是"没出过事所以先留着"的托辞，而是真查到了具体的下游渲染代码证明它们喂进固定宽度位置——这两处保留是基于新证据，不是延续旧的保守判断。
+
+---
+
+### "为什么频繁第一次没过"系统性追问：DeepSeek 严格模式事实核查 + 批评者/五层说明书补漏两处
+
+用户追问：今天真实跑里那么多站点第一次没通过，到底是约束不够硬、说明书不够优雅，还是没用对 DeepSeek 的 JSON 模式？要求研究整体架构有没有系统性不优雅。
+
+**排查方法**：不凭印象回答，逐条查代码 + 逐条查真实 run 的报错原文，把当天所有重试按根因分类，而不是笼统归为"模型不听话"。
+
+**结论一：不是 JSON 模式用错**。`llm_engine.py:166` 确认已用 `response_format={"type":"json_object"}`；当天两次真实跑的 `llm_stage_diagnostics.json` 里所有重试均为 `schema_validation_error`/`contract_validation_error`，零个 `parse_error`——JSON 语法合法性从未是问题，`json_object` 模式的职责边界与实测完全吻合。
+
+**结论二：但代码里有一段被搁置两个半月的"强模式"线索**。`llm_engine.py:57,79,100` 的 `service_beta_features["deepseek"]` 只被赋值、全仓库无第二处读取；追出仓库里已有一份 2026-05-10 的历史审计文档（`docs/2026-05-10_BRIDGE_JSON_RESILIENCE_AI_AUDIT.md`），当时已完整诊断同一类问题（bridge 站点 event_refs 类型漂移崩溃），去 DeepSeek 官方文档核实过存在"Strict Function Calling (Beta)"——服务端保证 100% 命中 schema，但当时只做了"阶段 A/B"（parse_error 反馈强化 + 切 `/beta` 端点），"阶段 C"（真正注册 strict tool）被记录为"仍是根治路径"后从未执行。**用户怀疑这可能是 AI 编造的功能，故这次不直接采信旧文档，重新联网核实**：用 `web-access` skill 直接抓取 `api-docs.deepseek.com` 当前版本的 JSON Output 和 Tool Calls 两个页面原文——确认该模式**截至 2026-07-26 仍然存在**，仍是 Beta、仍需 `/beta` base_url、仍要求 `additionalProperties:false` 和全字段 required、仍不支持 `min/maxLength`/`min/maxItems`、思考模式下可用；官方文档未明确 `deepseek-v4-flash` 是否支持（示例只出现 v4-pro），也未说明能否与 `response_format=json_object` 同时使用——这两点如实标注为"文档未回答"，不是我推断出来的答案。**结论：这不是幻觉，是真实存在、且被搁置至今的改进项，需要按 5 月文档建议的方式先单点试点，而不是直接采信推广。**
+
+**结论三：约束不够硬这个怀疑是对的，而且不是孤例**。把批评者、五层分析师站点的判卷标准和说明书逐条比对（风险哨兵、事件卡解读、事件汇总、五层的 `core_facts` 等已核对确认说明书写清楚，不受影响），新发现两处与 reviser/counter_thesis 同型的漏洞：
+
+- 【已修复】`Critique.overall_assessment`（`max_length=200`）和 `revision_direction`（`max_length=300`）都是 pydantic 硬约束，但 `critic.md` 从未提及这两个字数上限——真实事故当天复现：`overall_assessment` 写长被打回重试一次。已在 `critic.md` 补齐两处上限说明，并在 `STAGE_CONTRACT_PROMPT_REQUIREMENTS` 登记 `"critic": ("200 字符", "300 字符")`，扩展防漂移闸门覆盖面（登记表首次覆盖非 lambda-validator 类型的合约，即 pydantic 原生长度约束）。
+- 【已修复】`LayerCard.local_conclusion`（必填、`max_length=500`）是五层共享的 `_compose_layer_prompt` 契约文本里唯一一处"提到字段名但从未指示必须输出"的字段——"必须新增并认真填写的字段"清单里没有它，只在别处顺带提了一句"layer_synthesis 不能只重复 local_conclusion"。真实事故当天复现：L4 站点因 `local_conclusion Field required` 被打回重试一次。已在共享契约文本里补上明确指令。由于这是 5 个 stage 共享一段 Python 动态拼接文本、不是单个静态 prompt 文件，不适合塞进 `STAGE_CONTRACT_PROMPT_REQUIREMENTS`（该机制假设每个 stage 对应一个静态文件），改为单独测试直接调用 `_compose_layer_prompt` 断言拼接结果。
+
+**验证**：新增 2 条测试（`test_critic_stage_retries_after_overlong_overall_assessment` 锁定"写长了仍能靠重试自愈"这条安全网；`test_layer_prompt_documents_local_conclusion_as_required_field` 锁定共享契约文本包含必填指令）。全量 `--cache-clear` 由 990 passed 增至 **992 passed**，零回归；`tests/test_docs_consistency.py` 7 passed。
+
+**给用户的最终判断**：当天的重试大致分两类，不能一概而论。一类是"说明书没写清楚"（今天连续找到 5 处：bridge 5月已修、reviser/counter_thesis 本周已修、critic/L1-L5 本条修），这是真实的架构缺陷，可以且应该根治，思路是把 `STAGE_CONTRACT_PROMPT_REQUIREMENTS` 覆盖面继续扩大到所有站点。另一类是"说明书写清楚了，模型仍偶尔不合规"（l2 漏填一条 core_fact、事件卡偶尔忘记降级措辞、事件总结的引用交叉核对），这是概率性输出的正常代价，重试机制本身没有问题，不需要也不应该为此推倒重来。DeepSeek 的严格模式（若試點成功）主要能收窄第二类里"字段结构性缺失/类型错误"的子集，但官方 schema 本身不支持长度约束，所以像批评者的字数上限这类问题就算换了严格模式也治不了——文档纪律仍是唯一根治路径。
+
+---
+
+### 真实完整 run（`20260725_232410`）端到端验收，T24 关单 + 发现并修复终审判决书零引用漏洞
+
+用户手动跑通一次干净完整 run，要求"看一下还有什么需要收尾的，高质量解决"。逐项核对上一批五条并行线在真实 API 调用下的表现，不只看测试绿灯。
+
+**上一批五条线的真实 run 验收结果**：
+
+- 【关闭 T24】论点建构 + 反方输入瘦身。真实结算单（`final_adjudication.json.token_usage`）：thesis 站读入量从上一次真实跑的 278,764 prompt tokens 降到 **67,372**（降 75.8%，超过预测的 72.9%）；counter_thesis 从 282,286 降到 **71,320**（降 74.7%，超过预测的 70.2%）；全跑总 prompt tokens 从 1,250,568 降到 957,630（降 23.4%）。判断质量未见劣化：`reasoned_verdict` 连贯、引用真实数字（实际利率 2.43%/99.6分位、盈利修正 30日+4%/90日+10% 等），方向与证据面吻合（利率类/估值类/趋势类共振指向"赔率偏不利"）。反方与论点建构均 `attempts=1`，无需重试。
+- **反方修复（T21）真实验证**：`counter_thesis` 站 `attempts=1, errors=0`——此前反复失败、烧掉约 28 万 token 的问题在真实 API 调用下没有复现，一次通过。
+- **修订者规格漂移修复（T19）真实再验证**：`reviser` 站 `attempts=1, errors=0`，`reviser_thesis_field_carry_forward` / `reviser_degraded_fallback` 均未触发——两道安全网继续保持"备而不用"，说明书本身撑住了。
+- **机械站点 flash 路由（T25）真实验证**：`event_card_interpreter` 全部合计约 1.56 万 prompt tokens、`event_section_summary` 约 3,897 tokens，与预期"省不了多少钱但原则一致"的判断吻合，未观察到降级导致的质量异常。
+
+**本轮真实 run 顺带发现的独立问题（不在原五条线范围内，当场诊断修复）**：
+
+终审判决书给读者看的正文 `reasoned_verdict` 这次一字未引用证据——514 字、内容连贯、数字详实（利率分位、PE、广度百分比等一应俱全），却**零处**方括号引用。`final_adjudicator.md` 白纸黑字："三条主要理由每条必须至少带一个方括号标注的 evidence_ref……这是硬要求，一个都没有等于整段作废。"但代码侧从未把这条规则接成会拦截、触发重试的合约——`_annotate_reasoned_verdict_refs` 只在生成**之后**做软性标注（写进 `quality_gate.notes` 的 `reasoned_verdict_missing_refs`），不会让 `_run_stage` 重试；final 阶段的 `validator=` 只有 `_validate_stage_evidence_refs`，该函数只扫描结构化的 `evidence_refs`/`counterevidence_refs` 字段，`reasoned_verdict` 是自由文本，从未落入它的检查范围。报告照常按 `approved_with_reservations` 发布，读者看到的主判决文字完全没有可追溯证据。
+
+**根因归类**：与本次系列事故同宗——A 类规格漂移的变体。区别在于这次不是"说明书没写规则"（`final_adjudicator.md` 本来就写了、还给了正确格式示例 `[L1.get_10y_real_rate]`），而是"规则没有被强制"：判卷标准里压根没有对应的校验钩子。修复不需要碰 prompt，只需要把说明书已经声明的"硬要求"真的做成硬校验。
+
+**修复**：新增 `_validate_reasoned_verdict_refs`（复用既有的 `_resolve_claim_evidence_ref` 解析逻辑），接进 final 阶段 `_run_stage` 的 `validator=` 链：`reasoned_verdict` 非空时，零方括号引用 → 拒绝；引用了不在 `evidence_index` 里的 ref → 拒绝。不改动 `_annotate_reasoned_verdict_refs`（继续服务续跑加载旧检查点时的软性标注，且它的既有两条单测——非阻塞、零引用打软标记——原样保留，未被本次改动破坏）；不放大终审阶段本来就有的爆炸半径（`reasoned_verdict` 的 300-1300 字长度要求此前就是会触发重试的硬 pydantic 校验，这次只是把"必须带引用"提到同一严重度，不是新增一种此前不存在的失败模式）。
+
+**验证**：红灯先行——独立脚本证实修复前的 `_validate_stage_evidence_refs` 单独作用于零引用判决文本时返回空错误列表（即会静默放行，逐字复现真实 run 的漏洞）。新增 2 条测试：零引用触发重试、引用非法 ref 触发重试，均验证重试反馈生效、第二次尝试正确通过。全量 `--cache-clear` 由 988 passed 增至 **990 passed**，零回归；`tests/test_docs_consistency.py` 7 passed。
+
+**本轮扫过、确认健康、无需处理的信号**（如实记录，避免下次误判为新 bug）：critic/l2/l4 各自的单站点自愈重试（首次触发既有校验、第二次自行修正，非本次改动引入）；`event_section_summary` 两次尝试失败后按设计留空，属于既有"宁缺毋滥"闸门（`CLAUDE.md`「常见误判」已记录，不是遗漏）；`final_claim_ledger.json` 中 1 条 thesis claim 因 `only_weak_or_derived_evidence_refs` 被判定为 `downgraded`（非 `blocked`）——核对该 claim 的四要素（evidence_refs/counter_evidence_refs/inference_steps/falsification_conditions）齐全，降级理由是所依赖证据全部为技术面衍生指标而非核心强证据，是"指标不得越权"闸门正确工作，不是缺陷。
+
+**未完成**：本批改动（含 2026-07-25 的 T19/T21/T24/T25 全部四批 + 本条的 reasoned_verdict 修复）均未提交入库，待用户确认后统一提交。
+
+---
+
+## 2026-07-25
+
+### T24（论点建构 + 反方输入瘦身）：方案 + 代码 + 测试完工，未关单——等一次真实 run 验收判断质量
+
+T21 落地后解封，worktree 隔离施工，两阶段门槛制（先出书面方案 + 预估节省，达标才动手，严禁触碰证据索引 key、竞争假说、冲突相关字段、反方独立性边界）。Fable 合并前独立用真实 run 的 `synthesis_packet.json` 复核了安全性，不只信 agent 自报。
+
+**方案发现**（`investigation_reports/20260725_thesis_counter_thesis_slimming/PROPOSAL.md`）：两站读入量大的瓶颈不在 `SynthesisPacket` 顶层字段（去掉全部非 `evidence_index` 字段理论上限只有 7.4%），而在 `evidence_index` 内部——单条 `L2.get_vix_term_structure#percentile_context` 就有 228,941 字符，评估后确认是"审计级全量明细"（逐票/逐日序列），两站说明书从未要求读取，且两站合法引用只到 `parent#field` 一层，模型没有任何路径能合法引用到某一票或某一天，模型看了也用不上。
+
+**实施**：不改 `_run_thesis` / `_counter_thesis_prompt_payload` 构造的完整 payload（继续用于 checkpoint 续跑比对和审计），只在最后一步"喂给 LLM 的 prompt 文本"这一层做压缩——`_sanitize_prompt_payload` 新增 thesis/counter_thesis 分支：丢弃两站说明书均未要求的顶层字段（`evidence_registry_summary` 等），并对 `evidence_index` 每条记录里超过双阈值（条数>8 且序列化>800字符）的嵌套列表压缩成"count+2-3条样本+说明"，聚合字段（`value`/`coverage`/`windows`/`winsorized_weight_pct`）原样保留。
+
+**Fable 独立复核**（不是转述 agent 报告）：用真实 `output/analysis/vnext/20260725_145833/synthesis_packet.json` 跑一遍真实的 `_sanitize_prompt_payload("thesis", ...)`，实测 thesis payload 518,835→140,397 字符，**降 72.9%**（agent 自报 72.6%，吻合）；`evidence_index` 94 个 ref key 压缩前后**逐字完全一致**；`competing_hypotheses` 逐字保留；`high_severity_typed_conflicts` 初查有 1 处差异，追查后确认是既有的 `_strip_empty_event_prompt_fields`（T24 之前就存在的逻辑）清掉了一个本来就是空列表的 `event_refs` 字段，冲突的严重度/描述/机制/影响/证据引用等实质内容未受影响，不是本次改动引入的问题。
+
+**验证**：新增 5 条测试（thesis/counter_thesis 各一条验证必需字段保留+冗余字段丢弃+ref key不变+聚合字段不变+超长列表压缩、阈值边界测试、端到端真实 `_run_stage` 落盘验证没进样本的行确实从磁盘上的 prompt 文本消失）。全量 `--cache-clear` 由 984 passed 增至 **988 passed**，零回归；`tests/test_docs_consistency.py` 7 passed。
+
+**未完成——不能靠测试替代的一条**：压缩掉 92% 的证据审计明细后，论点建构和反方的**判断质量**会不会受影响，这是模型行为问题，不是格式问题，测试只能证明"结构对、没丢引用"，不能证明"少看这些明细，结论不会变差"。必须靠一次真实 LLM run 验收才能关单，见 `现在.md`。
+
+---
+
+### T21/T22/T23/T25 四条并行线关单（多 agent 并行施工 + Fable 逐项复核合并）
+
+用户在核实 T17-T19 之余，追问三件事：这套架构是否有根本性浪费、reviser 那次事故有没有同类漏网之鱼、以及能否全面换 flash 降本。诊断结论：全面 flash 不划算（弱模型违约率上升，重试单价正好压在最贵的两站上，省下的会吐回去）；但診断过程中用真实 token_usage 结算单坐实了另一个具体病灶——反方（counter_thesis）复刻了 reviser 崩溃前一模一样的规格漂移病。用户批准按拆解出的五条线（T21-T25）分头施工，本条记录关闭其中四条（T24 留待下条记录，因为它依赖 T21 先落地才解封）。
+
+**并行拆分方式**：T21（改 counter_thesis 相关代码）、T25（改模型路由配置）用独立 git worktree 隔离，避免与彼此、与当时主工作树里未提交的 T19 改动互相踩踏；T22（只读调查）、T23（新建文档）不碰既有代码，直接在主工作树跑。四个 agent 并行执行，完工后逐个由 Fable 亲自核对真实数据、审查 diff、手工合并（非 git merge，因 worktree 落后主仓库提交，逐 hunk 核对内容一致后搬运），不接受 agent 自述"已完成"。
+
+- 【关闭 T25】机械站点选择性换 flash。事件卡解读、事件汇总两站路由改 flash 优先、pro 兜底；判断脊梁站点路由未动。核实事件卡产出确实被隔离在 `event_index`（非 `evidence_index`），不进主证据链，换模型不会让弱判断升格为强证据。真实数据显示这两站合计仅占全跑 token 的约 2.7%，如实告知用户"省不了多少钱，价值在原则一致性"，未夸大效果。改动仅 `config/stage_model_routing.json`、`orchestrator.py` 默认路由字典、新增 1 条路由测试。
+
+- 【关闭 T22】批评者/风险哨兵冗余可行性调查（只读）。核实到一条比"是否冗余"更重要的事实：某次真实跑里，批评者精确指出"回购同比收缩 69%"这个数字无数据支撑（对应字段为 null）建议删除，但**同一次跑**里风险哨兵在完全不知情的情况下把这个已被证伪的数字当既定事实写进了风险论证——证明"两个独立视角互相校验"这个默认预期目前架构上并未兑现。同时定位重叠根因：`critic.md`"过度谨慎与错过赔率"一节与 `risk_sentinel.md`"3.5 双向风险与确认成本"一节是同一件事的设计层面对撞，不是巧合。产出三选一书面建议（合并/仅改重试策略/维持现状），推荐"仅改重试策略"为唯一无代价改动，"合并"会真实牺牲"证据面均衡"原则，需要额外 A/B 验证，**决定权留用户**，未产出任何代码改动。报告：`investigation_reports/20260725_critic_risk_redundancy/OVERLAP_AUDIT.md`。
+
+- 【关闭 T23】人话架构文档。逐站点讲清楚回答什么问题/凭什么有发言权/看不到什么/失败会怎样，配真实花钱地图（`token_usage` 实测数字），加"还没人替你验证过的设计决定"一节（收录 T22/T20/T24 三项）。Fable 抽查核实了文档里的关键事实（回购 69% 数字矛盾、终审第二次才通过、结构检查未过但未触发重跑等），均与真实数据吻合，未发现编造，未做实质改写。交付：`系统说明_人话版.md`。
+
+- 【关闭 T21】反方 counter_thesis 合约—说明书错位修复。根因与 reviser 那次事故同型：`_validate_counter_thesis_draft` 和 pydantic 结构校验要求的字段名，`counter_thesis.md` 从未逐字写过，模型只能凭经验猜——两次真实事故复现同一模式（`hypothesis_text` 猜成 summary/statement，`falsification_conditions` 猜成 falsification_signals），两次尝试共烧掉约 28 万 prompt token，最后退回确定性兜底稿。修复：`counter_thesis.md` 补齐「输出字段纪律（硬合约）」+ 完整正确 JSON 示例；`STAGE_CONTRACT_PROMPT_REQUIREMENTS` 登记表新增 `counter_thesis` 条目（与已有 thesis/reviser/final 条目合并，非覆盖）；红灯回归测试用会"照 prompt 抄字段名"的 fake engine 精确复现两条真实报错，修复前红、修复后一次通过。
+
+  **Fable 在合并 agent 产出时发现并补做的追加修复**（不在原 T21 任务范围内，是复核 T23 文档时发现的缺口）：修订者失败降级时会显式打 `degraded_fallback` 标记并传导进终审判决书的质量闸门（T19 的 D 类工作），但反方失败降级时此前只留痕在 `counter_thesis.json` 自己的 `prompt_input_audit` 里，终审判决书完全看不出这次反方论证是模板凑数，两个站点的降级可见度不对称。补齐：`_build_hypothesis_competition` 把 counter_thesis 的 `fallback_reason` 计入 `HypothesisCompetition.fallback_warnings`；主流程在原有 `reviser_degraded_unrevised_thesis` 质量闸门备注旁新增对应的 `counter_thesis_degraded_deterministic_fallback` 备注。新增 2 条测试（降级触发时正确标记、正常产出时不误标）。
+
+**验证**：全量 `--cache-clear` 由 T19 收工时的 980 passed 增至 **984 passed**（T25 +1、T21 主修复 +1、T21 追加修复 +2，零回归）；`tests/test_docs_consistency.py` 7 passed。
+
+**未完成**：四项修复均未提交入库，与此前 T17-T19 的工作树改动一起，待用户批准后统一提交。T20（命名空间根治方案）、T24（输入瘦身，本条记录后立即启动）仍未开工，见 `现在.md`。
+
+---
+
+### 干净完整 run 端到端验收，T17/T18/T19 三项一并关单
+
+用户手动跑通一次干净完整 run（`output/analysis/vnext/20260725_145833/`），逐项核对三个待验收事项，证据均在同一次 run 里坐实：
+
+- 【关闭 T17】L4 句柄泄漏治本 + 分层缓存修复。`data_integrity_report.json`：`function_availability_percent=93.9`（前次 82.3%）、`confidence_percent=91.1`、`blocked=False`、`publish_status="publishable"`；`analysis_packet.json` 中 `get_equity_risk_premium` 多处正常出现，确认恢复。代码已随 commit `9f8d484` 入库。
+- 【关闭 T18】reviser 证据引用优雅降级 + `get_ndx_earnings_revision_metrics` 授权登记。`synthesis_packet.evidence_index` 核对：该函数五个字段（`slope_30d` / `slope_90d` / `breadth_30d` / `dispersion_ntm` / `analyst_coverage`）均登记为 `supporting_only`，与设计一致；本次 run 净化逻辑未被触发（`llm_stage_diagnostics.json` 无 `reviser_evidence_ref_sanitization` 记录），说明本轮无非法引用可净化，不是功能失效。代码已随 commit `9f8d484` 入库。
+- 【关闭 T19】reviser 合约架构性修复（规格漂移 + 软着陆），验收判据见下方施工记录。`llm_stage_diagnostics.json`：reviser `attempts=1`，`reviser_thesis_field_carry_forward` 与 `reviser_degraded_fallback` 均未出现——即**第一次尝试就过、且两道安全网都没触发**，证明是 A/B 类说明书修复本身治本，不是靠 C/D 类兜底混过去的。`final_adjudication.json.quality_gate.notes` 中也没有 `reviser_degraded_unrevised_thesis` 标记。
+
+同一份 run 的真实结算单（`final_adjudication.json.token_usage`）顺带暴露了下一个问题：反方（counter_thesis）复刻了 reviser 崩溃前一模一样的规格漂移病，`attempts=2` 且 `status=failed`，两次尝试共约 28 万 prompt token 全部作废、代码兜底稿顶上；加上论点建构（约 27.9 万 prompt token），两站合计吃掉全跑 45% 的 token。已拆解为 T21-T25 五条线继续处理，见 `现在.md`。
+
+### reviser 连崩两跑的根因诊断与架构性修复（T19 施工记录）
+
+**诊断（证据取自失败 run `output/analysis/vnext/20260724_223804/`）**：不是"约束太多压垮模型"，是 **reviser 挂的合约最多、说明书写的最少**。
+
+- `llm_stage_diagnostics.json`：reviser 两次尝试报同一条错（`candidate hypothesis hyp_counter_33b7f68546 is missing from hypothesis_responses`），非随机失手。
+- `prompt_audit/reviser/attempt_{1,2}.parsed.normalized.json`：两次 `revised_thesis` 键集合**逐字相同**，且恰好等于 `reviser.md` 输出模板 + Step 3 清单列出的 19 个字段。模型严格照说明书作答；`hypothesis_responses` 从不在说明书里。
+- 输入体量**不是**病因：reviser `prompt_chars=70,671`，thesis `prompt_chars=596,649`（8.4 倍）却通过。
+- 材料本就在手：`attempt_1.prompt.txt:321-344` 完整携带 `thesis_hypothesis_responses`（两个 id、verdict、理由、合法 refs），但 `reviser.md` 输入字段表未列该字段。
+- 重试无效的机制：`_run_stage` 把 `last_error` 追加在完整 prompt 之后，正文仍是 18 字段模板 → 反馈与正文自相矛盾，且重试是整份重采样，无法表达"保持其余不变只补一个字段"。
+- 合约面盘点：thesis 挂 1 条 validator、prompt 写了；final 挂 1 条、prompt 写了子字段权限；**reviser 挂 2 条（严格超集）、prompt 一条没写**。二跑与三跑的死因正是这两条。
+
+**修复（按第一性原理分类施工）**：
+
+- **A 类 规格漂移**：`reviser.md` 补齐 `hypothesis_responses`（输入表 / 输出模板 / Step 3 第 7 位 / 质检表 / 绝对禁止表）与「证据引用纪律」硬合约节；`final_adjudicator.md` 补 evidence_index 逐字合法性。
+- **B 类 命名空间不一致**：合法子引用名来自 `MetricAuthority` 条目名，与工具 `value` 真实字段名是两套词汇（本跑 thesis attempt 1 即因 `L4.get_m7_buyback_flow#m7_quarterly_total` 命中）。三份 prompt（thesis/reviser/final）统一加"只能逐字使用索引已存在的 ref、不得自行拼接 `parent#field`"。根治口径留 T20。
+- **C 类 职责错配**：`_carry_forward_reviser_thesis_fields` —— reviser **整个遗漏**的 `revised_thesis` 字段从原稿原样继承、打 `carried_forward_from_thesis` 标记、写 `stage_diagnostics.reviser_thesis_field_carry_forward`。白名单起步只放 `hypothesis_responses`；键存在（含空数组）一律不碰，交 validator 硬拦。接线为 `pre_validate_transform`（继承先行、净化在后），无签名改动。
+- **D 类 爆炸半径**：reviser 调用点加 try/except（对照 `counter_thesis` 既有成例），失败退回未修订原稿。`AnalysisRevised` 新增 `degraded_fallback`（Optional，向后兼容）；`revision_summary` 带 `[degraded]` 声明；进 `_append_final_quality_note("reviser_degraded_unrevised_thesis")`；`_load_reviser_checkpoint` 拒绝把降级产物当检查点复用，避免一次失败被续跑永久固化。
+- **F 类 防漂移**：新增 `STAGE_CONTRACT_PROMPT_REQUIREMENTS` 登记表 + `tests/test_governance_input.py` 两条闸门（合约必须在 prompt 里写过、三份 prompt 必须有命名空间纪律）。**对修复前的 prompt 跑该闸门会红 9 处**，其中 reviser 的 2 处正是二跑/三跑死因。
+- **E 类 反馈回路**（定向修补重试）**未做**：本次事故可证其无效——模型手上没有该字段的 schema，再精准的反馈也修不了。前置修复完成后重试将变罕见，留待再评估。
+
+**验证**：新增 9 条测试（遗漏继承一次通过、显式空数组仍硬拦、模型自答不被覆盖、继承来源非法仍硬拦、降级产物保原稿+保冲突+声明降级、降级进质量闸门、降级检查点不被续跑复用、合约—说明书一致性、命名空间纪律）。红灯先行：修复前复现出与生产逐字相同的错误。全量 `--cache-clear` 由基线 **971 passed** 增至 **980 passed**（9 条全部新增，零回归）；`tests/test_docs_consistency.py` 7 passed。
+
+**端到端验收结果**：见上方「干净完整 run 端到端验收」条目——`attempts=1`，两道安全网均未触发，判据达标，【关闭 T19】。
+
+---
+
 ## 2026-07-24
 
 ### 全成分 NTM Forward PE 正式链落地（工单 E4，Codex 施工 + Fable 接线验收）

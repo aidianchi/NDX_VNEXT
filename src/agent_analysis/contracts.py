@@ -903,10 +903,11 @@ class CrossLayerClaim(BaseModel):
         description="支撑该主张的事实引用，如 ['L1.liquidity_loose', 'L4.pe_expansion']"
     )
     confidence: Confidence = Field(..., description="置信度")
+    # 原 300 字符上限已移除（2026-07-26 数字规则重构）：不进入任何固定宽度展示位，
+    # 无下游依据支撑这个数字。
     mechanism: str = Field(
         ...,
-        description="因果机制解释（第一性原理）",
-        max_length=300
+        description="因果机制解释（第一性原理）"
     )
     event_refs: List[str] = Field(
         default_factory=list,
@@ -928,10 +929,10 @@ class Conflict(BaseModel):
     )
     severity: ConflictSeverity = Field(..., description="严重程度")
     description: str = Field(..., description="冲突描述")
+    # 原 300 字符上限已移除（2026-07-26 数字规则重构）：不进入任何固定宽度展示位。
     implication: str = Field(
         ...,
-        description="对投资决策的影响",
-        max_length=300
+        description="对投资决策的影响"
     )
     involved_layers: List[Layer] = Field(
         ...,
@@ -1304,11 +1305,11 @@ class BridgeMemo(BaseModel):
         description="仍需下游保留或验证的问题"
     )
 
-    # 对 NDX 的综合影响
+    # 对 NDX 的综合影响。原 500 字符上限已移除（2026-07-26 数字规则重构）：
+    # 不进入任何固定宽度展示位，无下游依据。
     implication_for_ndx: str = Field(
         ...,
-        description="对纳斯达克100的综合影响评估",
-        max_length=500
+        description="对纳斯达克100的综合影响评估"
     )
 
     # 关键不确定性
@@ -1641,32 +1642,29 @@ class ThesisDraft(BaseModel):
 
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    # 环境判断（L1-L3）
+    # 环境判断（L1-L3）。原 300 字符上限已移除（2026-07-26 数字规则重构）：不进入
+    # 任何固定宽度展示位，无下游依据。
     environment_assessment: str = Field(
         ...,
-        description="宏观环境评估：能不能涨？",
-        max_length=300
+        description="宏观环境评估：能不能涨？"
     )
 
     # 价值判断（L4）
     valuation_assessment: str = Field(
         ...,
-        description="估值评估：该不该买？",
-        max_length=300
+        description="估值评估：该不该买？"
     )
 
     # 时机判断（L5）
     timing_assessment: str = Field(
         ...,
-        description="时机评估：何时买卖？",
-        max_length=300
+        description="时机评估：何时买卖？"
     )
 
     # 主论点
     main_thesis: str = Field(
         ...,
-        description="主论点陈述",
-        max_length=500
+        description="主论点陈述"
     )
 
     # 支撑链
@@ -1692,21 +1690,19 @@ class ThesisDraft(BaseModel):
         description="该论点依赖哪些前提条件"
     )
 
-    # Decision Semantics v1：定价与赔率判断面
+    # Decision Semantics v1：定价与赔率判断面。以下三个原有 600-800 字符上限均已
+    # 移除（2026-07-26 数字规则重构）：均不进入固定宽度展示位，无下游依据。
     state_diagnosis: str = Field(
         "",
         description="当前市场状态诊断，不等同于最终买卖立场",
-        max_length=600,
     )
     priced_narrative: str = Field(
         "",
         description="当前价格正在定价什么、哪些坏消息可能已反映、哪些仍未反映",
-        max_length=800,
     )
     payoff_assessment: str = Field(
         "",
         description="风险补偿/赔率判断，如高风险高赔率、高风险低赔率等",
-        max_length=600,
     )
     time_horizon_views: List[TimeHorizonView] = Field(
         default_factory=list,
@@ -1719,7 +1715,6 @@ class ThesisDraft(BaseModel):
     confirmation_cost: str = Field(
         "",
         description="等待更多确认降低什么风险、付出什么机会成本",
-        max_length=600,
     )
     invalidation_conditions: List[str] = Field(
         default_factory=list,
@@ -1770,8 +1765,10 @@ class Critique(BaseModel):
     """
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    # 整体评估
-    overall_assessment: str = Field(..., description="整体评估", max_length=200)
+    # 整体评估。原有 200 字符上限已移除（2026-07-26 数字规则重构）：该字段是内部
+    # 批评记录，从不进入报告任何固定宽度展示位，且真实事故证明 200 字经常不够表达
+    # "幸存的最强反对意见"，逼模型截断论证不比让它写完整更有价值。
+    overall_assessment: str = Field(..., description="整体评估")
 
     # 具体批评项
     issues: List[CritiqueItem] = Field(default_factory=list, description="具体问题")
@@ -1782,8 +1779,9 @@ class Critique(BaseModel):
         description="跨层逻辑问题"
     )
 
-    # 建议修订方向
-    revision_direction: str = Field(..., description="建议修订方向", max_length=300)
+    # 建议修订方向。上限从 300 放宽到 500（2026-07-26）：与 overall_assessment 同理，
+    # 同样不进入固定宽度展示位，没有理由比它更紧。
+    revision_direction: str = Field(..., description="建议修订方向", max_length=500)
 
 
 class RiskBoundaryReport(BaseModel):
@@ -1998,8 +1996,9 @@ class AnalysisRevised(BaseModel):
     """
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    # 修订说明
-    revision_summary: str = Field(..., description="修订说明", max_length=500)
+    # 修订说明。原 500 字符上限已移除（2026-07-26 数字规则重构）：不进入固定宽度
+    # 展示位，无下游依据。
+    revision_summary: str = Field(..., description="修订说明")
 
     # 采纳的批评
     accepted_critiques: List[str] = Field(default_factory=list, description="采纳的批评")
@@ -2017,6 +2016,13 @@ class AnalysisRevised(BaseModel):
     remaining_conflicts: List[Conflict] = Field(
         default_factory=list,
         description="仍然保留的冲突（未解决但被接受）"
+    )
+
+    # 降级留痕：reviser 阶段全部尝试均未通过合约校验时，本产物是"未经修订的 thesis 原稿"，
+    # 不是一份真正的修订稿。必须对下游、质量闸门和审计区可见，且不得被续跑当作正常检查点复用。
+    degraded_fallback: Optional[Dict[str, Any]] = Field(
+        None,
+        description="非空表示本产物是 reviser 失败后的未修订兜底；含 reason 与 attempts",
     )
 
 
@@ -2041,7 +2047,11 @@ class FinalAdjudication(BaseModel):
         description="批准状态"
     )
 
-    # 最终立场
+    # 最终立场。2026-07-26 数字规则重构复核后**保留**此上限（其余同类字段的上限
+    # 已移除）：`vnext_reporter.py` 把它渲染进报告的 <h1> 主标题和 hero title
+    # （非固定宽度输入框，而是页面标题），无限长会直接破坏报告首屏排版，这是真实
+    # 下游约束，不是随手定的数字。若未来发现 200 字符不够表达最终立场，应该单独
+    # 评估，不要和其余"无下游依据"的字段一起放宽。
     final_stance: str = Field(
         ...,
         description="对 NDX 的最终立场",
@@ -2080,11 +2090,11 @@ class FinalAdjudication(BaseModel):
         description="阻止批准的具体问题"
     )
 
-    # 裁决说明
+    # 裁决说明。原 500 字符上限已移除（2026-07-26 数字规则重构）：不进入固定宽度
+    # 展示位，无下游依据。
     adjudicator_notes: str = Field(
         ...,
-        description="裁决者的说明",
-        max_length=500
+        description="裁决者的说明"
     )
 
     # 可追溯引用
@@ -2139,9 +2149,14 @@ class FinalAdjudication(BaseModel):
     @field_validator("reasoned_verdict")
     @classmethod
     def _validate_reasoned_verdict_length(cls, value: str) -> str:
+        """下限 300 字符予以保留：final_adjudicator.md 要求"总-分-总"结构、三条主要
+        理由各带方括号引用，篇幅太短物理上装不下这个结构，下限是在强制实质内容，
+        不是任意数字。上限从 1300 放宽到 3000（2026-07-26 数字规则重构）：原上限
+        无下游依据（不进入任何固定宽度展示位），只留一个远高于正常篇幅的安全网，
+        防止真正失控的输出，不再充当"逼它写简短"的强制手段。"""
         text = str(value or "").strip()
-        if text and not 300 <= len(text) <= 1300:
-            raise ValueError("reasoned_verdict must be empty or contain 300-1300 characters")
+        if text and not 300 <= len(text) <= 3000:
+            raise ValueError("reasoned_verdict must be empty or contain 300-3000 characters")
         return text
 
     @field_validator("long_term_assessment", mode="before")
@@ -2452,8 +2467,9 @@ class ContextBrief(BaseModel):
     """
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    # 数据概况
-    data_summary: str = Field(..., description="数据概况", max_length=300)
+    # 数据概况。原 300 字符上限已移除（2026-07-26 数字规则重构）：不进入固定宽度
+    # 展示位，无下游依据。
+    data_summary: str = Field(..., description="数据概况")
 
     # 各层关键信号
     layer_highlights: Dict[str, List[str]] = Field(

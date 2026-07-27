@@ -19,6 +19,7 @@ from agent_analysis.contracts import (
     ClaimLedgerEntry,
     CompetingHypothesis,
     Confidence,
+    Conflict,
     ContextBrief,
     CoreFact,
     CounterThesisDraft,
@@ -652,6 +653,269 @@ def test_thesis_prompt_receives_slim_object_run_gate(tmp_path: Path):
     assert "prompt_note" in object_gate
     assert "methodology_boundary" not in object_gate
     assert "LONG_METHOD_BOUNDARY_SENTINEL" not in json.dumps(sanitized, ensure_ascii=False)
+
+
+def _oversized_constituent_list(count: int = 20) -> list:
+    """真实事故复现：全成分逐票明细（如盈利修正的 constituents/flagged/invalid），
+    每条都带一个唯一标记，方便断言"没在样本里的那条被砍掉了"。"""
+    return [
+        {
+            "ticker": f"TICK{i:03d}",
+            "weight_pct": 1.23,
+            "slope": 0.045,
+            "unique_marker": f"UNIQUE_ROW_MARKER_{i:03d}",
+        }
+        for i in range(count)
+    ]
+
+
+def _mini_synthesis_packet_dict_for_slimming_test() -> dict:
+    big_list = _oversized_constituent_list()
+    return {
+        "packet_meta": {"data_date": "2026-07-25"},
+        "context_summary": "数据日期 2026-07-25。",
+        "layer_summaries": [{"layer": "L4", "local_conclusion": "估值偏高。", "confidence": "medium"}],
+        "bridge_summaries": [{"bridge_type": "feedback_bridge_v2", "implication_for_ndx": "综合影响。"}],
+        "high_severity_conflicts": [
+            {
+                "conflict_type": "L4_expensive_vs_L5_strong_trend",
+                "severity": "high",
+                "description": "冲突描述。",
+                "implication": "对判断的影响。",
+                "involved_layers": ["L4", "L5"],
+            }
+        ],
+        "high_severity_typed_conflicts": [
+            {
+                "conflict_id": "c1",
+                "conflict_type": "valuation_discount_rate",
+                "severity": "high",
+                "description": "冲突描述。",
+                "implication": "对判断的影响。",
+            }
+        ],
+        "principal_contradictions": [{"contradiction_id": "pc1", "summary": "主要矛盾。"}],
+        "competing_hypotheses": [
+            {
+                "hypothesis_id": "hyp_1",
+                "hypothesis_text": "反方假说。",
+                "source": "counter_thesis",
+                "status": "candidate",
+            }
+        ],
+        "hypothesis_competition_summary": {"schema_version": "hypothesis_competition_v1", "hypothesis_count": 1},
+        "adjudication_history": [{"version_id": "adj_1", "change_type": "kept_unresolved"}],
+        "counter_thesis_boundary": {"input_refs": ["synthesis_packet.json"], "independence_verified": True},
+        "objective_firewall_summary": {"object_clear": True, "authority_clear": True},
+        "evidence_index": {
+            "L4.get_ndx_pe_and_earnings_yield": {
+                "layer": "L4",
+                "function_id": "get_ndx_pe_and_earnings_yield",
+                "metric": "NDX PE",
+                "narrative": "估值叙事。",
+            },
+            "L4.get_ndx_earnings_revision_metrics#slope_30d": {
+                "layer": "L4",
+                "function_id": "get_ndx_earnings_revision_metrics",
+                "field_name": "slope_30d",
+                "field_value": {
+                    "value": 0.040793811,
+                    "unit": "decimal_change",
+                    "coverage": {"included_constituents": 90, "total_constituents": 103},
+                    "winsorized_weight_pct": 0.804847,
+                    "constituents": big_list,
+                },
+            },
+        },
+        "event_index": {"event:demo": {"headline": "占位事件。"}},
+        "evidence_registry_summary": {"schema_version": "evidence_registry_v1", "passport_count": 185},
+        "synthesis_guidance": ["只能整合，不得重做指标分析。"],
+    }
+
+
+def test_thesis_prompt_drops_low_value_fields_and_keeps_required_ones(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    payload = {"synthesis_packet": _mini_synthesis_packet_dict_for_slimming_test()}
+
+    sanitized = orchestrator._sanitize_prompt_payload("thesis", payload)
+    sp = sanitized["synthesis_packet"]
+
+    # 纯记账元数据：thesis_builder.md 从未要求过，只在 prompt 层丢弃
+    for dropped_key in (
+        "counter_thesis_boundary",
+        "evidence_registry_summary",
+    ):
+        assert dropped_key not in sp, f"{dropped_key} should be dropped from the thesis prompt payload"
+
+    # 2026-07-27 撤出丢弃清单：重复采样实验证明丢掉 hypothesis_competition_summary 会让
+    # thesis 的 invalidation_conditions 从 [4,5,3] 稳定塌成 [2,2,2]（区间零重叠），因为
+    # retained_disputes 正是"我哪里还不确定"——改判条件的原料。丢它只省 0.40% token。
+    for retained_key in ("hypothesis_competition_summary", "adjudication_history"):
+        assert retained_key in sp, (
+            f"{retained_key} 必须保留在 thesis prompt 里：它承载未解决争议/降级审计链，"
+            "丢弃只省 0.40% token 却系统性削弱改判条件（见 WORK_LOG 2026-07-27 重复采样实验）"
+        )
+
+    # thesis_builder.md「## 输入」重点字段清单 + 「对竞争假说的强制回应」：逐字段必须仍在
+    for required_key in (
+        "layer_summaries",
+        "bridge_summaries",
+        "high_severity_conflicts",
+        "high_severity_typed_conflicts",
+        "principal_contradictions",
+        "competing_hypotheses",
+        "objective_firewall_summary",
+        "evidence_index",
+        "event_index",
+        "synthesis_guidance",
+    ):
+        assert required_key in sp, f"{required_key} must remain in the thesis prompt payload"
+
+    # evidence_index 的 ref key 集合（含 #field 子 ref）逐字不变——两站的证据引用
+    # 合法性校验完全依赖 key 是否存在
+    assert set(sp["evidence_index"].keys()) == {
+        "L4.get_ndx_pe_and_earnings_yield",
+        "L4.get_ndx_earnings_revision_metrics#slope_30d",
+    }
+
+    # 聚合字段（value/coverage/winsorized_weight_pct）原样保留
+    field_value = sp["evidence_index"]["L4.get_ndx_earnings_revision_metrics#slope_30d"]["field_value"]
+    assert field_value["value"] == 0.040793811
+    assert field_value["coverage"] == {"included_constituents": 90, "total_constituents": 103}
+    assert field_value["winsorized_weight_pct"] == 0.804847
+
+    # 超长逐票明细被压缩为 count+sample 摘要
+    constituents = field_value["constituents"]
+    assert constituents["_prompt_summary"] is True
+    assert constituents["count"] == 20
+    assert len(constituents["sample"]) == 3
+
+    # 没进样本的那些行必须真的从 prompt 文本里消失，不是换了个位置藏起来
+    serialized = json.dumps(sanitized, ensure_ascii=False)
+    assert "UNIQUE_ROW_MARKER_010" not in serialized
+    assert "UNIQUE_ROW_MARKER_000" in serialized  # 前 2 条样本之一
+    assert "UNIQUE_ROW_MARKER_019" in serialized  # 末 1 条样本
+    assert "L4.get_ndx_earnings_revision_metrics#slope_30d" in serialized
+
+
+def test_counter_thesis_prompt_drops_evidence_registry_summary_and_slims_evidence_index(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    synthesis_dict = _mini_synthesis_packet_dict_for_slimming_test()
+    # _counter_thesis_prompt_payload 已经在构造阶段 pop 掉这 4 个自我循环字段；
+    # 这里模拟它构造完之后的样子，只验证 _sanitize_prompt_payload 的 counter_thesis 分支。
+    for key in ("competing_hypotheses", "hypothesis_competition_summary", "adjudication_history", "counter_thesis_boundary"):
+        synthesis_dict.pop(key, None)
+    payload = {
+        "synthesis_packet_without_self_reference": synthesis_dict,
+        "bridge_v1_structure": [{"bridge_type": "bridge_v1", "implication_for_ndx": "占位。"}],
+        "bridge_v2_feedback_summary": {"schema_version": "bridge_v2_feedback_summary_v1"},
+        "non_stub_investigation_reports": [],
+        "allowed_evidence_refs": [
+            "L4.get_ndx_pe_and_earnings_yield",
+            "L4.get_ndx_earnings_revision_metrics#slope_30d",
+        ],
+        "forbidden_context_refs": ["thesis_draft.json", "analysis_revised.json", "final_adjudication.json"],
+        "output_contract": "CounterThesisDraft",
+    }
+
+    sanitized = orchestrator._sanitize_prompt_payload("counter_thesis", payload)
+    sp = sanitized["synthesis_packet_without_self_reference"]
+
+    # counter_thesis.md「## 输入边界」清单也没要求它
+    assert "evidence_registry_summary" not in sp
+
+    # ref key 集合不变
+    assert set(sp["evidence_index"].keys()) == {
+        "L4.get_ndx_pe_and_earnings_yield",
+        "L4.get_ndx_earnings_revision_metrics#slope_30d",
+    }
+    constituents = sp["evidence_index"]["L4.get_ndx_earnings_revision_metrics#slope_30d"]["field_value"]["constituents"]
+    assert constituents["_prompt_summary"] is True
+    assert constituents["count"] == 20
+
+    # counter_thesis 独立性边界 / 证据合法性契约必须逐字不受影响
+    assert sanitized["allowed_evidence_refs"] == payload["allowed_evidence_refs"]
+    assert sanitized["forbidden_context_refs"] == payload["forbidden_context_refs"]
+    assert sanitized["bridge_v1_structure"] == payload["bridge_v1_structure"]
+    assert sanitized["bridge_v2_feedback_summary"] == payload["bridge_v2_feedback_summary"]
+    assert sanitized["output_contract"] == "CounterThesisDraft"
+
+
+def test_slim_long_list_for_prompt_only_compresses_lists_past_both_thresholds():
+    big_list = _oversized_constituent_list(count=20)
+    small_list = [{"ticker": "AAPL", "weight_pct": 7.7}, {"ticker": "MSFT", "weight_pct": 6.5}]
+
+    slimmed_big = VNextOrchestrator._slim_long_list_for_prompt(big_list)
+    assert isinstance(slimmed_big, dict)
+    assert slimmed_big["_prompt_summary"] is True
+    assert slimmed_big["count"] == 20
+    sampled_markers = {item["unique_marker"] for item in slimmed_big["sample"]}
+    assert sampled_markers == {"UNIQUE_ROW_MARKER_000", "UNIQUE_ROW_MARKER_001", "UNIQUE_ROW_MARKER_019"}
+
+    # 短列表不满足条数阈值，原样透传
+    slimmed_small = VNextOrchestrator._slim_long_list_for_prompt(small_list)
+    assert slimmed_small == small_list
+
+
+def test_run_thesis_end_to_end_prompt_file_omits_oversized_constituent_rows(tmp_path: Path):
+    """端到端：经过真实 _run_stage / _compose_prompt 落到磁盘的 prompt 文本里，
+    没进样本的逐票明细行必须真的消失，而不是只在单元测试里裁过一次。"""
+    synthesis = SynthesisPacket(
+        packet_meta={"data_date": "2026-07-25"},
+        evidence_index={
+            "L4.get_ndx_pe_and_earnings_yield": {"layer": "L4", "narrative": "估值叙事。"},
+            "L4.get_ndx_earnings_revision_metrics#slope_30d": {
+                "layer": "L4",
+                "field_name": "slope_30d",
+                "field_value": {
+                    "value": 0.0408,
+                    "coverage": {"included_constituents": 90},
+                    "constituents": _oversized_constituent_list(),
+                },
+            },
+        },
+        competing_hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_1",
+                hypothesis_text="反方假说。",
+                source="counter_thesis",
+                status="candidate",
+            )
+        ],
+    )
+    valid_response = {
+        "environment_assessment": "环境评估。",
+        "valuation_assessment": "估值评估。",
+        "timing_assessment": "择时评估。",
+        "main_thesis": "主论点。",
+        "hypothesis_responses": [
+            {
+                "hypothesis_id": "hyp_1",
+                "verdict": "absorb_partially",
+                "reasoning": "部分吸收该假说。",
+                "evidence_refs": [],
+            }
+        ],
+        "overall_confidence": "medium",
+    }
+    engine = FakeLLMEngine({"thesis": json.dumps(valid_response, ensure_ascii=False)})
+    orchestrator = VNextOrchestrator(available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine)
+
+    orchestrator._run_thesis(synthesis)
+
+    prompt_text = (tmp_path / "prompt_audit" / "thesis" / "attempt_1.prompt.txt").read_text(encoding="utf-8")
+    assert "UNIQUE_ROW_MARKER_010" not in prompt_text
+    assert "UNIQUE_ROW_MARKER_000" in prompt_text
+    assert "L4.get_ndx_earnings_revision_metrics#slope_30d" in prompt_text
+    assert "0.0408" in prompt_text
 
 
 def _indicator_analysis(function_id: str, metric: str, reading: str, narrative: str):
@@ -2214,6 +2478,112 @@ def test_run_stage_uses_stage_model_routing_for_cognitive_stages(tmp_path: Path)
     assert diagnostics["stages"]["thesis"]["model"] == "deepseek-v4-pro"
 
 
+def test_run_stage_uses_stage_model_routing_for_mechanical_stages(tmp_path: Path):
+    """机械活儿站点（事件卡解读/事件汇总）路由表应 flash 优先、pro 作为失败降级，
+    与判断脊梁站点（如 thesis，见上一条测试）pro 优先的顺序相反。"""
+    engine = RoutingFakeLLMEngine({"event_card_interpreter": '{"value": "ok"}'})
+    orchestrator = VNextOrchestrator(
+        available_models=["deepseek-v4-flash", "deepseek-v4-pro"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="event_card_interpreter",
+        stage_name="event_card_interpreter",
+        model_cls=MiniStageModel,
+        payload={"example": "payload"},
+    )
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+
+    assert result.value == "ok"
+    assert engine.preferred_models_by_call[0][0] == "deepseek-v4-flash"
+    assert diagnostics["stages"]["event_card_interpreter"]["model_routing"]["preferred_models"][0] == "deepseek-v4-flash"
+    assert diagnostics["stages"]["event_card_interpreter"]["model"] == "deepseek-v4-flash"
+
+
+class _StrictToolSchemaRecordingFakeLLMEngine(FakeLLMEngine):
+    """记录 `call_with_fallback` 每次实际收到的 strict_tool_schema/strict_tool_name，
+    用于验证 `_run_stage` 只在明确传入时才把它们递给引擎——绝大多数调用不传，
+    行为必须和试点之前完全一致。"""
+
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.calls_kwargs: list = []
+
+    def call_with_fallback(self, prompt, stage_name="", preferred_models=None, **kwargs):
+        self.calls_kwargs.append(kwargs)
+        return self.responses[stage_name]
+
+
+def test_run_stage_passes_strict_tool_schema_only_when_provided(tmp_path: Path):
+    """DeepSeek strict function calling 试点（2026-07-26）的接线验证：
+    - 不传 strict_tool_schema（绝大多数 stage 的真实调用方式）→ 引擎完全收不到
+      这个关键字参数，调用形态与试点之前逐字节相同。
+    - 传了 strict_tool_schema → 引擎收到 schema 和 tool 名（未指定时有默认名）。
+    """
+    engine = _StrictToolSchemaRecordingFakeLLMEngine(
+        {"critic": '{"value": "ok"}', "bridge": '{"value": "ok"}'}
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine
+    )
+
+    orchestrator._run_stage(
+        stage_key="critic", stage_name="critic", model_cls=MiniStageModel, payload={}
+    )
+    assert "strict_tool_schema" not in engine.calls_kwargs[-1]
+    assert "strict_tool_name" not in engine.calls_kwargs[-1]
+
+    schema = {"type": "object", "properties": {}, "additionalProperties": False, "required": []}
+    orchestrator._run_stage(
+        stage_key="bridge",
+        stage_name="bridge",
+        model_cls=MiniStageModel,
+        payload={},
+        strict_tool_schema=schema,
+    )
+    assert engine.calls_kwargs[-1]["strict_tool_schema"] == schema
+    assert engine.calls_kwargs[-1]["strict_tool_name"] == "emit_bridge_output"
+
+
+def test_strict_tool_schema_for_stage_defaults_off(tmp_path: Path, monkeypatch):
+    """开关默认关闭：不设置环境变量时，即使是试点白名单里的 bridge 站点也拿不到
+    schema——这是刻意的显式 opt-in，不是配置文件，方便用户按需临时开关。"""
+    monkeypatch.delenv("NDX_STRICT_TOOL_CALLING_STAGES", raising=False)
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    assert orchestrator._strict_tool_schema_for_stage("bridge", BridgeMemo) is None
+
+
+def test_strict_tool_schema_for_stage_only_covers_pilot_allowlist(tmp_path: Path, monkeypatch):
+    """即使环境变量把某个非试点站点也列进去，也不会启用——试点范围收窄到代码里
+    显式列出的 `_STRICT_TOOL_CALLING_ELIGIBLE_STAGES`，环境变量只能在这个白名单
+    内做子集选择，不能扩大试点范围。"""
+    monkeypatch.setenv("NDX_STRICT_TOOL_CALLING_STAGES", "thesis,critic")
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    assert orchestrator._strict_tool_schema_for_stage("thesis", ThesisDraft) is None
+    assert orchestrator._strict_tool_schema_for_stage("critic", Critique) is None
+
+
+def test_strict_tool_schema_for_stage_enabled_for_bridge_via_env_var(tmp_path: Path, monkeypatch):
+    """真正开启的路径：环境变量包含 "bridge" 时，返回一份已经过 strict 校验的
+    schema（不是原始未处理的 model_json_schema()）。"""
+    monkeypatch.setenv("NDX_STRICT_TOOL_CALLING_STAGES", "bridge")
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+
+    schema = orchestrator._strict_tool_schema_for_stage("bridge", BridgeMemo)
+
+    assert schema is not None
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == set(schema["properties"].keys())
+
+
 def test_thesis_retries_until_every_candidate_hypothesis_has_auditable_response(tmp_path: Path):
     invalid = {
         "environment_assessment": "环境偏紧。",
@@ -2627,6 +2997,393 @@ def test_reviser_illegal_refs_are_sanitized_and_do_not_raise_runtime_error(tmp_p
     )
 
 
+# ── Reviser 遗漏继承（omission-only carry-forward）回归 ──
+#
+# 真实事故（run 20260724_223804）：reviser 两次尝试输出的 revised_thesis 键集合逐字
+# 相同，且恰好等于 reviser.md 输出模板列出的字段——hypothesis_responses 从不在其中，
+# 因为该字段在 reviser 的 prompt 里根本没有出现过。结果是 candidate 假说回应缺失、
+# 重试无法自愈、整条约 25 分钟的流水线 RuntimeError 中止。
+
+def _reviser_carry_forward_fixture():
+    """返回 (synthesis, thesis, reviser_payload_without_hypothesis_responses)。"""
+    synthesis = SynthesisPacket(
+        packet_meta={"data_date": "2026-04-24"},
+        evidence_index={
+            "L1.get_10y_real_rate": {"layer": "L1"},
+            "L4.get_ndx_pe_and_earnings_yield": {"layer": "L4"},
+        },
+        competing_hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_counter_33b7f68546",
+                hypothesis_text="反方：证据缺口足以推翻主线。",
+                source="counter_thesis",
+                status="candidate",
+            ),
+        ],
+    )
+    thesis = ThesisDraft(
+        environment_assessment="环境偏紧。",
+        valuation_assessment="估值缺乏安全垫。",
+        timing_assessment="趋势转弱。",
+        main_thesis="主线：估值压缩与广度恶化共振。",
+        overall_confidence=Confidence.MEDIUM,
+        hypothesis_responses=[
+            {
+                "hypothesis_id": "hyp_counter_33b7f68546",
+                "verdict": "reject",
+                "reasoning": "主要矛盾不依赖单一数据，多层硬证据已构成充分风险画面。",
+                "evidence_refs": [
+                    "L1.get_10y_real_rate",
+                    "L4.get_ndx_pe_and_earnings_yield",
+                ],
+            }
+        ],
+    )
+    # 复刻真实 attempt_1/attempt_2 的形状：revised_thesis 里完全没有 hypothesis_responses 这个键。
+    reviser_payload = {
+        "revision_summary": "吸收批评并保留张力。",
+        "accepted_critiques": ["Critic 指出的跨层逻辑跳跃"],
+        "rejected_critiques": [],
+        "revised_thesis": {
+            "environment_assessment": "环境偏紧，实际利率处极端高位。",
+            "valuation_assessment": "估值缺乏安全垫，ERP 低分位。",
+            "timing_assessment": "价格跌破中短期均线。",
+            "main_thesis": "修订后主线：估值压缩与广度恶化共振，赔率不利。",
+            "overall_confidence": "medium",
+            "key_support_chains": [
+                {
+                    "chain_description": "实际利率压制久期资产估值",
+                    "evidence_refs": ["L1.get_10y_real_rate"],
+                    "weight": 0.6,
+                }
+            ],
+        },
+        "remaining_conflicts": [],
+    }
+    return synthesis, thesis, reviser_payload
+
+
+def _run_reviser_stage(orchestrator, synthesis, thesis, raw_response: str):
+    """按生产调用点（orchestrator._run_analysis 中 reviser 那一段）的完全相同接线跑一次。"""
+    return orchestrator._run_stage(
+        stage_key="reviser",
+        stage_name="reviser",
+        model_cls=AnalysisRevised,
+        payload={"example": "payload"},
+        pre_validate_transform=lambda parsed: orchestrator._sanitize_reviser_evidence_refs(
+            orchestrator._carry_forward_reviser_thesis_fields(parsed, thesis),
+            synthesis.evidence_index,
+        ),
+        validator=lambda candidate: (
+            orchestrator._validate_stage_evidence_refs(
+                candidate, set(synthesis.evidence_index.keys()), "reviser"
+            )
+            + orchestrator._validate_thesis_hypothesis_responses(
+                candidate.revised_thesis, synthesis
+            )
+        ),
+    )
+
+
+def test_reviser_omitted_hypothesis_responses_are_carried_forward_from_thesis(tmp_path: Path):
+    """遗漏（键缺席）→ 从 thesis 原稿原样继承、打标记、留痕，stage 一次通过不再硬崩。
+
+    这是 run 20260724_223804 的最小复现：修复前此用例必然 RuntimeError
+    ("candidate hypothesis hyp_counter_33b7f68546 is missing from hypothesis_responses.")。
+    """
+    synthesis, thesis, reviser_payload = _reviser_carry_forward_fixture()
+    engine = SequencedFakeLLMEngine(
+        {"reviser": [json.dumps(reviser_payload, ensure_ascii=False)]}
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    result = _run_reviser_stage(orchestrator, synthesis, thesis, "")
+
+    # 一次通过：不再靠重试抽奖。
+    assert engine.calls["reviser"] == 1
+
+    responses = result.revised_thesis.hypothesis_responses
+    assert [item.hypothesis_id for item in responses] == ["hyp_counter_33b7f68546"]
+    # 原稿裁决必须原样搬运——代码永不生成回应内容。
+    assert responses[0].verdict == "reject"
+    assert responses[0].reasoning == thesis.hypothesis_responses[0].reasoning
+    assert responses[0].evidence_refs == [
+        "L1.get_10y_real_rate",
+        "L4.get_ndx_pe_and_earnings_yield",
+    ]
+    # 必须可被下游和审计区识别为"本轮未修订"，不能伪装成 reviser 自己的判断。
+    assert getattr(responses[0], "carried_forward_from_thesis", False) is True
+
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["stages"]["reviser"]["status"] == "ok"
+    carry_log = diagnostics.get("reviser_thesis_field_carry_forward", [])
+    assert any("hypothesis_responses" in entry for entry in carry_log)
+
+
+def test_reviser_explicit_empty_hypothesis_responses_still_fails(tmp_path: Path):
+    """主动交空数组 = 主动抹平候选假说，必须继续硬拦——继承逻辑不得成为后门。"""
+    synthesis, thesis, reviser_payload = _reviser_carry_forward_fixture()
+    reviser_payload["revised_thesis"]["hypothesis_responses"] = []
+    engine = SequencedFakeLLMEngine(
+        {"reviser": [json.dumps(reviser_payload, ensure_ascii=False)]}
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    with pytest.raises(RuntimeError, match="missing from hypothesis_responses"):
+        _run_reviser_stage(orchestrator, synthesis, thesis, "")
+
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+    assert "reviser_thesis_field_carry_forward" not in diagnostics
+
+
+def test_reviser_own_hypothesis_responses_are_never_overwritten(tmp_path: Path):
+    """reviser 自己作答时必须尊重它的答案，继承只补遗漏，不做覆盖。"""
+    synthesis, thesis, reviser_payload = _reviser_carry_forward_fixture()
+    reviser_payload["revised_thesis"]["hypothesis_responses"] = [
+        {
+            "hypothesis_id": "hyp_counter_33b7f68546",
+            "verdict": "absorb_partially",
+            "reasoning": "修订后部分吸收反方，承认盈利数据缺口。",
+            "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+        }
+    ]
+    engine = SequencedFakeLLMEngine(
+        {"reviser": [json.dumps(reviser_payload, ensure_ascii=False)]}
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    result = _run_reviser_stage(orchestrator, synthesis, thesis, "")
+    response = result.revised_thesis.hypothesis_responses[0]
+
+    assert response.verdict == "absorb_partially"
+    assert getattr(response, "carried_forward_from_thesis", False) is False
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+    assert "reviser_thesis_field_carry_forward" not in diagnostics
+
+
+def test_reviser_carried_forward_reject_without_evidence_still_fails(tmp_path: Path):
+    """继承来源本身不合法时，继承不得把非法内容洗白——validator 仍须拦下。"""
+    synthesis, thesis, reviser_payload = _reviser_carry_forward_fixture()
+    thesis.hypothesis_responses[0].evidence_refs = []
+    engine = SequencedFakeLLMEngine(
+        {"reviser": [json.dumps(reviser_payload, ensure_ascii=False)]}
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    with pytest.raises(RuntimeError, match="reject requires at least one evidence_ref"):
+        _run_reviser_stage(orchestrator, synthesis, thesis, "")
+
+
+def test_degraded_analysis_revised_preserves_thesis_and_declares_degradation(tmp_path: Path):
+    """reviser 软着陆：兜底产物必须沿用原稿、保留冲突、并显式声明未经修订。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+        max_node_retries=2,
+    )
+    _, thesis, _ = _reviser_carry_forward_fixture()
+    thesis.retained_conflicts = [
+        Conflict(
+            conflict_type="L1_high_real_rate_vs_L4_medium_valuation",
+            severity="high",
+            description="高实际利率与估值并存",
+            involved_layers=["L1", "L4"],
+            implication="估值安全垫不足，赔率偏薄。",
+        )
+    ]
+
+    degraded = orchestrator._build_degraded_analysis_revised(thesis, "reviser failed after 2 attempts: ...")
+
+    # 兜底沿用原稿，因此天然满足 reviser 所受的同一组合约（原稿已通过）。
+    assert degraded.revised_thesis.main_thesis == thesis.main_thesis
+    assert degraded.revised_thesis.hypothesis_responses[0].hypothesis_id == "hyp_counter_33b7f68546"
+    # 冲突是资产：兜底不得顺手抹平。
+    assert [c.conflict_type for c in degraded.remaining_conflicts] == [
+        "L1_high_real_rate_vs_L4_medium_valuation"
+    ]
+    # 降级必须机器可读、人眼可见。
+    assert degraded.degraded_fallback["stage"] == "reviser"
+    assert "[degraded]" in degraded.revision_summary
+    assert "未经修订" in degraded.revision_summary
+
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["reviser_degraded_fallback"][0]["attempts"] == 2
+
+
+def test_degraded_reviser_checkpoint_is_not_reused_on_resume(tmp_path: Path):
+    """一次修订失败不得被续跑永久固化：降级产物不是成功结果，续跑必须重跑 reviser。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+        max_node_retries=2,
+        resume_from_existing=True,
+    )
+    _, thesis, _ = _reviser_carry_forward_fixture()
+    payload = {"governance_input": {"thesis_main": thesis.main_thesis}}
+
+    # 先落一份正常修订产物：续跑应当复用。
+    healthy = AnalysisRevised(revision_summary="正常修订。", revised_thesis=thesis)
+    orchestrator._save_json("analysis_revised.json", healthy)
+    orchestrator._record_stage_artifact(
+        tmp_path / "analysis_revised.json",
+        stage_key="reviser",
+        stage_name="reviser",
+        payload=payload,
+    )
+    assert orchestrator._load_reviser_checkpoint(payload) is not None
+
+    # 换成降级兜底产物：续跑必须忽略它并重跑。
+    degraded = orchestrator._build_degraded_analysis_revised(thesis, "reviser failed after 2 attempts")
+    orchestrator._save_json("analysis_revised.json", degraded)
+    orchestrator._record_stage_artifact(
+        tmp_path / "analysis_revised.json",
+        stage_key="reviser",
+        stage_name="reviser",
+        payload=payload,
+    )
+    assert orchestrator._load_reviser_checkpoint(payload) is None
+
+
+def test_degraded_reviser_marks_final_quality_gate(tmp_path: Path):
+    """降级必须传导到质量闸门，由发布闸门决定能不能发，而不是悄悄变成正常报告。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    final = FinalAdjudication(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="中性偏谨慎",
+        confidence=Confidence.MEDIUM,
+        must_preserve_risks=["估值压缩风险"],
+        adjudicator_notes="保留风险边界。",
+    )
+
+    orchestrator._append_final_quality_note(final, "reviser_degraded_unrevised_thesis")
+
+    assert "reviser_degraded_unrevised_thesis" in final.quality_gate.notes
+
+
+def test_critic_overall_assessment_has_no_length_cap(tmp_path: Path):
+    """2026-07-26 数字规则重构：`Critique.overall_assessment` 原有的 `max_length=200`
+    经复核确认无任何下游依据（不进入固定宽度展示位，纯属人为限制，且真实事故
+    run 20260725_232410 已证明它经常不够表达"幸存的最强反对意见"），已移除。
+
+    这条测试锁定"移除生效"这件事本身：一段远超原 200 字符上限的文本必须一次
+    通过，不再触发任何重试。"""
+    base = {
+        "issues": [],
+        "cross_layer_issues": [],
+        "revision_direction": "保留主要论点，补充证据引用。",
+    }
+    long_assessment = "这是一段远超过原 200 字符上限的总体评估文本，" * 15
+    assert len(long_assessment) > 200
+    engine = SequencedFakeLLMEngine({
+        "critic": [json.dumps({**base, "overall_assessment": long_assessment}, ensure_ascii=False)]
+    })
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="critic",
+        stage_name="critic",
+        model_cls=Critique,
+        payload={"example": "payload"},
+    )
+
+    assert result.overall_assessment == long_assessment
+    assert engine.calls["critic"] == 1
+
+
+def test_critic_stage_retries_after_overlong_revision_direction(tmp_path: Path):
+    """`Critique.revision_direction` 仍保留长度上限（2026-07-26 从 300 放宽到 500，
+    不是移除）——这条测试锁定"写长了仍能靠重试自愈"这条安全网继续有效。"""
+    base = {
+        "issues": [],
+        "cross_layer_issues": [],
+        "overall_assessment": "未发现重大问题，最强反对意见是盈利修正数据置信度偏低。",
+    }
+    engine = SequencedFakeLLMEngine({
+        "critic": [
+            json.dumps({**base, "revision_direction": "过长的修订方向文本" * 60}, ensure_ascii=False),
+            json.dumps({**base, "revision_direction": "保留主要论点，补充证据引用。"}, ensure_ascii=False),
+        ]
+    })
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="critic",
+        stage_name="critic",
+        model_cls=Critique,
+        payload={"example": "payload"},
+    )
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+
+    assert result.revision_direction == "保留主要论点，补充证据引用。"
+    assert engine.calls["critic"] == 2
+    assert diagnostics["stages"]["critic"]["errors"][0]["kind"] == "schema_validation_error"
+    assert "revision_direction" in diagnostics["stages"]["critic"]["errors"][0]["message"]
+
+
+def test_layer_prompt_documents_local_conclusion_as_required_field(tmp_path: Path):
+    """真实事故复现（run 20260725_232410）：`LayerCard.local_conclusion` 是必填字段
+    （无默认值，`max_length=500`），但五层共享的 `_compose_layer_prompt` 契约段此前
+    只在"layer_synthesis 不能只重复 local_conclusion"这一句里提到它的名字，从未指示
+    模型必须输出这个字段——L4 站点当天就因为 `local_conclusion Field required` 被
+    打回重试一次。
+
+    这是与 reviser/counter_thesis/critic 同型的 Class A 规格漂移，区别在于它的"说明书"
+    不是一个静态 prompt 文件，而是 `_compose_layer_prompt` 动态拼接的共享契约文本——
+    所以不适合塞进 `STAGE_CONTRACT_PROMPT_REQUIREMENTS`（那套机制假设每个 stage 对应
+    一个静态文件），改用直接调用 `_compose_layer_prompt` 断言拼接结果的方式验证。
+    """
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    prompt = orchestrator._compose_layer_prompt(
+        "l4_analyst",
+        "占位 prompt 正文。",
+        {"layer": "L4", "layer_raw_data": {}},
+    )
+
+    assert "local_conclusion" in prompt
+    assert "500" in prompt
+    assert "必填" in prompt
+
+
 def test_final_stage_retries_after_overlong_reasoned_verdict(tmp_path: Path):
     base = {
         "approval_status": "approved_with_reservations",
@@ -2638,7 +3395,7 @@ def test_final_stage_retries_after_overlong_reasoned_verdict(tmp_path: Path):
     }
     engine = SequencedFakeLLMEngine({
         "final_adjudicator": [
-            json.dumps({**base, "reasoned_verdict": "过长" * 651}, ensure_ascii=False),
+            json.dumps({**base, "reasoned_verdict": "过长" * 1501}, ensure_ascii=False),  # 上限已放宽至 3000（2026-07-26）
             json.dumps({**base, "reasoned_verdict": _VALID_REASONED_VERDICT}, ensure_ascii=False),
         ]
     })
@@ -2661,6 +3418,165 @@ def test_final_stage_retries_after_overlong_reasoned_verdict(tmp_path: Path):
     assert engine.calls["final_adjudicator"] == 2
     assert diagnostics["stages"]["final_adjudicator"]["errors"][0]["kind"] == "schema_validation_error"
     assert "reasoned_verdict" in diagnostics["stages"]["final_adjudicator"]["errors"][0]["message"]
+
+
+def test_final_stage_retries_when_reasoned_verdict_has_zero_citations(tmp_path: Path):
+    """真实事故复现（run 20260725_232410）：终审一次通过，reasoned_verdict 514 字、
+    内容连贯、数字详实，却零处方括号引用——final_adjudicator.md 明确说这是"硬要求，
+    一个都没有等于整段作废"，但当时的 validator 链只查结构化 evidence_refs 字段，
+    从不检查判决正文里的方括号引用，于是模型交零引用也能一次通过。
+
+    修复后：final 阶段的 validator 链新增 `_validate_reasoned_verdict_refs`，零引用
+    触发重试，重试反馈原样喂回模型，第二次尝试补上引用即可通过——不需要碰
+    prompt，因为说明书本来就给了正确格式的例子，这不是"模型不知道规则"。
+    """
+    base = {
+        "approval_status": "approved_with_reservations",
+        "final_stance": "中性偏谨慎",
+        "confidence": "medium",
+        "must_preserve_risks": ["估值压缩风险"],
+        "blocking_issues": [],
+        "adjudicator_notes": "保留风险边界。",
+    }
+    zero_citation_verdict = (
+        "当前NDX市场处在宏观利率极端压制估值与微观盈利改善之间的拉锯状态。"
+        "主导矛盾是实际利率处于历史极值与盈利修正持续向上之间的冲突。"
+        "风险面目前占优：简式收益差距为负，安全垫不足，广度恶化和技术结构偏空强化了下行压力。"
+        "信用市场总体宽松但尾部分化，暴露了结构性脆弱。价格已部分反映利率压力，但剩余估值压缩风险未充分定价。"
+        "盈利上修预期部分计入，但对失望风险定价不足。赔率偏不利：利率、估值和趋势类别指向补偿变薄，"
+        "信用和流动性提供部分缓冲，但不足以扭转方向。核心仓位应维持偏低配置，战术仓可极轻仓试短线反弹，严格止损。"
+        "主要风险是利率继续上行或盈利下修导致估值进一步压缩，等待成本在于错过短期技术性修复或盈利超预期带来的反弹。"
+    )
+    engine = SequencedFakeLLMEngine({
+        "final_adjudicator": [
+            json.dumps({**base, "reasoned_verdict": zero_citation_verdict}, ensure_ascii=False),
+            json.dumps({**base, "reasoned_verdict": _VALID_REASONED_VERDICT}, ensure_ascii=False),
+        ]
+    })
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="final",
+        stage_name="final_adjudicator",
+        model_cls=FinalAdjudication,
+        payload={"example": "payload"},
+        validator=lambda candidate: orchestrator._validate_reasoned_verdict_refs(
+            candidate, {"L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield", "L5.get_qqq_technical_indicators"}
+        ),
+    )
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+
+    # 零引用不该一次通过：必须重试，第二次带引用的版本才被接受。
+    assert engine.calls["final_adjudicator"] == 2
+    assert result.reasoned_verdict == _VALID_REASONED_VERDICT
+    assert diagnostics["stages"]["final_adjudicator"]["errors"][0]["kind"] == "contract_validation_error"
+    assert "found zero citations" in diagnostics["stages"]["final_adjudicator"]["errors"][0]["message"]
+
+
+def test_reasoned_verdict_requires_three_distinct_citations_for_three_reasons(tmp_path: Path):
+    """只查"至少一条引用"会放过真实事故形态：单段连续文字 + 一条引用即可蒙混过关。
+
+    final_adjudicator.md:243-245 要求总-分-总结构、中间按"最有分量的三条理由"展开，
+    且"三条主要理由每条必须至少带一个方括号标注的 evidence_ref"。三条理由各至少
+    一条 ⇒ 至少三条不同引用。这不是新拍的数字，是把说明书里已写死的结构提到强制等级。
+    """
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    allowed = {
+        "L1.get_fed_funds_rate",
+        "L4.get_ndx_pe_and_earnings_yield",
+        "L5.get_qqq_technical_indicators",
+    }
+
+    class _V:
+        def __init__(self, verdict): self.reasoned_verdict = verdict
+
+    # 单段连续文字、只挂一条引用 —— 正是 20260725_232410 的失败形态，必须被拦下。
+    single = orchestrator._validate_reasoned_verdict_refs(
+        _V("宏观与微观拉锯，风险面占优，赔率偏不利 [L1.get_fed_funds_rate]。"), allowed
+    )
+    assert single and "at least 3 distinct citations" in single[0]
+
+    # 两条也不够：说明书要的是三条理由。
+    two = orchestrator._validate_reasoned_verdict_refs(
+        _V("理由一 [L1.get_fed_funds_rate]；理由二 [L4.get_ndx_pe_and_earnings_yield]。"), allowed
+    )
+    assert two and "at least 3 distinct citations" in two[0]
+
+    # 同一条引用重复三次不算三条理由（去重后仍是 1）。
+    dup = orchestrator._validate_reasoned_verdict_refs(
+        _V("一 [L1.get_fed_funds_rate] 二 [L1.get_fed_funds_rate] 三 [L1.get_fed_funds_rate]。"),
+        allowed,
+    )
+    assert dup and "at least 3 distinct citations" in dup[0]
+
+    # 三条不同引用 —— 通过。
+    ok = orchestrator._validate_reasoned_verdict_refs(
+        _V(
+            "第一，利率压制估值 [L1.get_fed_funds_rate]；"
+            "第二，估值安全垫薄 [L4.get_ndx_pe_and_earnings_yield]；"
+            "第三，趋势质量差 [L5.get_qqq_technical_indicators]。"
+        ),
+        allowed,
+    )
+    assert ok == []
+
+    # 引用越界仍然优先拦下（既有语义不得被新规则削弱）。
+    illegal = orchestrator._validate_reasoned_verdict_refs(
+        _V("一 [L1.get_fed_funds_rate] 二 [L4.get_ndx_pe_and_earnings_yield] 三 [L9.fake_ref]。"),
+        allowed,
+    )
+    assert illegal and "outside evidence_index" in illegal[0]
+
+
+def test_final_stage_retries_when_reasoned_verdict_cites_illegal_ref(tmp_path: Path):
+    """零引用之外的另一半：引用了不在 evidence_index 里的 ref，同样必须重试，
+    不能靠 `_validate_stage_evidence_refs`（只查结构化字段）蒙混过关。"""
+    base = {
+        "approval_status": "approved_with_reservations",
+        "final_stance": "中性偏谨慎",
+        "confidence": "medium",
+        "must_preserve_risks": ["估值压缩风险"],
+        "blocking_issues": [],
+        "adjudicator_notes": "保留风险边界。",
+    }
+    illegal_ref_verdict = _VALID_REASONED_VERDICT.replace(
+        "[L1.get_fed_funds_rate]", "[L9.fabricated_metric]", 1
+    )
+    engine = SequencedFakeLLMEngine({
+        "final_adjudicator": [
+            json.dumps({**base, "reasoned_verdict": illegal_ref_verdict}, ensure_ascii=False),
+            json.dumps({**base, "reasoned_verdict": _VALID_REASONED_VERDICT}, ensure_ascii=False),
+        ]
+    })
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+    allowed = {"L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield", "L5.get_qqq_technical_indicators"}
+
+    result = orchestrator._run_stage(
+        stage_key="final",
+        stage_name="final_adjudicator",
+        model_cls=FinalAdjudication,
+        payload={"example": "payload"},
+        validator=lambda candidate: orchestrator._validate_reasoned_verdict_refs(candidate, allowed),
+    )
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+
+    assert engine.calls["final_adjudicator"] == 2
+    assert result.reasoned_verdict == _VALID_REASONED_VERDICT
+    assert "outside evidence_index" in diagnostics["stages"]["final_adjudicator"]["errors"][0]["message"]
 
 
 def test_reasoned_verdict_ref_validation_is_non_blocking_and_normalized(tmp_path: Path):
@@ -3657,6 +4573,174 @@ def test_counter_thesis_uses_llm_when_available(tmp_path: Path):
     assert draft.hypotheses[0].support_evidence_refs == ["L5.get_qqq_technical_indicators"]
     assert draft.prompt_input_audit["allowed_inputs_only"] is True
     assert draft.prompt_input_audit["thesis_read"] is False
+
+
+class _CounterThesisFieldNameFakeLLMEngine(FakeLLMEngine):
+    """模拟真实事故（run 20260724_223804）里那种"严格照 prompt 抄字段名"的模型：
+    prompt 正文里没有逐字给出 `hypothesis_text` / `falsification_conditions` 时，
+    它会像真实事故一样自己猜字段名（猜成 summary+statement、falsification_signals）；
+    prompt 写清楚了，它就照抄。
+
+    这个 fake engine 特意读取真正传入的 prompt 文本（由 `_compose_prompt` 拼接，
+    其中包含 `counter_thesis.md` 的真实内容和重试反馈），而不是无条件返回固定
+    canned 响应——只有这样，"counter_thesis.md 修复前后跑同一条测试"才能真实地
+    由红转绿，而不是靠改测试本身的期望值。
+
+    副作用（如实复现，不是 bug）：第一次尝试失败后，重试反馈文本里会带上上一次
+    pydantic 报错原文（其中恰好含有 `hypothesis_text` 字样），这与真实事故的 attempt 2
+    行为一致——模型从报错文本里学会了 `hypothesis_text`，但仍然猜错了
+    `falsification_conditions`，因为第一次报错从未触达那条合约。
+    """
+
+    def __init__(self):
+        super().__init__({})
+        self.calls: dict[str, int] = {}
+
+    def call_with_fallback(self, prompt, stage_name="", preferred_models=None):
+        self.calls[stage_name] = self.calls.get(stage_name, 0) + 1
+        teaches_hypothesis_text = "hypothesis_text" in prompt
+        teaches_falsification_conditions = "falsification_conditions" in prompt
+
+        hypothesis: dict = {
+            "hypothesis_id": "cth_01",
+            "source": "counter_thesis",
+            "support_evidence_refs": ["L1.get_fed_funds_rate"],
+            "counter_evidence_refs": [],
+            "diagnostic_evidence_refs": ["L1.get_fed_funds_rate"],
+        }
+        if teaches_hypothesis_text:
+            hypothesis["hypothesis_text"] = "反方核心论点：盈利加速对冲利率压力，当前回调是布局窗口。"
+        else:
+            # 真实事故 attempt 1：模型不知道字段叫 hypothesis_text，猜成 summary/statement。
+            hypothesis["summary"] = "反方核心论点：盈利加速对冲利率压力，当前回调是布局窗口。"
+            hypothesis["statement"] = "详细展开的论证文本。"
+        if teaches_falsification_conditions:
+            hypothesis["falsification_conditions"] = ["10Y实际利率维持高位且盈利修正转负。"]
+        else:
+            # 真实事故 attempt 2：模型猜成 falsification_signals，falsification_conditions 留空。
+            hypothesis["falsification_signals"] = ["10Y实际利率维持高位且盈利修正转负。"]
+
+        payload = {
+            "hypotheses": [hypothesis],
+            "principal_counterargument": "反方论点的一句话概述。",
+            "cannot_establish": [],
+        }
+        return json.dumps(payload, ensure_ascii=False)
+
+
+def test_counter_thesis_field_names_reproduce_real_incident_until_prompt_documents_them(tmp_path: Path):
+    """真实事故复现（run 20260724_223804，counter_thesis 两次尝试全部失败）：
+
+    - attempt 1：`hypotheses.0.hypothesis_text` 缺失 —— pydantic 结构校验直接报错。
+    - attempt 2：`falsification_conditions must not be empty` —— 合约校验报错。
+
+    根因不是模型能力问题：`_validate_counter_thesis_draft` 和 `CompetingHypothesis`
+    要求的字段，`counter_thesis.md` 从未逐字写过，模型只能凭经验猜（猜成
+    summary/statement、falsification_signals），两次都没猜中，约 28 万 prompt token
+    被两次尝试烧光，最终退回确定性兜底稿。
+
+    本测试用一个"严格照 prompt 抄字段名"的 fake engine：prompt 正文没写全字段名时，
+    它复现真实事故的错误猜测；写全了，它就照抄产出合法结构。因此：
+    - **修复 `counter_thesis.md` 之前**跑这条测试：`_run_stage` 因两次尝试都不合法、
+      耗尽重试后抛 `RuntimeError`（红，忠实复现两条真实错误）。
+    - **修复之后**：prompt 已经逐字教会字段名，第一次尝试就通过校验（绿）。
+    """
+    engine = _CounterThesisFieldNameFakeLLMEngine()
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+    allowed_refs = {"L1.get_fed_funds_rate"}
+
+    result = orchestrator._run_stage(
+        stage_key="counter_thesis",
+        stage_name="counter_thesis",
+        model_cls=CounterThesisDraft,
+        payload={"allowed_evidence_refs": sorted(allowed_refs)},
+        validator=lambda candidate: orchestrator._validate_counter_thesis_draft(candidate, allowed_refs),
+    )
+
+    # 字段名教对了，模型第一次就能产出合法结构，不需要靠重试抽奖。
+    assert engine.calls["counter_thesis"] == 1
+    assert result.hypotheses[0].hypothesis_text
+    assert result.hypotheses[0].falsification_conditions
+
+
+def test_counter_thesis_deterministic_fallback_surfaces_in_competition_fallback_warnings(
+    tmp_path: Path, monkeypatch
+):
+    """反方降级可见度对齐 reviser：counter_thesis 两次尝试失败退回确定性兜底稿时，
+    此前只留痕在 counter_thesis.json 自己的 prompt_input_audit 里，终审判决书完全看
+    不出这次反方论证其实是模板凑数（不像 reviser 那样有 degraded_fallback 显式标记并
+    传导进 quality_gate）。这条测试锁定修复后的行为：兜底发生时，
+    `HypothesisCompetition.fallback_warnings` 必须携带一条可识别的信号，供下游
+    （_run_analysis 里紧邻 reviser_degraded_unrevised_thesis 的那段代码）转成终审质量
+    闸门备注。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    bridge_v2 = BridgeMemo(
+        bridge_type="feedback_bridge_v2",
+        layers_connected=["L1", "L4"],
+        implication_for_ndx="保留张力。",
+        principal_contradiction={
+            "contradiction_id": "rates_vs_valuation",
+            "summary": "高利率与高估值并存。",
+            "why_principal": "决定估值承压程度。",
+            "dominant_side": "利率约束。",
+            "secondary_side": "盈利韧性。",
+            "price_reflection": "partially_reflected",
+            "evidence_refs": ["L1.get_fed_funds_rate"],
+        },
+    )
+    # 模拟 counter_thesis 两次尝试全部失败、走 _build_deterministic_counter_thesis 兜底
+    # 的真实路径：直接让 _build_counter_thesis 产出一个带 fallback_reason 的 draft，
+    # 不需要真的驱动两次 LLM 失败重试。
+    fallback_draft = CounterThesisDraft(
+        hypotheses=[],
+        prompt_input_audit={"fallback_reason": "counter_thesis failed after 2 attempts: ..."},
+    )
+    monkeypatch.setattr(orchestrator, "_build_counter_thesis", lambda **_: fallback_draft)
+
+    competition = orchestrator._build_hypothesis_competition(
+        synthesis_packet=SynthesisPacket(
+            evidence_index={"L1.get_fed_funds_rate": {"evidence_ref": "L1.get_fed_funds_rate"}}
+        ),
+        bridge_v2=bridge_v2,
+        investigation_reports=[],
+        effective_date="2026-07-25",
+    )
+
+    assert "counter_thesis_deterministic_fallback" in competition.fallback_warnings
+
+
+def test_counter_thesis_success_does_not_add_fallback_warning(tmp_path: Path, monkeypatch):
+    """反面用例：counter_thesis 正常产出（无 fallback_reason）时，不能被误标成降级。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    bridge_v2 = BridgeMemo(
+        bridge_type="feedback_bridge_v2",
+        layers_connected=["L1", "L4"],
+        implication_for_ndx="保留张力。",
+    )
+    healthy_draft = CounterThesisDraft(hypotheses=[], prompt_input_audit={})
+    monkeypatch.setattr(orchestrator, "_build_counter_thesis", lambda **_: healthy_draft)
+
+    competition = orchestrator._build_hypothesis_competition(
+        synthesis_packet=SynthesisPacket(evidence_index={}),
+        bridge_v2=bridge_v2,
+        investigation_reports=[],
+        effective_date="2026-07-25",
+    )
+
+    assert "counter_thesis_deterministic_fallback" not in competition.fallback_warnings
 
 
 def test_field_authority_merge_uses_the_most_restrictive_usage(tmp_path: Path):

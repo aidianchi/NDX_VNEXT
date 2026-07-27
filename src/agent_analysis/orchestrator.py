@@ -56,7 +56,7 @@ try:
     from .deep_research_canon import L3_STRUCTURAL_PRIORITY_FUNCTIONS, build_layer_canon_prompt, get_indicator_canon
     from .few_shot import build_layer_few_shot_prompt
     from .inquiry_router import InquiryRouter
-    from .llm_engine import LLMEngine
+    from .llm_engine import LLMEngine, sanitize_json_schema_for_strict_tool_calling
     from .packet_builder import indicator_payload_unavailable_reason
     from .run_review import build_run_review_report
     from .outcome_review import build_outcome_review_report
@@ -107,7 +107,7 @@ except ImportError:
     from deep_research_canon import L3_STRUCTURAL_PRIORITY_FUNCTIONS, build_layer_canon_prompt, get_indicator_canon
     from few_shot import build_layer_few_shot_prompt
     from inquiry_router import InquiryRouter
-    from llm_engine import LLMEngine
+    from llm_engine import LLMEngine, sanitize_json_schema_for_strict_tool_calling
     from packet_builder import indicator_payload_unavailable_reason
     from run_review import build_run_review_report
     from outcome_review import build_outcome_review_report
@@ -147,6 +147,46 @@ PROMPT_FILES = {
     "event_section_summary": "event_section_summary.md",
 }
 
+# 合约—说明书一致性登记表：stage_key -> 该 stage 的 prompt 文件里必须逐字出现的关键词。
+#
+# 存在理由（真实事故 run 20260724_223804）：合约写在本文件的 validator 里，说明书写在
+# prompts/*.md 里，两者没有任何东西保证说的是同一件事。每加一条治理要求，改 validator
+# 是必做的、改 prompt 是"顺手做一下"——不做也没人报错，直到一次正式跑崩在那儿。
+# reviser 当时同时挂着 _validate_stage_evidence_refs 和 _validate_thesis_hypothesis_responses
+# 两条合约，而它的 prompt 一条都没写，于是两条各崩过一次真实运行。
+#
+# 新增/修改 stage validator 时，必须同步在这里登记它会点名的字段或规则关键词；
+# tests/test_governance_input.py 会强制两边对齐。
+STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
+    # _validate_thesis_hypothesis_responses + evidence_index 合法性
+    "thesis": ("hypothesis_responses", "evidence_index"),
+    # reviser 同时受上述两条合约约束，是合约面最宽的治理 stage
+    "reviser": ("hypothesis_responses", "evidence_index"),
+    # _validate_stage_evidence_refs + _validate_reasoned_verdict_refs（三条理由各带引用）
+    "final": ("evidence_index", "三条主要理由"),
+    # _validate_counter_thesis_draft + CompetingHypothesis 必填字段（真实事故 run
+    # 20260724_223804：counter_thesis.md 从未逐字写过 hypothesis_text /
+    # falsification_conditions，模型两次尝试各猜错一个字段名，约 28 万 prompt token
+    # 被烧光后退回确定性兜底稿）
+    "counter_thesis": (
+        "hypothesis_text",
+        "falsification_conditions",
+        "support_evidence_refs",
+        "diagnostic_evidence_refs",
+        "evidence_index",
+    ),
+    # Critique.revision_direction 是 pydantic max_length 硬约束（不是自定义 validator，
+    # 但同样是"模型没被告知就会被拒"的合约面）。真实事故复现于 20260725_232410：
+    # critic.md 当时未提及 200 字符上限，模型认真写长了被打回重试一次。这里的登记与
+    # 来源不限于自定义 validator——凡是会让结构校验/合约校验判失败、却可能没被写进
+    # 说明书的约束，都值得登记，不局限于 lambda validator。
+    #
+    # 2026-07-26 数字规则重构：overall_assessment 的 200 字符上限已确认无下游依据、
+    # 纯属人为限制并已移除，故从此登记撤下；revision_direction 上限放宽至 500，
+    # 登记同步更新为新数字。
+    "critic": ("500",),
+}
+
 PROMPT_AUDIT_BOOKKEEPING_FIELDS = {
     "source_switches",
     "StaleReferences",
@@ -158,6 +198,47 @@ PROMPT_AUDIT_BOOKKEEPING_FIELDS = {
 }
 MANIFEST_DATA_QUALITY_LIST_LIMIT = 10
 MANIFEST_DATA_QUALITY_OBJECT_CHAR_LIMIT = 1200
+
+# Thesis / Counter-Thesis prompt 瘦身阈值（investigation_reports/20260725_thesis_
+# counter_thesis_slimming/PROPOSAL.md）：evidence_index 里超过这个条数、且序列化
+# 后超过这个字符数的嵌套列表（全成分逐票明细、raw_series 历史序列等）判定为
+# "审计专用明细"——两站的合法 evidence_ref 只到 parent#field_name 一层，模型没有
+# 任何合法引用路径能指到某一票或某一天，压缩前后模型"能合法引用什么"完全不变。
+# ref key 本身和聚合字段（value/coverage/windows/...）不受影响；完整明细继续留在
+# synthesis_packet.json / evidence_registry.json 供审计与独立重算。
+EVIDENCE_FIELD_LIST_PROMPT_COUNT_THRESHOLD = 8
+EVIDENCE_FIELD_LIST_PROMPT_CHAR_THRESHOLD = 800
+
+# thesis_builder.md「## 输入」重点字段清单和「对竞争假说的强制回应」一节、
+# counter_thesis.md「## 输入边界」清单，均未把这些字段列为必读；
+# evidence_registry_summary 明确是 _build_governance_input_packet 转发给 Critic/
+# Risk/Reviser/Final 四个治理站用的阶段 4 摘要，不是这两站的输入面。只在喂给
+# LLM 的 prompt 层丢弃——_run_thesis / _counter_thesis_prompt_payload 构造出的
+# 完整 payload 仍保留它们，供 checkpoint 续跑比对和 prompt_input_audit 使用完整
+# 上游输入。
+# 叙事阶段 prompt 中可以安全丢弃的记账类字段。
+#
+# 【2026-07-27 收缩：`hypothesis_competition_summary` 与 `adjudication_history` 撤出丢弃清单】
+# 首版把这两个字段一并丢弃，重复采样实验证明这是错的（脚本见 WORK_LOG 同日条目）：
+#   现状丢弃：thesis.invalidation_conditions = [2, 2, 2]（含原跑 232410 共 4/4 恒为 2）
+#   仅保留 hypothesis_competition_summary：= [4, 5, 3]
+#   未瘦身历史基线（20260725_145833）：4
+# 两组区间零重叠。机制清楚：`hypothesis_competition_summary.retained_disputes` 装的是
+# 11 条"未解决的争议"，而"改判条件"本就是从"我哪里还不确定"推导出来的——把不确定
+# 清单从 thesis 眼前拿走，它就写不出独立的失效通道，只能退化成"多个条件同时成立才
+# 算失效"的复合 AND 条件，实际永远不会触发（等于把确认偏误制度化）。
+# 代价对比更说明问题：丢弃这四个字段合计只省 0.40%，而证据索引明细压缩省 72.71%。
+# 为 0.4% 的 token 牺牲"冲突是资产"的核心载体，不成比例。
+# `adjudication_history` 同批保留：403 字符，记录 candidate → kept_unresolved 的降级
+# 原因，是假说降级审计链，thesis 需要看见"这条假说为什么被降级"。
+# 余下两项属纯记账元数据（输入边界声明、证据护照计数），维持丢弃。
+NARRATIVE_STAGE_PROMPT_DROP_FIELDS: Dict[str, tuple] = {
+    "thesis": (
+        "counter_thesis_boundary",
+        "evidence_registry_summary",
+    ),
+    "counter_thesis": ("evidence_registry_summary",),
+}
 EVENT_INTERPRETATION_CARD_LIMIT = 10
 EVENT_FINANCIAL_LINKS = [
     "earnings_path",
@@ -443,32 +524,51 @@ class VNextOrchestrator:
             schema_report=schema_report,
             layer_cards=layer_cards,
         )
-        analysis_revised = self._run_and_save(
-            stage_key="reviser",
-            stage_name="reviser",
-            model_cls=AnalysisRevised,
-            payload={"governance_input": _model_dump(gov_input_reviser)},
-            filename="analysis_revised.json",
-            # 优雅降级：reviser 幻觉出的非法 parent#field 引用先净化（可退回父级的退回，
-            # 混合权威父级或彻底无法解析的直接丢弃），避免整跑仅因个别幻觉 ref 就
-            # RuntimeError 中止。净化不放松下方 _validate_stage_evidence_refs 的合法性
-            # 判定——净化后仍残留的非法 ref 依旧会被拦下并走既有重试路径。
-            pre_validate_transform=lambda parsed: self._sanitize_reviser_evidence_refs(
-                parsed,
-                synthesis_packet.evidence_index,
-            ),
-            validator=lambda candidate: (
-                self._validate_stage_evidence_refs(
-                    candidate,
-                    set(synthesis_packet.evidence_index.keys()),
-                    "reviser",
+        reviser_payload = {"governance_input": _model_dump(gov_input_reviser)}
+        analysis_revised = self._load_reviser_checkpoint(reviser_payload)
+        if analysis_revised is None:
+            try:
+                analysis_revised = self._run_stage(
+                    stage_key="reviser",
+                    stage_name="reviser",
+                    model_cls=AnalysisRevised,
+                    payload=reviser_payload,
+                    # 两道 pre-validate 降级，顺序不可颠倒：
+                    # 1) 遗漏继承——reviser 整个漏掉的 revised_thesis 字段从 thesis 原稿原样
+                    #    搬回并留痕（键存在则一律不碰，见 _carry_forward_reviser_thesis_fields）；
+                    # 2) 引用净化——幻觉出的非法 parent#field 可退回的退回、混合权威父级或
+                    #    无法解析的丢弃。继承先行，使搬回的原稿引用也过同一张净化网。
+                    # 两者都不放松下方 validator 的合法性判定：残留问题仍会被拦下并重试。
+                    pre_validate_transform=lambda parsed: self._sanitize_reviser_evidence_refs(
+                        self._carry_forward_reviser_thesis_fields(parsed, thesis),
+                        synthesis_packet.evidence_index,
+                    ),
+                    validator=lambda candidate: (
+                        self._validate_stage_evidence_refs(
+                            candidate,
+                            set(synthesis_packet.evidence_index.keys()),
+                            "reviser",
+                        )
+                        + self._validate_thesis_hypothesis_responses(
+                            candidate.revised_thesis,
+                            synthesis_packet,
+                        )
+                    ),
                 )
-                + self._validate_thesis_hypothesis_responses(
-                    candidate.revised_thesis,
-                    synthesis_packet,
-                )
-            ),
-        )
+            except RuntimeError as exc:
+                # 软着陆：reviser 是编辑岗，它失败不该让上游约 25 分钟的采集、五层分析、
+                # 桥接、论点、批评、风险全部归零（对照 counter_thesis 的既有兜底成例）。
+                # 退回未修订的 thesis 原稿——该原稿已通过同一组合约校验，所以兜底产物
+                # 不放松任何合约；但必须带 degraded_fallback 显式声明"本轮判断书未经修订"。
+                logger.warning("reviser 阶段全部尝试均未通过合约校验，退回未修订原稿：%s", exc)
+                analysis_revised = self._build_degraded_analysis_revised(thesis, str(exc))
+            self._save_json("analysis_revised.json", analysis_revised)
+            self._record_stage_artifact(
+                self.output_dir / "analysis_revised.json",
+                stage_key="reviser",
+                stage_name="reviser",
+                payload=reviser_payload,
+            )
 
         gov_input_final = self._build_governance_input_packet(
             synthesis_packet=synthesis_packet,
@@ -495,10 +595,16 @@ class VNextOrchestrator:
                 stage_name="final_adjudicator",
                 model_cls=FinalAdjudication,
                 payload=final_payload,
-                validator=lambda candidate: self._validate_stage_evidence_refs(
-                    candidate,
-                    set(synthesis_packet.evidence_index.keys()),
-                    "final",
+                validator=lambda candidate: (
+                    self._validate_stage_evidence_refs(
+                        candidate,
+                        set(synthesis_packet.evidence_index.keys()),
+                        "final",
+                    )
+                    + self._validate_reasoned_verdict_refs(
+                        candidate,
+                        set(synthesis_packet.evidence_index.keys()),
+                    )
                 ),
             )
             token_report = self.llm_engine.get_token_report() if hasattr(self.llm_engine, "get_token_report") else {}
@@ -514,6 +620,15 @@ class VNextOrchestrator:
             final_adjudication,
             set(synthesis_packet.evidence_index.keys()),
         )
+        # 修订阶段降级必须进入质量闸门，由发布闸门决定这样一份"未经修订"的判断书能不能发，
+        # 而不是让它悄悄长成一份正常报告。
+        if getattr(analysis_revised, "degraded_fallback", None):
+            self._append_final_quality_note(final_adjudication, "reviser_degraded_unrevised_thesis")
+        # 反方降级同理：counter_thesis 两次尝试失败退回确定性兜底稿时，此前只留痕在
+        # counter_thesis.json 自己的 prompt_input_audit 里，终审判决书看不出这次反方
+        # 论证其实是模板凑数。对齐 reviser 的可见度处理，让发布闸门也能看到这条信号。
+        if "counter_thesis_deterministic_fallback" in list(hypothesis_competition.fallback_warnings or []):
+            self._append_final_quality_note(final_adjudication, "counter_thesis_degraded_deterministic_fallback")
         final_claim_ledger = self._build_final_claim_ledger(
             synthesis_packet=synthesis_packet,
             thesis=analysis_revised.revised_thesis,
@@ -929,6 +1044,8 @@ class VNextOrchestrator:
                 "thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
                 "reviser": ["deepseek-v4-pro", "deepseek-v4-flash"],
                 "final": ["deepseek-v4-pro", "deepseek-v4-flash"],
+                "event_card_interpreter": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                "event_section_summary": ["deepseek-v4-flash", "deepseek-v4-pro"],
             },
         }
 
@@ -1429,7 +1546,7 @@ class VNextOrchestrator:
             "card_count": len(compact_cards),
             "title_only_card_count": title_only_count,
             "output_contract": {
-                "summary_text": "150-400 字总结正文，含 [card:<event_id>] 引用与结尾边界句",
+                "summary_text": "100-1500 字总结正文（宽松上限，不必刻意压缩），含 [card:<event_id>] 引用与结尾边界句",
                 "cited_event_ids": ["正文中实际引用的 event_id"],
             },
             "boundary": {
@@ -1502,9 +1619,14 @@ class VNextOrchestrator:
             errors.append("summary_text must end with the fixed boundary sentence")
         if re.search(r"L[1-5]\.get_", text):
             errors.append("summary_text must not reference L1-L5 data refs")
+        # 下限 100 予以保留：短于此难以对多张事件卡（含各自降级措辞）给出实质总结，
+        # 是在强制内容而非任意数字。上限从 600 放宽到 1500（2026-07-26 数字规则
+        # 重构）：渲染进 `<div class="prose event-summary"><p>` 普通段落，不是固定
+        # 宽度展示位，原上限无下游依据；尤其是最多可引用 5 张卡、每张仅标题/非官方
+        # 来源卡都要求带各自的降级措辞时，600 字经常装不下诚实的表达。
         plain = re.sub(r"\[card:[^\[\]]+\]", "", text)
-        if not 100 <= len(plain) <= 600:
-            errors.append(f"summary_text length {len(plain)} outside tolerant band 100-600")
+        if not 100 <= len(plain) <= 1500:
+            errors.append(f"summary_text length {len(plain)} outside tolerant band 100-1500")
         # codex P1：材料以标题为主时，总结必须诚实声明质量限制，不得写得言之凿凿。
         if title_only_majority and not any(phrase in text for phrase in VNextOrchestrator._MATERIAL_QUALITY_CAVEAT_PHRASES):
             errors.append("majority of cited materials are title-only; summary_text must state this quality limitation")
@@ -2183,6 +2305,14 @@ class VNextOrchestrator:
         hypotheses = self._dedupe_hypotheses(hypotheses)
 
         fallback_warnings = self._competition_fallback_warnings(bridge_v2)
+        # 反方(counter_thesis)降级可见度对齐 reviser：reviser 失败退回原稿时会显式打上
+        # degraded_fallback 并传导进终审质量闸门（见 _append_final_quality_note 调用点），
+        # 但 counter_thesis 失败退回 _build_deterministic_counter_thesis 时，此前只把
+        # fallback_reason 记进 counter_thesis.json 自己的 prompt_input_audit 里，终审判决书
+        # 完全看不出这次反方论证其实是模板凑数，不像 reviser 那样留下可见标记。这里把它
+        # 也计入 fallback_warnings，交给下游在终审阶段同样显式标注。
+        if counter_thesis.prompt_input_audit.get("fallback_reason"):
+            fallback_warnings = list(dict.fromkeys(fallback_warnings + ["counter_thesis_deterministic_fallback"]))
         downgrade_records = self._build_adjudication_change_records(
             base_hypothesis=base_hypothesis,
             counter_hypotheses=counter_thesis.hypotheses,
@@ -3781,6 +3911,30 @@ class VNextOrchestrator:
         except Exception:
             return default
 
+    # DeepSeek Strict Function Calling（Beta）试点范围：只有这里列出的 stage_key 才
+    # 可能被启用，默认整个集合为空（不读环境变量也不改变行为）。试点范围收窄到
+    # bridge 一处，是因为 docs/2026-05-10_BRIDGE_JSON_RESILIENCE_AI_AUDIT.md 当时
+    # 已经把 bridge 的事故诊断透了、且切到 /beta 端点的前置工作已经做完，属于"捡起
+    # 被搁置的阶段 C"而不是从零开始；其余 stage 一律走原有 json_object 路径。
+    _STRICT_TOOL_CALLING_ELIGIBLE_STAGES = {"bridge"}
+
+    def _strict_tool_schema_for_stage(self, stage_key: str, model_cls: Type[Any]) -> Optional[Dict[str, Any]]:
+        """按 `NDX_STRICT_TOOL_CALLING_STAGES` 环境变量（逗号分隔 stage_key）决定
+        是否为这次调用启用 DeepSeek strict function calling。未设置该环境变量、
+        或 stage_key 不在试点白名单内时返回 None——调用方据此完全跳过 strict 路径，
+        与试点之前的行为逐字节相同。这是刻意选择的显式 opt-in 开关，不是配置文件，
+        方便用户在一次真实 run 前后随时打开/关闭做对比，不需要改代码。"""
+        if stage_key not in self._STRICT_TOOL_CALLING_ELIGIBLE_STAGES:
+            return None
+        enabled_stages = {
+            item.strip()
+            for item in os.environ.get("NDX_STRICT_TOOL_CALLING_STAGES", "").split(",")
+            if item.strip()
+        }
+        if stage_key not in enabled_stages:
+            return None
+        return sanitize_json_schema_for_strict_tool_calling(model_cls.model_json_schema())
+
     def _run_bridge(
         self,
         packet: AnalysisPacket,
@@ -3809,6 +3963,8 @@ class VNextOrchestrator:
             model_cls=BridgeMemo,
             payload=bridge_payload,
             validator=self._validate_bridge_memo_v2,
+            strict_tool_schema=self._strict_tool_schema_for_stage("bridge", BridgeMemo),
+            strict_tool_name="emit_bridge_memo",
         )
         self._save_json(self.bridge_dir / "bridge_0.json", bridge)
         self._record_stage_artifact(
@@ -4575,6 +4731,8 @@ class VNextOrchestrator:
         payload: Dict[str, Any],
         validator: Optional[Callable[[Any], List[str]]] = None,
         pre_validate_transform: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+        strict_tool_schema: Optional[Dict[str, Any]] = None,
+        strict_tool_name: Optional[str] = None,
     ) -> Any:
         prompt = self._compose_prompt(stage_key, model_cls, payload)
         preferred_models = self._preferred_models_for_stage(stage_key)
@@ -4618,12 +4776,18 @@ class VNextOrchestrator:
             stage_record["prompt_audit"]["attempts"].append(attempt_record)
             stage_record["prompt_audit"]["latest_prompt_file"] = attempt_record["prompt_file"]
             self._save_stage_diagnostics()
+            # strict_tool_schema 只在明确传入时才加进调用参数——绝大多数 stage 从不
+            # 传它，这条路径与改动前逐字节相同，不影响任何既有 stage 或测试用的
+            # 简化版 fake engine（它们的 call_with_fallback 大多不接受这个新参数）。
+            call_kwargs: Dict[str, Any] = {
+                "stage_name": stage_name,
+                "preferred_models": preferred_models or None,
+            }
+            if strict_tool_schema is not None:
+                call_kwargs["strict_tool_schema"] = strict_tool_schema
+                call_kwargs["strict_tool_name"] = strict_tool_name or f"emit_{stage_key}_output"
             try:
-                raw = self.llm_engine.call_with_fallback(
-                    active_prompt,
-                    stage_name=stage_name,
-                    preferred_models=preferred_models or None,
-                )
+                raw = self.llm_engine.call_with_fallback(active_prompt, **call_kwargs)
             except TypeError:
                 raw = self.llm_engine.call_with_fallback(active_prompt, stage_name=stage_name)
             self._save_prompt_audit_text(stage_name, f"attempt_{attempt}.response.raw.txt", str(raw or ""))
@@ -5032,6 +5196,119 @@ class VNextOrchestrator:
             self._save_stage_diagnostics()
         return parsed
 
+    # `revised_thesis` 中允许 reviser 原样不动的字段。Reviser 的岗位定义是"编辑，不是
+    # 重写者"，所以某个键**完全缺席**语义上等于"本段未修订"，代码可以确定性地把原稿
+    # 搬过来；而键存在（哪怕是空列表）是 reviser 自己的作答，永不覆盖——否则继承就成了
+    # 绕过"冲突是资产"的后门。
+    _REVISER_CARRY_FORWARD_FIELDS = ("hypothesis_responses",)
+
+    def _carry_forward_reviser_thesis_fields(
+        self,
+        parsed: Dict[str, Any],
+        thesis: Optional[Any],
+    ) -> Dict[str, Any]:
+        """把 reviser 整个遗漏的 revised_thesis 字段从 thesis 原稿继承过来并留痕。
+
+        动机（真实事故 run 20260724_223804）：reviser 的合约要求每个 candidate 假说恰有
+        一条回应，但"别把交给你的东西弄丢"是**确定性义务**；交给一次约 9.5K token 的自由
+        生成去保证，等于抽奖，且失败时整条流水线硬崩。代码继承把它变回确定的。
+
+        严格边界（任何一条被放松都会让它变成合约后门）：
+        - 只在键**完全缺席**时介入；键存在（含空列表）一律不碰，交给既有 validator 硬拦。
+        - 只搬运 thesis 已在案、且已通过同一组合约校验的原文；代码**永不生成**回应内容。
+        - 每条继承项打 `carried_forward_from_thesis` 标记并写 stage_diagnostics 留痕，
+          使"本轮未修订"对下游、审计区和人工复核可见，不伪装成 reviser 自己的判断。
+        """
+        if thesis is None:
+            return parsed
+        revised = parsed.get("revised_thesis")
+        if not isinstance(revised, dict):
+            return parsed
+
+        notes: List[str] = []
+        for field in self._REVISER_CARRY_FORWARD_FIELDS:
+            if field in revised:
+                continue
+            source_items = getattr(thesis, field, None)
+            if not source_items:
+                continue
+            carried: List[Any] = []
+            for item in source_items:
+                dumped = _model_dump(item)
+                if not isinstance(dumped, dict):
+                    continue
+                dumped["carried_forward_from_thesis"] = True
+                carried.append(dumped)
+            if not carried:
+                continue
+            revised[field] = carried
+            notes.append(
+                f"reviser.revised_thesis.{field}: omitted by reviser, carried forward "
+                f"verbatim from thesis_draft ({len(carried)} item(s)); marked "
+                "carried_forward_from_thesis=true — 本轮未修订"
+            )
+
+        if notes:
+            logger.warning(
+                "reviser thesis field carry-forward applied (%d field(s)): %s",
+                len(notes),
+                "; ".join(notes),
+            )
+            self.stage_diagnostics.setdefault("reviser_thesis_field_carry_forward", [])
+            self.stage_diagnostics["reviser_thesis_field_carry_forward"].extend(notes)
+            self._save_stage_diagnostics()
+        return parsed
+
+    def _load_reviser_checkpoint(self, expected_payload: Dict[str, Any]) -> Optional[AnalysisRevised]:
+        """载入 reviser 检查点，但拒绝复用降级兜底产物。
+
+        降级产物代表"本轮放弃了修订"，不是一次成功的 reviser 结果。续跑必须重新尝试
+        修订，否则一次失败会把"未经修订"永久固化进后续所有续跑。
+        """
+        checkpoint = self._load_stage_checkpoint(
+            "analysis_revised.json",
+            AnalysisRevised,
+            stage_key="reviser",
+            stage_name="reviser",
+            expected_payload=expected_payload,
+        )
+        if checkpoint is not None and getattr(checkpoint, "degraded_fallback", None):
+            logger.warning("analysis_revised.json 是降级兜底产物，忽略该检查点并重跑 reviser。")
+            return None
+        return checkpoint
+
+    def _build_degraded_analysis_revised(self, thesis: ThesisDraft, reason: str) -> AnalysisRevised:
+        """Reviser 全部尝试失败时的兜底：原样退回未修订的 thesis，并显式声明降级。
+
+        不放松任何合约——thesis 已通过 reviser 所受的同一组校验（证据引用合法性、
+        每个 candidate 假说恰一条回应），所以兜底产物天然合规。但它**不是**一份修订稿，
+        必须让下游、质量闸门、报告审计区和人工复核一眼看见"本轮未经修订"，
+        绝不能长得像正常产物。
+        """
+        note = (
+            f"[degraded] reviser 阶段 {self.max_node_retries} 次尝试均未通过合约校验，"
+            "本轮判断书未经修订，直接沿用 thesis 原稿。批评与风险意见本轮未被吸收。"
+        )
+        self.stage_diagnostics.setdefault("reviser_degraded_fallback", [])
+        self.stage_diagnostics["reviser_degraded_fallback"].append(
+            {"reason": reason[:1000], "attempts": self.max_node_retries}
+        )
+        self._save_stage_diagnostics()
+        return AnalysisRevised(
+            revision_summary=note[:500],
+            accepted_critiques=[],
+            rejected_critiques=[],
+            revised_thesis=thesis,
+            # 冲突是资产：兜底不得顺手抹平原稿已保留的冲突。
+            remaining_conflicts=list(thesis.retained_conflicts),
+            degraded_fallback={
+                "stage": "reviser",
+                "reason": reason[:1000],
+                "attempts": self.max_node_retries,
+                "effect": "revised_thesis 为未修订的 thesis 原稿；critique/risk 反馈本轮未吸收",
+            },
+        )
+
     def _validate_stage_evidence_refs(self, candidate: Any, allowed_refs: set[str], stage_key: str) -> List[str]:
         payload = _model_dump(candidate)
         refs_by_path: List[tuple[str, str]] = []
@@ -5078,6 +5355,58 @@ class VNextOrchestrator:
         if note not in notes:
             notes.append(note)
             final.quality_gate.notes = "；".join(notes)
+
+    def _validate_reasoned_verdict_refs(self, candidate: Any, allowed_refs: set[str]) -> List[str]:
+        """final_adjudicator.md 白纸黑字："三条主要理由每条必须至少带一个方括号标注
+        的 evidence_ref……这是硬要求，一个都没有等于整段作废。"但此前这条规则只在
+        生成之后由 `_annotate_reasoned_verdict_refs` 做软性标注（写进
+        quality_gate.notes），从不触发重试——真实事故（run 20260725_232410）：
+        终审一次通过，`reasoned_verdict` 514 字、内容连贯、数字详实，却**零处**方括号
+        引用，读者拿到手的主判决文字完全没有可追溯证据，质量闸门只留了一条
+        `reasoned_verdict_missing_refs` 备注，报告照常发布。
+
+        这里补成真正的合约校验，接进 `_run_stage` 的 validator 链：说明书已经给了
+        模型示例格式（`[L1.get_10y_real_rate]`），这不是"模型不知道规则"（reviser/
+        counter_thesis 那两次事故的根因），而是"规则没有被强制"，补一道校验、让重试
+        机制把报错原样喂回去即可，不需要改说明书。`reasoned_verdict` 长度已经是硬性
+        pydantic 校验（`test_final_stage_retries_after_overlong_reasoned_verdict`
+        锁定的既有行为），这里只是把"必须带引用"这条也提到同一严重度，不额外放大
+        终审阶段本来就有的爆炸半径。
+        """
+        verdict = str(getattr(candidate, "reasoned_verdict", "") or "").strip()
+        if not verdict:
+            return []
+        cited_refs = [item.strip() for item in re.findall(r"\[([^\[\]]+)\]", verdict)]
+        if not cited_refs:
+            return [
+                "reasoned_verdict must cite at least one evidence_ref in [brackets] "
+                "(e.g. [L1.get_10y_real_rate]); found zero citations."
+            ]
+        # final_adjudicator.md:243-245 要求"总-分-总"结构，中间按最有分量的**三条理由**
+        # 展开，且"三条主要理由每条必须至少带一个方括号标注的 evidence_ref"。只校验
+        # "至少一条引用"会放过真实事故形态：run 20260725_232410 的 514 字判决书把状态、
+        # 矛盾、风险、定价、赔率、仓位、失效条件全部压进单段连续文字，没有三条理由的
+        # 层级，读者拿不到"哪条证据支撑哪条理由"。三条理由各至少一条引用 ⇒ 至少三条
+        # 不同引用，这不是新拍的数字，是把说明书里已经写死的结构提到同一强制等级。
+        if len(set(cited_refs)) < 3:
+            return [
+                "reasoned_verdict must follow the documented 总-分-总 structure: the three "
+                "main reasons each need at least one [bracketed] evidence_ref, i.e. at least "
+                f"3 distinct citations. Found {len(set(cited_refs))}: {sorted(set(cited_refs))}. "
+                "Do not merge the reasons into one continuous paragraph."
+            ]
+        lower_key_map = {key.lower(): key for key in allowed_refs}
+        passports = {key: None for key in allowed_refs}
+        unresolved = [
+            ref
+            for ref in cited_refs
+            if self._resolve_claim_evidence_ref(ref, passports, lower_key_map) is None
+        ]
+        if unresolved:
+            return [
+                f"reasoned_verdict cites refs outside evidence_index: {unresolved[:5]}"
+            ]
+        return []
 
     def _annotate_reasoned_verdict_refs(
         self,
@@ -5535,7 +5864,20 @@ class VNextOrchestrator:
         if stage_key == "bridge":
             return self._strip_empty_event_prompt_fields(payload)
         if stage_key == "thesis":
-            return self._strip_empty_event_prompt_fields(self._slim_object_run_gate_for_prompt(payload))
+            slimmed = self._slim_object_run_gate_for_prompt(payload)
+            slimmed = self._drop_low_value_synthesis_fields_for_prompt(
+                slimmed, "synthesis_packet", NARRATIVE_STAGE_PROMPT_DROP_FIELDS["thesis"]
+            )
+            slimmed = self._slim_evidence_index_for_prompt(slimmed, "synthesis_packet")
+            return self._strip_empty_event_prompt_fields(slimmed)
+        if stage_key == "counter_thesis":
+            slimmed = self._drop_low_value_synthesis_fields_for_prompt(
+                payload,
+                "synthesis_packet_without_self_reference",
+                NARRATIVE_STAGE_PROMPT_DROP_FIELDS["counter_thesis"],
+            )
+            slimmed = self._slim_evidence_index_for_prompt(slimmed, "synthesis_packet_without_self_reference")
+            return self._strip_empty_event_prompt_fields(slimmed)
         if not (stage_key.startswith("l") and stage_key.endswith("_analyst")):
             return payload
         sanitized = dict(payload)
@@ -5576,6 +5918,86 @@ class VNextOrchestrator:
         sanitized["synthesis_packet"] = slim_synthesis
         return sanitized
 
+    def _drop_low_value_synthesis_fields_for_prompt(
+        self,
+        payload: Dict[str, Any],
+        synthesis_key: str,
+        drop_fields: tuple,
+    ) -> Dict[str, Any]:
+        """Drop SynthesisPacket top-level fields that neither thesis_builder.md nor
+        counter_thesis.md ever asks the model to read (see investigation_reports/
+        20260725_thesis_counter_thesis_slimming/PROPOSAL.md). Only affects the text
+        actually serialized into the prompt; the full payload passed into
+        _run_thesis / _counter_thesis_prompt_payload (used for checkpoint diffing
+        and prompt_input_audit) is untouched.
+        """
+        sanitized = dict(payload)
+        synthesis = sanitized.get(synthesis_key)
+        if not isinstance(synthesis, dict):
+            return sanitized
+        sanitized[synthesis_key] = {
+            key: value for key, value in synthesis.items() if key not in drop_fields
+        }
+        return sanitized
+
+    def _slim_evidence_index_for_prompt(self, payload: Dict[str, Any], synthesis_key: str) -> Dict[str, Any]:
+        """Compress audit-only nested detail out of evidence_index before it reaches
+        the Thesis / Counter-Thesis prompt text.
+
+        不删除、不重命名任何 evidence_ref key —— 两站的引用合法性校验完全依赖
+        key 是否存在，与 value 内容无关。只压缩每条记录 field_value 里超长的
+        逐票/逐日审计明细（如全成分明细、raw_series 历史序列），聚合字段
+        （value/coverage/windows/...）原样保留。完整明细继续留在持久化的
+        synthesis_packet.json / evidence_registry.json 中。
+        """
+        sanitized = dict(payload)
+        synthesis = sanitized.get(synthesis_key)
+        if not isinstance(synthesis, dict):
+            return sanitized
+        evidence_index = synthesis.get("evidence_index")
+        if not isinstance(evidence_index, dict):
+            return sanitized
+        slim_index: Dict[str, Any] = {}
+        for ref, entry in evidence_index.items():
+            if not isinstance(entry, dict) or "field_value" not in entry:
+                slim_index[ref] = entry
+                continue
+            entry_copy = dict(entry)
+            entry_copy["field_value"] = self._slim_long_list_for_prompt(entry_copy["field_value"])
+            slim_index[ref] = entry_copy
+        slim_synthesis = dict(synthesis)
+        slim_synthesis["evidence_index"] = slim_index
+        sanitized[synthesis_key] = slim_synthesis
+        return sanitized
+
+    @classmethod
+    def _slim_long_list_for_prompt(cls, value: Any) -> Any:
+        """Recursively replace oversized nested lists with a count+sample summary.
+
+        阈值见 EVIDENCE_FIELD_LIST_PROMPT_COUNT_THRESHOLD /
+        EVIDENCE_FIELD_LIST_PROMPT_CHAR_THRESHOLD：条数和序列化字符数都超过阈值
+        才判定为审计明细，避免误伤本来就短的合法列表（如季度趋势这类只有几条、
+        但本身就是叙事所需信号的列表）。
+        """
+        if isinstance(value, list):
+            if len(value) > EVIDENCE_FIELD_LIST_PROMPT_COUNT_THRESHOLD:
+                serialized_len = len(json.dumps(value, ensure_ascii=False, default=str))
+                if serialized_len > EVIDENCE_FIELD_LIST_PROMPT_CHAR_THRESHOLD:
+                    sample_items = value[:2] + (value[-1:] if len(value) > 3 else [])
+                    return {
+                        "_prompt_summary": True,
+                        "count": len(value),
+                        "sample": [cls._slim_long_list_for_prompt(item) for item in sample_items],
+                        "note": (
+                            "完整明细保留在 synthesis_packet.json / evidence_registry.json 供审计与"
+                            "独立重算；聚合统计见同级 value/coverage/windows 等字段。"
+                        ),
+                    }
+            return [cls._slim_long_list_for_prompt(item) for item in value]
+        if isinstance(value, dict):
+            return {key: cls._slim_long_list_for_prompt(item) for key, item in value.items()}
+        return value
+
     def _strip_empty_event_prompt_fields(self, payload: Any) -> Any:
         if isinstance(payload, dict):
             stripped: Dict[str, Any] = {}
@@ -5610,6 +6032,9 @@ class VNextOrchestrator:
             "以上只是职责边界和接口协议，不是其他层的当前数据、状态或结论。"
             "你可以据此决定把验证问题路由给哪一层，但不得据此推断其他层现在是 bullish、bearish、expensive、healthy 或 uptrend。\n\n"
             "### 必须新增并认真填写的字段\n"
+            "- local_conclusion: 必填字段，最多500字符，本层最核心的一句结论（例如"
+            "\"估值处于历史高位但盈利韧性提供部分支撑\"）；缺失会被结构校验直接拒绝，"
+            "不允许省略或留空。\n"
             "- indicator_analyses: 对每一个 analysis_required=true 的指标输出一条原生分析。\n"
             "- indicator_analyses[].function_id 必须等于输入 function_id。\n"
             "- indicator_analyses[].metric 必须优先等于输入 metric_name。\n"

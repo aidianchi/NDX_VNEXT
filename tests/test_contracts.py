@@ -511,7 +511,7 @@ def test_final_adjudication_reasoned_verdict_contract_and_missing_note():
     assert missing.quality_gate is not None
     assert "判决正文缺失" in missing.quality_gate.notes
 
-    for invalid in ("过短", "过长" * 651):
+    for invalid in ("过短", "过长" * 1501):  # 上限已放宽至 3000（2026-07-26），需超过新上限
         with pytest.raises(Exception, match="reasoned_verdict"):
             FinalAdjudication(
                 approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,

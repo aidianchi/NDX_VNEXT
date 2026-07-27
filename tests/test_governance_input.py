@@ -26,7 +26,11 @@ from agent_analysis.contracts import (
     ThesisDraft,
     TypedConflict,
 )
-from agent_analysis.orchestrator import VNextOrchestrator
+from agent_analysis.orchestrator import (
+    PROMPT_FILES,
+    STAGE_CONTRACT_PROMPT_REQUIREMENTS,
+    VNextOrchestrator,
+)
 
 
 def _empty_layer_card(layer: str) -> LayerCard:
@@ -467,6 +471,47 @@ def test_governance_prompts_still_ban_fabricated_statistics():
         text = (prompt_dir / name).read_text(encoding="utf-8")
         for phrase in banned_patterns:
             assert phrase not in text, f"{name} contains banned phrase: {phrase}"
+
+
+# ── 防漂移闸门：校验函数会点名的东西，说明书里必须写过 ──
+
+def test_stage_contracts_are_documented_in_their_prompts():
+    """合约写在代码里、说明书写在 prompt 里，必须有机器闸门保证两边说的是同一件事。
+
+    真实事故（run 20260724_223804）：reviser 同时挂着证据引用合法性和竞争假说回应两条
+    合约，而 reviser.md 一条都没写。模型严格照着 prompt 的输出模板作答，于是必然缺字段、
+    重试逐字复现、整条流水线 RuntimeError。两条缺口各崩过一次真实运行。
+
+    这个测试是让"逐条打补丁"收敛的关键：新增 stage validator 时必须同步登记，
+    否则下一次漂移会在这里红，而不是在下一次正式跑里红。
+    """
+    prompt_dir = Path(__file__).resolve().parents[1] / "src" / "agent_analysis" / "prompts"
+
+    for stage_key, required_keywords in STAGE_CONTRACT_PROMPT_REQUIREMENTS.items():
+        prompt_name = PROMPT_FILES[stage_key]
+        text = (prompt_dir / prompt_name).read_text(encoding="utf-8")
+        for keyword in required_keywords:
+            assert keyword in text, (
+                f"{prompt_name} 未说明 stage `{stage_key}` 的合约要求 `{keyword}`："
+                "validator 会因此判失败，但模型从未被告知该要求。"
+                "请补 prompt，或在 STAGE_CONTRACT_PROMPT_REQUIREMENTS 中同步调整登记。"
+            )
+
+
+def test_governance_prompts_ban_fabricated_subfield_refs():
+    """B 类命名空间纪律：合法子引用名由 evidence_index 给定，不等于模型看到的数据字段名。
+
+    真实事故（同一 run 的 thesis attempt 1）：模型引用了 `L4.get_m7_buyback_flow#m7_quarterly_total`
+    ——`m7_quarterly_total` 确实是该工具 value 里的真实字段名，但 evidence_index 的合法子引用
+    用的是 authority 条目名（`m7_aggregate_and_yoy`）。模型"照实抄"反而违规。
+    每个会拼 `parent#field` 的 stage 都必须被明确告知：只能逐字使用索引里已存在的 ref。
+    """
+    prompt_dir = Path(__file__).resolve().parents[1] / "src" / "agent_analysis" / "prompts"
+
+    for name in ("thesis_builder.md", "reviser.md", "final_adjudicator.md"):
+        text = (prompt_dir / name).read_text(encoding="utf-8")
+        assert "逐字" in text, f"{name} 未要求 evidence_ref 必须逐字来自索引"
+        assert "不得自行拼接" in text, f"{name} 未禁止自行拼接 parent#field 子引用"
 
     # 确认 risk 和 final 仍明确禁止编造统计
     for name in ["risk_sentinel.md", "final_adjudicator.md"]:

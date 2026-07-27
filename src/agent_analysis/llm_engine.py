@@ -45,6 +45,100 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+# DeepSeek Strict Function Calling（Beta）对 JSON Schema 的硬性要求。
+#
+# 【2026-07-26 首版曾写"anyOf 官方支持、不需要额外处理"——这条判断错了，已被真实
+# API 调用证伪，在这里如实记录教训】：真实试点 run（`codex_strict_bridge_
+# 20260726_2032`）里 bridge 两次尝试均 `empty_response`，用户反馈"anyOf 节点缺少
+# 顶层 type"。用真实 API 直接复现（非猜测）：
+#   `{'error': {'message': 'Invalid tool parameters schema : field `anyOf`:
+#   missing field `type`', ...}}`
+# 逐个 schema 形态实测（见 WORK_LOG 2026-07-26 记录），确认两类修法：
+#   1) Optional[原始类型]（pydantic 生成 anyOf:[{type:T},{type:"null"}]）→
+#      collapse 成 `{"type": [T, "null"]}`，整个去掉 anyOf。
+#   2) Optional[嵌套模型/枚举]（pydantic 生成 anyOf:[{$ref:...},{type:"null"}]）→
+#      把 $ref 解析并内联展开成实际的 object/enum 定义，保留 anyOf 结构，但
+#      **不能**再加一个 sibling "type" 兜底（实测会撞另一条"An object with no
+#      properties is not allowed"）。
+#
+# 同一批真实调用还额外发现一条独立问题：DeepSeek 的模型默认开启思考模式（哪怕不
+# 显式请求），而思考模式下强制指定单个函数名的 tool_choice
+# （`{"type":"function","function":{"name":...}}`）会被拒绝——"Thinking mode does
+# not support this tool_choice"。实测 `tool_choice="auto"` 在思考模式下可用，且
+# 只注册一个工具时模型会正常调用它；`_call_ai` 已相应改为 "auto"（见其实现），
+# 不再强制指定函数名。
+#
+# 仍然成立、未被推翻的部分：不支持 minLength/maxLength/minItems/maxItems；
+# "format" 不在官方支持类型清单内故剥离；每个 object 类型仍需
+# additionalProperties:false + 全字段 required。
+def sanitize_json_schema_for_strict_tool_calling(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """把 pydantic `model_json_schema()` 的输出转换成 DeepSeek strict tool calling
+    真实接受的形态（不是文档字面推断的形态——上面注释记录了两者的出入）。只改
+    JSON Schema 本身（发给 API、用于约束模型输出的那份契约），不改任何 pydantic
+    模型定义——`extra="allow"` 和 `Optional` 字段在 contracts.py 里保持原样，
+    校验响应时 pydantic 仍按自己的规则走，两边互不影响。
+    """
+    import copy
+
+    def strip_and_require(node: Any) -> Any:
+        if isinstance(node, dict):
+            cleaned = {key: strip_and_require(value) for key, value in node.items()}
+            for unsupported_key in ("minLength", "maxLength", "minItems", "maxItems", "format"):
+                cleaned.pop(unsupported_key, None)
+            if cleaned.get("type") == "object" and isinstance(cleaned.get("properties"), dict):
+                cleaned["additionalProperties"] = False
+                cleaned["required"] = list(cleaned["properties"].keys())
+            return cleaned
+        if isinstance(node, list):
+            return [strip_and_require(item) for item in node]
+        return node
+
+    basic = strip_and_require(schema)
+    defs = basic.get("$defs", {}) if isinstance(basic.get("$defs"), dict) else {}
+
+    def resolve_ref(ref: str) -> Any:
+        name = ref.rsplit("/", 1)[-1]
+        return copy.deepcopy(defs.get(name, {}))
+
+    def fix_anyof(node: Any) -> Any:
+        if isinstance(node, dict):
+            fixed = {key: fix_anyof(value) for key, value in node.items()}
+            branches = fixed.get("anyOf")
+            if isinstance(branches, list):
+                resolved: List[Any] = []
+                for branch in branches:
+                    if isinstance(branch, dict) and "$ref" in branch:
+                        resolved.append(fix_anyof(resolve_ref(branch["$ref"])))
+                    else:
+                        resolved.append(branch)
+                primitive_types: List[str] = []
+                has_ref_or_object_branch = False
+                for branch in resolved:
+                    branch_type = branch.get("type") if isinstance(branch, dict) else None
+                    if branch_type == "object" or (isinstance(branch, dict) and "properties" in branch):
+                        has_ref_or_object_branch = True
+                    elif isinstance(branch_type, str):
+                        primitive_types.append(branch_type)
+                    else:
+                        has_ref_or_object_branch = True
+                if not has_ref_or_object_branch and primitive_types:
+                    # Optional[原始类型/枚举] 且没有嵌套 object：collapse 成 type 数组，
+                    # 整个去掉 anyOf——DeepSeek 对裸 anyOf 节点要求同级必须有 type。
+                    fixed.pop("anyOf")
+                    fixed["type"] = primitive_types if len(primitive_types) > 1 else primitive_types[0]
+                else:
+                    # 含嵌套 object 的分支：保留 anyOf 结构、$ref 已内联展开，
+                    # 不额外加 sibling type（会撞"object with no properties"）。
+                    fixed["anyOf"] = resolved
+            return fixed
+        if isinstance(node, list):
+            return [fix_anyof(item) for item in node]
+        return node
+
+    return fix_anyof(basic)
+
+
 class LLMEngine:
     """可复用的 LLM 调用引擎（从 legacy analyzer 提取）"""
 
@@ -136,7 +230,14 @@ class LLMEngine:
             )
         return cls.SYSTEM_CONSTRAINTS
 
-    def _call_ai(self, prompt: str, model_key: str, stage: str = "") -> Tuple[Optional[str], Dict]:
+    def _call_ai(
+        self,
+        prompt: str,
+        model_key: str,
+        stage: str = "",
+        strict_tool_schema: Optional[Dict[str, Any]] = None,
+        strict_tool_name: Optional[str] = None,
+    ) -> Tuple[Optional[str], Dict]:
         config = MODEL_CONFIGS[model_key]
         client_type = config["client"]
         service_name = config.get("service", "")
@@ -150,6 +251,10 @@ class LLMEngine:
 
             if client_type == "openai_compatible" and service_name in self.clients:
                 use_json_output = service_name == "deepseek"
+                # 严格工具调用（DeepSeek Beta strict function calling）只在 deepseek 服务、
+                # 且调用方显式传入 schema 时启用；未传入时走原有 json_object 路径，逐字节
+                # 不变——这是本次试点唯一的分叉点，其余所有 stage 不受影响。
+                use_strict_tools = use_json_output and strict_tool_schema is not None
                 # Use system message for constraints (higher authority than user message)
                 messages: List[Dict[str, Any]] = [
                     {"role": "system", "content": self._load_system_constraints()},
@@ -162,7 +267,28 @@ class LLMEngine:
                     "max_tokens": config["max_tokens"],
                     "stream": False,
                 }
-                if use_json_output:
+                if use_strict_tools:
+                    tool_name = strict_tool_name or "emit_structured_output"
+                    kwargs["tools"] = [{
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "description": f"Emit the structured {stage or 'stage'} output.",
+                            "parameters": strict_tool_schema,
+                            "strict": True,
+                        },
+                    }]
+                    # 真实 API 复现（2026-07-26）：DeepSeek v4 系列默认开启思考模式
+                    # （即使不显式请求），思考模式下强制指定单个函数名的 tool_choice
+                    # （{"type":"function","function":{"name":...}}）会被拒绝——
+                    # "Thinking mode does not support this tool_choice"。"auto" 在
+                    # 思考模式下可用；只注册了这一个工具时模型会正常调用它，若模型
+                    # 选择不调用（tool_calls 为空），下方已有 content 兜底分支处理。
+                    kwargs["tool_choice"] = "auto"
+                    if model_name.startswith("deepseek-v4-"):
+                        kwargs["reasoning_effort"] = "high"
+                        kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+                elif use_json_output:
                     kwargs["response_format"] = {"type": "json_object"}
                     if model_name.startswith("deepseek-v4-"):
                         kwargs["reasoning_effort"] = "high"
@@ -180,6 +306,13 @@ class LLMEngine:
                         f"  -> Token使用: 输入={usage['prompt_tokens']}, "
                         f"输出={usage['completion_tokens']}, 总计={usage['total_tokens']}"
                     )
+                if use_strict_tools:
+                    message = response.choices[0].message
+                    tool_calls = getattr(message, "tool_calls", None) or []
+                    if not tool_calls:
+                        logger.warning(f"  ! [Stage: {stage}] strict tool call 未返回 tool_calls，退回 content。")
+                        return message.content, usage
+                    return tool_calls[0].function.arguments, usage
                 return response.choices[0].message.content, usage
 
             elif client_type == "gemini_sdk" and service_name in self.clients:
@@ -269,6 +402,8 @@ class LLMEngine:
         prompt: str,
         stage_name: str = "",
         preferred_models: Optional[List[str]] = None,
+        strict_tool_schema: Optional[Dict[str, Any]] = None,
+        strict_tool_name: Optional[str] = None,
     ) -> Optional[str]:
         models_to_try = []
         if preferred_models:
@@ -288,7 +423,13 @@ class LLMEngine:
 
         for model_key in models_to_try:
             for attempt in range(2):
-                result, usage = self._call_ai(prompt, model_key, stage_name)
+                result, usage = self._call_ai(
+                    prompt,
+                    model_key,
+                    stage_name,
+                    strict_tool_schema=strict_tool_schema,
+                    strict_tool_name=strict_tool_name,
+                )
                 if result:
                     logger.info(f"  ✔ {MODEL_CONFIGS[model_key]['name']} 分析成功。")
                     self.successful_model = model_key

@@ -2,12 +2,15 @@
   "schema_version": "stage_model_routing_v1",
   "notes": [
     "Only models present in the run's available_models list are used.",
-    "Cognitive adjudication stages prefer pro-grade models first, then fall back to the remaining user-provided model chain."
+    "Cognitive adjudication stages prefer pro-grade models first, then fall back to the remaining user-provided model chain.",
+    "Mechanical/formatting stages (event card interpretation, event section summary) prefer flash-grade models first for cost efficiency; pro-grade remains as the failure-fallback safety net, not removed."
   ],
   "stage_preferences": {
     "counter_thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
     "thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
     "reviser": ["deepseek-v4-pro", "deepseek-v4-flash"],
-    "final": ["deepseek-v4-pro", "deepseek-v4-flash"]
+    "final": ["deepseek-v4-pro", "deepseek-v4-flash"],
+    "event_card_interpreter": ["deepseek-v4-flash", "deepseek-v4-pro"],
+    "event_section_summary": ["deepseek-v4-flash", "deepseek-v4-pro"]
   }
 }
