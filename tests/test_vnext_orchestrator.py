@@ -4,7 +4,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -1294,6 +1294,25 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
                         "evidence_refs": ["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
                     }
                 ],
+                # T28：本次全链条 fake run 的两条竞争假说都以 kept_unresolved 落地
+                # （无受控调查挑战但 counter_thesis 走确定性兜底触发 fallback_warnings，
+                # 见 `_build_adjudication_change_records`），扩大后的触发集合要求逐一
+                # 回应；id 由 `_stable_hypothesis_id` 对本测试固定的假说文本取哈希，
+                # 是确定性值，不是随机数。
+                "hypothesis_responses": [
+                    {
+                        "hypothesis_id": "hyp_base_a6e6834ec0",
+                        "verdict": "accept_and_revise",
+                        "reasoning": "当前证据下仍以主线解释为主，采纳并保留监测项。",
+                        "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+                    },
+                    {
+                        "hypothesis_id": "hyp_counter_ee07162fa7",
+                        "verdict": "absorb_partially",
+                        "reasoning": "部分吸收反方观察，但仍缺少独立验证。",
+                        "evidence_refs": ["L5.get_qqq_technical_indicators"],
+                    },
+                ],
                 "dependencies": ["盈利韧性"],
                 "overall_confidence": "medium",
             },
@@ -1494,6 +1513,26 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
     resumed_diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
     assert resumed_diagnostics["stages"]["l1"]["status"] == "resumed"
     assert resumed_diagnostics["stages"]["final_adjudicator"]["status"] == "resumed"
+    # counter_thesis 曾是唯一没接进检查点机制的叙事站：它用 _save_json 直接落盘，
+    # manifest 里 stage_key / payload_sha256 都是 None，也没有 _load_stage_checkpoint。
+    # 后果是一条缺失引发整条级联——续跑必然重跑反方 → 竞争假说变了 → thesis 的
+    # expected_payload 指纹对不上 → thesis / reviser / final 跟着全部重跑并静默覆盖
+    # 已产出的产物（真实事故 run 20260728_110702，首跑那批验收样本因此消失），
+    # 与 `--resume-run-dir` 帮助文字里"verified stage checkpoints are reused"不符。
+    # 本夹具没有注册 counter_thesis 响应，反方站必然走确定性兜底。兜底稿是降级产物、
+    # 不是"已验证"结果，按设计**不得**被当检查点复用——所以这里断言的是"没被复用"，
+    # 且 manifest 显式标了不可复用。成功路径的复用由
+    # test_counter_thesis_checkpoint_is_reused_on_resume 覆盖。
+    counter_checkpoint = json.loads(
+        (tmp_path / "stage_manifest.json").read_text(encoding="utf-8")
+    )["artifacts"]["counter_thesis.json"]
+    assert counter_checkpoint["stage_key"] == "counter_thesis"
+    assert len(counter_checkpoint["payload_sha256"]) == 64
+    assert counter_checkpoint["checkpoint_reusable"] is False
+    assert resumed_diagnostics["stages"]["counter_thesis"]["status"] != "resumed"
+    # 兜底稿是确定性的，重跑产物一致 → 下游 payload 指纹不变 → thesis/reviser 仍能复用。
+    assert resumed_diagnostics["stages"]["thesis"]["status"] == "resumed"
+    assert resumed_diagnostics["stages"]["reviser"]["status"] == "resumed"
 
 
 def test_checkpoint_resume_requires_matching_stage_payload(tmp_path: Path):
@@ -1661,6 +1700,23 @@ def test_layer_v2_contract_gap_retries_before_bridge_consumes_card(tmp_path: Pat
                         "implication": "估值压缩风险较高。",
                         "involved_layers": ["L1", "L4"],
                     }
+                ],
+                # T28：本测试的两条竞争假说同样以 kept_unresolved 落地（counter_thesis
+                # 走确定性兜底 → fallback_warnings 非空 → 全体降级），扩大后的触发集合
+                # 要求逐一回应。id 由假说文本哈希确定性生成，与全链条测试同值。
+                "hypothesis_responses": [
+                    {
+                        "hypothesis_id": "hyp_base_a6e6834ec0",
+                        "verdict": "accept_and_revise",
+                        "reasoning": "主线解释在当前证据下成立，采纳并保留监测项。",
+                        "evidence_refs": ["L1.get_fed_funds_rate"],
+                    },
+                    {
+                        "hypothesis_id": "hyp_counter_ee07162fa7",
+                        "verdict": "absorb_partially",
+                        "reasoning": "部分吸收反方观察，张力未解决。",
+                        "evidence_refs": ["L1.get_fed_funds_rate"],
+                    },
                 ],
                 "dependencies": ["盈利韧性"],
                 "overall_confidence": "medium",
@@ -2615,6 +2671,12 @@ def test_thesis_retries_until_every_candidate_hypothesis_has_auditable_response(
                 "reasoning": "部分吸收趋势解释，但仍缺少广度确认。",
                 "evidence_refs": ["L5.get_qqq_technical_indicators"],
             },
+            {
+                "hypothesis_id": "hyp_leading",
+                "verdict": "accept_and_revise",
+                "reasoning": "主线解释在当前证据下仍然成立，予以采纳并保留监测项。",
+                "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+            },
         ],
     }
     engine = SequencedFakeLLMEngine(
@@ -2659,6 +2721,7 @@ def test_thesis_retries_until_every_candidate_hypothesis_has_auditable_response(
     assert {response.hypothesis_id for response in thesis.hypothesis_responses} == {
         "hyp_counter_1",
         "hyp_counter_2",
+        "hyp_leading",
     }
     assert thesis.hypothesis_responses[0].evidence_refs == ["L4.get_ndx_pe_and_earnings_yield"]
     retry_prompt = (tmp_path / "prompt_audit" / "thesis" / "attempt_2.prompt.txt").read_text(encoding="utf-8")
@@ -2670,6 +2733,7 @@ def test_thesis_retries_until_every_candidate_hypothesis_has_auditable_response(
     assert [response.hypothesis_id for response in governance.thesis_hypothesis_responses] == [
         "hyp_counter_1",
         "hyp_counter_2",
+        "hyp_leading",
     ]
     assert "L4.get_ndx_pe_and_earnings_yield" in governance.key_evidence_refs
     assert "L5.get_qqq_technical_indicators" in governance.key_evidence_refs
@@ -2742,6 +2806,216 @@ def test_thesis_hypothesis_response_validator_rejects_duplicates_and_refs_outsid
     )
 
 
+# ── T28 红灯测试：越有争议（kept_unresolved）的假说越不能被免于回应 ──
+#
+# 真实事故机制（investigation_reports/20260727_handoff_open_threads/HANDOFF.md T28）：
+# `_run_hypothesis_competition` 一旦触发降级（受控调查提出挑战，或存在
+# fallback_warnings），就会把全部假说（含反方、含 base）统一改判为
+# kept_unresolved。旧版 `_validate_thesis_hypothesis_responses` 只收集
+# status == "candidate" 的假说 id，降级之后 candidate 集合归零，合约整体空转——
+# 四次真实 run 里三次（20260719_130534 / 20260725_145833 / 20260725_232410）
+# candidate 数为 0，thesis 交零回应也能通过校验。下面三个用例锁定 T28 的修复：
+# kept_unresolved 现在必须被回应，absorb_partially 是合格回应，reject 仍须带证据。
+
+def _kept_unresolved_synthesis_fixture():
+    """复刻真实 run 20260725_232410 的形状：两条假说全部是 kept_unresolved。"""
+    return SynthesisPacket(
+        packet_meta={"data_date": "2026-07-25"},
+        evidence_index={
+            "L1.get_10y_real_rate": {"layer": "L1"},
+            "L4.get_ndx_pe_and_earnings_yield": {"layer": "L4"},
+        },
+        competing_hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_base_f3d40c16e7",
+                hypothesis_text="主线解释：宏观环境持续收紧与盈利增长支撑估值之间的矛盾。",
+                source="bridge_v2",
+                status="kept_unresolved",
+                adjudication_reason="存在调查反证、证据缺口或兜底痕迹，不能形成单一路径裁决。",
+            ),
+            CompetingHypothesis(
+                hypothesis_id="cth_01",
+                hypothesis_text="反方：盈利基本面改善，市场可能过度定价了利率风险。",
+                source="counter_thesis",
+                status="kept_unresolved",
+                adjudication_reason="存在调查反证、证据缺口或兜底痕迹，不能形成单一路径裁决。",
+            ),
+        ],
+    )
+
+
+def test_kept_unresolved_hypotheses_with_zero_responses_are_now_blocked(tmp_path: Path):
+    """改前该场景能通过校验（旧 candidate_ids 为空集，合约空转）；改后必须被拦下。
+
+    这是 T19 事故之外的第二个真实缺陷：run 20260725_232410 里 thesis 对两条
+    kept_unresolved 假说交了 0 条回应，且 `_validate_thesis_hypothesis_responses`
+    在旧触发集合下判定合法——直接复现该 run 的真实 payload 形状。
+    """
+    synthesis = _kept_unresolved_synthesis_fixture()
+    thesis = ThesisDraft(
+        environment_assessment="环境偏紧。",
+        valuation_assessment="估值缺乏安全垫。",
+        timing_assessment="趋势转弱。",
+        main_thesis="主线：估值压缩与广度恶化共振。",
+        overall_confidence="medium",
+        hypothesis_responses=[],  # 真实 run 20260725_232410 就是空列表
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    errors = orchestrator._validate_thesis_hypothesis_responses(thesis, synthesis)
+
+    assert any("hyp_base_f3d40c16e7" in error and "kept_unresolved" in error for error in errors)
+    assert any("cth_01" in error and "kept_unresolved" in error for error in errors)
+    assert any("missing from hypothesis_responses" in error for error in errors)
+
+
+def test_kept_unresolved_hypothesis_answered_with_absorb_partially_passes(tmp_path: Path):
+    """正向用例：kept_unresolved 用 absorb_partially 承认张力未解决，不强求下确定结论。"""
+    synthesis = _kept_unresolved_synthesis_fixture()
+    thesis = ThesisDraft(
+        environment_assessment="环境偏紧。",
+        valuation_assessment="估值缺乏安全垫。",
+        timing_assessment="趋势转弱。",
+        main_thesis="主线：估值压缩与广度恶化共振，反方张力未解决。",
+        overall_confidence="medium",
+        hypothesis_responses=[
+            {
+                "hypothesis_id": "hyp_base_f3d40c16e7",
+                "verdict": "accept_and_revise",
+                "reasoning": "当前证据下仍以主线解释为主，采纳并保留监测项。",
+                "evidence_refs": ["L1.get_10y_real_rate"],
+            },
+            {
+                "hypothesis_id": "cth_01",
+                "verdict": "absorb_partially",
+                "reasoning": "承认反方张力未解决：盈利修正数据待验证前无法证伪或证实。",
+                "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+            },
+        ],
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    errors = orchestrator._validate_thesis_hypothesis_responses(thesis, synthesis)
+
+    assert errors == []
+
+
+def test_kept_unresolved_reject_without_evidence_ref_still_blocked(tmp_path: Path):
+    """回归：kept_unresolved 假说也不能用"证据不足"当挡箭牌驳回——reject 仍须带 evidence_ref。"""
+    synthesis = _kept_unresolved_synthesis_fixture()
+    thesis = ThesisDraft(
+        environment_assessment="环境偏紧。",
+        valuation_assessment="估值缺乏安全垫。",
+        timing_assessment="趋势转弱。",
+        main_thesis="主线：估值压缩与广度恶化共振。",
+        overall_confidence="medium",
+        hypothesis_responses=[
+            {
+                "hypothesis_id": "hyp_base_f3d40c16e7",
+                "verdict": "accept_and_revise",
+                "reasoning": "采纳主线。",
+                "evidence_refs": ["L1.get_10y_real_rate"],
+            },
+            {
+                "hypothesis_id": "cth_01",
+                "verdict": "reject",
+                "reasoning": "证据不足，直接驳回。",
+                "evidence_refs": [],
+            },
+        ],
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    errors = orchestrator._validate_thesis_hypothesis_responses(thesis, synthesis)
+
+    assert any("reject requires at least one evidence_ref" in error for error in errors)
+
+
+def test_reviser_kept_unresolved_responses_explicitly_emptied_still_fails(tmp_path: Path):
+    """真实样本 20260719_130534 的最小复现：thesis 对 kept_unresolved 假说交了 2 条
+    回应（accept_and_revise + absorb_partially），但 reviser 把
+    revised_thesis.hypothesis_responses 显式交成空列表——键存在（非缺席），
+    不触发遗漏继承，必须被 validator 硬拦。这是本次扩大触发集合后，reviser 站
+    第一次真正会为 kept_unresolved 假说消失而报警（旧触发集合下这个场景合法，
+    是 T19「漏字段」症状在 kept_unresolved 语境下的真实样本）。
+    """
+    synthesis = _kept_unresolved_synthesis_fixture()
+    thesis = ThesisDraft(
+        environment_assessment="环境偏紧。",
+        valuation_assessment="估值缺乏安全垫。",
+        timing_assessment="趋势转弱。",
+        main_thesis="主线：估值压缩与广度恶化共振。",
+        overall_confidence="medium",
+        hypothesis_responses=[
+            {
+                "hypothesis_id": "hyp_base_f3d40c16e7",
+                "verdict": "accept_and_revise",
+                "reasoning": "采纳主线，保留监测项。",
+                "evidence_refs": ["L1.get_10y_real_rate"],
+            },
+            {
+                "hypothesis_id": "cth_01",
+                "verdict": "absorb_partially",
+                "reasoning": "承认反方张力未解决。",
+                "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+            },
+        ],
+    )
+    reviser_payload = {
+        "revision_summary": "吸收批评并保留张力。",
+        "accepted_critiques": [],
+        "rejected_critiques": [],
+        "revised_thesis": {
+            "environment_assessment": "环境偏紧，实际利率处极端高位。",
+            "valuation_assessment": "估值缺乏安全垫，ERP 低分位。",
+            "timing_assessment": "价格跌破中短期均线。",
+            "main_thesis": "修订后主线：估值压缩与广度恶化共振。",
+            "overall_confidence": "medium",
+            "hypothesis_responses": [],  # 键存在但被清空——不是遗漏，是主动抹平
+        },
+        "remaining_conflicts": [],
+    }
+    engine = SequencedFakeLLMEngine({"reviser": [json.dumps(reviser_payload, ensure_ascii=False)]})
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    with pytest.raises(RuntimeError, match="missing from hypothesis_responses"):
+        orchestrator._run_stage(
+            stage_key="reviser",
+            stage_name="reviser",
+            model_cls=AnalysisRevised,
+            payload={"example": "payload"},
+            pre_validate_transform=lambda parsed: orchestrator._sanitize_reviser_evidence_refs(
+                orchestrator._carry_forward_reviser_thesis_fields(parsed, thesis),
+                synthesis.evidence_index,
+            ),
+            validator=lambda candidate: (
+                orchestrator._validate_stage_evidence_refs(
+                    candidate, set(synthesis.evidence_index.keys()), "reviser"
+                )
+                + orchestrator._validate_thesis_hypothesis_responses(
+                    candidate.revised_thesis, synthesis
+                )
+            ),
+        )
+
+
 def test_thesis_resume_rejects_legacy_checkpoint_without_candidate_responses(tmp_path: Path):
     synthesis = SynthesisPacket(
         packet_meta={"data_date": "2026-04-24"},
@@ -2802,10 +3076,14 @@ def test_thesis_resume_rejects_legacy_checkpoint_without_candidate_responses(tmp
 
 
 def test_thesis_builder_prompt_keeps_work_order_r7_block_exact():
+    """R7 工单（WORK_LOG.md:435）在 2026-07-27 T28 扩大了触发集合：从"仅 candidate"
+    扩到"非 downgraded"（含 leading / kept_unresolved），因为受控调查触发降级后会把
+    全部假说统一改判为 kept_unresolved，旧触发集合下 candidate 集合归零、合约整体
+    空转。这里锁的是扩大后的新措辞，防止再次漂移回旧的"仅 candidate"表述。"""
     prompt = Path(orchestrator_module.__file__).with_name("prompts").joinpath("thesis_builder.md").read_text(encoding="utf-8")
     required_block = (
         "## 对竞争假说的强制回应\n"
-        "`synthesis_packet.competing_hypotheses` 里每一个 status 为 candidate 的假说，你必须在 `hypothesis_responses` 里逐一回应，三选一：接受并修正判断（accept_and_revise）、部分吸收（absorb_partially）、驳回（reject）。驳回必须引用具体的反证 evidence_ref，不许用\"证据不足\"四个字一笔带过——证据不足时的诚实选项是 absorb_partially 并写明缺哪条证据。你的主论点如果无法回应某个假说最强的那条证据，就不许假装没看见它。"
+        "`synthesis_packet.competing_hypotheses` 里除 `status` 为 `downgraded`（已被裁决出局）之外的每一个假说——`candidate`、`leading`、`kept_unresolved`、`split`——你都必须在 `hypothesis_responses` 里逐一回应，三选一：接受并修正判断（accept_and_revise）、部分吸收（absorb_partially）、驳回（reject）。`leading` 通常是你主论点所依据的主线假说，也要求显式回应，写清楚为什么接受，不能因为它是自己的主线就默认略过。`kept_unresolved` 表示这条假说还没有被单一路径裁决出胜负、张力尚未解决，合格回应可以是 absorb_partially（承认张力未解决，并写明还缺哪条证据），不强求给出确定的 accept_and_revise 或 reject——诚实保留未解决的争议，比强行下结论更符合纪律。驳回（reject）无论对方是什么状态，都必须引用具体的反证 evidence_ref，不许用\"证据不足\"四个字一笔带过——证据不足时的诚实选项是 absorb_partially 并写明缺哪条证据。你的主论点如果无法回应某个假说最强的那条证据，就不许假装没看见它。"
     )
 
     assert prompt.count(required_block) == 1
@@ -3266,6 +3544,118 @@ def test_degraded_reviser_checkpoint_is_not_reused_on_resume(tmp_path: Path):
     assert orchestrator._load_reviser_checkpoint(payload) is None
 
 
+def test_counter_thesis_checkpoint_is_reused_on_resume(tmp_path: Path):
+    """成功产出的反方稿必须能被续跑复用；兜底稿必须被拒。
+
+    真实事故 run 20260728_110702：`counter_thesis.json` 此前用 `_save_json` 直接落盘，
+    manifest 里 stage_key / payload_sha256 都是 None，也没有 `_load_stage_checkpoint`。
+    结果续跑必然重跑反方 → 竞争假说变了 → thesis 的 expected_payload 指纹对不上 →
+    thesis / reviser / final 跟着全部重跑并**静默覆盖**已产出的产物（那次首跑的 3 条
+    假说验收样本因此永久消失），与 `--resume-run-dir` 帮助文字里
+    "verified stage checkpoints are reused" 不符。裁决为修行为而非修文档。
+    """
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+        resume_from_existing=True,
+    )
+    payload = {"synthesis_packet_without_self_reference": {"packet_meta": {"data_date": "2026-07-28"}}}
+    draft = CounterThesisDraft(
+        principal_counterargument="反方：利率已近顶部，回调是介入机会。",
+        hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="cth_01",
+                hypothesis_text="盈利上修足以消化当前估值。",
+                source="counter_thesis",
+                status="kept_unresolved",
+            )
+        ],
+    )
+
+    # 1) 正常产出的反方稿：登记为可复用，续跑取得回来。
+    orchestrator._save_json("counter_thesis.json", draft)
+    orchestrator._record_stage_artifact(
+        tmp_path / "counter_thesis.json",
+        stage_key="counter_thesis",
+        stage_name="counter_thesis",
+        payload=payload,
+        checkpoint_reusable=True,
+    )
+    reused = orchestrator._load_stage_checkpoint(
+        "counter_thesis.json",
+        CounterThesisDraft,
+        stage_key="counter_thesis",
+        stage_name="counter_thesis",
+        expected_payload=payload,
+    )
+    assert reused is not None
+    assert [item.hypothesis_id for item in reused.hypotheses] == ["cth_01"]
+
+    # 2) 上游输入变了就不许复用（既有 payload 指纹语义不得被新登记削弱）。
+    assert orchestrator._load_stage_checkpoint(
+        "counter_thesis.json",
+        CounterThesisDraft,
+        stage_key="counter_thesis",
+        stage_name="counter_thesis",
+        expected_payload={"synthesis_packet_without_self_reference": {"packet_meta": {"data_date": "2026-07-29"}}},
+    ) is None
+
+    # 3) 兜底稿：模板凑数不是"已验证"结果，续跑必须重试而不是把它固化下去。
+    orchestrator._record_stage_artifact(
+        tmp_path / "counter_thesis.json",
+        stage_key="counter_thesis",
+        stage_name="counter_thesis",
+        payload=payload,
+        checkpoint_reusable=False,
+    )
+    assert orchestrator._load_stage_checkpoint(
+        "counter_thesis.json",
+        CounterThesisDraft,
+        stage_key="counter_thesis",
+        stage_name="counter_thesis",
+        expected_payload=payload,
+    ) is None
+
+
+def test_resume_overwrite_of_verified_artifact_leaves_a_trace(tmp_path: Path):
+    """续跑覆盖已验证产物不再无迹可寻。
+
+    行为不变（重跑就该写新结果），但 manifest 必须留下被覆盖那份的指纹，
+    让"我当时读到的那份还在不在"事后可查——run 20260728_110702 的教训。
+    """
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+        resume_from_existing=True,
+    )
+    payload = {"governance_input": {"thesis_main": "第一版"}}
+    first = CounterThesisDraft(principal_counterargument="第一版反方论证。")
+    orchestrator._save_json("counter_thesis.json", first)
+    orchestrator._record_stage_artifact(
+        tmp_path / "counter_thesis.json",
+        stage_key="counter_thesis",
+        stage_name="counter_thesis",
+        payload=payload,
+    )
+    first_sha = orchestrator.stage_manifest["artifacts"]["counter_thesis.json"]["sha256"]
+    assert "overwritten_in_resume" not in orchestrator.stage_manifest["artifacts"]["counter_thesis.json"]
+
+    second = CounterThesisDraft(principal_counterargument="第二版反方论证，内容不同。")
+    orchestrator._save_json("counter_thesis.json", second)
+    orchestrator._record_stage_artifact(
+        tmp_path / "counter_thesis.json",
+        stage_key="counter_thesis",
+        stage_name="counter_thesis",
+        payload=payload,
+    )
+
+    trace = orchestrator.stage_manifest["artifacts"]["counter_thesis.json"].get("overwritten_in_resume")
+    assert trace is not None, "续跑覆盖了已登记产物却没有留痕"
+    assert trace["previous_sha256"] == first_sha
+
+
 def test_degraded_reviser_marks_final_quality_gate(tmp_path: Path):
     """降级必须传导到质量闸门，由发布闸门决定能不能发，而不是悄悄变成正常报告。"""
     orchestrator = VNextOrchestrator(
@@ -3535,6 +3925,103 @@ def test_reasoned_verdict_requires_three_distinct_citations_for_three_reasons(tm
         allowed,
     )
     assert illegal and "outside evidence_index" in illegal[0]
+
+
+def test_reasoned_verdict_tolerates_comma_joined_refs_inside_one_bracket(tmp_path: Path):
+    """红灯：真实事故 run 20260728_110702——两条合法 ref 被逗号合并进同一个方括号，
+    旧解析把整段当成一个 ref，两条都合法却被判"引用不在索引内"，终审两次尝试后整跑硬崩。
+
+    这是 2026-07-27 把"至少一条引用"收紧为"至少三条不同引用"之后的第一次真实 run，
+    收紧恰好把模型推向了"一个方括号塞多条"的写法。修法是解析容忍逗号合并（每一段仍要
+    逐字合法），同时把计数改成"方括号组数 ≥ 3 且不同引用 ≥ 3"——后者比单纯数引用条数
+    更贴近 final_adjudicator.md 原文，防止"一段文字里一个方括号塞三条"重新蒙混过关。
+    """
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    allowed = {
+        "L1.get_10y_real_rate",
+        "L4.get_equity_risk_premium#level",
+        "L3.get_advance_decline_line",
+        "L5.get_obv_qqq",
+    }
+
+    class _V:
+        def __init__(self, verdict): self.reasoned_verdict = verdict
+
+    # 事故原文形态：合法 ref 被逗号合并。三个方括号组、四条不同引用 —— 必须放行。
+    merged = orchestrator._validate_reasoned_verdict_refs(
+        _V(
+            "第一，实际利率与风险补偿同时紧 [L1.get_10y_real_rate, L4.get_equity_risk_premium#level]；"
+            "第二，广度与量能背离 [L3.get_advance_decline_line, L5.get_obv_qqq]；"
+            "第三，趋势质量存疑 [L5.get_obv_qqq]。"
+        ),
+        allowed,
+    )
+    assert merged == []
+
+    # 容忍形状不等于放松合法性：合并串里混进越界 ref，仍须逐段拆开后拦下。
+    illegal = orchestrator._validate_reasoned_verdict_refs(
+        _V(
+            "第一 [L1.get_10y_real_rate, L9.fake_ref]；"
+            "第二 [L3.get_advance_decline_line]；"
+            "第三 [L5.get_obv_qqq]。"
+        ),
+        allowed,
+    )
+    assert illegal and "outside evidence_index" in illegal[0] and "L9.fake_ref" in illegal[0]
+
+    # 反向防线：一段连续文字、只有一个方括号却塞满三条合法 ref —— 正是收紧要堵的洞，
+    # 不能因为"拆开后有三条不同引用"就放行。
+    one_bracket = orchestrator._validate_reasoned_verdict_refs(
+        _V(
+            "宏观、广度与量能同时走弱，赔率不利 "
+            "[L1.get_10y_real_rate, L3.get_advance_decline_line, L5.get_obv_qqq]。"
+        ),
+        allowed,
+    )
+    assert one_bracket and "3 separate [bracket] groups" in one_bracket[0]
+
+
+def test_final_adjudication_tolerates_bare_claim_ledger_entry_list():
+    """红灯：真实事故 run 20260728_110702——`claim_ledger` 在 final_adjudicator.md 里
+    出现 0 次，模型只能猜形状、猜成裸列表，终审第一次尝试即被 pydantic 拒。
+
+    说明书那侧已补写并登记进 STAGE_CONTRACT_PROMPT_REQUIREMENTS["final"]；契约这侧
+    只做形状纠正——裸列表补回 {"entries": [...]} 外壳，但每个条目仍要逐字通过
+    ClaimLedgerEntry 校验，缺必填字段照样拒。
+    """
+    base = {
+        "approval_status": "approved_with_reservations",
+        "final_stance": "中性偏谨慎",
+        "confidence": "medium",
+        "must_preserve_risks": ["估值压缩风险"],
+        "adjudicator_notes": "保留跨层张力。",
+        "reasoned_verdict": "略。" * 200,
+    }
+    entry = {
+        "claim_id": "FINAL_CLAIM_1",
+        "source_stage": "final",
+        "claim_text": "实际利率处于极端高位，压制估值。",
+        "claim_type": "market_state",
+    }
+
+    # 事故形态：裸列表 —— 修复后必须被吸收成合法对象，且条目一条不少。
+    final = FinalAdjudication.model_validate({**base, "claim_ledger": [entry]})
+    assert final.claim_ledger is not None
+    assert [item.claim_id for item in final.claim_ledger.entries] == ["FINAL_CLAIM_1"]
+
+    # 形状容忍不等于内容放水：条目缺必填字段仍须被拒。
+    with pytest.raises(ValidationError):
+        FinalAdjudication.model_validate(
+            {**base, "claim_ledger": [{"source_stage": "final", "claim_type": "market_state"}]}
+        )
+
+    # 正常对象形态不受影响。
+    normal = FinalAdjudication.model_validate({**base, "claim_ledger": {"entries": [entry]}})
+    assert [item.claim_id for item in normal.claim_ledger.entries] == ["FINAL_CLAIM_1"]
 
 
 def test_final_stage_retries_when_reasoned_verdict_cites_illegal_ref(tmp_path: Path):

@@ -152,8 +152,68 @@ reviser 没崩，**不能证明**"漏字段"那个毛病被治好了——因为
 ## 通用注意事项（两条都适用）
 
 - **不要用 `20260719_130534` 做对照组**，理由见开头。
+- **本文件 T27 一节的两条前提在结案时被证伪**（"6/6 采样稳定复现，不是方差"、"代码补齐默认值可能是病根"），细节见文末关单记录与 `T27_FINDINGS.md`。引用本文件时请连同关单记录一起读。
 - 涉及真实 API 采样的实验，先说明预计花费再做；一次 thesis 采样约 6.7 万 prompt token。
 - 本批改动的完整背景在 `WORK_LOG.md` 的 2026-07-25 ~ 2026-07-27 三条记录里，
   尤其"reviser 连崩两跑的根因诊断"那条给出了本项目反复出现的一类结构性缺陷
   （合约写在代码里、说明书写在 prompt 里、两边无人对账）及其治理机制。
   查这两条线索时如果又撞见同型问题，优先考虑扩展既有的防漂移闸门，而不是单点打补丁。
+
+---
+
+## 关单记录
+
+### T27 —— 2026-07-28 关闭（裁决：合理行为，非缺陷）
+
+本文件 T27 一节写下的两条前提，结案时都被证伪：
+
+1. **"6/6 采样稳定复现，不是方差"不成立。** 那 6 次采样打在 thesis 站点，而
+   `price_reflection_map` 由 bridge 生成、thesis 与 final 逐字继承（三份产物实测一致）。
+   在 thesis 重采测的是"继承是否稳定"。真正做判断的 bridge 站点是 n=1 对 n=1。
+2. **"代码补齐默认值是病根"这条优先假设不成立。** `_ensure_price_reflection_categories`
+   补齐时写的是 `unclear`，不是任何"已反映"值；两次 run 的五类全部模型原生，
+   `normalization_notes` 无补齐痕迹。
+3. **"输入瘦身削薄了 bridge"也不成立。** 瘦身只作用于 thesis / counter_thesis；
+   bridge prompt 两次逐字节相同；两次 run 之间零代码提交。
+
+**受控重采样（真实 API，n=4×2，用户批准）**：A payload（历史 3 个 `not_reflected`）
+重采得 0/1/1/0；B payload（历史 0 个）重采得 1/1/1/2。两次历史值都无法在自己的
+payload 上复现，两组分布重叠，B 反而更偏 `not_reflected`——**原假设的方向本身不成立**。
+
+裁决为合理行为，未改 `orchestrator.py`；判读说明写入 `RESEARCH_CANON.md`。
+顺带修掉一个审计诚实性缺陷（`run_review.py` 把代码占位类别当作"已覆盖五类"给 pass），
+带红灯测试。完整证据见 `T27_FINDINGS.md`。
+
+### T28 —— 2026-07-28 关闭（含 T19 一并验收）
+
+**实现**：`_validate_thesis_hypothesis_responses` 的触发集合从 `status == "candidate"`
+扩大为 `status != "downgraded"`。本文件建议的"非 rejected"落到代码上就是"非 `downgraded`"
+——`CompetingHypothesis.status` 的 `Literal` 里没有 `"rejected"`。`kept_unresolved` 的
+合格回应允许 `absorb_partially`，不强求 `accept_and_revise` 或 `reject`（本文件第 3 点
+要求确认的"不会退化成逼模型硬下结论"，已按此实现并由正向用例锁定）。`leading` 也纳入
+必答集合。`STAGE_CONTRACT_PROMPT_REQUIREMENTS` 与 `thesis_builder.md` / `reviser.md`
+同步登记改写。
+
+**真实 run 验收（`20260728_110702`）**：该 run 因终审站崩溃走了一次断点续跑，续跑重跑了
+counter_thesis 起的全部叙事站，因此留下两批独立样本，两批的竞争假说都**全部是
+`kept_unresolved`**——正是过去让合约空转的场景，两批也都通过：
+
+- 首跑（已被续跑覆盖）：3 条假说，`thesis`/`reviser` 各 `attempts=1`，回应 3/3，
+  verdict = 1×`accept_and_revise` + 2×`absorb_partially`。
+- 续跑后（当前 artifacts，可复核）：2 条假说，`thesis`/`reviser` 各 `attempts=1`，
+  回应 2/2 完整传导到 `revised_thesis`，verdict = 1×`accept_and_revise` + **1×`reject`**，
+  每条 4 个 evidence_ref，逐条比对 `evidence_index` 零越界。
+
+本文件「什么算做完」的两个面因此都被真实触发：`absorb_partially`（承认张力未解决、
+不逼硬下结论）由首跑证实；**"reject 必须带合法反证 evidence_ref"由续跑真实考到并通过**。
+**扩大合约零重试成本**，本文件担心的"逼模型硬下结论"未发生。T19 由此拿到第一次真实
+run 实证（此前四次 run 的 `revised_thesis.hypothesis_responses` 全空，合约根本没被考到），
+一并关闭。
+
+**本文件"附带影响"一节点出的洞另有一个真实样本**：run `20260719_130534` 里 thesis 写了
+2 条回应、reviser 交出空列表且无人报警。已加专测锁定这一形态。
+
+**顺带**：这次真实 run 现场暴露终审站两处规格漂移（`claim_ledger` 说明书零覆盖；
+`reasoned_verdict` 逗号合并引用——2026-07-27 收紧后的真实回归），均已修复并带红灯测试。
+正是本文件"通用注意事项"预告的同型问题，修法按其建议扩展既有闸门而非单点打补丁。
+详见 `WORK_LOG.md` 2026-07-28 条目。

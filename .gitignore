@@ -69,3 +69,6 @@ Thumbs.db
 
 # --- Local worktrees ---
 .worktrees/
+
+# Codex CLI 本机配置：2026-07-28 用户裁定不再追踪（每台机器不同，不属于项目资产）
+.codex/config.toml

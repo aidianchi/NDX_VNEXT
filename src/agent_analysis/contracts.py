@@ -1003,6 +1003,22 @@ class ContradictionTransformationSignal(BaseModel):
     event_refs: List[str] = Field(default_factory=list, description="可选事件 refs，仅作触发/背景")
 
 
+# 价格反映的五个类别：**唯一**名单（2026-07-28 单一事实源审计）。
+#
+# 此前同一份五类名单在两处各存一份字面量：`orchestrator.PRICE_REFLECTION_CATEGORIES`
+# 的键，与 `run_review.REQUIRED_PRICE_REFLECTION_CATEGORIES` 的裸集合。两者当时内容
+# 一致，但没有任何机制保证它们一起变——改了一处而漏了另一处，复盘检查会开始
+# 要求或放过错误的类别，且不会报错。放在 contracts.py 是因为 orchestrator 与
+# run_review 都已依赖它、而它不反向依赖任何一方，是唯一不会造成循环导入的落点。
+PRICE_REFLECTION_CATEGORY_KEYS: tuple = (
+    "credit",
+    "rates",
+    "valuation",
+    "technical_panic",
+    "liquidity",
+)
+
+
 class PriceReflectionAssessment(BaseModel):
     """Bridge assessment of whether a conflict is already reflected in price."""
     model_config = {"extra": "allow"}
@@ -1092,7 +1108,7 @@ class CompetingHypothesis(BaseModel):
 
 
 class HypothesisResponse(BaseModel):
-    """Thesis 对一个候选竞争假说的显式裁决。"""
+    """Thesis 对一个竞争假说（非 downgraded 状态均要求作答）的显式裁决。"""
     model_config = {"extra": "allow"}
 
     hypothesis_id: str = Field(..., min_length=1, description="被回应的竞争假说 ID")
@@ -1681,7 +1697,7 @@ class ThesisDraft(BaseModel):
 
     hypothesis_responses: List[HypothesisResponse] = Field(
         default_factory=list,
-        description="对每个 candidate 竞争假说的逐一回应",
+        description="对每个非 downgraded 竞争假说的逐一回应",
     )
 
     # 依赖前提
@@ -1893,7 +1909,7 @@ class GovernanceInputPacket(BaseModel):
     )
     thesis_hypothesis_responses: List[HypothesisResponse] = Field(
         default_factory=list,
-        description="Thesis 对 candidate 竞争假说的逐一回应，治理阶段不得静默丢失",
+        description="Thesis 对非 downgraded 竞争假说（candidate/leading/kept_unresolved/split）的逐一回应，治理阶段不得静默丢失",
     )
     retained_conflict_types: List[str] = Field(default_factory=list, description="已保留的冲突类型名")
     thesis_state_diagnosis: str = Field("", description="Decision Thesis 状态诊断")
@@ -2145,6 +2161,25 @@ class FinalAdjudication(BaseModel):
         default=None,
         description="阶段 4：最终自然语言结论的 claim-level 台账；完整产物另存 final_claim_ledger.json",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _tolerate_bare_claim_ledger_entry_list(cls, data: Any) -> Any:
+        """模型把 `claim_ledger` 直接写成条目列表时，补回 `{"entries": [...]}` 外壳。
+
+        真实事故 run 20260728_110702：`final_adjudicator.md` 从未提过 `claim_ledger`
+        （grep 命中 0 次），模型只能猜形状，猜成了裸列表，整跑在终审站硬崩。说明书那一侧
+        已经补写（见 `final_adjudicator.md` 的 claim_ledger 一节 + `STAGE_CONTRACT_
+        PROMPT_REQUIREMENTS["final"]` 登记）；这里只做形状纠正，不生成任何内容——
+        每个条目仍要逐字通过 `ClaimLedgerEntry` 校验，字段缺失照样被拒。
+        """
+        if not isinstance(data, dict):
+            return data
+        ledger = data.get("claim_ledger")
+        if isinstance(ledger, list):
+            data = dict(data)
+            data["claim_ledger"] = {"entries": ledger}
+        return data
 
     @field_validator("reasoned_verdict")
     @classmethod

@@ -159,11 +159,17 @@ PROMPT_FILES = {
 # tests/test_governance_input.py 会强制两边对齐。
 STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
     # _validate_thesis_hypothesis_responses + evidence_index 合法性
-    "thesis": ("hypothesis_responses", "evidence_index"),
+    # 2026-07-27 T28：触发集合从"仅 candidate"扩大为"非 downgraded"（含 leading /
+    # kept_unresolved），说明书必须逐字点名这两个新状态词，否则又是"合约写在代码里、
+    # 模型看不见"的 T19 型漂移。
+    "thesis": ("hypothesis_responses", "evidence_index", "kept_unresolved", "downgraded"),
     # reviser 同时受上述两条合约约束，是合约面最宽的治理 stage
-    "reviser": ("hypothesis_responses", "evidence_index"),
+    "reviser": ("hypothesis_responses", "evidence_index", "kept_unresolved", "downgraded"),
     # _validate_stage_evidence_refs + _validate_reasoned_verdict_refs（三条理由各带引用）
-    "final": ("evidence_index", "三条主要理由"),
+    # 2026-07-28 追加 claim_ledger：它是 FinalAdjudication 的可选字段，但形状是硬约束
+    # （必须是对象不是数组）。真实事故 run 20260728_110702——说明书里 grep 命中 0 次，
+    # 模型只能猜形状、猜成裸列表，终审第一次尝试即被 pydantic 拒，整跑硬崩。
+    "final": ("evidence_index", "三条主要理由", "claim_ledger"),
     # _validate_counter_thesis_draft + CompetingHypothesis 必填字段（真实事故 run
     # 20260724_223804：counter_thesis.md 从未逐字写过 hypothesis_text /
     # falsification_conditions，模型两次尝试各猜错一个字段名，约 28 万 prompt token
@@ -185,6 +191,50 @@ STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
     # 纯属人为限制并已移除，故从此登记撤下；revision_direction 上限放宽至 500，
     # 登记同步更新为新数字。
     "critic": ("500",),
+    # 2026-07-28「丙」反射闸门上线后立刻查出的三个漏登记 stage。前两个的说明书本来就
+    # 写过对应规则，只是从没登记；bridge 是真缺口——`_validate_bridge_memo_v2` 硬性要求
+    # resonance_chains 的 confirming_indicators / falsifiers 非空，而 cross_layer_bridge.md
+    # 里这两个词各出现 0 次，真实 run 20260728_110702 的 bridge 就为此重试了一次
+    # （`resonance_chains[resonance_chain].confirming_indicators must not be empty`）。
+    "bridge": ("confirming_indicators", "falsifiers", "path_id"),
+    # _event_card_validation_errors：机制假设前缀 + 不得断言市场必然方向
+    "event_card_interpreter": ("该事件可能通过", "必须涨或必须跌"),
+    # _event_section_summary_validation_errors：卡片引用格式与 2-5 张的引用数量区间
+    "event_section_summary": ("cited_event_ids", "[card:", "至少引用两张"),
+}
+
+# 「丙」的豁免名单：`_run_stage` 的 stage_key 在这些调用点是运行时拼出来的，静态扫描
+# 无法解析，只能显式登记豁免并写清理由——豁免必须看得见，不能靠扫描器沉默跳过。
+DYNAMIC_STAGE_KEY_CALL_SITES: Dict[str, str] = {
+    "layer_analyst": (
+        "L1-L5 分析站的 stage_key 由 f-string 按层拼出（如 l1_analyst）；它们共用一份"
+        "按层渲染的说明书模板，合约面由 _validate_layer_card_v2 统一约束，不适用"
+        "单文件关键词登记。"
+    ),
+    "generic_stage_helper": (
+        "内部通用 _run_stage 包装，stage_key 由调用方传入变量；真正的合约登记落在"
+        "各自的具体 stage 上。"
+    ),
+}
+
+# 证据权限等级：**唯一**词汇表（2026-07-28 单一事实源审计发现并根治）。
+#
+# 此前这份事实分两处各存一份：`_field_authority_from_payload` 里的 `usage_rank` 既当
+# 排序表又当白名单，而 36 行之后的 `_field_authority_usages` 另写了一份 `allowed` 集合。
+# 两份已经漂移——`usage_rank` 漏收 `validation_only`（"经第三方交叉校验的值"），于是
+# `tools_L4.py` 真实产出的 `usage="validation_only"` 一进合并逻辑就被静默改写成
+# `audit_only`，报告里解释"这条证据为什么被降级"的审计文案因此与工具本意对不上。
+# 当时没有翻转 verified/downgraded 判定，纯属两者恰好同档的侥幸，不是设计保证。
+#
+# rank 用于两个来源声明冲突时取更保守的一档；`validation_only` 与 `audit_only` 同档，
+# 与既有弱证据集合（`_downgrade_reason_for_claim` 里的判断）口径一致，因此这次修复
+# 只恢复了标签的真实性，不改变任何既有的强弱判定。
+METRIC_AUTHORITY_USAGE_RANK: Dict[str, int] = {
+    "rejected": 0,
+    "audit_only": 1,
+    "validation_only": 1,
+    "supporting_only": 2,
+    "core_allowed": 3,
 }
 
 PROMPT_AUDIT_BOOKKEEPING_FIELDS = {
@@ -305,6 +355,8 @@ _AUTHORITY_OVERREACH_RULES: Dict[str, List[tuple[str, str]]] = {
     ],
 }
 
+# 键必须与 contracts.PRICE_REFLECTION_CATEGORY_KEYS 完全一致（唯一名单），
+# 由模块末尾的断言在导入时强制；这里额外承载每类的 target / label / hint 文案。
 PRICE_REFLECTION_CATEGORIES: Dict[str, Dict[str, str]] = {
     "credit": {
         "target": "credit_stress",
@@ -2374,6 +2426,17 @@ class VNextOrchestrator:
             current_hypothesis_ids=[hypothesis.hypothesis_id for hypothesis in hypotheses],
         )
         self._save_json("counter_thesis.json", counter_thesis)
+        counter_payload = getattr(self, "_last_counter_thesis_payload", None)
+        if counter_payload is not None:
+            self._record_stage_artifact(
+                self.output_dir / "counter_thesis.json",
+                stage_key="counter_thesis",
+                stage_name="counter_thesis",
+                payload=counter_payload,
+                # 走了确定性兜底的反方稿是降级产物，不是"已验证"结果——续跑必须重试，
+                # 不能把模板凑数稿当检查点一路带下去。
+                checkpoint_reusable=not getattr(self, "_last_counter_thesis_fallback", False),
+            )
         self._save_json("hypothesis_competition.json", competition)
         self._save_json("adjudication_history.json", history)
         self._save_json(
@@ -2404,6 +2467,23 @@ class VNextOrchestrator:
         )
         allowed_refs = set(synthesis_packet.evidence_index.keys())
         fallback_reason = ""
+        # 断点续跑：counter_thesis 此前是唯一没有接进检查点机制的叙事站——它用
+        # `_save_json` 直接落盘，manifest 里 stage_key / payload_sha256 都是 None，
+        # 也没有对应的 `_load_stage_checkpoint`。后果是一条缺失引发整条级联：续跑必然
+        # 重跑反方 → 竞争假说变了 → thesis 的 expected_payload 指纹对不上 → thesis
+        # 检查点作废 → reviser / final 跟着全部重跑，并**静默覆盖**已经产出的产物。
+        # 真实事故 run 20260728_110702：首跑那批 3 条假说的验收样本就是这样消失的，
+        # 而 `--resume-run-dir` 的帮助文字写的是"verified stage checkpoints are reused"。
+        # 修行为而不是修文档——帮助文字描述的才是设计意图，这里只是从没接上。
+        checkpoint = self._load_stage_checkpoint(
+            "counter_thesis.json",
+            CounterThesisDraft,
+            stage_key="counter_thesis",
+            stage_name="counter_thesis",
+            expected_payload=payload,
+        )
+        if checkpoint is not None:
+            return checkpoint
         try:
             draft = self._run_stage(
                 stage_key="counter_thesis",
@@ -2426,6 +2506,10 @@ class VNextOrchestrator:
         audit = self._counter_thesis_prompt_input_audit(payload)
         if fallback_reason:
             audit["fallback_reason"] = fallback_reason[:500]
+        # 交给 `_run_hypothesis_competition` 在落盘后登记检查点指纹；不重算一遍 payload，
+        # 避免两处构造逻辑日后各走各路（这正是本次会话反复治理的那类重复）。
+        self._last_counter_thesis_payload = payload
+        self._last_counter_thesis_fallback = bool(fallback_reason)
         return draft.model_copy(
             update={
                 "input_refs": ["synthesis_packet.json", "bridge_memos/bridge_0.json", "investigation_reports/*.json"],
@@ -2995,7 +3079,7 @@ class VNextOrchestrator:
         value_field_authority = value.get("MetricAuthority") if isinstance(value.get("MetricAuthority"), dict) else {}
         quality = raw_payload.get("data_quality") if isinstance(raw_payload.get("data_quality"), dict) else {}
         quality_field_authority = quality.get("metric_authority") if isinstance(quality.get("metric_authority"), dict) else {}
-        usage_rank = {"rejected": 0, "audit_only": 1, "supporting_only": 2, "core_allowed": 3}
+        usage_rank = METRIC_AUTHORITY_USAGE_RANK
 
         def normalized_rule(value: Any) -> Any:
             if not isinstance(value, dict):
@@ -3031,7 +3115,7 @@ class VNextOrchestrator:
 
     @staticmethod
     def _field_authority_usages(field_authority: Dict[str, Any]) -> set[str]:
-        allowed = {"rejected", "audit_only", "supporting_only", "core_allowed", "validation_only"}
+        allowed = set(METRIC_AUTHORITY_USAGE_RANK)
         usages = set()
         for rule in field_authority.values():
             if not isinstance(rule, dict):
@@ -4015,24 +4099,42 @@ class VNextOrchestrator:
         thesis: ThesisDraft,
         synthesis_packet: SynthesisPacket,
     ) -> List[str]:
-        """Require an auditable response for every candidate, while tolerating extra responses."""
+        """Require an auditable response for every non-downgraded competing hypothesis.
+
+        触发集合（2026-07-27 T28）：从曾经的"仅 status == candidate"扩大为
+        "status 不是 downgraded"，即 candidate / leading / split / kept_unresolved
+        都要求逐一回应。动机：`_run_hypothesis_competition` 只要触发降级（受控调查
+        提出挑战，或存在 fallback_warnings），就会把全部假说（含反方、含 base）
+        统一改判为 kept_unresolved——旧触发集合下 candidate 集合因此归零，合约
+        整体空转（四次真实 run 三次 candidate 数为 0），导致"越有争议的假说越
+        不会被要求回应"。`downgraded` 是唯一表示"已被正式裁决出局"的状态，是这里
+        唯一被豁免的状态；`kept_unresolved` 的语义是"没有胜出、张力未解决"，不等于
+        "不需要被回应"——合格回应允许 `absorb_partially`（承认张力未解决），
+        不强求 `accept_and_revise` 或 `reject`，否则"冲突是资产"会退化成逼模型
+        对每条争议硬下结论。`reject` 无论对方状态是什么，仍必须带合法 evidence_ref。
+        """
         errors: List[str] = []
-        candidate_ids = {
-            hypothesis.hypothesis_id
+        required_hypotheses = {
+            hypothesis.hypothesis_id: hypothesis.status
             for hypothesis in synthesis_packet.competing_hypotheses
-            if hypothesis.status == "candidate"
+            if hypothesis.status != "downgraded"
         }
         responses_by_id: Dict[str, List[Any]] = {}
         for response in thesis.hypothesis_responses:
             responses_by_id.setdefault(response.hypothesis_id, []).append(response)
 
-        for hypothesis_id in sorted(candidate_ids):
+        for hypothesis_id in sorted(required_hypotheses):
+            status = required_hypotheses[hypothesis_id]
             responses = responses_by_id.get(hypothesis_id, [])
             if not responses:
-                errors.append(f"candidate hypothesis {hypothesis_id} is missing from hypothesis_responses.")
+                errors.append(
+                    f"competing hypothesis {hypothesis_id} (status={status}) is missing from hypothesis_responses."
+                )
                 continue
             if len(responses) > 1:
-                errors.append(f"candidate hypothesis {hypothesis_id} has duplicate hypothesis_responses.")
+                errors.append(
+                    f"competing hypothesis {hypothesis_id} (status={status}) has duplicate hypothesis_responses."
+                )
                 continue
             response = responses[0]
             if response.verdict != "reject":
@@ -5376,7 +5478,8 @@ class VNextOrchestrator:
         verdict = str(getattr(candidate, "reasoned_verdict", "") or "").strip()
         if not verdict:
             return []
-        cited_refs = [item.strip() for item in re.findall(r"\[([^\[\]]+)\]", verdict)]
+        bracket_groups = self._reasoned_verdict_bracket_groups(verdict)
+        cited_refs = [ref for group in bracket_groups for ref in group]
         if not cited_refs:
             return [
                 "reasoned_verdict must cite at least one evidence_ref in [brackets] "
@@ -5388,12 +5491,25 @@ class VNextOrchestrator:
         # 矛盾、风险、定价、赔率、仓位、失效条件全部压进单段连续文字，没有三条理由的
         # 层级，读者拿不到"哪条证据支撑哪条理由"。三条理由各至少一条引用 ⇒ 至少三条
         # 不同引用，这不是新拍的数字，是把说明书里已经写死的结构提到同一强制等级。
-        if len(set(cited_refs)) < 3:
+        # 真实事故 run 20260728_110702：模型把两条合法 ref 逗号合并进同一个方括号
+        # （`[L1.get_10y_real_rate, L4.get_equity_risk_premium#level]`），旧解析把整段
+        # 当成一个 ref，两条都合法却被判"引用不在索引内"，终审两次尝试后整跑硬崩。
+        # 这是 2026-07-27 把"至少一条引用"收紧为"至少三条不同引用"之后的第一次真实 run，
+        # 收紧恰好把模型推向了这种写法——所以修法是让解析容忍逗号合并（每一段仍须逐字
+        # 合法，不放松任何一条 ref 的合法性），而不是把计数要求退回去。
+        #
+        # 但只按"不同 ref 条数"计数会重新打开 2026-07-27 要堵的洞：一段连续文字里塞一个
+        # 装三条 ref 的方括号也能凑够 3 条。所以这里同时要求**方括号组数 ≥ 3**——这才是
+        # `final_adjudicator.md:244` 写死的原文（"三条主要理由每条必须至少带一个方括号
+        # 标注的 evidence_ref"），比"3 条不同引用"更贴近说明书，不是新拍的数字。
+        if len(bracket_groups) < 3 or len(set(cited_refs)) < 3:
             return [
                 "reasoned_verdict must follow the documented 总-分-总 structure: the three "
                 "main reasons each need at least one [bracketed] evidence_ref, i.e. at least "
-                f"3 distinct citations. Found {len(set(cited_refs))}: {sorted(set(cited_refs))}. "
-                "Do not merge the reasons into one continuous paragraph."
+                "3 separate [bracket] groups and at least 3 distinct citations. Found "
+                f"{len(bracket_groups)} bracket group(s) and {len(set(cited_refs))} distinct "
+                f"citation(s): {sorted(set(cited_refs))}. Put one evidence_ref per bracket and "
+                "do not merge the three reasons into one continuous paragraph."
             ]
         lower_key_map = {key.lower(): key for key in allowed_refs}
         passports = {key: None for key in allowed_refs}
@@ -5408,6 +5524,21 @@ class VNextOrchestrator:
             ]
         return []
 
+    @staticmethod
+    def _reasoned_verdict_bracket_groups(verdict: str) -> List[List[str]]:
+        """把 `reasoned_verdict` 里的方括号标注解析成"每个方括号一组 ref"。
+
+        模型会把多条 ref 逗号合并进同一个方括号（真实事故 run 20260728_110702），
+        所以每组内部再按中英文逗号/顿号/分号拆开。只做形状纠正：拆出来的每一段仍要
+        逐字通过 `_resolve_claim_evidence_ref`，不放松任何 ref 的合法性要求。
+        """
+        groups: List[List[str]] = []
+        for raw in re.findall(r"\[([^\[\]]+)\]", verdict):
+            refs = [part.strip() for part in re.split(r"[,，、;；]", raw) if part.strip()]
+            if refs:
+                groups.append(refs)
+        return groups
+
     def _annotate_reasoned_verdict_refs(
         self,
         final: FinalAdjudication,
@@ -5416,7 +5547,7 @@ class VNextOrchestrator:
         verdict = str(final.reasoned_verdict or "").strip()
         if not verdict:
             return
-        cited_refs = [item.strip() for item in re.findall(r"\[([^\[\]]+)\]", verdict)]
+        cited_refs = [ref for group in self._reasoned_verdict_bracket_groups(verdict) for ref in group]
         if not cited_refs:
             self._append_final_quality_note(final, "reasoned_verdict_missing_refs")
             return
@@ -5848,15 +5979,101 @@ class VNextOrchestrator:
             prompt_body = self._compose_thesis_prompt(prompt_body, prompt_payload)
         fields = list(getattr(model_cls, "model_fields", {}).keys())
         schema_hint = ", ".join(fields) if fields else model_cls.__name__
+        field_spec = self._render_contract_field_spec(model_cls)
         return (
             f"{prompt_body}\n\n"
             "## Runtime Input\n"
             f"{json.dumps(prompt_payload, ensure_ascii=False, indent=2, default=str)}\n\n"
+            f"{field_spec}"
             "## Response Rules\n"
             "- 只返回一个 JSON 对象。\n"
             "- 不要使用 markdown code fence。\n"
             f"- JSON 顶层字段必须匹配: {schema_hint}。\n"
+            "- 字段的**形状**（对象 / 数组 / 标量、是否可为 null）以上面「输出字段规格」为准；"
+            "正文里的示例只解释语义，形状冲突时以规格为准。\n"
             "- 不要编造新的外部数据源，只能使用输入中的信息。\n"
+        )
+
+    # 一层嵌套里最多列几个子字段名，超出用省略号——够模型判断"这是对象不是数组"，
+    # 又不至于把整棵 schema 树铺进 prompt。
+    _CONTRACT_SPEC_NESTED_FIELD_LIMIT = 8
+    _CONTRACT_SPEC_DESCRIPTION_LIMIT = 70
+
+    @classmethod
+    def _render_contract_type(cls, annotation: Any, *, depth: int = 0) -> str:
+        """把 pydantic 字段注解渲染成一句人能读、模型也能照做的形状说明。"""
+        import enum
+        import typing
+
+        origin = typing.get_origin(annotation)
+        args = [arg for arg in typing.get_args(annotation)]
+        if origin is typing.Union or str(origin) == "typing.Union" or (
+            origin is not None and getattr(origin, "__name__", "") == "UnionType"
+        ):
+            non_none = [arg for arg in args if arg is not type(None)]  # noqa: E721
+            rendered = " 或 ".join(cls._render_contract_type(arg, depth=depth) for arg in non_none)
+            return f"{rendered} 或 null" if len(non_none) < len(args) else rendered
+        if origin is typing.Literal or str(origin) == "typing.Literal":
+            return "取值之一：" + " / ".join(json.dumps(arg, ensure_ascii=False) for arg in args)
+        if origin in (list, set, tuple):
+            inner = cls._render_contract_type(args[0], depth=depth) if args else "任意值"
+            return f"数组，元素为 {inner}"
+        if origin is dict:
+            return "对象（键自由）"
+        if isinstance(annotation, type):
+            if issubclass(annotation, enum.Enum):
+                return "取值之一：" + " / ".join(
+                    json.dumps(getattr(member, "value", member.name), ensure_ascii=False)
+                    for member in annotation
+                )
+            if annotation is bool:
+                return "布尔"
+            if annotation in (int, float):
+                return "数字"
+            if annotation is str:
+                return "字符串"
+            if annotation is datetime:
+                return "ISO8601 时间字符串"
+            sub_fields = getattr(annotation, "model_fields", None)
+            if sub_fields is not None:
+                if depth >= 1:
+                    return f"对象 {annotation.__name__}"
+                names = list(sub_fields.keys())
+                shown = names[: cls._CONTRACT_SPEC_NESTED_FIELD_LIMIT]
+                suffix = ", …" if len(names) > len(shown) else ""
+                return f"对象 {annotation.__name__}{{{', '.join(shown)}{suffix}}}"
+        return "任意值"
+
+    def _render_contract_field_spec(self, model_cls: Type[Any]) -> str:
+        """由契约本身生成输出字段规格，取代"靠人记得把字段写进说明书"。
+
+        2026-07-28 用户裁决：合约写在代码里、说明书写在 prompt 里、再拿一张关键词
+        登记表对账——这套"三件套"并没有消除重复，而是把两份变成三份，而且只查关键词
+        在不在、不查解释对不对。**形状漂移**这一类可以从结构上根除：契约里每个字段本来
+        就带 `description`，直接由 `model_fields` 生成规格即可，模型永远不可能收到一份
+        漏掉某个字段的说明书。
+
+        它只覆盖形状与字段存在性（真实事故：`claim_ledger` 在 final_adjudicator.md 里
+        零覆盖、模型猜成裸数组；counter_thesis 猜错字段名烧掉 28 万 token）；行为规则
+        （例如"必须逐一回应非 downgraded 假说"）仍由手写说明书承担，那部分由
+        `STAGE_CONTRACT_PROMPT_REQUIREMENTS` 登记闸门守。
+        """
+        model_fields = getattr(model_cls, "model_fields", None)
+        if not model_fields:
+            return ""
+        lines: List[str] = []
+        for name, field in model_fields.items():
+            shape = self._render_contract_type(getattr(field, "annotation", None))
+            necessity = "必填" if field.is_required() else "可选"
+            description = str(getattr(field, "description", "") or "").strip()
+            if len(description) > self._CONTRACT_SPEC_DESCRIPTION_LIMIT:
+                description = description[: self._CONTRACT_SPEC_DESCRIPTION_LIMIT] + "…"
+            tail = f" —— {description}" if description else ""
+            lines.append(f"- `{name}`（{necessity}）：{shape}{tail}")
+        return (
+            f"## 输出字段规格（由 {model_cls.__name__} 契约自动生成，形状以此为准）\n"
+            + "\n".join(lines)
+            + "\n\n"
         )
 
     def _sanitize_prompt_payload(self, stage_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -6519,10 +6736,13 @@ class VNextOrchestrator:
         stage_key: Optional[str] = None,
         stage_name: Optional[str] = None,
         payload: Optional[Dict[str, Any]] = None,
+        checkpoint_reusable: Optional[bool] = None,
     ) -> None:
+        """登记产物指纹。`checkpoint_reusable=False` 用于显式拒绝复用降级产物。"""
         if path.resolve() == self.stage_manifest_path.resolve() or not path.exists():
             return
         relpath = self._artifact_relpath(path)
+        previous = self.stage_manifest.get("artifacts", {}).get(relpath, {})
         input_sha256 = self._current_input_sha256()
         item = {
             "stage": self._manifest_stage_for_path(relpath),
@@ -6543,8 +6763,24 @@ class VNextOrchestrator:
             item["stage_key"] = stage_key
         if stage_name:
             item["stage_name"] = stage_name
+        if checkpoint_reusable is not None:
+            item["checkpoint_reusable"] = bool(checkpoint_reusable)
         if stage_key and payload is not None:
             item["payload_sha256"] = self._stable_stage_payload_sha256(stage_key, payload)
+        # 续跑静默覆盖已验证产物是本项目踩过的真实坑（run 20260728_110702：首跑那批
+        # 竞争假说样本被续跑覆盖后无迹可寻）。这里不改变覆盖行为——重跑就该写新结果——
+        # 但必须留痕，让"我读到的那份还在不在"可被事后追查。
+        if self.resume_from_existing and previous.get("sha256"):
+            if previous["sha256"] != item["sha256"]:
+                item["overwritten_in_resume"] = {
+                    "previous_sha256": previous["sha256"],
+                    "previous_updated_at": previous.get("updated_at", ""),
+                }
+            elif previous.get("overwritten_in_resume"):
+                # 同一份产物常被登记两次：`_save_json` 先无 stage_key 记一次，调用方再带
+                # stage_key/payload 补记一次。第二次的 sha 与第一次相同，若不继承就会把
+                # 第一次留下的覆盖痕迹擦掉——留痕机制自己被覆盖，是最讽刺的失败方式。
+                item["overwritten_in_resume"] = previous["overwritten_in_resume"]
         self.stage_manifest.setdefault("artifacts", {})[relpath] = item
         self._write_stage_manifest()
 

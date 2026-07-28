@@ -216,6 +216,11 @@ Bridge 必须从 typed_conflicts、resonance_chains 和 transmission_paths 中�
 - ✅ conflicts 字段不能为空列表
 - ✅ principal_contradiction 必须非空，除非输入 Layer Cards 严重不足且必须在 unresolved_questions 说明原因
 - ✅ price_reflection_map 必须覆盖信用、利率、估值、技术恐慌、流动性五类，并说明证据、反证和动作影响，不能只重复风险清单
+- ✅ 每一条 **typed_conflicts** 都必须写满 `evidence_refs`（非空）、`mechanism`、`implication`——三者缺一，整份 memo 会被结构校验打回重来
+- ✅ 每一条 **resonance_chains** 都必须写满 `evidence_refs`（非空）、`confirming_indicators`（非空）、`mechanism`、`implication`、`falsifiers`（非空）。其中两个最容易漏：
+  - `confirming_indicators`：还有哪些指标同向印证这条共振链（列指标名即可，至少一个）。共振链如果只有一个指标撑着，它就不是共振。
+  - `falsifiers`：什么观察会证明这条共振链不成立（至少一条）。写不出证伪条件的共振链，说明它只是叙事巧合。
+- ✅ 每一条 **transmission_paths** 的 `path_id` 必须唯一，不得重复
 
 ## 质量检查清单
 

@@ -14,12 +14,12 @@
 
 ## 竞争假说回应纪律（硬合约）
 
-`thesis_hypothesis_responses` 里每一个假说，你都**必须**在 `revised_thesis.hypothesis_responses` 里留下恰好一条回应——不多不少，`hypothesis_id` 逐字照抄，不得改写、合并或漏掉。
+`thesis_hypothesis_responses` 里每一个假说，你都**必须**在 `revised_thesis.hypothesis_responses` 里留下恰好一条回应——不多不少，`hypothesis_id` 逐字照抄，不得改写、合并或漏掉。这份列表覆盖 Thesis 阶段所有非 `downgraded` 状态的竞争假说（`candidate`、`leading`、`kept_unresolved`、`split`），不是只有 candidate。
 
 - 你可以**修订**某条回应（改 verdict、改理由、换证据），这正是你的职责；
 - 你**不可以**因为"这一段我没改"就把整个字段省略掉。省略等于让候选假说在最终判断书里消失，属于抹平冲突。
-- verdict 三选一：`accept_and_revise`、`absorb_partially`、`reject`。
-- `reject` 必须给出至少一条来自索引的反证 `evidence_ref`；证据不足时诚实选项是 `absorb_partially` 并写明缺哪条证据，不许用"证据不足"一笔带过。
+- verdict 三选一：`accept_and_revise`、`absorb_partially`、`reject`。对应 `kept_unresolved` 假说的回应允许是 `absorb_partially`（承认张力未解决），不强求改成确定的 `accept_and_revise` 或 `reject`。
+- `reject` 必须给出至少一条来自索引的反证 `evidence_ref`（必须逐字存在于 `key_evidence_refs` / evidence_index 中）；证据不足时诚实选项是 `absorb_partially` 并写明缺哪条证据，不许用"证据不足"一笔带过。
 
 ## 证据引用纪律（硬合约）
 
@@ -42,7 +42,7 @@
 - **thesis_principal_contradiction / thesis_secondary_contradictions / thesis_price_reflection_map**: 原始主要矛盾、次要矛盾和价格反映地图
 - **principal_contradictions**: Bridge 主要矛盾候选
 - **thesis_key_support_chains**: 原始 Thesis 的关键支撑链；修订时可调整，但不能丢失其可追溯 evidence_refs
-- **thesis_hypothesis_responses**: 原始 Thesis 对每个 candidate 竞争假说的逐一裁决。**这是必须带进 `revised_thesis.hypothesis_responses` 的字段**，详见上文「竞争假说回应纪律」
+- **thesis_hypothesis_responses**: 原始 Thesis 对每个非 downgraded 竞争假说（candidate/leading/kept_unresolved/split）的逐一裁决。**这是必须带进 `revised_thesis.hypothesis_responses` 的字段**，详见上文「竞争假说回应纪律」
 - **high_severity_typed_conflicts**: 必须在最终报告中保留的高严重度跨层冲突
 - **objective_firewall_summary**: 客观性防火墙摘要（对象、发言权、反证）
 - **critique_overall / critique_cross_layer_issues**: Critic 的核心批评与跨层逻辑问题
@@ -212,7 +212,7 @@ revision_summary 应包含：
 
 ### 绝对禁止
 - ❌ 抹平冲突（为了"完美"而删除 retained_conflicts）
-- ❌ 省略 `hypothesis_responses`，或让任何一个候选假说在回应里消失
+- ❌ 省略 `hypothesis_responses`，或让任何一个竞争假说（candidate/leading/kept_unresolved/split）在回应里消失
 - ❌ 自行拼接证据索引中不存在的 `parent#field` 子引用
 - ❌ 无视批评（不接受任何意见）
 - ❌ 过度谦卑（接受所有批评，放弃原有立场）
@@ -236,7 +236,7 @@ revision_summary 应包含：
 - [ ] revision_summary 是否诚实说明修订内容？
 - [ ] accepted_critiques 是否列出所有采纳的批评？
 - [ ] rejected_critiques 是否有充分理由？
-- [ ] revised_thesis.hypothesis_responses 是否对每个候选假说恰有一条回应、id 逐字对应、无遗漏无重复？
+- [ ] revised_thesis.hypothesis_responses 是否对每个非 downgraded 竞争假说恰有一条回应、id 逐字对应、无遗漏无重复？
 - [ ] 所有 evidence_refs 是否逐字存在于证据索引中（没有自行拼接的 `parent#field`）？
 - [ ] revised_thesis 是否修复了数据引用错误？
 - [ ] revised_thesis 是否整合了风险警示？

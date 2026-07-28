@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from agent_analysis.contracts import PRICE_REFLECTION_CATEGORY_KEYS
+
 try:
     from .contracts import RunReviewFinding, RunReviewReport
 except ImportError:
@@ -21,7 +23,7 @@ INTERNAL_READER_PHRASES = [
     "adjudicator",
 ]
 
-REQUIRED_PRICE_REFLECTION_CATEGORIES = {"credit", "rates", "valuation", "technical_panic", "liquidity"}
+REQUIRED_PRICE_REFLECTION_CATEGORIES = set(PRICE_REFLECTION_CATEGORY_KEYS)
 HIGH_PAYOFF_TERMS = ["高赔率", "赔率改善", "赔率变厚", "风险补偿变厚"]
 NEGATIVE_PAYOFF_TERMS = ["赔率不利", "赔率偏向下行", "赔率不对称偏向下行", "风险收益比不利", "不支持重仓"]
 
@@ -737,6 +739,20 @@ def build_run_review_report(
                 or not item.get("action_implication")
             )
         ]
+        # T27 审计发现：`_ensure_price_reflection_categories` 补齐缺失类别时，恒定会把
+        # rationale / counterevidence / action_implication 三个字段填成非空模板文案，
+        # 因此代码占位条目永远进不了上面的 thin_items，会一路落到 pass 分支，让复盘者
+        # 误以为五类都被模型真正分析过。区分线索只在另一条独立的 normalization_notes
+        # finding 里，两条互不引用。这里把被代码占位的类别直接从"覆盖五类"的结论里减掉。
+        code_filled_categories = sorted(
+            {
+                category
+                for note in normalization_notes
+                if str(note).startswith("price_reflection_categories_added_by_code:")
+                for category in str(note).split(":", 1)[1].split(",")
+                if category.strip()
+            }
+        )
         if missing_categories:
             findings.append(
                 _finding(
@@ -746,6 +762,27 @@ def build_run_review_report(
                     + ", ".join(missing_categories),
                     ["bridge_memos/bridge_0.json:price_reflection_map"],
                     recommended_rule_update="价格反映地图至少拆成 credit/rates/valuation/technical_panic/liquidity 五类。",
+                )
+            )
+        elif code_filled_categories:
+            findings.append(
+                _finding(
+                    "bridge",
+                    "observe",
+                    "Bridge price_reflection_map 表面覆盖五类，但其中 "
+                    + ", ".join(code_filled_categories)
+                    + " 是代码补齐的占位项（reflected_state=unclear），并未被模型原生分析；"
+                    "只有 "
+                    + (
+                        ", ".join(sorted(REQUIRED_PRICE_REFLECTION_CATEGORIES - set(code_filled_categories)))
+                        or "无"
+                    )
+                    + " 是原生判断。",
+                    [
+                        "bridge_memos/bridge_0.json:price_reflection_map",
+                        "bridge_memos/bridge_0.json:normalization_notes",
+                    ],
+                    recommended_rule_update="复盘「五类覆盖」时必须扣除代码占位类别；占位不等于已分析。",
                 )
             )
         elif thin_items:

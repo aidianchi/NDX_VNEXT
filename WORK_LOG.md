@@ -5,6 +5,155 @@
 
 ---
 
+## 2026-07-28
+
+### 【关闭 T28】【关闭 T19】越有争议的假说越不被要求回应：触发集合倒置修复 + 真实 run 双验收
+
+**病机**：`_run_hypothesis_competition`（`orchestrator.py:2290-2350`）只要 `_build_adjudication_change_records` 产出任何降级记录（受控调查提出挑战，或存在 `fallback_warnings`），就把**全部**假说（含反方、含 base）统一改判 `kept_unresolved`、`leading_hypothesis_id=""`；而 `_validate_thesis_hypothesis_responses` 只收集 `status == "candidate"`，于是 candidate 集合归零、合约整体空转。四次真实 run 里三次 candidate 数为 0。**逻辑正好反了：越有争议、越需要被正面回应的假说，越容易被降级，也就越不会被要求回应。**
+
+**设计裁决**：触发集合从 `status == "candidate"` 扩大为 `status != "downgraded"`（`candidate` / `leading` / `split` / `kept_unresolved` 全要求回应）。`CompetingHypothesis.status` 没有 `"rejected"` 取值，HANDOFF 说的"非 rejected"落到代码上就是"非 `downgraded`"——它是唯一表示"已被正式裁决出局"的状态。`kept_unresolved` 的语义是"没有胜出、张力未解决"，不等于"不需要被回应"，所以合格回应允许 `absorb_partially`，**不强求** `accept_and_revise` 或 `reject`；否则"冲突是资产"会退化成逼模型对每条争议硬下结论。`reject` 仍必须带合法 `evidence_ref`。`leading` 也纳入必答集合（它通常是 thesis 自己的主线，显式声明"为什么接受"便宜且可审计）。
+
+**前置条件先验证再动手**（不做这步就是重演 T19）：`prompt_audit/thesis/attempt_1.payload.json` 实测 `synthesis_packet.competing_hypotheses` 逐条带 `hypothesis_id` + `status` + 正文，2/2 无截断——模型看得见它必须回应的东西。`_carry_forward_reviser_thesis_fields`（`orchestrator.py:5226`）只在键完全缺席时继承、键存在（含空列表）交给 validator 硬拦，与新合约互补不冲突。断点续跑路径（`orchestrator.py:3992`）用同一 validator，一并收紧。
+
+**同步登记**：`STAGE_CONTRACT_PROMPT_REQUIREMENTS` 的 `thesis` / `reviser` 各增 `kept_unresolved` / `downgraded`；`thesis_builder.md`「对竞争假说的强制回应」与 `reviser.md`「竞争假说回应纪律」同步改写（含"kept_unresolved 可用 absorb_partially 承认张力未解决"）。
+
+**顺带定位的既有缺陷**：run `20260719_130534` 里 thesis 写了 2 条回应（`accept_and_revise` + `absorb_partially`），`analysis_revised.json` 的 `revised_thesis.hypothesis_responses` 却是空的——reviser 整段丢掉且无人报警。四次 run 的 revised 全空。已加专测锁定"thesis 答了、reviser 交空列表"这一形态。
+
+**红灯实证**（`git stash` 旧 orchestrator 对照）：`test_kept_unresolved_hypotheses_with_zero_responses_are_now_blocked` 改前断言失败（旧逻辑放行）、改后拦下；`test_reviser_kept_unresolved_responses_explicitly_emptied_still_fails` 改前 `DID NOT RAISE RuntimeError`、改后抛出。另有 `absorb_partially` 正向用例与 `reject` 无证据回归用例。
+
+**真实 run 验收（`20260728_110702`，用户批准花费）**。该 run 因终审站崩溃走了一次断点续跑，**续跑重跑了 counter_thesis 起的全部叙事站**（`stat` 实测：`bridge_0.json` 停在 11:18 被复用，`counter_thesis.json` / `hypothesis_competition.json` 11:46、`synthesis_packet.json` 11:49、`thesis_draft.json` 11:50、`analysis_revised.json` 11:55 全部被重写），所以本 run 留下了**两批独立的验收样本**，两批都成立：
+
+| 项 | 首跑（已被覆盖，仅存于当时读数） | 续跑后（当前 artifacts，可复核） |
+|---|---|---|
+| 竞争假说 | 3 条全 `kept_unresolved`（`bridge_v2`×1 + `counter_thesis`×2，含一条"反方的反方"） | 2 条全 `kept_unresolved`（`bridge_v2`×1 + `counter_thesis`×1） |
+| `thesis` | `attempts=1`，回应 3/3 | `attempts=1`，回应 2/2 |
+| `analysis_revised` | `attempts=1`，回应 3/3 完整保留 | `attempts=1`，回应 2/2 完整保留，无 `degraded_fallback` |
+| verdict | `accept_and_revise`×1 + `absorb_partially`×2 | `accept_and_revise`×1 + **`reject`×1** |
+| 证据 | 每条 3-4 个真实 ref | 每条 **4** 个 ref，逐条比对 `evidence_index` **零越界** |
+
+两批合起来覆盖了 HANDOFF 全部验收面：`absorb_partially`（承认张力未解决、不逼硬下结论）由首跑证实；**`reject` 必须带合法反证 evidence_ref 这一支由续跑真实触发并通过**——这是 HANDOFF「回应内容不是敷衍」那条标准第一次在真实 run 里被考到。
+
+**thesis 与 reviser 在两批里都是一次通过，扩大合约零重试成本**——"改完每次都崩"的风险判断被真实数据否定。同时这是 T19「漏字段」修复**第一次拿到真实 run 实证**（此前四次 run 的 revised 全空，合约根本没被考到），故一并关闭 T19。
+
+**附带记录**：`--resume-run-dir` 的检查点复用只到 bridge 为止，counter_thesis 之后的叙事站全部重跑（本次 4 次真实 LLM 调用）。续跑会**静默覆盖**已验证过的产物——这次首跑那批 3 假说样本就是这样消失的。以后拿真实 run 做验收时，结论要以最终落盘的 artifacts 为准，中途读到的数不能当最终证据。
+
+### 单一事实源全仓审计：修掉一个活跃 bug + 两处名单收敛为一份
+
+用户提出的排查方向：把"同一件事实分两处各存一份、没人负责对账"这类缺陷穷举出来。审计全文 `investigation_reports/20260728_single_source_audit/FINDINGS.md`。
+
+**已修 1 —— `usage_rank` 漏收 `validation_only`（唯一一条活跃 bug）**：`_field_authority_from_payload` 里的 `usage_rank` **既当排序表又当白名单**，而 36 行之后的 `_field_authority_usages` 另写了一份 `allowed` 集合，两份已漂移。实测复现：输入 `{"usage": "validation_only"}` → 输出 `{"usage": "audit_only"}`。`tools_L4.py` 有 6 处真实产出该等级（Wind PE 与 Yahoo 交叉校验等），下游 `packet_builder.py:796,831` / `vnext_reporter.py:4331` 把它与 `core_allowed` 同等对待——标签被改写后，报告里"这条证据为何被降级"的审计文案与工具本意对不上。当时未翻转 verified/downgraded 判定，是因为两者恰好同档，**侥幸不是设计保证**。既有两条 claim_gate 测试手工构造 passport 绕过了该函数，所以一直显示通过、其实没保护真实路径。修法：合并为唯一常量 `METRIC_AUTHORITY_USAGE_RANK`，白名单由其键派生；`validation_only` 与 `audit_only` 同档，**只恢复标签真实性，不改变任何既有强弱判定**。
+
+**已修 2 —— 五类价格反映名单两处硬编码**：`orchestrator.PRICE_REFLECTION_CATEGORIES` 键与 `run_review.REQUIRED_PRICE_REFLECTION_CATEGORIES` 各存一份。依赖方向核实为 orchestrator → run_review 单向，`contracts.py` 是唯一不造成循环导入的落点。新增 `contracts.PRICE_REFLECTION_CATEGORY_KEYS` 为唯一名单，run_review 派生，orchestrator 富字典由测试强制键一致。
+
+**红灯实证**：`test_metric_authority_usage_vocabulary_has_exactly_one_source`（删掉 `validation_only` 一行即报 `assert 'audit_only' == 'validation_only'`）、`test_price_reflection_category_list_has_exactly_one_source`（另含"每类必须写全 target/label/hint"，防代码补齐拼出空文案）。
+
+**已核实、留给用户决定（未动手）**：
+- **T20 被坐实**：`tools_L4.py` 7 处 MetricAuthority 里 5 处 key 即真实字段名，2 处（`get_m7_buyback_flow` / `get_m7_capex_cycle`）用概念分组名。已复现具体后果——`orchestrator.py:2892-2893` 按概念名取 `value_payload.get(field)` 恒为 `None` → `evidence_value_missing` + `verified` 恒 `False`，**底层数据完好也被永久判定证据缺失**。不再是理论担忧。
+- **`CoreFact` 三个低填充字段**：`historical_percentile` / `trend` / `magnitude`。四个真实 run 填充实测 8/57、0/60、1/54、0/39（`historical_percentile`），波动 0%~15%。**订正此前两处表述**：(1)"1/54 与 0/60"是同一字段在两次 run 的填充数，不是两个字段各一个数；(2)"只有 magnitude 有消费方"不准确——三者在 `legacy_adapter.py:268,294,328` 都被读取（vNext 主链无据此下结论的逻辑这一点仍成立）。**新增变量**：当日上线的 `_render_contract_field_spec` 已把这三个字段列进每次层分析 prompt，净效果是成本还是收益需下一次真实 run 的填充率对照判定，审计报告里已留基线表。
+
+**登记在案暂不处理**：`{"high","medium","low"}` 在 orchestrator 内 4 处重复字面量（纯维护负担）；`AdjudicationChangeRecord.old_status/new_status` 为自由 `str` 且写入过枚举外的值，但全仓无读取方。
+
+**阴性结论**：`CompetingHypothesis.status` 语义判定**没有第四处**（覆盖 `src/`、`tests/`、`scripts/`、`console_run_all.py`、`legacy_adapter.py`）；本次审计**没有发现"会让真实 run 崩"级别的新问题**。
+
+**验证**：全量 `--cache-clear` **1017 passed**。
+
+### 断点续跑只复用到 bridge：反方站从未接进检查点机制
+
+用户指出 `--resume-run-dir` 的实测行为与其帮助文字"verified stage checkpoints are reused"不符，要求裁决修文档还是修行为。**裁决：修行为。** 帮助文字描述的是设计意图，反方站只是从来没接上。
+
+**根因（单点）**：`counter_thesis.json` 经 `_save_json` 直接落盘，`_record_stage_artifact` 未带 `stage_key` / `payload`——实测 manifest 里 `stage_key=None, payload_sha256=None`；`_build_counter_thesis` 中也没有 `_load_stage_checkpoint`。其余叙事站（bridge/thesis/reviser/final/layer cards）两者俱全。**一条缺失引发整条级联**：续跑必重跑反方 → `competing_hypotheses` 变 → `synthesis_packet` 变 → thesis 检查点的 `payload_sha256` 失配 → thesis / reviser / final 依次重跑，并静默覆盖已产出的产物（真实事故 run `20260728_110702`：首跑那批 3 条假说的验收样本因此永久消失）。
+
+**修复**：
+1. `_build_counter_thesis` 开头加 `_load_stage_checkpoint("counter_thesis.json", ...)`；结尾把 payload 与 fallback 标记存 `self._last_counter_thesis_payload/_fallback`，由 `_run_hypothesis_competition` 落盘后带 `stage_key` + `payload` 补记（不重算 payload，避免两处构造逻辑分叉——正是本轮反复治理的那类重复）。
+2. `_record_stage_artifact` 新增 `checkpoint_reusable` 覆写参数；**走了确定性兜底的反方稿登记为不可复用**——模板凑数稿不是"已验证"结果，续跑必须重试而不是把它永久固化。
+3. `_record_stage_artifact` 在续跑模式下、产物 sha 变化时写入 `overwritten_in_resume={previous_sha256, previous_updated_at}`。**行为不变**（重跑就该写新结果），但"我当时读到的那份还在不在"从此可查。sha 未变时继承既有痕迹——同一份产物会被登记两次（`_save_json` 先无 stage_key 记一次、调用方再补记一次），不继承就会把留痕自己擦掉。
+
+**红灯实证**：移除 counter_thesis 检查点 → `test_orchestrator_runs_full_chain_with_fake_llm` 报 `AssertionError: assert 'running' == 'resumed'`。新增 `test_counter_thesis_checkpoint_is_reused_on_resume`（正常稿可复用 / payload 指纹变则拒 / 兜底稿拒）与 `test_resume_overwrite_of_verified_artifact_leaves_a_trace`。
+
+**过程中两处自我更正（如实记录）**：(1) 首次写的红灯测试因 `-k` 过滤未匹配而**从未被执行**，差点把没跑过的测试当实证；(2) 该断言本身写错了——断言反方站被复用，但该夹具下反方必然走兜底，而"兜底稿不得复用"正是我自己刚定的规则，**拒绝复用才是正确行为**。已改为断言"必须拒绝复用"，另写成功路径用例。
+
+### 合约治理机制改造：字段规格由契约生成（甲）+ 登记不再靠人记得（丙）
+
+用户读完当日汇报后的裁决："三件套（合约写在代码 → 说明书写在 prompt → 关键词登记表对账）不优雅"。诊断成立：登记表并没有消除重复，而是把两份变成三份，且只查关键词在不在、不查解释对不对，还得靠人记得去登记。据此做两处改造，用户批准甲、丙，明确否决乙（让 validator 自带 spec 句并注入 prompt——会把手写说明书改成机器拼装，牺牲这个项目赖以产出质量的说明书语气与分寸）。
+
+**甲：`_compose_prompt` 注入由契约生成的「输出字段规格」。** 新增 `_render_contract_field_spec()` + `_render_contract_type()`，遍历 `model_cls.model_fields`，把每个字段渲染成"名称（必填/可选）：形状 —— description"。形状渲染区分对象 / 数组 / 标量 / Literal / Enum / 可为 null，并对嵌套模型展开一层子字段名（上限 8 个）。Response Rules 追加一条优先级声明："形状以规格为准，正文示例只解释语义"。
+
+**这从结构上根除了形状漂移这一类事故**：只要字段在 pydantic 模型里，它就一定出现在 prompt 里。当天崩掉的 `claim_ledger` 现在渲染为 `对象 ClaimLedger{schema_version, generated_at, effective_date, entries, publish_gate, …} 或 null`——模型不可能再猜成裸数组；20260724 那次 counter_thesis 猜错字段名烧掉 28 万 token 的事故同理。行为规则（"必须逐一回应非 downgraded 假说"）不在覆盖范围，仍由手写说明书 + 登记闸门承担，这是刻意的分工。体积成本：FinalAdjudication 2588 字符、ThesisDraft 2074、BridgeMemo 2173，约占各站 prompt 的 3%。
+
+顺带订正 `ThesisDraft.hypothesis_responses` 的 `description`——T28 之后它仍写着"对每个 candidate 竞争假说的逐一回应"。以前这句只在代码里，现在它直接进 prompt，准确性成了硬要求。
+
+**丙：登记表改由反射闸门守。** 新增 `test_every_validator_bearing_stage_is_registered_in_prompt_requirements`：用 AST 静态扫描 `orchestrator.py` 里所有 `self._run_stage(...)` 调用，凡带 `validator=` 且 `stage_key` 为字面量的，必须在 `STAGE_CONTRACT_PROMPT_REQUIREMENTS` 里有登记；`stage_key` 为运行时拼接的调用点必须落在新增的 `DYNAMIC_STAGE_KEY_CALL_SITES` 豁免名单里并写明理由（豁免必须看得见，不能被扫描器沉默跳过）。另加 `test_registered_prompt_requirement_keywords_are_not_vacuous` 防止用空串/单字符关键词骗过闸门。
+
+**闸门一上线立刻查出三个漏登记的 stage**：
+- `event_card_interpreter` / `event_section_summary`：说明书本来就写了对应规则（"该事件可能通过"前缀、`[card:...]` 引用格式与 2-5 张区间），纯属漏登记，补登记即可。
+- **`bridge` 是真缺口**：`_validate_bridge_memo_v2` 硬性要求每条 `resonance_chains` 的 `confirming_indicators` 与 `falsifiers` 非空，而 `cross_layer_bridge.md` 里这两个词**各出现 0 次**。真实代价当场可查——run `20260728_110702` 的 bridge `attempts=2`，报错正是 `resonance_chains[resonance_chain].confirming_indicators must not be empty`，白烧一次 11 万 token 的调用。已在 `cross_layer_bridge.md`「必须遵守」补写三条（typed_conflicts 三必填、resonance_chains 五必填含两条易漏项的语义解释、transmission_paths 的 path_id 唯一），并登记。
+
+**红灯实证**：把 `bridge` 登记临时删掉，闸门当场报 `这些 stage 挂了 validator 却没有登记：{'bridge': 3990}`。
+
+**一次操作事故（如实记录）**：验证红灯后我用 `git checkout src/agent_analysis/orchestrator.py` 去"恢复"，把该文件上全部未提交改动一次性冲掉（T28 触发集合、reasoned_verdict 分组解析、claim_ledger 登记、甲、丙五处）。其余文件未受影响。已按记录逐处重建并由全量测试确认无丢失。**教训：working tree 有未提交改动时，`git checkout <file>` 是不可逆丢弃，不是恢复；临时试验必须用 `git stash push <file>` + `git stash pop`。**
+
+**验证**：全量 `--cache-clear` **1013 passed**。
+
+### 报告层的同一处逻辑倒置：越有争议的假说越不会出现在报告里（T28 的第三处）
+
+用户读完 T28 汇报后问"主线对反方的回应能不能进报告"。查下来这不是新功能，是**同一个 bug 的第三处**：`vnext_reporter._hypothesis_competition_block`（`vnext_reporter.py:4514`）也用 `status == "candidate"` 过滤假说。而 `_run_hypothesis_competition` 一旦触发降级就把全部假说改判 `kept_unresolved`——于是这一节在真实 run 里长期只剩 counter_thesis 单独成块，读者只看得见反方说了什么，看不到主线逐条怎么答的。**逐条回应的渲染代码（verdict 标签 + reasoning 正文 + 证据 chips）一直都在，只是从不执行。**
+
+真实样本：run `20260728_110702` 两条假说全 `kept_unresolved`，修复前该节渲染出的字面结论是"**本轮没有结构化竞争假说。**"——明明有两条。
+
+**修复**（与合约层口径统一）：
+- 过滤条件改为 `status != "downgraded"`。
+- `include_leading=True` 的调用点（`vnext_reporter.py:4718`）此前靠"只有 candidate 才进 cards"隐式避免重复；放宽后领先假说会同时出现在独立卡和 cards 里，故显式把 `leading_hypothesis_id` 从 cards 列表排除。
+- 卡片行标题从写死的「暂不采纳」改为「主线怎么回应」（有回应时）。旧标题在触发集合放宽前只可能配 candidate，放宽后会承载 `accept_and_revise`，把"采纳"渲染成"暂不采纳"；verdict 本就单独显示在卡片标签上，正文行保持中性即可。
+
+**红灯实证**（`git stash` 旧 reporter）：新增 `test_brief_stress_section_shows_kept_unresolved_hypotheses_and_their_responses`，改前渲染出 `本轮没有结构化竞争假说。`、断言失败，改后两条 kept_unresolved 假说各带回应正文、`downgraded` 那条被正确排除。既有 `test_r2_stress_section_uses_r7_hypothesis_response` 同步改为断言新标题。
+
+**版式核对**：重新生成 brief 后该节纯文字 1067 字，占全篇 64132 字的 **1.7%**；全篇既有 70 个 `<details>` 折叠块，该节不折叠不构成版面压力。是否折叠交用户裁决。
+
+全量 `--cache-clear` **1009 passed**。
+
+### 终审站两处规格漂移（本次真实 run 现场暴露，其中一处是 2026-07-27 收紧的真实回归）
+
+`20260728_110702` 首次跑到终审站硬崩、无产物无报告。两个独立崩因，都是同型病（合约写在代码里、说明书没写）：
+
+1. **`claim_ledger` 形状**：`final_adjudicator.md` 里该字段 grep 命中 **0 次**，契约却要求 `Optional[ClaimLedger]`（对象）。模型只能猜，猜成裸 `List[ClaimLedgerEntry]`，第一次尝试即被 pydantic 拒。修：`FinalAdjudication` 增 `model_validator(mode="before")` 把裸列表补回 `{"entries": [...]}`（每个条目仍逐字过 `ClaimLedgerEntry`，缺必填照拒）；`final_adjudicator.md` 补 `## claim_ledger` 一节含 JSON 示例与"宁可整个不写也别写错形状"；`STAGE_CONTRACT_PROMPT_REQUIREMENTS["final"]` 追加 `claim_ledger`。
+
+2. **`reasoned_verdict` 逗号合并引用——2026-07-27 收紧的真实回归**。线上原文：`reasoned_verdict cites refs outside evidence_index: ['L1.get_10y_real_rate, L4.get_equity_risk_premium#level', 'L3.get_advance_decline_line, L5.get_obv_qqq']`。两条 ref 都合法，模型只是把它们逗号合并进同一个方括号；`re.findall(r"\[([^\[\]]+)\]")` 把整串当成一个 ref，判越界，重试两次后整跑崩。**这是把"至少一条引用"收紧为"至少三条不同引用"之后的第一次真实 run，收紧恰好把模型推向了这种写法。** 修法不是把计数退回去：新增 `_reasoned_verdict_bracket_groups()` 按 `[,，、;；]` 拆分组内内容（每一段仍要逐字过 `_resolve_claim_evidence_ref`，不放松任何 ref 合法性），`_validate_reasoned_verdict_refs` 与 `_annotate_reasoned_verdict_refs` 共用；计数条件同时改为 `方括号组数 ≥ 3 且不同引用 ≥ 3`——后者比原"3 条不同引用"更贴 `final_adjudicator.md:244` 原文（"三条主要理由每条必须至少带一个方括号"），顺带堵住"单方括号塞三条"这个新洞。说明书补"一个方括号只放一个 ref"。
+
+**红灯实证**：`git stash` 旧 orchestrator+contracts，两条新测试分别报出**与线上逐字相同**的 `outside evidence_index` 串、以及 `ValidationError: claim_ledger`；恢复后全过。
+
+**断点续跑救回该 run**（`--resume-run-dir`，复用已验证检查点，只重跑终审）：`final_adjudicator attempts=1` 一次通过，`claim_ledger` 8 条 entries，`reasoned_verdict` 1174 字符 / **11 个方括号组、每组一条 ref**（说明书修改生效，模型不再逗号合并），`approval_status=approved_with_reservations`，native brief / workbench / prompt inspector 全部产出。`event_section_summary` 仍 `failed`——是"宁缺毋滥"闸门的既有正常行为（见 `CLAUDE.md` 常见误判），非本次引入。
+
+**验证**：全量 `--cache-clear` 1001 → **1008 passed**，零回归。
+
+### 【关闭 T27】`price_reflection_map` 倒向"已反映"：不是缺陷，是实验做错了站点——受控重采样反转了原假设
+
+**先纠正上一条记录里的实验方法。** 2026-07-27 条目末尾"A/B 两组共 6 次采样全部为 0"这个证据**不成立**：那 6 次采样打在 **thesis** 站点，而 `price_reflection_map` 是 bridge 站点生成、thesis 与 final 逐字继承的（三份产物实测完全一致）。在 thesis 重采测到的是"继承是否稳定"，不是"判断是否稳定"。真正产生判断的 bridge 站点，两次 run 实际上只有 n=1 对 n=1。
+
+**HANDOFF 的优先假设也被证伪**：`_ensure_price_reflection_categories`（`orchestrator.py:7272`）补齐缺失类别时默认写 `reflected_state="unclear"`，不是任何"已反映"值；两次 run 的 `normalization_notes` 都没有 `price_reflection_categories_added_by_code`，五类全是模型原生输出，代码没插手。
+
+**"输入瘦身削薄了 bridge"这条线索同样证伪**：`NARRATIVE_STAGE_PROMPT_DROP_FIELDS`（`orchestrator.py:238`）只有 `thesis` / `counter_thesis` 两个 key；`_sanitize_prompt_payload` 的 `bridge` 分支（`orchestrator.py:5885`）只调 `_strip_empty_event_prompt_fields`，无任何裁剪。两份 `prompt_audit/bridge/attempt_1.prompt.txt` 从开头到 `## Runtime Input` 的前 10888 字符**逐字节相同**。两次 run 之间也没有任何代码提交（07-25 全天仅 `9f8d484`，12:22，早于两次 run 且不涉 bridge）。
+
+**受控重采样实验（真实 API，用户批准后执行）**：直接回放两份已落盘的 bridge prompt 原文（零组装漂移），固定 `deepseek-v4-flash`，每组 n=4，统计口径复用 `_ensure_price_reflection_categories`：
+
+| payload | 历史那次的 `not_reflected` 数 | 重采 4 次 |
+|---|---|---|
+| A = `20260725_145833` | 3 | **0, 1, 1, 0** |
+| B = `20260725_232410` | 0 | **1, 1, 1, 2** |
+
+两次历史值**都无法在自己的 payload 上复现**，两组分布还互相重叠；被怀疑"系统性倒向已反映"的 B payload 重采下反而更偏 `not_reflected`。**原假设的方向本身不成立。** 8 个样本全部模型原生写满五类，出现的 4 次 `unclear` 全是模型原生（3 次落在 `liquidity`）。
+
+**裁决为"合理行为 + 一个既有设计弱点"**，未改 `orchestrator.py`。判读说明已写入 `RESEARCH_CANON.md`（`price_reflection_map` 判读边界一节）：类别齐全性由代码兜底保证≠五类都被分析过、`unclear` 语义、不同时段同数据日 run 之间地图正常迁移、以及"不能在下游站点重采来推断 bridge 稳定性"。
+
+**顺带修掉一个审计诚实性缺陷（第一性原理审计发现，非本现象成因）**：`run_review.py` 的 `price_reflection_map` 复盘检查里，`thin_items` 判据是三个字段任一为空，而代码补齐的占位条目恒定把三者填成非空模板文案——占位类别永远进不了 `thin_items`，一路落到 `pass` 分支，给出"已覆盖五类，并包含反证与动作含义"的结论，即使其中几类从未被模型分析过。区分线索只在另一条互不引用的 `normalization_notes` finding 里。修法：新增 `code_filled_categories` 分支，从 `normalization_notes` 解析 `price_reflection_categories_added_by_code:` 前缀，把占位类别从"覆盖五类"结论里显式扣除并点名。
+
+另记一条**未处理的观察**（不在 T27 修复范围）：`CoreFact` 契约备有 `historical_percentile` / `trend` / `magnitude` 三个结构化字段，但 L1-L5 几乎从不填（A 组 1/54、B 组 0/60），分位数实际被层级模型随手写进自由文本 `value`——A 组 L1 九条核心事实条条带分位数、B 组全部剥掉。分位数仍从 `context_brief.layer_highlights` 和 `indicator_analyses` 到达 bridge（全 payload 出现次数 77/110 vs 70/93，同一量级），所以是**显著性差异不是信息丢失**；`historical_percentile` 在 vNext 主链无消费方，字段空着不会让代码读到 `None` 出错。
+
+**验证**：`tests/test_run_review.py` 新增红灯测试 `test_run_review_does_not_call_code_filled_price_reflection_categories_covered`，实证改前命中 `pass`（断言失败）、改后命中 `observe` 并点名 credit/liquidity。全量 `--cache-clear` **1006 passed**。
+
+调查全文：`investigation_reports/20260727_handoff_open_threads/T27_FINDINGS.md`。
+
+---
+
 ## 2026-07-27
 
 ### 输入瘦身的受控复核：撤销 0.40% 的那一半、保留 72.71% 的那一半（用户逐条裁决后施工）

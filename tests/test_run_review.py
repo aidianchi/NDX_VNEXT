@@ -358,6 +358,82 @@ def test_run_review_observes_thin_price_reflection_map():
     )
 
 
+def test_run_review_does_not_call_code_filled_price_reflection_categories_covered():
+    """红灯：代码补齐的占位类别不得在复盘里冒充"模型已分析过的五类覆盖"。
+
+    机制（T27 调查第五点审计，investigation_reports/20260727_handoff_open_threads/
+    T27_FINDINGS.md 第六节）：`_ensure_price_reflection_categories` 补齐缺失类别时，
+    rationale / counterevidence / action_implication 三个字段恒定被填成非空模板文案，
+    因此占位条目永远进不了 thin_items 检查，会一路落到 pass 分支，给出
+    "已覆盖五类，并包含反证与动作含义"的结论——即使其中两类其实从未被模型分析。
+    修复前本用例会命中那条 pass；修复后必须命中 observe 并逐一点名占位类别。
+    """
+    placeholder = {
+        "rationale": "价格反映未被 bridge 原生拆出；保留为待复核项，不能当作已分析充分。",
+        "counterevidence": ["缺少该类别的结构化反证分析"],
+        "action_implication": "降低该类别对动作升级/降级的确定性；等待下游或人工复盘补足。",
+        "reflected_state": "unclear",
+    }
+    report = build_run_review_report(
+        run_dir="output/analysis/vnext/test",
+        analysis_packet={"meta": {"backtest_date": "2025-04-09"}},
+        bridges=[
+            {
+                "principal_contradiction": {"summary": "风险与赔率拉扯。", "price_reflection": "partially_reflected"},
+                "normalization_notes": ["price_reflection_categories_added_by_code:credit,liquidity"],
+                "price_reflection_map": [
+                    {
+                        "category": category,
+                        "target": f"{category}_target",
+                        "reflected_state": "partially_reflected",
+                        "rationale": "模型原生判断。",
+                        "counterevidence": ["原生反证"],
+                        "action_implication": "原生动作含义。",
+                    }
+                    for category in ("rates", "valuation", "technical_panic")
+                ]
+                + [
+                    {"category": "credit", "target": "credit_spread", **placeholder},
+                    {"category": "liquidity", "target": "liquidity_env", **placeholder},
+                ],
+            }
+        ],
+        thesis_draft={
+            "principal_contradiction": {"summary": "风险与赔率拉扯。", "price_reflection": "partially_reflected"},
+            "priced_narrative": "坏消息部分进入价格。",
+            "payoff_assessment": "高风险高赔率候选。",
+        },
+        risk_boundary_report={
+            "must_preserve_risks": ["信用恶化风险"],
+            "opportunity_costs": [{"condition": "等待全部确认"}],
+            "confirmation_costs": [{"wait_for": "趋势确认"}],
+        },
+        final_adjudication={
+            "final_stance": "高风险高赔率候选",
+            "approval_status": "approved_with_reservations",
+            "principal_contradiction": {"summary": "风险与赔率拉扯。", "price_reflection": "partially_reflected"},
+            "reader_final": {"one_liner": "风险高，但赔率可能改善。"},
+        },
+        data_integrity_report={"publish_status": "publishable"},
+    )
+
+    price_findings = [
+        item
+        for item in report.attribution_findings
+        if item.category == "bridge" and "price_reflection_map" in item.finding
+    ]
+    assert not any(item.severity == "pass" for item in price_findings), (
+        "代码占位类别仍被判为「覆盖五类」的 pass"
+    )
+    assert any(
+        item.severity == "observe"
+        and "代码补齐的占位项" in item.finding
+        and "credit" in item.finding
+        and "liquidity" in item.finding
+        for item in price_findings
+    )
+
+
 def test_run_review_fails_inconsistent_high_payoff_final_language():
     principal = {
         "contradiction_id": "valuation_vs_rates",

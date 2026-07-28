@@ -1,8 +1,10 @@
 """GovernanceInputPacket unit tests — ensure narrow input preserves critical signals."""
 
+import ast
 import os
 import sys
 from pathlib import Path
+from typing import Dict, List
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -13,6 +15,7 @@ from agent_analysis.contracts import (
     Conflict,
     ContextBrief,
     CoreFact,
+    FinalAdjudication,
     PriceReflectionAssessment,
     PrincipalContradiction,
     GovernanceInputPacket,
@@ -27,6 +30,7 @@ from agent_analysis.contracts import (
     TypedConflict,
 )
 from agent_analysis.orchestrator import (
+    DYNAMIC_STAGE_KEY_CALL_SITES,
     PROMPT_FILES,
     STAGE_CONTRACT_PROMPT_REQUIREMENTS,
     VNextOrchestrator,
@@ -529,3 +533,187 @@ def _four_empty_cards() -> list:
 
 def _five_empty_cards() -> list:
     return _empty_layer_cards("L1", "L2", "L3", "L4", "L5")
+
+
+# ── 甲：输出字段规格由契约生成，形状漂移从结构上根除（2026-07-28 用户裁决） ──
+
+def test_compose_prompt_embeds_contract_generated_field_spec(tmp_path: Path):
+    """红灯：真实事故 run 20260728_110702——`claim_ledger` 在 final_adjudicator.md 里
+    grep 命中 0 次，模型只能猜形状、猜成裸数组，终审第一次尝试即被 pydantic 拒、整跑硬崩。
+
+    根治不是"记得把字段补进说明书"（那还是靠人），而是让说明书的字段规格**由契约生成**：
+    只要字段在 pydantic 模型里，它就一定出现在 prompt 里，并且带上"对象 / 数组 / 是否可 null"。
+    本用例锁定三件事：字段一个不漏、嵌套对象不会被渲染成数组、可选字段标注 null。
+    """
+    orchestrator = _orchestrator(tmp_path)
+    spec = orchestrator._render_contract_field_spec(FinalAdjudication)
+
+    # 1) 契约里的每个字段都必须出现，不允许有"说明书没提过"的字段。
+    for name in FinalAdjudication.model_fields:
+        assert f"`{name}`" in spec, f"契约字段 {name} 没有出现在自动生成的字段规格里"
+
+    # 2) 事故字段的形状必须明确是对象、且点名 entries 子字段——这正是模型当初猜错的地方。
+    claim_line = next(line for line in spec.splitlines() if line.startswith("- `claim_ledger`"))
+    assert "对象 ClaimLedger" in claim_line
+    assert "entries" in claim_line
+    assert "数组，元素为" not in claim_line
+    assert "或 null" in claim_line
+
+    # 3) 列表型字段要标成数组并点明元素形状（否则模型可能回一个裸对象）。
+    price_line = next(line for line in spec.splitlines() if line.startswith("- `price_reflection_map`"))
+    assert "数组，元素为 对象 PriceReflectionAssessment" in price_line
+
+    # 4) 必填 / 可选与 Literal 取值要如实呈现。
+    confidence_line = next(line for line in spec.splitlines() if line.startswith("- `confidence`"))
+    assert "必填" in confidence_line and "取值之一" in confidence_line
+
+
+def test_compose_prompt_field_spec_declares_shape_authority(tmp_path: Path):
+    """规格必须真的进 prompt，并且声明"形状冲突时以规格为准"。
+
+    说明书正文里的手写 JSON 示例仍然保留（它们解释语义），但示例是人写的、会过期；
+    自动生成的规格不会。两者冲突时必须有明确的优先级，否则模型只能猜。
+    """
+    orchestrator = _orchestrator(tmp_path)
+    prompt = orchestrator._compose_prompt("final", FinalAdjudication, {"example": "payload"})
+
+    assert "## 输出字段规格（由 FinalAdjudication 契约自动生成，形状以此为准）" in prompt
+    assert "`claim_ledger`" in prompt
+    assert "形状冲突时以规格为准" in prompt
+    # 规格必须排在 Response Rules 之前，读到规则时形状已经交代过了。
+    assert prompt.index("## 输出字段规格") < prompt.index("## Response Rules")
+
+
+# ── 丙：登记不能靠人记得——反射枚举所有带 validator 的 stage（2026-07-28 用户裁决） ──
+
+def test_every_validator_bearing_stage_is_registered_in_prompt_requirements():
+    """红灯：加了 stage validator 却忘了登记 → 合约会考、说明书没写、模型必挂。
+
+    `STAGE_CONTRACT_PROMPT_REQUIREMENTS` 此前是**手填**的：新增一条 validator 不会强迫
+    任何人去登记表里加一行。真实代价：`_validate_bridge_memo_v2` 硬性要求 resonance_chains
+    的 confirming_indicators / falsifiers 非空，而 cross_layer_bridge.md 里这两个词各出现
+    0 次——真实 run 20260728_110702 的 bridge 因此重试一次，烧掉一次 11 万 token 的调用。
+
+    本用例静态扫描 orchestrator.py 里所有 `self._run_stage(...)` 调用，凡是带了
+    `validator=` 且 stage_key 是字面量的，都必须在登记表里有一行；stage_key 是运行时
+    拼出来的调用点必须落在显式豁免名单里，并写清豁免理由。这样"忘了登记"从"靠人记得"
+    变成"测试当场红"。
+    """
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "agent_analysis" / "orchestrator.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    literal_stages: Dict[str, int] = {}
+    dynamic_sites: List[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "_run_stage"):
+            continue
+        keywords = {kw.arg: kw for kw in node.keywords}
+        if "validator" not in keywords:
+            continue
+        stage_key = keywords.get("stage_key")
+        if stage_key is not None and isinstance(stage_key.value, ast.Constant):
+            literal_stages[str(stage_key.value.value)] = node.lineno
+        else:
+            dynamic_sites.append(node.lineno)
+
+    assert literal_stages, "静态扫描没找到任何带 validator 的 _run_stage 调用——扫描器本身坏了"
+
+    unregistered = {
+        stage: line
+        for stage, line in literal_stages.items()
+        if stage not in STAGE_CONTRACT_PROMPT_REQUIREMENTS
+    }
+    assert not unregistered, (
+        f"这些 stage 挂了 validator 却没有登记进 STAGE_CONTRACT_PROMPT_REQUIREMENTS："
+        f"{unregistered}（键是 stage_key，值是 orchestrator.py 行号）。"
+        "合约会因此判失败，但模型从未被告知该要求——请补 prompt 并登记关键词。"
+    )
+
+    # 豁免必须看得见：运行时拼 stage_key 的调用点数量变化时，这里要有人重新裁决一次。
+    assert len(dynamic_sites) == len(DYNAMIC_STAGE_KEY_CALL_SITES), (
+        f"带 validator 但 stage_key 为动态值的 _run_stage 调用点有 {len(dynamic_sites)} 处"
+        f"（行号 {dynamic_sites}），而豁免名单登记了 {len(DYNAMIC_STAGE_KEY_CALL_SITES)} 条。"
+        "新增动态调用点必须显式登记豁免理由，不能沉默跳过。"
+    )
+    for stage, reason in DYNAMIC_STAGE_KEY_CALL_SITES.items():
+        assert reason.strip(), f"豁免项 {stage} 没有写理由——豁免必须带理由"
+
+
+def test_registered_prompt_requirement_keywords_are_not_vacuous():
+    """登记表本身也要防退化：不许用空串或单字符关键词把闸门骗过去。"""
+    for stage, keywords in STAGE_CONTRACT_PROMPT_REQUIREMENTS.items():
+        assert keywords, f"stage `{stage}` 登记了空的关键词元组，等于没登记"
+        for keyword in keywords:
+            assert len(str(keyword).strip()) >= 2, (
+                f"stage `{stage}` 的登记关键词 `{keyword}` 过短，"
+                "几乎必然在任何 prompt 里命中，起不到闸门作用"
+            )
+
+
+# ── 单一事实源闸门（2026-07-28 全仓审计的产物） ──
+
+def test_metric_authority_usage_vocabulary_has_exactly_one_source():
+    """红灯：证据权限等级此前分两处各存一份，且已经漂移。
+
+    `_field_authority_from_payload` 里的 `usage_rank` 既当排序表又当白名单，而 36 行
+    之后的 `_field_authority_usages` 另写了一份 `allowed` 集合。`usage_rank` 漏收
+    `validation_only`（"经第三方交叉校验的值"，`tools_L4.py` 有 6 处真实产出），于是
+    真实 usage 一进合并逻辑就被静默改写成 `audit_only`，报告里"这条证据为何被降级"
+    的审计文案与工具本意对不上——直接戳中"可审计推理链"。
+
+    修法是合并成一份 `METRIC_AUTHORITY_USAGE_RANK`，白名单从它的键派生。
+    """
+    from agent_analysis.orchestrator import METRIC_AUTHORITY_USAGE_RANK
+
+    orchestrator = VNextOrchestrator.__new__(VNextOrchestrator)
+
+    # 1) 白名单与排序表必须是同一份事实，不允许再各写一份。
+    assert orchestrator._field_authority_usages(
+        {name: {"usage": name} for name in METRIC_AUTHORITY_USAGE_RANK}
+    ) == set(METRIC_AUTHORITY_USAGE_RANK)
+
+    # 2) 事故形态：validation_only 必须原样保留，不得被改写成 audit_only。
+    merged = orchestrator._field_authority_from_payload(
+        {"value": {"MetricAuthority": {"pe_vs_yahoo": {"usage": "validation_only"}}}}
+    )
+    assert merged["pe_vs_yahoo"]["usage"] == "validation_only"
+
+    # 3) 两来源冲突时仍取更保守的一档（既有语义不得被本次修复削弱）。
+    conflicted = orchestrator._field_authority_from_payload(
+        {
+            "value": {"MetricAuthority": {"f": {"usage": "core_allowed"}}},
+            "data_quality": {"metric_authority": {"f": {"usage": "supporting_only"}}},
+        }
+    )
+    assert conflicted["f"]["usage"] == "supporting_only"
+
+    # 4) 真正未知的 usage 仍然要被兜底成 audit_only，不能借这次放宽混进来。
+    unknown = orchestrator._field_authority_from_payload(
+        {"value": {"MetricAuthority": {"f": {"usage": "totally_made_up"}}}}
+    )
+    assert unknown["f"]["usage"] == "audit_only"
+
+
+def test_price_reflection_category_list_has_exactly_one_source():
+    """红灯：五类价格反映名单此前在 orchestrator 与 run_review 各存一份字面量。
+
+    两者当时内容一致，但没有任何机制保证它们一起变——改一处漏一处，复盘检查会开始
+    要求或放过错误的类别，而且不会报错。现在统一派生自
+    `contracts.PRICE_REFLECTION_CATEGORY_KEYS`。
+    """
+    from agent_analysis.contracts import PRICE_REFLECTION_CATEGORY_KEYS
+    from agent_analysis.orchestrator import PRICE_REFLECTION_CATEGORIES
+    from agent_analysis.run_review import REQUIRED_PRICE_REFLECTION_CATEGORIES
+
+    assert set(PRICE_REFLECTION_CATEGORIES) == set(PRICE_REFLECTION_CATEGORY_KEYS), (
+        "orchestrator 的富字典键与唯一名单漂移了——新增/删除类别时两处必须一起改"
+    )
+    assert REQUIRED_PRICE_REFLECTION_CATEGORIES == set(PRICE_REFLECTION_CATEGORY_KEYS)
+    # 富字典每一类都要写全 target/label/hint，否则代码补齐时会拼出空文案。
+    for name, meta in PRICE_REFLECTION_CATEGORIES.items():
+        assert meta.get("target") and meta.get("label") and meta.get("hint"), name

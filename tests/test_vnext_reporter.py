@@ -300,10 +300,77 @@ def test_r2_stress_section_uses_r7_hypothesis_response():
 
     assert "它的主张" in html
     assert "最强证据" in html
-    assert "暂不采纳" in html
+    # 2026-07-28：标题从"暂不采纳"改为"主线怎么回应"。触发集合放宽后这一行开始承载
+    # thesis 的逐条回应，而回应可能是 accept_and_revise（采纳）——旧标题会把采纳说成
+    # 不采纳。verdict 已单独显示在卡片标签上，这里保持中性。
+    assert "主线怎么回应" in html
+    assert "暂不采纳" not in html
     assert "什么会让它赢" in html
     assert "资本开支提供支撑，但盈利证据仍缺失。" in html
     assert "盈利没有兑现。" in html
+
+
+def test_brief_stress_section_shows_kept_unresolved_hypotheses_and_their_responses():
+    """红灯：报告层曾有和 T28 完全相同的逻辑倒置——只渲染 status == "candidate" 的假说。
+
+    `_run_hypothesis_competition` 一旦触发降级就把全部假说改判 kept_unresolved，于是
+    **越有争议的假说越不会出现在报告里**：读者只看得到反方说了什么（counter_thesis
+    单独成块），看不到主线逐条怎么答的（逐条回应的渲染代码一直都在，只是从不执行）。
+    真实样本 run 20260728_110702：两条假说全 kept_unresolved，修复前该节零张假说卡。
+    """
+    html = VNextReportGenerator()._brief_stress_section(
+        {
+            "hypothesis_competition": {
+                "hypotheses": [
+                    {
+                        "hypothesis_id": "hyp_base",
+                        "hypothesis_text": "主线：宏观收紧与信用风险偏好的张力。",
+                        "status": "kept_unresolved",
+                        "support_evidence_refs": ["L1.get_10y_real_rate"],
+                        "falsification_conditions": ["实际利率拐头向下。"],
+                    },
+                    {
+                        "hypothesis_id": "cth_01",
+                        "hypothesis_text": "反方：利率已近顶部，回调是介入机会。",
+                        "status": "kept_unresolved",
+                        "support_evidence_refs": ["L1.get_net_liquidity_momentum"],
+                        "falsification_conditions": ["实际利率再创新高。"],
+                    },
+                    {
+                        "hypothesis_id": "hyp_out",
+                        "hypothesis_text": "已被裁定出局的解释。",
+                        "status": "downgraded",
+                        "support_evidence_refs": [],
+                        "falsification_conditions": [],
+                    },
+                ]
+            },
+            "thesis_draft": {
+                "hypothesis_responses": [
+                    {
+                        "hypothesis_id": "hyp_base",
+                        "verdict": "accept_and_revise",
+                        "reasoning": "接受矛盾结构，但强化风险权重。",
+                        "evidence_refs": ["L1.get_10y_real_rate"],
+                    },
+                    {
+                        "hypothesis_id": "cth_01",
+                        "verdict": "reject",
+                        "reasoning": "当前证据不支持实际利率见顶，驳回过度乐观叙事。",
+                        "evidence_refs": ["L1.get_10y_real_rate"],
+                    },
+                ]
+            },
+            "counter_thesis": {},
+        }
+    )
+
+    # 两条 kept_unresolved 假说都必须出现，且各自带上主线的回应正文。
+    assert "接受矛盾结构，但强化风险权重。" in html
+    assert "当前证据不支持实际利率见顶，驳回过度乐观叙事。" in html
+    assert html.count("主线怎么回应") == 2
+    # downgraded 是唯一被豁免的状态：已裁定出局的不再占版面。
+    assert "已被裁定出局的解释。" not in html
 
 
 def test_r2_facade_keeps_publish_block_visible(tmp_path: Path):

@@ -4512,8 +4512,13 @@ class VNextReportGenerator:
         competition = artifacts.get("hypothesis_competition", {}) if isinstance(artifacts.get("hypothesis_competition"), dict) else {}
         counter = artifacts.get("counter_thesis", {}) if isinstance(artifacts.get("counter_thesis"), dict) else {}
         all_hypotheses = [item for item in _as_list(competition.get("hypotheses")) if isinstance(item, dict)]
+        # T28 的同一处逻辑倒置在报告层还有一份（2026-07-28 发现）：这里此前也只收
+        # status == "candidate"，而 `_run_hypothesis_competition` 一旦触发降级就把全部假说
+        # 改判 kept_unresolved——于是越有争议的假说越不会出现在报告里，读者只看得见反方
+        # 说了什么，看不到主线逐条怎么答的（回应本身的渲染代码一直都在，只是从不执行）。
+        # 与合约层一致：`downgraded` 是唯一表示"已被正式裁决出局"的状态，其余都要露面。
         hypotheses = [
-            item for item in all_hypotheses if str(item.get("status") or "") == "candidate"
+            item for item in all_hypotheses if str(item.get("status") or "") != "downgraded"
         ]
         principal_counter = str(counter.get("principal_counterargument") or "")
         if not hypotheses and not principal_counter and not (include_leading and all_hypotheses):
@@ -4542,6 +4547,12 @@ class VNextReportGenerator:
       <small>领先仅表示当前证据权重，非确定结论。</small>
     </article>
 """
+                # 领先假说已经单独出卡，触发集合放宽后它会同时留在 hypotheses 里，
+                # 不排掉就会在同一节里重复出现两次。
+                leading_key = str(leading.get("hypothesis_id") or "")
+                hypotheses = [
+                    item for item in hypotheses if str(item.get("hypothesis_id") or "") != leading_key
+                ]
         for index, item in enumerate(hypotheses[:4], 1):
             response = responses.get(str(item.get("hypothesis_id")), {})
             support_refs = _as_list(item.get("support_evidence_refs"))
@@ -4550,6 +4561,10 @@ class VNextReportGenerator:
             if not reason:
                 cannot = "；".join(_sentence(value, 110) for value in _as_list(item.get("cannot_explain"))[:2])
                 reason = cannot or "本轮没有结构化回应，保留为未解决问题。"
+            # 触发集合放宽后这一行才真正开始承载 thesis 的逐条回应，而回应可能是
+            # accept_and_revise（采纳）——沿用旧标题"暂不采纳"会把采纳说成不采纳。
+            # verdict 已经写在卡片标签上，这里只需中性地说明"主线怎么答的"。
+            reason_label = "主线怎么回应" if response else "暂不采纳"
             falsifiers = "".join(
                 f"<li>{_escape(_sentence(value, 180))}</li>"
                 for value in _as_list(item.get("falsification_conditions"))[:4]
@@ -4560,7 +4575,7 @@ class VNextReportGenerator:
       <span class="hlabel">竞争假说 {index} · {_escape(verdict)}</span>
       <div class="hrow"><b>它的主张</b><p>{_escape(item.get('hypothesis_text') or '')}</p></div>
       <div class="hrow"><b>最强证据</b><div class="ref-row">{self._ref_chips(strongest)}</div></div>
-      <div class="hrow"><b>暂不采纳</b><p>{_escape(reason)}</p></div>
+      <div class="hrow"><b>{_escape(reason_label)}</b><p>{_escape(reason)}</p></div>
       <div class="hrow"><b>什么会让它赢</b><ul>{falsifiers or '<li>未记录结构化胜出条件。</li>'}</ul></div>
     </article>
 """
