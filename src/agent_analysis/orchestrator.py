@@ -5994,10 +5994,66 @@ class VNextOrchestrator:
             "- 不要编造新的外部数据源，只能使用输入中的信息。\n"
         )
 
-    # 一层嵌套里最多列几个子字段名，超出用省略号——够模型判断"这是对象不是数组"，
-    # 又不至于把整棵 schema 树铺进 prompt。
+    # 一层嵌套里最多列几个**自由形状**子字段名，超出用省略号——够模型判断"这是对象不是数组"，
+    # 又不至于把整棵 schema 树铺进 prompt。受限子字段（Literal / dict）不受该上限约束：
+    # 它们猜错就是硬失败，必须每一个都带类型出现（见 _render_contract_nested_hint）。
     _CONTRACT_SPEC_NESTED_FIELD_LIMIT = 8
     _CONTRACT_SPEC_DESCRIPTION_LIMIT = 70
+
+    # 受限子字段最多往下钻几层。深处只报"猜错就硬失败"的字段，不报自由文本字段——
+    # 既堵住 ClaimLedgerEntry 这类藏在第二层的枚举，又不至于把整棵 schema 铺进 prompt。
+    _CONTRACT_SPEC_MAX_NESTED_DEPTH = 2
+
+    @classmethod
+    def _render_contract_nested_hint(cls, annotation: Any, *, depth: int = 0) -> str:
+        """嵌套子字段里"猜错就硬失败"的那部分类型，渲染成一小段紧凑提示。
+
+        只覆盖 Literal（取值必须落在枚举里）与 dict（必须是对象），因为这两类是
+        pydantic 会当场硬拒的形状；字符串 / 数字 / 自由数组交给字段名本身的语义即可，
+        全量铺开会把规格撑成第二份 schema。
+
+        真实事故 run 20260728_222759：`CoreFact.magnitude`(Literal) 与 `raw_data`(dict)
+        在规格里只有名字，模型分别填成 -4.9 和一句描述文本，L1 两次尝试全废、整跑终止。
+        """
+        import typing
+
+        origin = typing.get_origin(annotation)
+        args = typing.get_args(annotation)
+        if origin is typing.Union or (
+            origin is not None and getattr(origin, "__name__", "") == "UnionType"
+        ):
+            for arg in args:
+                if arg is type(None):  # noqa: E721
+                    continue
+                hint = cls._render_contract_nested_hint(arg, depth=depth)
+                if hint:
+                    return hint
+            return ""
+        if origin is typing.Literal:
+            return ":" + "|".join(json.dumps(arg, ensure_ascii=False) for arg in args)
+        if origin is dict:
+            return ":对象"
+        if origin in (list, set, tuple):
+            inner = (
+                cls._render_contract_nested_hint(args[0], depth=depth) if args else ""
+            )
+            return f":[{inner.lstrip(':')}]" if inner else ""
+        if depth < cls._CONTRACT_SPEC_MAX_NESTED_DEPTH and isinstance(annotation, type):
+            sub_fields = getattr(annotation, "model_fields", None)
+            if sub_fields is not None:
+                parts = [
+                    f"{name}{hint}"
+                    for name, field in sub_fields.items()
+                    if (
+                        hint := cls._render_contract_nested_hint(
+                            getattr(field, "annotation", None), depth=depth + 1
+                        )
+                    )
+                ]
+                if parts:
+                    # 只列了受限字段，用省略号如实交代"还有别的字段没写在这里"。
+                    return f":对象 {annotation.__name__}{{{', '.join(parts)}, …}}"
+        return ""
 
     @classmethod
     def _render_contract_type(cls, annotation: Any, *, depth: int = 0) -> str:
@@ -6038,9 +6094,19 @@ class VNextOrchestrator:
             if sub_fields is not None:
                 if depth >= 1:
                     return f"对象 {annotation.__name__}"
-                names = list(sub_fields.keys())
-                shown = names[: cls._CONTRACT_SPEC_NESTED_FIELD_LIMIT]
-                suffix = ", …" if len(names) > len(shown) else ""
+                shown: List[str] = []
+                budget = cls._CONTRACT_SPEC_NESTED_FIELD_LIMIT
+                for sub_name, sub_field in sub_fields.items():
+                    hint = cls._render_contract_nested_hint(
+                        getattr(sub_field, "annotation", None)
+                    )
+                    if hint:
+                        # 受限子字段不占名额：漏掉一个就等于让模型猜一个硬失败点。
+                        shown.append(f"{sub_name}{hint}")
+                    elif budget > 0:
+                        shown.append(sub_name)
+                        budget -= 1
+                suffix = ", …" if len(shown) < len(sub_fields) else ""
                 return f"对象 {annotation.__name__}{{{', '.join(shown)}{suffix}}}"
         return "任意值"
 

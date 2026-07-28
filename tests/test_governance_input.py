@@ -584,6 +584,102 @@ def test_compose_prompt_field_spec_declares_shape_authority(tmp_path: Path):
     assert prompt.index("## 输出字段规格") < prompt.index("## Response Rules")
 
 
+def test_field_spec_exposes_constrained_nested_subfield_types(tmp_path: Path):
+    """红灯：真实事故 run 20260728_222759——L1 两次尝试全挂，整跑死在第一站。
+
+    甲把嵌套对象的**字段名**写进了规格，却没写子字段的**类型**：core_facts 渲染成
+    `对象 CoreFact{metric, value, historical_percentile, trend, magnitude, raw_data}`。
+    可 `magnitude` 是 Literal["extreme"…"low"]、`raw_data` 是 dict——规格里都只剩一个名字。
+
+    甲上线前这两个字段在整份 L1 prompt 里出现 0 次，模型压根不填（run 20260728_110702
+    五层 57 条 core_facts，magnitude / raw_data 填充率 0/0），于是校验一直通过。甲点名之后
+    模型开始填：第一次把 raw_data 填成字符串（9 个 dict_type 错），重试修好 raw_data 又把
+    magnitude 填成 -4.9 这类数字（9 个 literal_error），两次尝试用尽、L1 硬失败。
+
+    教训：**只报字段名不报类型，比压根不提更危险**——它把模型从"不填"推到"乱填"。
+    本用例扫描所有 stage 契约，凡是嵌套对象里"猜错就硬失败"的子字段（Literal、dict），
+    规格里必须带类型，且不得因为字段数上限被截断掉（`TypedConflict.status` 排第 12、
+    `CompetingHypothesis.status` 排第 10，正是被截断的两个）。
+    """
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "agent_analysis" / "orchestrator.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    import agent_analysis.contracts as contracts_module
+
+    stage_models: Dict[str, type] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "_run_stage":
+            continue
+        model_arg = {kw.arg: kw for kw in node.keywords}.get("model_cls")
+        if model_arg is None or not isinstance(model_arg.value, ast.Name):
+            continue
+        model_cls = getattr(contracts_module, model_arg.value.id, None)
+        if model_cls is not None and getattr(model_cls, "model_fields", None):
+            stage_models[model_arg.value.id] = model_cls
+
+    assert stage_models, "静态扫描没找到任何 _run_stage 的 model_cls——扫描器本身坏了"
+
+    orchestrator = _orchestrator(tmp_path)
+
+    def _constrained_subfields(annotation, seen=frozenset()) -> Dict[type, List[str]]:
+        """穷举该注解可达的、所有深度的"猜错就硬失败"子字段。
+
+        这里刻意**不引用** `_CONTRACT_SPEC_MAX_NESTED_DEPTH`：期望值若由实现常量推导，
+        把常量调小就能让测试自己闭嘴，闸门等于不存在。要求是绝对的——契约里任何一个
+        枚举 / 对象子字段，模型都必须被告知类型；将来真出现更深一层的枚举，这里当场红，
+        由人决定是抬高钻取深度还是把契约拍平。
+        """
+        import typing
+
+        found: Dict[type, List[str]] = {}
+        origin = typing.get_origin(annotation)
+        if origin is not None:
+            for arg in typing.get_args(annotation):
+                found.update(_constrained_subfields(arg, seen))
+            return found
+        sub_fields = getattr(annotation, "model_fields", None)
+        if sub_fields is None or annotation in seen:
+            return found
+
+        def _hard_typed(inner) -> bool:
+            if typing.get_origin(inner) in (typing.Literal, dict):
+                return True
+            return any(_hard_typed(arg) for arg in typing.get_args(inner))
+
+        names = [name for name, f in sub_fields.items() if _hard_typed(f.annotation)]
+        if names:
+            found[annotation] = names
+        # 继续往下钻：ClaimLedgerEntry 的三个枚举就藏在 claim_ledger.entries[] 的第二层。
+        for f in sub_fields.values():
+            found.update(_constrained_subfields(f.annotation, seen | {annotation}))
+        return found
+
+    missing: List[str] = []
+    for model_name, model_cls in sorted(stage_models.items()):
+        spec = orchestrator._render_contract_field_spec(model_cls)
+        for field_name, field in model_cls.model_fields.items():
+            line = next(
+                (l for l in spec.splitlines() if l.startswith(f"- `{field_name}`")), ""
+            )
+            for sub_model, sub_names in _constrained_subfields(field.annotation).items():
+                for sub_name in sub_names:
+                    # 字段名出现还不够：必须带上冒号后的类型，否则模型只能猜。
+                    if f"{sub_name}:" not in line:
+                        missing.append(
+                            f"{model_name}.{field_name} -> "
+                            f"{sub_model.__name__}.{sub_name}"
+                        )
+
+    assert not missing, (
+        "这些嵌套子字段在自动生成的规格里只有名字、没有类型（Literal 的取值范围 / dict 的对象形状）："
+        f"{missing}。模型会照着名字乱填，pydantic 当场硬拒——run 20260728_222759 就是这么死的。"
+    )
+
+
 # ── 丙：登记不能靠人记得——反射枚举所有带 validator 的 stage（2026-07-28 用户裁决） ──
 
 def test_every_validator_bearing_stage_is_registered_in_prompt_requirements():
