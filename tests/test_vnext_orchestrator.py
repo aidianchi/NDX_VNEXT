@@ -27,6 +27,7 @@ from agent_analysis.contracts import (
     EvidencePassport,
     EvidenceRegistry,
     EventInterpretationCard,
+    EventSectionSummary,
     FinalAdjudication,
     GoldenPitChecklist,
     HypothesisCompetition,
@@ -1984,6 +1985,211 @@ def test_schema_guard_rejects_bridge_dead_refs_and_bad_transmission_paths(tmp_pa
     assert "duplicate path_id" in joined
     assert "evidence_refs must not be empty" in joined
     assert "implication is required" in joined
+
+
+def _schema_guard_conflict_case(tmp_path: Path, thesis_conflict: dict):
+    """桥给一条 high 冲突，正方用自己的措辞重述它——只有编号能认亲。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    bridge = BridgeMemo.model_validate(
+        {
+            "bridge_type": "macro_valuation",
+            "layers_connected": ["L1", "L4"],
+            "typed_conflicts": [
+                {
+                    "conflict_id": "T1_real_rate_valuation_tension",
+                    "conflict_type": "rate_vs_valuation",
+                    "severity": "high",
+                    "description": "L1 实际利率极端高位，L4 估值分位仅中位。",
+                    "implication": "估值压缩风险未被定价。",
+                    "involved_layers": ["L1", "L4"],
+                    "evidence_refs": ["L1.get_fed_funds_rate"],
+                }
+            ],
+            "implication_for_ndx": "保留张力。",
+        }
+    )
+    return orchestrator._run_schema_guard(
+        _mock_packet(),
+        [],
+        [bridge],
+        ThesisDraft.model_validate(
+            {
+                "environment_assessment": "环境偏紧。",
+                "valuation_assessment": "估值偏高。",
+                "timing_assessment": "趋势待确认。",
+                "main_thesis": "测试。",
+                "retained_conflicts": [thesis_conflict],
+                "overall_confidence": "medium",
+            }
+        ),
+        Critique.model_validate({"overall_assessment": "测试。", "revision_direction": "测试。"}),
+        RiskBoundaryReport.model_validate({"must_preserve_risks": ["测试风险"]}),
+    )
+
+
+def test_schema_guard_matches_retained_conflict_by_upstream_conflict_id(tmp_path: Path):
+    """红灯：真实 run 20260728_222759——闸门谎报"高严重度冲突被抹平"，冲突其实一条没丢。
+
+    `Conflict` 契约当时**根本没有 conflict_id 字段**，闸门只能拿 `conflict_type` 认亲；
+    而正方本来就该用自己的话重述冲突，它把桥的 `rate_vs_valuation` 写成
+    `real_rate_vs_valuation`，一词之差即判丢失。语义兜底是 `_normalize_conflict_text`
+    的逐字相等，遇到改写必然失效——也就是说，只要正方好好干活（改写而非复制），
+    闸门就会误报。
+
+    这条误报比一般 bug 更危险：它往"系统抹平了跨层冲突"这个方向说谎，而"冲突是资产"
+    是本项目的常驻边界之一。照着它去"修"正方，修的是一个不存在的病。
+
+    修法是把编号通道补上（契约加 conflict_id + 说明书要求原样沿用 + 闸门两侧对称取
+    {conflict_id, conflict_type} 并集），而不是放宽闸门。
+    """
+    report = _schema_guard_conflict_case(
+        tmp_path,
+        {
+            "conflict_id": "T1_real_rate_valuation_tension",
+            # 类型名与描述都被正方改写过——这是它该做的事，不该因此被判丢失。
+            "conflict_type": "real_rate_vs_valuation",
+            "severity": "high",
+            "description": "L1 实际利率 2.43% 处 10 年 99.6 分位，L4 估值安全垫不足。",
+            "implication": "偏防守。",
+            "involved_layers": ["L1", "L4"],
+        },
+    )
+
+    joined = "\n".join(report.consistency_issues)
+    assert "High severity conflicts missing" not in joined, (
+        "正方已用 conflict_id 认领了这条高严重度冲突，闸门不得再报丢失"
+    )
+
+
+def test_schema_guard_flags_missing_conflict_id_as_possible_id_gap(tmp_path: Path):
+    """编号真的没传下来时仍要报警，但必须说清"可能只是编号没沿用"。
+
+    "冲突被抹平"和"编号没传下来"后果天差地别，报错文案不区分，读的人就会误判。
+    闸门本身不放宽——放宽等于拆掉"冲突是资产"这条边界的守卫。
+    """
+    report = _schema_guard_conflict_case(
+        tmp_path,
+        {
+            "conflict_type": "real_rate_vs_valuation",
+            "severity": "high",
+            "description": "L1 实际利率极高，L4 估值安全垫不足。",
+            "implication": "偏防守。",
+            "involved_layers": ["L1", "L4"],
+        },
+    )
+
+    joined = "\n".join(report.consistency_issues)
+    assert "High severity conflicts missing" in joined
+    assert "T1_real_rate_valuation_tension" in joined
+    assert "无一条填写 conflict_id" in joined, "必须提示这可能是编号缺失而非冲突丢失"
+
+
+def test_event_section_summary_errors_carry_prefixed_citation_example(tmp_path: Path):
+    """红灯：event_section_summary 连续四次真实 run 全灭（0725_145833 / 0725_232410 /
+    0728_110702 / 0728_222759），每次都静默吞掉报告的"外部世界"整节。
+
+    事件编号自带 `event:` 前缀，而引用写法是 `[card:<event_id>]`，拼起来是
+    `[card:event:xxx]`——看着像重复前缀，模型本能地删掉一层。于是两条规则互相卡死：
+    正文去前缀则与清单不一致；按重试反馈"两边必须一致"把清单也去掉前缀，又落到
+    allowed_ids 之外。模型两次都不算错，它只是从没被告知编号真正长什么样。
+
+    修法不是去前缀容错（那等于默许写错还把错误藏起来），而是让报错自带可执行示例，
+    并在 payload 里直接给出现成的引用串供其原样抄写。
+    """
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    allowed = {"event:3a4f8fe4369bd167", "event:4c46665e1c0dbd9e"}
+    summary = EventSectionSummary.model_validate(
+        {
+            # 正文去掉了 event: 前缀，清单保留——真实 attempt 1 的原样复现。
+            "summary_text": (
+                "据报道，两则材料指向同一方向 [card:3a4f8fe4369bd167]，"
+                "该媒体称另一则亦然 [card:4c46665e1c0dbd9e]。" + "补充说明。" * 30
+                + "以上事件材料不构成主证据，判断以数据层为准。"
+            ),
+            "cited_event_ids": sorted(allowed),
+        }
+    )
+
+    errors = orchestrator._event_section_summary_validation_errors(
+        summary,
+        allowed_ids=allowed,
+        effective_date="2026-07-28",
+        title_only_majority=False,
+    )
+
+    mismatch = next((e for e in errors if e.startswith("cited_event_ids must exactly match")), "")
+    assert mismatch, "正文与清单不一致时必须报错"
+    assert "[card:event:3a4f8fe4369bd167]" in mismatch, (
+        "报错必须给出带前缀的合法写法，否则模型只会把两边都改成错的那一边"
+    )
+    assert "3a4f8fe4369bd167" in mismatch and "event:3a4f8fe4369bd167" in mismatch, (
+        "报错必须同时列出两侧差集，模型才知道该往哪边改"
+    )
+
+
+def test_event_section_summary_payload_hands_model_a_ready_made_citation(tmp_path: Path):
+    """治本的一半：别让模型从 `[card:<event_id>]` 这个占位模式自己拼引用串。
+
+    它一拼就会把 `event:` 前缀当成重复而删掉（见
+    test_event_section_summary_errors_carry_prefixed_citation_example 的事故记录）。
+    payload 里直接给出可原样抄写的完整串，猜的余地就没有了。
+    """
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    def _card(event_id: str) -> EventInterpretationCard:
+        return EventInterpretationCard.model_validate(
+            {
+                "event_id": event_id,
+                "fact_summary": "材料事实。",
+                "interpretation": "该事件可能通过折现率渠道影响纳指100估值。",
+                "event_type": "official_calendar",
+                "mechanism_hypothesis": {
+                    "financial_link": "discount_rate",
+                    "hypothesis": "该事件可能通过折现率渠道影响纳指100估值。",
+                },
+                "limitations": ["事件材料不能证明指数必须涨跌。"],
+                "passport": {
+                    "source": "Federal Reserve",
+                    "tier": "official",
+                    "published_at": "2026-07-28T18:00:00Z",
+                    "event_date": "2026-07-28",
+                    "effective_date": "2026-07-28",
+                },
+            }
+        )
+
+    captured: dict = {}
+
+    def _capture(*, payload, **kwargs):
+        captured["payload"] = payload
+        raise RuntimeError("stop before llm call")
+
+    orchestrator._run_stage = _capture
+    orchestrator._build_event_section_summary(
+        [_card("event:3a4f8fe4369bd167"), _card("event:4c46665e1c0dbd9e")],
+        events_by_id={},
+        effective_date="2026-07-28",
+    )
+
+    cards = captured["payload"]["event_cards"]
+    assert [c["citation"] for c in cards] == [
+        "[card:event:3a4f8fe4369bd167]",
+        "[card:event:4c46665e1c0dbd9e]",
+    ], "每张卡都要带一个可原样抄写的完整引用串"
+    contract_text = json.dumps(captured["payload"]["output_contract"], ensure_ascii=False)
+    assert "event:" in contract_text, "输出契约必须让模型看见 id 真实带 event: 前缀"
 
 
 def test_bridge_normalization_converts_claim_fact_sentences_to_evidence_refs(tmp_path: Path):

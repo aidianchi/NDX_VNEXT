@@ -249,6 +249,7 @@
   ],
   "retained_conflicts": [
     {
+      "conflict_id": "<原样抄 synthesis_packet 里该冲突的 conflict_id；本站新发现的才留 null>",
       "conflict_type": "<冲突类型>",
       "severity": "high | medium | low",
       "description": "<冲突描述>",
@@ -347,6 +348,6 @@
 - `principal_contradiction` 是否来自 Bridge 矛盾地图，并解释主要矛盾、价格反映和行动含义？
 - `secondary_contradictions` 是否保留会约束行动的次要矛盾？
 - `key_support_chains` 是否使用有效 evidence refs？
-- `retained_conflicts` 是否保留所有高严重度冲突？
+- `retained_conflicts` 是否保留所有高严重度冲突？沿用上游冲突时，`conflict_id` 是否原样抄了 synthesis_packet 里的编号（不是你自己重新命名的）？编号对不上时，下游审计会误判成"冲突被抹平"。
 - 失效条件是否覆盖了立场的反方向（谨慎立场有上行失效、进攻立场有下行失效）？
 - `overall_confidence` 是否与证据一致性和数据完备度匹配？一边倒且数据齐全时骑墙给 medium，与冲突剧烈时给 high，同样是失真。

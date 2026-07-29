@@ -646,7 +646,9 @@ def test_field_spec_exposes_constrained_nested_subfield_types(tmp_path: Path):
             return found
 
         def _hard_typed(inner) -> bool:
-            if typing.get_origin(inner) in (typing.Literal, dict):
+            # list 也算：run 20260728_222759 终审把 List[str] 的 uncertainty_notes
+            # 写成一整句话被拒，证伪了"复数字段名足以暗示数组"。
+            if typing.get_origin(inner) in (typing.Literal, dict, list, set, tuple):
                 return True
             return any(_hard_typed(arg) for arg in typing.get_args(inner))
 

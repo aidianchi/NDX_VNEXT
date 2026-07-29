@@ -162,9 +162,12 @@ STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
     # 2026-07-27 T28：触发集合从"仅 candidate"扩大为"非 downgraded"（含 leading /
     # kept_unresolved），说明书必须逐字点名这两个新状态词，否则又是"合约写在代码里、
     # 模型看不见"的 T19 型漂移。
-    "thesis": ("hypothesis_responses", "evidence_index", "kept_unresolved", "downgraded"),
+    # 2026-07-29 追加 conflict_id：审计闸门按编号认亲，而正方会把上游冲突的类型名
+    # 改写成自己的措辞（run 20260728_222759：bridge `rate_vs_valuation` → thesis
+    # `real_rate_vs_valuation`），于是闸门谎报"高严重度冲突被抹平"——冲突其实一条没丢。
+    "thesis": ("hypothesis_responses", "evidence_index", "kept_unresolved", "downgraded", "conflict_id"),
     # reviser 同时受上述两条合约约束，是合约面最宽的治理 stage
-    "reviser": ("hypothesis_responses", "evidence_index", "kept_unresolved", "downgraded"),
+    "reviser": ("hypothesis_responses", "evidence_index", "kept_unresolved", "downgraded", "conflict_id"),
     # _validate_stage_evidence_refs + _validate_reasoned_verdict_refs（三条理由各带引用）
     # 2026-07-28 追加 claim_ledger：它是 FinalAdjudication 的可选字段，但形状是硬约束
     # （必须是对象不是数组）。真实事故 run 20260728_110702——说明书里 grep 命中 0 次，
@@ -1580,6 +1583,9 @@ class VNextOrchestrator:
                 downgrade_required_ids.add(str(card.event_id))
             compact_cards.append({
                 "event_id": card.event_id,
+                # 现成的引用串，供模型原样抄进正文——不要让它从 `[card:<event_id>]`
+                # 这个占位模式自己拼，拼的时候它会把 event: 前缀当成重复而删掉。
+                "citation": f"[card:{card.event_id}]",
                 "fact_summary": card.fact_summary,
                 "interpretation": card.interpretation,
                 "financial_link": card.mechanism_hypothesis.financial_link,
@@ -1598,8 +1604,15 @@ class VNextOrchestrator:
             "card_count": len(compact_cards),
             "title_only_card_count": title_only_count,
             "output_contract": {
-                "summary_text": "100-1500 字总结正文（宽松上限，不必刻意压缩），含 [card:<event_id>] 引用与结尾边界句",
-                "cited_event_ids": ["正文中实际引用的 event_id"],
+                "summary_text": (
+                    "100-1500 字总结正文（宽松上限，不必刻意压缩），含引用与结尾边界句。"
+                    "引用一律原样抄 event_cards[].citation 字段的值，不要自行拼接、"
+                    f"不要删改 id（本轮示例：{compact_cards[0]['citation'] if compact_cards else '[card:event:<id>]'}）"
+                ),
+                "cited_event_ids": [
+                    "正文中实际引用的完整 event_id（与 event_cards[].event_id 逐字相同，"
+                    "含 event: 前缀），必须与正文里的 [card:...] 一一对应"
+                ],
             },
             "boundary": {
                 "event_material_only": True,
@@ -1658,11 +1671,25 @@ class VNextOrchestrator:
         text = str(candidate.summary_text or "")
         cited_in_text = set(re.findall(r"\[card:([^\[\]]+)\]", text))
         declared = {str(item).strip() for item in (candidate.cited_event_ids or []) if str(item).strip()}
+        # event_id 自带 `event:` 前缀，而引用写法是 `[card:<event_id>]`——拼起来是
+        # `[card:event:xxx]`，看着像重复前缀，模型会本能地去掉一层。两条规则于是互相
+        # 卡死：去掉前缀则正文与清单不一致，改成两边都去前缀又落到 allowed_ids 之外
+        # （真实事故：event_section_summary 连续四次 run 全灭，见 WORK_LOG）。
+        # 修法不是放宽比对，而是让报错自带可执行的修法示例。
+        example_id = sorted(allowed_ids)[0] if allowed_ids else "event:<id>"
         if cited_in_text != declared:
-            errors.append("cited_event_ids must exactly match the [card:...] citations in summary_text")
+            errors.append(
+                "cited_event_ids must exactly match the [card:...] citations in summary_text"
+                f"；正文有而清单无: {sorted(cited_in_text - declared)[:5]}"
+                f"；清单有而正文无: {sorted(declared - cited_in_text)[:5]}"
+                f"；两边都必须写完整 id（含 event: 前缀），正文里写作 [card:{example_id}]"
+            )
         unknown = sorted(declared - allowed_ids)
         if unknown:
-            errors.append(f"cited_event_ids contain ids outside this run's cards: {unknown[:5]}")
+            errors.append(
+                f"cited_event_ids contain ids outside this run's cards: {unknown[:5]}"
+                f"；本轮合法 id 形如 {example_id}，不得删去 event: 前缀"
+            )
         if len(declared) < 2:
             errors.append("summary must cite at least 2 event cards")
         if len(declared) > 5:
@@ -5879,7 +5906,19 @@ class VNextOrchestrator:
         if not risk_report.must_preserve_risks:
             consistency_issues.append("RiskBoundaryReport.must_preserve_risks is empty.")
 
-        retained_conflict_ids = {str(conflict.conflict_type) for conflict in thesis.retained_conflicts}
+        # 与 bridge 侧对称：两边都用 {conflict_id, conflict_type} 的并集来认亲。
+        # 此前 thesis 侧只取 conflict_type，而正方会把类型名改写成自己的措辞
+        # （bridge `rate_vs_valuation` → thesis `real_rate_vs_valuation`），
+        # 于是闸门谎报"高严重度冲突被抹平"——冲突其实一条没丢（run 20260728_222759）。
+        retained_conflict_ids = {
+            value
+            for conflict in thesis.retained_conflicts
+            for value in (
+                str(conflict.conflict_type or ""),
+                str(getattr(conflict, "conflict_id", "") or ""),
+            )
+            if value
+        }
         retained_conflict_semantic = {
             (
                 str(getattr(getattr(conflict, "severity", ""), "value", conflict.severity)).lower(),
@@ -5896,10 +5935,22 @@ class VNextOrchestrator:
                     continue
                 dropped_high_conflicts.append(candidate["label"])
         if dropped_high_conflicts:
-            consistency_issues.append(
+            message = (
                 "High severity conflicts missing from ThesisDraft.retained_conflicts: "
                 + ", ".join(sorted(set(dropped_high_conflicts)))
             )
+            # "编号没传下来"和"冲突真被抹平"后果天差地别：后者踩到"冲突是资产"这条
+            # 常驻边界，前者只是通道断了。不加区分地报后者，会让人去修一个不存在的病。
+            if thesis.retained_conflicts and not any(
+                str(getattr(conflict, "conflict_id", "") or "").strip()
+                for conflict in thesis.retained_conflicts
+            ):
+                message += (
+                    "；注意：retained_conflicts 共 "
+                    f"{len(thesis.retained_conflicts)} 条但无一条填写 conflict_id，"
+                    "本条告警可能是编号未沿用而非冲突真被抹平，请先核对描述内容再下结论"
+                )
+            consistency_issues.append(message)
 
         if structural_issues:
             suggested_fixes.append("Re-run the failed stage and verify JSON output matches the contract.")
@@ -6008,12 +6059,14 @@ class VNextOrchestrator:
     def _render_contract_nested_hint(cls, annotation: Any, *, depth: int = 0) -> str:
         """嵌套子字段里"猜错就硬失败"的那部分类型，渲染成一小段紧凑提示。
 
-        只覆盖 Literal（取值必须落在枚举里）与 dict（必须是对象），因为这两类是
-        pydantic 会当场硬拒的形状；字符串 / 数字 / 自由数组交给字段名本身的语义即可，
+        覆盖 Literal（取值必须落在枚举里）、dict（必须是对象）与 list（必须是数组），
+        因为这三类是 pydantic 会当场硬拒的形状；字符串 / 数字 不标注，字段名本身够用，
         全量铺开会把规格撑成第二份 schema。
 
         真实事故 run 20260728_222759：`CoreFact.magnitude`(Literal) 与 `raw_data`(dict)
         在规格里只有名字，模型分别填成 -4.9 和一句描述文本，L1 两次尝试全废、整跑终止。
+        同一跑的终审又证伪了"复数字段名足以暗示数组"这个判断：`uncertainty_notes`
+        (List[str]) 被写成一整句话，终审首次尝试即被拒——数组必须和枚举、对象一样明说。
         """
         import typing
 
@@ -6037,7 +6090,8 @@ class VNextOrchestrator:
             inner = (
                 cls._render_contract_nested_hint(args[0], depth=depth) if args else ""
             )
-            return f":[{inner.lstrip(':')}]" if inner else ""
+            # 元素形状不受限时也要留下空方括号——"是不是数组"本身就是硬失败点。
+            return f":[{inner.lstrip(':')}]"
         if depth < cls._CONTRACT_SPEC_MAX_NESTED_DEPTH and isinstance(annotation, type):
             sub_fields = getattr(annotation, "model_fields", None)
             if sub_fields is not None:

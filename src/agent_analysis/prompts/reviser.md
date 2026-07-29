@@ -212,6 +212,7 @@ revision_summary 应包含：
 
 ### 绝对禁止
 - ❌ 抹平冲突（为了"完美"而删除 retained_conflicts）
+- ❌ 沿用上游冲突却改写 `conflict_id`（编号必须原样抄；改了编号，下游审计会把它当成冲突被抹平）
 - ❌ 省略 `hypothesis_responses`，或让任何一个竞争假说（candidate/leading/kept_unresolved/split）在回应里消失
 - ❌ 自行拼接证据索引中不存在的 `parent#field` 子引用
 - ❌ 无视批评（不接受任何意见）
@@ -289,6 +290,7 @@ Risk Sentinel 指出：
     ],
     "retained_conflicts": [
       {
+        "conflict_id": "T1_real_rate_valuation_tension",
         "conflict_type": "L4_expensive_vs_L1_restrictive",
         "severity": "high",
         "description": "...",

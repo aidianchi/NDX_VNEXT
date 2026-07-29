@@ -923,6 +923,10 @@ class Conflict(BaseModel):
     这就像侦探发现的"矛盾线索"。
     比如 "L4 说估值偏高，但 L5 说趋势强劲"，这是一个潜在冲突。
     """
+    conflict_id: Optional[str] = Field(
+        None,
+        description="沿用上游 bridge 的 conflict_id 原文；本站新发现的冲突留空"
+    )
     conflict_type: str = Field(
         ...,
         description="冲突类型标识，如 'L4_expensive_vs_L5_strong_trend'"
