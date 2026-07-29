@@ -18,6 +18,11 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BOARD = os.path.join(REPO_ROOT, "现在.md")
 LETTERS = os.path.join(REPO_ROOT, "人话进度报告.md")
 WORK_LOG = os.path.join(REPO_ROOT, "WORK_LOG.md")
+# WORK_LOG 按月滚动归档（2026-07-29 起）。关闭记录会随条目一起搬进归档，因此"编号
+# 永不复用"这条闸门必须连归档一起扫——否则每轮转一次就静默出现一段可复用的编号区间。
+WORK_LOG_ARCHIVES = sorted(
+    glob.glob(os.path.join(REPO_ROOT, "docs", "archive", "**", "*WORK_LOG*.md"), recursive=True)
+)
 
 # 活路由文档：新对话会直接读到，或由入口文档直接指向；其中的路径必须能走通。
 ROUTE_DOCS = [os.path.join(REPO_ROOT, name) for name in (
@@ -164,8 +169,11 @@ def test_task_ids_are_never_reused():
 
     这是"东西不会被悄悄弄丢"的机器保证：owner 任何时候问「T03 后来怎么样了」，
     答案唯一。收工时在 WORK_LOG.md 写 `【关闭 T##】`，此后该编号永久退役。
+
+    扫描范围含 `docs/archive/**/*WORK_LOG*.md`：条目按月滚动归档后，退役编号仍然退役。
     """
-    closed = set(CLOSED_IN_HISTORY.findall(_read(WORK_LOG)))
+    history = "\n".join(_read(path) for path in [WORK_LOG, *WORK_LOG_ARCHIVES])
+    closed = set(CLOSED_IN_HISTORY.findall(history))
     live = {task_id for task_id, *_ in _ledger()}
     reused = sorted(closed & live)
     assert not reused, (
