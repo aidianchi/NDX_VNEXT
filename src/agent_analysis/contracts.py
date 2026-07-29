@@ -420,6 +420,10 @@ class EventInterpretationCard(BaseModel):
     limitations: List[str] = Field(default_factory=list, description="来源、全文与因果权限限制")
     needs_data_confirmation: List[str] = Field(default_factory=list, description="需要哪条正式数据确认")
     upgrade_candidate: bool = Field(False, description="是否值得进入后续正式证据升级流程")
+    attribution_quote: Optional[str] = Field(
+        None,
+        description="来源非官方时，从 interpretation 首句原样摘出的归因片段；官方来源留空"
+    )
     passport: EventInterpretationPassport = Field(..., description="来源与时间护照")
 
     @model_validator(mode="after")
@@ -429,12 +433,30 @@ class EventInterpretationCard(BaseModel):
         return self
 
 
+class CitationCaveat(BaseModel):
+    """一条"我给这张卡写的降级说明是哪一句"的自报。
+
+    降级说明本身仍然留在 `summary_text` 里（读者读到的是正文，不是这张表），这里只是
+    把"哪一句算数"指出来，好让校验从"在正文里扫一张写死的词表"变成"对编号 + 查这句话
+    在不在正文里"。措辞由模型自选——真实事故：模型写了"据投资预测报道"并额外声明
+    "属主观观点，需冷静看待"，却因为字面不等于"据报道"被判失败。
+    """
+    model_config = {"extra": "forbid"}
+
+    event_id: str = Field(..., min_length=1, description="被降级引用的 event_id，须与 cited_event_ids 中的写法逐字相同")
+    quote: str = Field(..., min_length=2, description="从 summary_text 中原样摘出的降级措辞片段，必须能在正文里逐字找到")
+
+
 class EventSectionSummary(BaseModel):
     """外部世界章节的 governed 总结（Q3）。只许引用本轮事件卡，失败宁缺毋滥。"""
     model_config = {"extra": "forbid"}
 
     summary_text: str = Field(..., min_length=1, description="含 [card:<event_id>] 引用与结尾边界句的总结正文")
     cited_event_ids: List[str] = Field(default_factory=list, description="正文实际引用的 event_id 列表")
+    citation_caveats: List[CitationCaveat] = Field(
+        default_factory=list,
+        description="对每张来源不够硬或仅有标题的被引卡，指出正文里哪一句是它的降级说明"
+    )
 
 
 class IntegratedQuestionAnswer(BaseModel):

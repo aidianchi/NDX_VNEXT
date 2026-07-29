@@ -8,6 +8,27 @@
 
 ## 2026-07-29
 
+### 【关闭 T30】降级归因：从"扫词表猜意思"改为"自报出处 + 对身份" + 严格模式扩围四站
+
+**改了什么／为什么**：`run 20260729_175306` 里事件总结与两张事件卡都栽在同一张写死的归因词表上，而模型写的是"据投资预测报道"并额外声明"属主观观点，需冷静看待"——归因比词表里的"据报道"更具体，只因字面不等而判失败。词表判的是"意思"，注定补不完；每补一个词就等下一次误伤。
+
+**改法（遵循 `CLAUDE.md`「闸门不判意思」）**：降级说明**仍然写在正文里**（`vnext_reporter.py:3954` 只渲染 `summary_text`，搬进结构化字段会让读者看不见，那是倒退），但模型必须额外自报"我给哪张卡写的降级说明是哪一句"。闸门只判两件事：该登记的卡登记了没有（对 event_id）、自报的那句是否**真的出现在该引用所在句中**（对原文）。措辞完全自选。
+
+- `EventSectionSummary.citation_caveats: List[CitationCaveat{event_id, quote}]`
+- `EventInterpretationCard.attribution_quote`：须为 `interpretation` 首句原文
+- 删除「多数仅标题 → 正文须命中质量限制词表」一条：仅标题卡必然落进 `downgrade_required_ids`，已被逐张卡的降级说明吸收，新规则严于旧规则
+- 校验器改用 `getattr` 取字段——**校验器里抛异常等于整站崩，比返回一条错误严重得多**
+
+**否决了什么**：不扩充词表（那正是"把比对写得更聪明"的反面教材）；不把说明搬出正文（读者透明度优先于结构整洁）；`_HINDSIGHT_OR_CAUSAL_PATTERNS` 这类**禁止型**规则不在本次范围——模型无法声明"我没干坏事"，结构化槽位对它无效，保留正则还是挪离线抽样需单独裁决。同理保留的还有两条固定格式约定（机制假设须以"该事件可能通过"开头、仅标题须在 `limitations` 写"未读全文，降级阅读"）——它们判的是格式不是意思。
+
+**严格模式扩围**：`_STRICT_TOOL_CALLING_ELIGIBLE_STAGES` 从 `{bridge}` 扩到 `{bridge, thesis, event_card_interpreter, event_section_summary}`，四处 `_run_stage` 调用点均已接线（此前只有 bridge 接了，光改白名单不生效）。依据是桥接实测：相对 5 次非严格跑的基线带，字符 9097-13079→19837、跨层断言 2-3→4、共振链 1-2→3、传导路径 2-3→4，且内容核验为真货（非严格那次共振链描述干脆是空的）。机制是 sanitizer 把每个字段设成必填，堵死了"能留空就留空"。仍需环境变量逐个点名才真正启用。
+
+**红灯测试在哪**：`test_downgrade_caveat_accepts_model_chosen_wording`（模型自选措辞必须被接受）、`test_downgrade_caveat_rejects_unbacked_self_report`（**自报不能变成免费通行证**：quote 必须是正文原文且落在同句）、`test_event_card_attribution_accepts_model_chosen_wording`。新字段未破坏严格模式资格——`test_strict_tool_schema_free_form_objects_are_registered` 复核四站仍为 0 处自由形态 object。
+
+**验证**：全量 `--cache-clear` **1027 passed**。三条既有测试的夹具随机制更新（断言的要求不变，只是判据换了）。**未经真实 run 验证**——下一跑才知道模型会不会好好填这两个新字段。
+
+---
+
 ### 【关闭 T26】【关闭 T31】严格模式试点通过 + 冲突编号误报根除（run 20260729_175306）
 
 **验收结果**：23 站，17 一次过 / 3 重试后过 / 3 未过。

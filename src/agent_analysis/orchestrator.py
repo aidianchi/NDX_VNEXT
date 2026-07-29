@@ -201,9 +201,11 @@ STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
     # （`resonance_chains[resonance_chain].confirming_indicators must not be empty`）。
     "bridge": ("confirming_indicators", "falsifiers", "path_id"),
     # _event_card_validation_errors：机制假设前缀 + 不得断言市场必然方向
-    "event_card_interpreter": ("该事件可能通过", "必须涨或必须跌"),
+    # 2026-07-29 追加 attribution_quote：非官方来源必须自报归因片段，闸门只校验它是否
+    # 为 interpretation 首句原文，不再扫词表（词表判"意思"，注定补不完）。
+    "event_card_interpreter": ("该事件可能通过", "必须涨或必须跌", "attribution_quote"),
     # _event_section_summary_validation_errors：卡片引用格式与 2-5 张的引用数量区间
-    "event_section_summary": ("cited_event_ids", "[card:", "至少引用两张"),
+    "event_section_summary": ("cited_event_ids", "[card:", "至少引用两张", "citation_caveats"),
 }
 
 # 「丙」的豁免名单：`_run_stage` 的 stage_key 在这些调用点是运行时拼出来的，静态扫描
@@ -1378,14 +1380,23 @@ class VNextOrchestrator:
             "primary_market_data_release",
         }
         source_tier = str(event.get("source_tier") or "unknown")
-        attribution_markers = ("据报道", "该媒体称", "报道称", "据该媒体", "该报道")
+        # 2026-07-29：同 event_section_summary 的改造——判定从"首句里扫一张写死的归因词
+        # 词表"改为"模型自报归因片段 + 校验它确实是首句里的原文"。run 20260729_175306 有
+        # 两张卡因此被判失败，而它们的归因写法（如"据投资预测报道"）比词表里的更具体。
+        # 闸门只判在场与出处，不判措辞好坏。
         first_interpretation_clause = re.split(r"[，。；;]", card.interpretation, maxsplit=1)[0]
-        if (
-            source_tier not in official_tiers
-            and card.interpretation != "与判断对象关联不足"
-            and not any(marker in first_interpretation_clause for marker in attribution_markers)
-        ):
-            errors.append("non-official interpretation must be downgraded with 据报道 or 该媒体称")
+        if source_tier not in official_tiers and card.interpretation != "与判断对象关联不足":
+            quote = str(getattr(card, "attribution_quote", "") or "").strip()
+            if not quote:
+                errors.append(
+                    "非官方来源的 interpretation 必须降级：把首句里的归因片段填进 attribution_quote"
+                    "（措辞自选，如「据…报道」「该媒体称」）"
+                )
+            elif quote not in first_interpretation_clause:
+                errors.append(
+                    f"attribution_quote「{quote}」不是 interpretation 首句里的原文"
+                    f"；首句为「{first_interpretation_clause}」"
+                )
 
         if not bool(event.get("raw_text_available")) and not any(
             "未读全文，降级阅读" in limitation for limitation in card.limitations
@@ -1499,6 +1510,10 @@ class VNextOrchestrator:
                     stage_name=f"event_card_interpreter.{stage_token}",
                     model_cls=EventInterpretationCard,
                     payload=payload,
+                    strict_tool_schema=self._strict_tool_schema_for_stage(
+                        "event_card_interpreter", EventInterpretationCard
+                    ),
+                    strict_tool_name="emit_event_interpretation_card",
                     validator=lambda candidate, event=event: self._event_card_validation_errors(
                         candidate,
                         event=event,
@@ -1613,6 +1628,12 @@ class VNextOrchestrator:
                     "正文中实际引用的完整 event_id（与 event_cards[].event_id 逐字相同，"
                     "含 event: 前缀），必须与正文里的 [card:...] 一一对应"
                 ],
+                "citation_caveats": [
+                    {
+                        "event_id": "<被降级引用的卡，写法同 cited_event_ids>",
+                        "quote": "<从 summary_text 里原样摘出的降级措辞，须落在该卡引用所在的那一句中；措辞自选>",
+                    }
+                ],
             },
             "boundary": {
                 "event_material_only": True,
@@ -1631,6 +1652,10 @@ class VNextOrchestrator:
                 stage_name="event_section_summary",
                 model_cls=EventSectionSummary,
                 payload=payload,
+                strict_tool_schema=self._strict_tool_schema_for_stage(
+                    "event_section_summary", EventSectionSummary
+                ),
+                strict_tool_name="emit_event_section_summary",
                 validator=lambda candidate: self._event_section_summary_validation_errors(
                     candidate,
                     allowed_ids=allowed_ids,
@@ -1706,12 +1731,33 @@ class VNextOrchestrator:
         plain = re.sub(r"\[card:[^\[\]]+\]", "", text)
         if not 100 <= len(plain) <= 1500:
             errors.append(f"summary_text length {len(plain)} outside tolerant band 100-1500")
-        # codex P1：材料以标题为主时，总结必须诚实声明质量限制，不得写得言之凿凿。
-        if title_only_majority and not any(phrase in text for phrase in VNextOrchestrator._MATERIAL_QUALITY_CAVEAT_PHRASES):
-            errors.append("majority of cited materials are title-only; summary_text must state this quality limitation")
-        # 每一张仅标题或非官方来源卡都必须在同一句内带降级措辞；不能用“全局多数”
-        # 规则放过少数弱卡，也不能在前一句笼统写一次“据报道”后把后一句写成确定事实。
+        # 每一张仅标题或非官方来源卡都必须在同一句内带降级措辞；不能用"全局多数"规则
+        # 放过少数弱卡，也不能在前一句笼统写一次"据报道"后把后一句写成确定事实。
+        #
+        # 2026-07-29 改造：判定依据从"在正文里扫一张写死的词表"改为"模型自报哪一句算数
+        # + 校验那句话确实在正文的同一句里"。原写法在 run 20260729_175306 当场误判——
+        # 模型写的是"另一方面，据投资预测报道，…但该预测属主观观点，需冷静看待"，归因比
+        # 词表里的"据报道"更具体，却因字面不等而判失败。词表判的是"意思"，注定补不完。
+        # 现在闸门只判身份（event_id 对不对得上）与在场（quote 是否真的在同句），
+        # 措辞好不好交给离线抽样复核。自报无法凭空过关：quote 必须是正文里的原文。
+        #
+        # 原"title_only_majority 必须声明质量限制"一条已被本机制吸收：仅标题卡必然落在
+        # downgrade_required_ids 里，因此每一张都要求逐句降级说明，比"全局一句"更严。
+        caveat_quotes: Dict[str, List[str]] = {}
+        for caveat in getattr(candidate, "citation_caveats", None) or []:
+            # 用 getattr 而非属性直取：校验器里抛异常等于整站崩，比返回一条错误严重得多。
+            caveat_id = str(getattr(caveat, "event_id", "") or "").strip()
+            caveat_quote = str(getattr(caveat, "quote", "") or "")
+            if caveat_id:
+                caveat_quotes.setdefault(caveat_id, []).append(caveat_quote)
         for event_id in sorted(declared & set(downgrade_required_ids or set())):
+            quotes = [quote for quote in caveat_quotes.get(event_id, []) if quote.strip()]
+            if not quotes:
+                errors.append(
+                    f"downgrade-required card {event_id} 缺 citation_caveats 条目"
+                    "（在 citation_caveats 里指出正文中哪一句是它的降级说明；措辞自选）"
+                )
+                continue
             citation = f"[card:{event_id}]"
             for match in re.finditer(re.escape(citation), text):
                 statement_prefix = text[:match.start()].rstrip()
@@ -1721,13 +1767,12 @@ class VNextOrchestrator:
                     statement_prefix.rfind(delimiter)
                     for delimiter in ("。", "！", "？", ".", "!", "?", ";", "；", "\n")
                 ) + 1
-                attribution_window = statement_prefix[sentence_start:]
-                if not any(
-                    phrase in attribution_window
-                    for phrase in VNextOrchestrator._DOWNGRADE_ATTRIBUTION_PHRASES
-                ):
+                sentence = statement_prefix[sentence_start:]
+                if not any(quote in sentence for quote in quotes):
                     errors.append(
-                        f"downgrade-required card {event_id} must have attribution/quality caveat near its citation"
+                        f"downgrade-required card {event_id} 的 citation_caveats quote "
+                        f"未出现在该引用所在句中；自报的是 {quotes[:2]}，"
+                        f"该句实际为「{sentence[-60:]}」"
                     )
                     break
         # 无日期的“后来已证实”和确定性因果同样属于事后信息/新闻越权，不能靠避开 ISO 日期绕过。
@@ -4027,7 +4072,13 @@ class VNextOrchestrator:
     # bridge 一处，是因为 docs/2026-05-10_BRIDGE_JSON_RESILIENCE_AI_AUDIT.md 当时
     # 已经把 bridge 的事故诊断透了、且切到 /beta 端点的前置工作已经做完，属于"捡起
     # 被搁置的阶段 C"而不是从零开始；其余 stage 一律走原有 json_object 路径。
-    _STRICT_TOOL_CALLING_ELIGIBLE_STAGES = {"bridge"}
+    # 2026-07-29 扩围：bridge 在 run 20260729_175306 上 attempts=1 零报错，且产出质量
+    # 相对 5 次非严格跑的基线带全面上移（字符 9097-13079→19837、共振链 1-2→3、传导路径
+    # 2-3→4，内容核验非凑数）。T29 离线体检确认另外三个站的严格 schema 同样零问题，
+    # 故一并纳入白名单。仍需环境变量逐个点名才会真正启用。
+    _STRICT_TOOL_CALLING_ELIGIBLE_STAGES = {
+        "bridge", "thesis", "event_card_interpreter", "event_section_summary",
+    }
 
     def _strict_tool_schema_for_stage(self, stage_key: str, model_cls: Type[Any]) -> Optional[Dict[str, Any]]:
         """按 `NDX_STRICT_TOOL_CALLING_STAGES` 环境变量（逗号分隔 stage_key）决定
@@ -4107,6 +4158,8 @@ class VNextOrchestrator:
             stage_name="thesis",
             model_cls=ThesisDraft,
             payload=thesis_payload,
+            strict_tool_schema=self._strict_tool_schema_for_stage("thesis", ThesisDraft),
+            strict_tool_name="emit_thesis_draft",
             validator=lambda candidate: self._validate_thesis_hypothesis_responses(
                 candidate,
                 synthesis_packet,

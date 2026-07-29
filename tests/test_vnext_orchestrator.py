@@ -132,6 +132,8 @@ def _event_card_response(event_id="event:abc", tier="official"):
             "event_id": event_id,
             "fact_summary": "材料称公司发布了更新。",
             "interpretation": interpretation,
+            # 非官方来源必须自报归因片段，且须为 interpretation 首句原文。
+            "attribution_quote": None if tier == "official" else "据报道",
             "entities": ["NVDA"],
             "event_type": "company_news",
             "mechanism_hypothesis": {
@@ -356,7 +358,10 @@ def test_event_card_validator_accepts_equivalent_downgrade_and_translated_month_
     ).model_copy(
         update={
             "fact_summary": "该材料发布于2026年7月18日。",
+            # 本用例的本意就是"等价说法也要接受"——新机制正好支持：措辞自选，
+            # 只要在 attribution_quote 里自报，且它确实是首句原文。
             "interpretation": "该报道称事件可能影响盈利预期。",
+            "attribution_quote": "该报道称",
             "limitations": ["未读全文，降级阅读：仅依据标题。"],
         }
     )
@@ -399,7 +404,9 @@ def test_event_card_validator_still_rejects_weak_source_without_attribution(tmp_
         allowed_hypothesis_ids={"hyp_rates"},
     )
 
-    assert any("non-official interpretation" in error for error in errors)
+    # 2026-07-29：判据从"首句扫词表"改为"自报 attribution_quote 且须为首句原文"，
+    # 要求不变（非官方来源必须降级），只是报错文案换了。
+    assert any("attribution_quote" in error for error in errors)
 
 
 def test_event_card_validator_rejects_late_attribution_and_signed_number_reversal(tmp_path: Path):
@@ -411,7 +418,9 @@ def test_event_card_validator_rejects_late_attribution_and_signed_number_reversa
     ).model_copy(
         update={
             "fact_summary": "公司股价下跌-10%。",
+            # 归因写在了第二句而不是首句——自报了也不算数，闸门查的是"是不是首句原文"。
             "interpretation": "该事件可能影响盈利预期，据报道仍需确认。",
+            "attribution_quote": "据报道",
         }
     )
 
@@ -428,7 +437,7 @@ def test_event_card_validator_rejects_late_attribution_and_signed_number_reversa
         allowed_hypothesis_ids={"hyp_rates"},
     )
 
-    assert any("non-official interpretation" in error for error in errors)
+    assert any("不是 interpretation 首句里的原文" in error for error in errors)
     assert any("signed number direction" in error for error in errors)
 
 
@@ -2192,6 +2201,138 @@ def test_event_section_summary_payload_hands_model_a_ready_made_citation(tmp_pat
     assert "event:" in contract_text, "输出契约必须让模型看见 id 真实带 event: 前缀"
 
 
+def _summary_with(text: str, ids, caveats) -> "EventSectionSummary":
+    return EventSectionSummary.model_validate(
+        {"summary_text": text, "cited_event_ids": list(ids), "citation_caveats": caveats}
+    )
+
+
+def test_downgrade_caveat_accepts_model_chosen_wording(tmp_path: Path):
+    """红灯：run 20260729_175306——模型的归因比词表更具体，却被判失败。
+
+    原判据是在正文里扫一张写死的词表（"据报道"/"该媒体称"/…）。模型写的是
+    「另一方面，据投资预测报道，[card:…] 称…但该预测属主观观点，需冷静看待」——
+    做了归因，还额外声明了主观性，字面却不等于"据报道"，于是整站失败。
+    词表判的是"意思"，注定补不完；每补一个词就等下一次误伤。
+
+    改判据：模型自报"哪一句是这张卡的降级说明"，闸门只对编号 + 查那句话是否真的出现在
+    该引用所在句中。措辞自选，自报也无法凭空过关——quote 必须是正文里的原文。
+    """
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    allowed = {"event:aaa", "event:bbb"}
+    text = (
+        "据某投资机构预测报道，[card:event:aaa] 称芯片需求回暖，但该预测属主观观点，需冷静看待。"
+        "另据外电转述，[card:event:bbb] 提到监管审查延后。" + "补充说明。" * 30
+        + "以上事件材料不构成主证据，判断以数据层为准。"
+    )
+    summary = _summary_with(
+        text,
+        sorted(allowed),
+        [
+            {"event_id": "event:aaa", "quote": "据某投资机构预测报道"},
+            {"event_id": "event:bbb", "quote": "另据外电转述"},
+        ],
+    )
+
+    errors = orchestrator._event_section_summary_validation_errors(
+        summary,
+        allowed_ids=allowed,
+        effective_date="2026-07-29",
+        title_only_majority=True,
+        downgrade_required_ids=allowed,
+    )
+
+    assert not [e for e in errors if "downgrade-required" in e], (
+        f"模型自选的归因措辞必须被接受，实际报错：{errors}"
+    )
+
+
+def test_downgrade_caveat_rejects_unbacked_self_report(tmp_path: Path):
+    """自报不能变成免费通行证：quote 必须真的在正文里，且落在该引用所在句。
+
+    这是"结构化槽位"设计最容易退化的地方——如果只查字段非空，模型填个占位符就能
+    过关，闸门等于拆掉。
+    """
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    allowed = {"event:aaa", "event:bbb"}
+    text = (
+        "据某投资机构预测报道，[card:event:aaa] 称芯片需求回暖。"
+        "监管审查确认将于下月落地，[card:event:bbb] 如是说。" + "补充说明。" * 30
+        + "以上事件材料不构成主证据，判断以数据层为准。"
+    )
+
+    missing = orchestrator._event_section_summary_validation_errors(
+        _summary_with(text, sorted(allowed), [{"event_id": "event:aaa", "quote": "据某投资机构预测报道"}]),
+        allowed_ids=allowed, effective_date="2026-07-29",
+        title_only_majority=False, downgrade_required_ids=allowed,
+    )
+    assert any("event:bbb" in e and "缺 citation_caveats" in e for e in missing), missing
+
+    fabricated = orchestrator._event_section_summary_validation_errors(
+        _summary_with(
+            text, sorted(allowed),
+            [
+                {"event_id": "event:aaa", "quote": "据某投资机构预测报道"},
+                {"event_id": "event:bbb", "quote": "据报道"},  # 正文里根本没这句
+            ],
+        ),
+        allowed_ids=allowed, effective_date="2026-07-29",
+        title_only_majority=False, downgrade_required_ids=allowed,
+    )
+    assert any("event:bbb" in e and "未出现在该引用所在句中" in e for e in fabricated), fabricated
+
+
+def test_event_card_attribution_accepts_model_chosen_wording(tmp_path: Path):
+    """事件卡侧同病同治：非官方来源的归因措辞由模型自选，闸门只查它是不是首句原文。
+
+    run 20260729_175306 有两张卡栽在同一张词表上。
+    """
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+
+    def _card(interpretation: str, quote):
+        payload = {
+            "event_id": "event:x", "fact_summary": "材料事实。",
+            "interpretation": interpretation, "event_type": "media_report",
+            "mechanism_hypothesis": {
+                "financial_link": "discount_rate",
+                "hypothesis": "该事件可能通过折现率渠道影响纳指100估值。",
+            },
+            "limitations": ["事件材料不能证明指数必须涨跌。"],
+            "passport": {
+                "source": "某财经媒体", "tier": "media",
+                "published_at": "2026-07-29T10:00:00Z",
+                "event_date": "2026-07-29", "effective_date": "2026-07-29",
+            },
+        }
+        if quote is not None:
+            payload["attribution_quote"] = quote
+        return EventInterpretationCard.model_validate(payload)
+
+    event = {"source_tier": "media", "raw_text_available": True, "title": "t", "raw_text_excerpt": ""}
+    kwargs = dict(event=event, allowed_hypothesis_ids=set())
+
+    ok = orchestrator._event_card_validation_errors(
+        _card("据某投资机构预测报道，该公司有望扩产，细节待确认。", "据某投资机构预测报道"), **kwargs
+    )
+    assert not [e for e in ok if "attribution_quote" in e or "非官方来源" in e], ok
+
+    missing = orchestrator._event_card_validation_errors(
+        _card("据某投资机构预测报道，该公司有望扩产，细节待确认。", None), **kwargs
+    )
+    assert any("attribution_quote" in e for e in missing), missing
+
+    fabricated = orchestrator._event_card_validation_errors(
+        _card("该公司有望扩产，细节待确认。", "据报道"), **kwargs
+    )
+    assert any("不是 interpretation 首句里的原文" in e for e in fabricated), fabricated
+
+
 def test_bridge_normalization_converts_claim_fact_sentences_to_evidence_refs(tmp_path: Path):
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
@@ -2822,13 +2963,20 @@ def test_strict_tool_schema_for_stage_defaults_off(tmp_path: Path, monkeypatch):
 def test_strict_tool_schema_for_stage_only_covers_pilot_allowlist(tmp_path: Path, monkeypatch):
     """即使环境变量把某个非试点站点也列进去，也不会启用——试点范围收窄到代码里
     显式列出的 `_STRICT_TOOL_CALLING_ELIGIBLE_STAGES`，环境变量只能在这个白名单
-    内做子集选择，不能扩大试点范围。"""
-    monkeypatch.setenv("NDX_STRICT_TOOL_CALLING_STAGES", "thesis,critic")
+    内做子集选择，不能扩大试点范围。
+
+    2026-07-29 扩围后白名单为 bridge / thesis / event_card_interpreter /
+    event_section_summary（T29 离线体检确认这四个的严格 schema 零问题）；critic 与
+    final 仍在白名单外——`FinalAdjudication` 有 3 处自由形态 object，开了会被 API 拒。
+    """
+    monkeypatch.setenv("NDX_STRICT_TOOL_CALLING_STAGES", "critic,final,thesis")
     orchestrator = VNextOrchestrator(
         available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
     )
-    assert orchestrator._strict_tool_schema_for_stage("thesis", ThesisDraft) is None
     assert orchestrator._strict_tool_schema_for_stage("critic", Critique) is None
+    assert orchestrator._strict_tool_schema_for_stage("final", FinalAdjudication) is None
+    # 反面：白名单内的站点，环境变量点名后必须真的启用（钉住本次扩围）。
+    assert orchestrator._strict_tool_schema_for_stage("thesis", ThesisDraft) is not None
 
 
 def test_strict_tool_schema_for_stage_enabled_for_bridge_via_env_var(tmp_path: Path, monkeypatch):
@@ -6438,9 +6586,15 @@ def test_event_section_summary_validator_enforces_citation_and_boundary_contract
         cited_event_ids=["event_aaa11111", "event_bbb22222"],
     )
     assert validate(no_caveat, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=False) == []
+    # 2026-07-29：原"多数仅标题 → 正文里必须出现质量限制词表中的某个词"一条已删除，
+    # 被逐张卡的 citation_caveats 吸收——仅标题卡必然落进 downgrade_required_ids，
+    # 于是每一张都要求各自的降级说明，比"全局写一句"严格。这里验证的正是那个更强的形态。
     assert any(
-        "quality limitation" in err
-        for err in validate(no_caveat, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=True)
+        "缺 citation_caveats" in err
+        for err in validate(
+            no_caveat, allowed_ids=allowed, effective_date="2026-07-19",
+            title_only_majority=True, downgrade_required_ids=set(allowed),
+        )
     )
 
     # codex P1 修复：绝不能把 effective_date 之后的日期写进历史总结（事后信息回流）
@@ -6471,13 +6625,16 @@ def test_event_section_summary_validator_enforces_citation_and_boundary_contract
     )
     assert any("downgrade-required card" in err for err in errors)
 
-    attributed = weak_without_attribution.model_copy(update={
+    # 用 model_validate 而不是 model_copy：后者不做校验，塞进去的 dict 不会变成模型对象。
+    attributed = EventSectionSummary.model_validate({
+        **weak_without_attribution.model_dump(),
         "summary_text": (
                 "据报道，某事件可能改变市场定价，另一事件提供补充线索；据报道，两张卡共同提出了政策路径、"
             "盈利兑现与风险偏好能否同步变化的问题，但这些都只是待数据确认的线索，不能据此推导指数方向。"
             " [card:event_aaa11111] [card:event_bbb22222]"
             "以上事件材料不构成主证据，判断以数据层为准。"
-        )
+        ),
+        "citation_caveats": [{"event_id": "event_aaa11111", "quote": "据报道"}],
     })
     assert validate(
         attributed,
