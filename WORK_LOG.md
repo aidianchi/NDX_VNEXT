@@ -8,6 +8,21 @@
 
 ## 2026-07-29
 
+### 【关闭 T26】【关闭 T31】严格模式试点通过 + 冲突编号误报根除（run 20260729_175306）
+
+**验收结果**：23 站，17 一次过 / 3 重试后过 / 3 未过。
+
+- **T26**：`NDX_STRICT_TOOL_CALLING_STAGES=bridge`，`bridge: {status: ok, attempts: 1, errors: []}`。此前该站两次尝试全失败。DeepSeek strict function calling 在真实完整流程里走通。
+- **T31**：`retained_conflicts[].conflict_id` 全部非空，其中 `TC1_real_rate_vs_earnings_dominance` 与桥的高严重度冲突逐字命中；`schema_guard_summary.passed = True`，`High severity conflicts missing` 消失。**闸门谎报"冲突被抹平"根除。**
+
+**小偏差（已记未处理）**：合约说明写的是"本站新发现的冲突留空 conflict_id"，模型给自发现的两条编了 `C1_` / `C2_`。闸门只校验桥的高严重度编号，当前不受影响；若将来有下游假设 `conflict_id ∈ bridge ids`，需先收紧。
+
+**未达标**：`event_section_summary` 仍 failed，但**报错换了一类**——前缀陷阱确实修好（正文与清单集合完全一致、均带 `event:` 前缀），失败改为解封后首次真正生效的降级归因词表检查。详见 T30。
+
+**发布状态**：`publish_quality_status=review_required` 来自 `claim_ledger_publish_gate`（8 条 entry，1 条要素不齐），闸门正常工作，非缺陷。
+
+---
+
 ### 【关闭 T29】严格模式离线 schema 体检：8 个契约扫完，4 个今天就能开
 
 **改了什么／为什么**：严格模式已被真实 run 证伪两次，两次都栽在 schema 转换上。这类问题可以被程序穷举，不该拿花钱的真实跑去撞。离线扫全部 8 个 stage 契约，共 7 处不合规，**全是同一种**——`Dict[str, Any]` / `extra=allow` 生成的"没有属性的 object"，严格模式实测直接报 `An object with no properties is not allowed`。
