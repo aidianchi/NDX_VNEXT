@@ -72,6 +72,32 @@ logger = logging.getLogger(__name__)
 # 仍然成立、未被推翻的部分：不支持 minLength/maxLength/minItems/maxItems；
 # "format" 不在官方支持类型清单内故剥离；每个 object 类型仍需
 # additionalProperties:false + 全字段 required。
+# 严格模式不接受"没有属性的 object"（实测报错 "An object with no properties is not
+# allowed"），而 `Dict[str, Any]` 与 `extra="allow"` 恰好生成这种节点。2026-07-29 的
+# 离线体检（T29）扫过全部 8 个 stage 契约，共 7 处命中，全是这一种；下表逐条登记，
+# 新增一处而不登记就会被 test_strict_tool_schema_free_form_objects_are_registered 拦下。
+#
+# 值列写的是"这个字段由谁填"——因为它决定修法：代码填的字段本就不该出现在给模型的
+# schema 里（`token_usage` 甚至在 orchestrator 里被强制置空），删掉即可；模型真会填的
+# 才需要权衡。
+STRICT_SCHEMA_FREE_FORM_OBJECTS: Dict[str, str] = {
+    "LayerCard:$.$defs.CoreFact.properties.raw_data.anyOf[0]":
+        "模型填。原始数据转存，vNext 主链不消费（只有 legacy_adapter 拿它做指标名匹配）",
+    "CounterThesisDraft:$.properties.prompt_input_audit":
+        "代码填（orchestrator.py:2544,2717）",
+    "FinalAdjudication:$.$defs.ClaimLedger.properties.publish_gate":
+        "代码填（orchestrator.py:3326）",
+    "FinalAdjudication:$.properties.token_usage.anyOf[0]":
+        "代码填（orchestrator.py:666），且模型若擅自填会被 :7187 强制置空",
+    "FinalAdjudication:$.properties.claim_ledger.anyOf[0].properties.publish_gate":
+        "代码填（同上，内联展开的第二处）",
+    "AnalysisRevised:$.properties.rejected_critiques.items":
+        "代码填（orchestrator.py:5429）",
+    "AnalysisRevised:$.properties.degraded_fallback.anyOf[0]":
+        "代码填（orchestrator.py:5433）",
+}
+
+
 def sanitize_json_schema_for_strict_tool_calling(schema: Dict[str, Any]) -> Dict[str, Any]:
     """把 pydantic `model_json_schema()` 的输出转换成 DeepSeek strict tool calling
     真实接受的形态（不是文档字面推断的形态——上面注释记录了两者的出入）。只改

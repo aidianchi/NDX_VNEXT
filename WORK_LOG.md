@@ -8,6 +8,20 @@
 
 ## 2026-07-29
 
+### 【关闭 T29】严格模式离线 schema 体检：8 个契约扫完，4 个今天就能开
+
+**改了什么／为什么**：严格模式已被真实 run 证伪两次，两次都栽在 schema 转换上。这类问题可以被程序穷举，不该拿花钱的真实跑去撞。离线扫全部 8 个 stage 契约，共 7 处不合规，**全是同一种**——`Dict[str, Any]` / `extra=allow` 生成的"没有属性的 object"，严格模式实测直接报 `An object with no properties is not allowed`。
+
+**结论**：`BridgeMemo` / `ThesisDraft` / `EventInterpretationCard` / `EventSectionSummary` 零问题，今天就能开。`LayerCard`(1) / `CounterThesisDraft`(1) / `FinalAdjudication`(3) / `AnalysisRevised`(2) 各有命中，**其中 6 处是代码事后填的诊断字段**（`token_usage` 甚至在 `orchestrator.py:7187` 被强制置空），本就不该出现在给模型的 schema 里；只有 `CoreFact.raw_data` 是模型真会填的，需要权衡。
+
+**否决了什么**：没有顺手删掉那 6 个字段。删是对的，但那是"哪些字段该进模型 schema"的设计决定，且当前只有桥接要开严格模式（零问题），不构成阻塞——留给用户在扩范围时一并定。
+
+**红灯测试在哪**：`tests/test_governance_input.py::test_strict_tool_schema_meets_provider_constraints`（关掉 sanitizer 的 `additionalProperties` 即红）与 `::test_strict_tool_schema_free_form_objects_are_registered`（登记表少一条即红，且过期登记也报错）。登记表 `llm_engine.STRICT_SCHEMA_FREE_FORM_OBJECTS` 逐条写清"由谁填"——那是决定修法的关键信息。
+
+**验证**：全量 `--cache-clear` 1024 passed。
+
+---
+
 ### 甲的规格漂移回归修复 + 体检跑三个发现 + 文档纪律换挡
 
 **改了什么／为什么**

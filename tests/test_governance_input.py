@@ -682,6 +682,122 @@ def test_field_spec_exposes_constrained_nested_subfield_types(tmp_path: Path):
     )
 
 
+# ── T29：严格模式的离线体检——别拿花钱的真实跑去撞可穷举的 schema 问题 ──
+
+def _stage_contracts() -> Dict[str, type]:
+    """静态扫描 orchestrator 里所有 `_run_stage(model_cls=<Name>)` 的契约类。"""
+    import agent_analysis.contracts as contracts_module
+
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "agent_analysis" / "orchestrator.py"
+    ).read_text(encoding="utf-8")
+    models: Dict[str, type] = {}
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr != "_run_stage":
+            continue
+        arg = {kw.arg: kw for kw in node.keywords}.get("model_cls")
+        if arg is None or not isinstance(arg.value, ast.Name):
+            continue
+        model_cls = getattr(contracts_module, arg.value.id, None)
+        if model_cls is not None and getattr(model_cls, "model_fields", None):
+            models[arg.value.id] = model_cls
+    return models
+
+
+def test_strict_tool_schema_meets_provider_constraints():
+    """红灯：严格模式已经被真实 run 证伪过两次，两次都栽在 schema 转换上。
+
+    `anyOf` 节点缺顶层 type、思考模式与 tool_choice 不兼容——这类问题**可以被程序
+    穷举**，不该靠一次花钱的真实跑去撞。本用例把 provider 的硬要求写死成断言：
+    每个 object 节点必须 `additionalProperties: false` 且 `required` 覆盖全部属性；
+    不得残留 minLength/maxLength/minItems/maxItems/format；`anyOf` 分支若全是原始
+    类型就必须已经塌缩成 type 数组（否则 DeepSeek 要求同级有 type）。
+
+    "没有属性的 object" 单独由下一个用例的登记表管——那是契约设计问题，不是转换 bug。
+    """
+    from agent_analysis.llm_engine import sanitize_json_schema_for_strict_tool_calling
+
+    violations: List[str] = []
+
+    def _walk(node, path: str, model_name: str) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "object" and "properties" in node:
+                if node.get("additionalProperties") is not False:
+                    violations.append(f"{model_name}:{path} object 缺 additionalProperties:false")
+                if set(node.get("required") or []) != set(node["properties"]):
+                    violations.append(f"{model_name}:{path} required 未覆盖全部 properties")
+            if "anyOf" in node and "type" not in node:
+                branches = node["anyOf"]
+                if all(
+                    isinstance(b, dict) and b.get("type") not in ("object", None) and "properties" not in b
+                    for b in branches
+                ):
+                    violations.append(f"{model_name}:{path} anyOf 分支全为原始类型却未塌缩成 type")
+            for keyword in ("minLength", "maxLength", "minItems", "maxItems", "format"):
+                if keyword in node:
+                    violations.append(f"{model_name}:{path} 残留不受支持的关键字 {keyword}")
+            for key, value in node.items():
+                _walk(value, f"{path}.{key}", model_name)
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                _walk(value, f"{path}[{index}]", model_name)
+
+    contracts = _stage_contracts()
+    assert contracts, "静态扫描没找到任何 stage 契约——扫描器本身坏了"
+    for name, model_cls in sorted(contracts.items()):
+        _walk(sanitize_json_schema_for_strict_tool_calling(model_cls.model_json_schema()), "$", name)
+
+    assert not violations, (
+        "这些节点不满足 DeepSeek strict function calling 的硬要求，开启严格模式会被 API 拒："
+        f"{violations}"
+    )
+
+
+def test_strict_tool_schema_free_form_objects_are_registered():
+    """自由形态 object（`Dict[str, Any]` / `extra=allow`）必须逐条登记，不许无声新增。
+
+    严格模式实测报错 "An object with no properties is not allowed"——也就是说，契约里
+    每多一个自由形态字段，就多一个站点无法开启严格模式。这不是转换能修的，是契约设计
+    的取舍，必须有人显式做决定。
+
+    登记表同时写清"这个字段由谁填"，因为它决定修法：代码事后填的字段本就不该出现在
+    给模型的 schema 里，删掉即可；模型真会填的才需要权衡。
+    """
+    from agent_analysis.llm_engine import (
+        STRICT_SCHEMA_FREE_FORM_OBJECTS,
+        sanitize_json_schema_for_strict_tool_calling,
+    )
+
+    found: List[str] = []
+
+    def _walk(node, path: str, model_name: str) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "object" and "properties" not in node:
+                found.append(f"{model_name}:{path}")
+            for key, value in node.items():
+                _walk(value, f"{path}.{key}", model_name)
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                _walk(value, f"{path}[{index}]", model_name)
+
+    for name, model_cls in sorted(_stage_contracts().items()):
+        _walk(sanitize_json_schema_for_strict_tool_calling(model_cls.model_json_schema()), "$", name)
+
+    unregistered = sorted(set(found) - set(STRICT_SCHEMA_FREE_FORM_OBJECTS))
+    stale = sorted(set(STRICT_SCHEMA_FREE_FORM_OBJECTS) - set(found))
+    assert not unregistered, (
+        f"新增了未登记的自由形态 object：{unregistered}。"
+        "它会让对应 stage 无法开启严格模式——请登记并写清由谁填，或把字段类型收窄。"
+    )
+    assert not stale, (
+        f"登记表里这些条目已经不存在了：{stale}。修好了就从表里删掉，别留过期登记。"
+    )
+    for key, reason in STRICT_SCHEMA_FREE_FORM_OBJECTS.items():
+        assert "填" in reason, f"登记项 {key} 没写清由谁填——那是决定修法的关键信息"
+
+
 # ── 丙：登记不能靠人记得——反射枚举所有带 validator 的 stage（2026-07-28 用户裁决） ──
 
 def test_every_validator_bearing_stage_is_registered_in_prompt_requirements():
