@@ -142,6 +142,68 @@ def test_event_fact_excerpt_uses_numeric_safe_120_character_limit():
     assert raw_excerpt[:121] not in html
 
 
+def test_weak_source_labelling_is_code_driven_not_model_worded():
+    """红灯：2026-07-30 删掉了三条"必须写某个词"的闸门，保证转由这里承担。
+
+    那三条（非官方来源必须含"据报道"、仅标题必须写"未读全文，降级阅读"、机制假设必须
+    以"该事件可能通过"开头）在最近四次真实 run 的 28 条重试/失败里占 14 条，且反复误伤
+    合格产出——模型写"据投资预测报道"比词表里的"据报道"更具体，仍被判失败。
+
+    删得掉的前提是：**读者要的保护由代码渲染，不靠模型措辞**。本用例把这个前提钉死——
+    卡片的解读文本里刻意不含任何降级词，标注仍必须出现，因为它来自 source_tier 与
+    raw_text_excerpt。若哪天有人改掉渲染，这里当场红；否则闸门已删、保证也没了，
+    就是彻底失守。
+    """
+    reporter = VNextReportGenerator()
+    artifacts = {
+        "event_mechanism_report": {},
+        "news_event_ledger": {
+            "events": [
+                {
+                    "event_id": "event:weak",
+                    "title": "某媒体标题",
+                    "source_name": "Some Media",
+                    "source_tier": "reliable_mainstream_report",
+                    "published_at": "2026-07-30",
+                    # 只有标题、没有正文片段 —— 弱来源的判定依据
+                    "raw_text_excerpt": "",
+                },
+                {
+                    "event_id": "event:strong",
+                    "title": "官方发布",
+                    "source_name": "Official Source",
+                    "source_tier": "official",
+                    "published_at": "2026-07-30",
+                    "raw_text_excerpt": "官方公布了一项安排。",
+                },
+            ]
+        },
+        "event_interpretation_cards": {
+            "cards": [
+                {
+                    "event_id": "event:weak",
+                    "fact_summary": "标题称某公司扩产。",
+                    # 刻意不含"据报道""该媒体称""未读全文"等任何降级措辞
+                    "interpretation": "该公司扩产计划或影响供给节奏，仍需数据确认。",
+                    "mechanism_hypothesis": {"financial_link": "earnings_path", "hypothesis": "供给变化或影响盈利路径。"},
+                    "limitations": ["事件材料不能证明指数必须涨跌。"],
+                    "passport": {"source": "Some Media", "tier": "reliable_mainstream_report"},
+                }
+            ]
+        },
+    }
+
+    html = reporter._event_layer_summary_section(artifacts)
+
+    assert "降级阅读" in html, (
+        "仅标题的弱来源卡必须被代码标注为降级阅读——这是删掉措辞闸门之后唯一的保证"
+    )
+    assert "Some Media" in html, "来源名应由代码渲染"
+    assert "可靠媒体转述" in html, "来源等级应由代码翻译成人话渲染，不依赖模型措辞"
+    # 模型的解读里一个降级词都没有，标注却仍在 —— 正是"保证与措辞脱钩"的证据
+    assert "据报道" not in artifacts["event_interpretation_cards"]["cards"][0]["interpretation"]
+
+
 def test_event_layer_summary_fallback_remains_facts_only():
     reporter = VNextReportGenerator()
     artifacts = {

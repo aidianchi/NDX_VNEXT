@@ -201,11 +201,12 @@ STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
     # （`resonance_chains[resonance_chain].confirming_indicators must not be empty`）。
     "bridge": ("confirming_indicators", "falsifiers", "path_id"),
     # _event_card_validation_errors：机制假设前缀 + 不得断言市场必然方向
-    # 2026-07-29 追加 attribution_quote：非官方来源必须自报归因片段，闸门只校验它是否
-    # 为 interpretation 首句原文，不再扫词表（词表判"意思"，注定补不完）。
-    "event_card_interpreter": ("该事件可能通过", "必须涨或必须跌", "attribution_quote"),
+    # 2026-07-30：删除 attribution_quote 与"该事件可能通过"前缀两条登记——对应闸门已按
+    # 用户裁决删除（措辞由代码渲染保证，见 _event_card_validation_errors 的说明）。
+    # 仅保留方向越权这条禁止型规则。
+    "event_card_interpreter": ("必须涨或必须跌",),
     # _event_section_summary_validation_errors：卡片引用格式与 2-5 张的引用数量区间
-    "event_section_summary": ("cited_event_ids", "[card:", "至少引用两张", "citation_caveats"),
+    "event_section_summary": ("cited_event_ids", "[card:", "至少引用两张"),
 }
 
 # 「丙」的豁免名单：`_run_stage` 的 stage_key 在这些调用点是运行时拼出来的，静态扫描
@@ -1364,44 +1365,26 @@ class VNextOrchestrator:
             errors.append(f"unknown hypothesis_id: {', '.join(sorted(invalid_hypotheses))}")
 
         hypothesis_text = card.mechanism_hypothesis.hypothesis.strip()
-        if not hypothesis_text.startswith("该事件可能通过"):
-            errors.append("mechanism_hypothesis must start with 该事件可能通过")
 
+        # 2026-07-30 用户裁决：删除三条"必须怎么说"的闸门——机制假设必须以"该事件可能通过"
+        # 开头、非官方来源必须含"据报道/该媒体称"、仅标题材料必须在 limitations 写
+        # "未读全文，降级阅读"。
+        #
+        # 依据是实测：最近四次真实 run 的 28 条重试/失败报错里，这三条占 14 条（50%），
+        # 且全部集中在本 stage。它们判的是措辞，措辞判不完——模型写"据投资预测报道"比
+        # 词表里的"据报道"更具体，仍被判失败，属误伤合格产出。
+        #
+        # 更根本的是它们**多余**：这三条想保护的是"读者别把只有标题的弱来源当确凿事实"，
+        # 而报告本来就由代码渲染这一行（`vnext_reporter.py` 的 event_row）：
+        #     「Yahoo Finance M7 Headlines · 可靠媒体转述 · 仅标题与片段 · 降级阅读」
+        # 它从 source_tier 与 raw_text_excerpt 算出，与模型措辞无关，且一条不漏——
+        # 比"靠模型记得写某个词"更强。删规则不降低保证，反而去掉了误伤。
+        #
+        # 保留下面的方向越权检查：它是**禁止型**规则，代码无法替代（渲染标不出
+        # "这句话有没有断言必涨必跌"），且在那 28 条里一次都没触发过，成本为零。
         directional_overreach = ("必然上涨", "必然下跌", "必须上涨", "必须下跌", "一定上涨", "一定下跌")
         if any(token in f"{card.interpretation} {hypothesis_text}" for token in directional_overreach):
             errors.append("event card must not claim mandatory market direction")
-
-        official_tiers = {
-            "official",
-            "official_macro",
-            "official_regulatory",
-            "official_filing",
-            "company_disclosure",
-            "primary_market_data_release",
-        }
-        source_tier = str(event.get("source_tier") or "unknown")
-        # 2026-07-29：同 event_section_summary 的改造——判定从"首句里扫一张写死的归因词
-        # 词表"改为"模型自报归因片段 + 校验它确实是首句里的原文"。run 20260729_175306 有
-        # 两张卡因此被判失败，而它们的归因写法（如"据投资预测报道"）比词表里的更具体。
-        # 闸门只判在场与出处，不判措辞好坏。
-        first_interpretation_clause = re.split(r"[，。；;]", card.interpretation, maxsplit=1)[0]
-        if source_tier not in official_tiers and card.interpretation != "与判断对象关联不足":
-            quote = str(getattr(card, "attribution_quote", "") or "").strip()
-            if not quote:
-                errors.append(
-                    "非官方来源的 interpretation 必须降级：把首句里的归因片段填进 attribution_quote"
-                    "（措辞自选，如「据…报道」「该媒体称」）"
-                )
-            elif quote not in first_interpretation_clause:
-                errors.append(
-                    f"attribution_quote「{quote}」不是 interpretation 首句里的原文"
-                    f"；首句为「{first_interpretation_clause}」"
-                )
-
-        if not bool(event.get("raw_text_available")) and not any(
-            "未读全文，降级阅读" in limitation for limitation in card.limitations
-        ):
-            errors.append("title-only material must declare 未读全文，降级阅读")
 
         material_text = f"{event.get('title') or ''} {event.get('raw_text_excerpt') or ''}"
         material_declares_alternative = bool(re.search(r"(?:\bor\b|或)", material_text, flags=re.IGNORECASE))
@@ -1628,12 +1611,6 @@ class VNextOrchestrator:
                     "正文中实际引用的完整 event_id（与 event_cards[].event_id 逐字相同，"
                     "含 event: 前缀），必须与正文里的 [card:...] 一一对应"
                 ],
-                "citation_caveats": [
-                    {
-                        "event_id": "<被降级引用的卡，写法同 cited_event_ids>",
-                        "quote": "<从 summary_text 里原样摘出的降级措辞，须落在该卡引用所在的那一句中；措辞自选>",
-                    }
-                ],
             },
             "boundary": {
                 "event_material_only": True,
@@ -1669,10 +1646,6 @@ class VNextOrchestrator:
             return None, f"{type(exc).__name__}: {str(exc)[:300]}"
         return _model_dump(summary), ""
 
-    _MATERIAL_QUALITY_CAVEAT_PHRASES = ("标题为主", "正文有限", "材料有限", "仅标题", "未读全文", "降级阅读")
-    _DOWNGRADE_ATTRIBUTION_PHRASES = _MATERIAL_QUALITY_CAVEAT_PHRASES + (
-        "据报道", "该媒体称", "媒体报道", "细节未知", "有待核实",
-    )
     _HINDSIGHT_OR_CAUSAL_PATTERNS = (
         r"(?:后来|随后|最终|事后|此后).{0,16}(?:结果|进展|显示|表明|证实|确认|证明|兑现)",
         r"(?:后来|随后|最终|事后|此后).{0,16}(?:上涨|下跌|走强|走弱|反弹|回落|上行|下行)",
@@ -1731,50 +1704,19 @@ class VNextOrchestrator:
         plain = re.sub(r"\[card:[^\[\]]+\]", "", text)
         if not 100 <= len(plain) <= 1500:
             errors.append(f"summary_text length {len(plain)} outside tolerant band 100-1500")
-        # 每一张仅标题或非官方来源卡都必须在同一句内带降级措辞；不能用"全局多数"规则
-        # 放过少数弱卡，也不能在前一句笼统写一次"据报道"后把后一句写成确定事实。
+        # 2026-07-30 用户裁决：删除"被引弱来源卡必须在同句带降级措辞"这条闸门。
         #
-        # 2026-07-29 改造：判定依据从"在正文里扫一张写死的词表"改为"模型自报哪一句算数
-        # + 校验那句话确实在正文的同一句里"。原写法在 run 20260729_175306 当场误判——
-        # 模型写的是"另一方面，据投资预测报道，…但该预测属主观观点，需冷静看待"，归因比
-        # 词表里的"据报道"更具体，却因字面不等而判失败。词表判的是"意思"，注定补不完。
-        # 现在闸门只判身份（event_id 对不对得上）与在场（quote 是否真的在同句），
-        # 措辞好不好交给离线抽样复核。自报无法凭空过关：quote 必须是正文里的原文。
+        # 它先后有过两个实现，都在真实 run 上误伤了合格产出：扫写死的词表（0729 误伤
+        # "据投资预测报道"）、改成模型自报原文再逐字比对（0730 误伤"另一标题显示"，
+        # 该站两次尝试用尽而 failed）。两次危害相同——拦住了本该通过的输出。
         #
-        # 原"title_only_majority 必须声明质量限制"一条已被本机制吸收：仅标题卡必然落在
-        # downgrade_required_ids 里，因此每一张都要求逐句降级说明，比"全局一句"更严。
-        caveat_quotes: Dict[str, List[str]] = {}
-        for caveat in getattr(candidate, "citation_caveats", None) or []:
-            # 用 getattr 而非属性直取：校验器里抛异常等于整站崩，比返回一条错误严重得多。
-            caveat_id = str(getattr(caveat, "event_id", "") or "").strip()
-            caveat_quote = str(getattr(caveat, "quote", "") or "")
-            if caveat_id:
-                caveat_quotes.setdefault(caveat_id, []).append(caveat_quote)
-        for event_id in sorted(declared & set(downgrade_required_ids or set())):
-            quotes = [quote for quote in caveat_quotes.get(event_id, []) if quote.strip()]
-            if not quotes:
-                errors.append(
-                    f"downgrade-required card {event_id} 缺 citation_caveats 条目"
-                    "（在 citation_caveats 里指出正文中哪一句是它的降级说明；措辞自选）"
-                )
-                continue
-            citation = f"[card:{event_id}]"
-            for match in re.finditer(re.escape(citation), text):
-                statement_prefix = text[:match.start()].rstrip()
-                if statement_prefix.endswith(("。", "！", "？", ".", "!", "?", ";", "；")):
-                    statement_prefix = statement_prefix[:-1].rstrip()
-                sentence_start = max(
-                    statement_prefix.rfind(delimiter)
-                    for delimiter in ("。", "！", "？", ".", "!", "?", ";", "；", "\n")
-                ) + 1
-                sentence = statement_prefix[sentence_start:]
-                if not any(quote in sentence for quote in quotes):
-                    errors.append(
-                        f"downgrade-required card {event_id} 的 citation_caveats quote "
-                        f"未出现在该引用所在句中；自报的是 {quotes[:2]}，"
-                        f"该句实际为「{sentence[-60:]}」"
-                    )
-                    break
+        # 根本原因是它多余：报告里每条事件本来就由代码渲染
+        #     「Yahoo Finance M7 Headlines · 可靠媒体转述 · 仅标题与片段 · 降级阅读」
+        # （`vnext_reporter.py` 的 event_row，取自 source_tier 与 raw_text_excerpt），
+        # 与模型措辞无关且一条不漏。读者要的保护已经在了，不需要再逼模型写某个词。
+        #
+        # `downgrade_required_ids` 参数予以保留：调用方仍在计算它，且它是"哪些卡属于弱
+        # 来源"的唯一真源，将来若要做离线抽样复核仍需它。
         # 无日期的“后来已证实”和确定性因果同样属于事后信息/新闻越权，不能靠避开 ISO 日期绕过。
         semantic_text = re.sub(r"\s+", " ", text)
         for pattern in VNextOrchestrator._HINDSIGHT_OR_CAUSAL_PATTERNS:
