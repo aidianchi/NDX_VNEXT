@@ -713,7 +713,16 @@ def test_strict_tool_schema_meets_provider_constraints():
     穷举**，不该靠一次花钱的真实跑去撞。本用例把 provider 的硬要求写死成断言：
     每个 object 节点必须 `additionalProperties: false` 且 `required` 覆盖全部属性；
     不得残留 minLength/maxLength/minItems/maxItems/format；`anyOf` 分支若全是原始
-    类型就必须已经塌缩成 type 数组（否则 DeepSeek 要求同级有 type）。
+    类型（不含 array/object）就必须已经塌缩成 type 数组（否则 DeepSeek 要求同级有
+    type）；`anyOf` 分支里含 array/object 的必须保留 anyOf 原样（探针验证过这种
+    形态被接受，塌缩反而会撞 400）。
+
+    2026-07-30 增补（②③ 联动的红灯）：`type` 数组本身也不得出现 array/object——
+    这是 fix_anyof 的潜伏雷被真实探针证伪过的形态。真实探针错误原文：
+    `{'error': {'message': "unknown variant 'array', expected one of string,
+    number, integer, boolean, null", ...}}`；`{"type": ["array","null"]}` 会被
+    DeepSeek 400 直接拒绝，正确形态是保留 `anyOf: [<array schema>, {"type":
+    "null"}]`。
 
     "没有属性的 object" 单独由下一个用例的登记表管——那是契约设计问题，不是转换 bug。
     """
@@ -731,10 +740,25 @@ def test_strict_tool_schema_meets_provider_constraints():
             if "anyOf" in node and "type" not in node:
                 branches = node["anyOf"]
                 if all(
-                    isinstance(b, dict) and b.get("type") not in ("object", None) and "properties" not in b
+                    isinstance(b, dict)
+                    and b.get("type") not in ("object", "array", None)
+                    and "properties" not in b
                     for b in branches
                 ):
                     violations.append(f"{model_name}:{path} anyOf 分支全为原始类型却未塌缩成 type")
+            type_value = node.get("type")
+            if isinstance(type_value, list):
+                invalid_variants = [
+                    t for t in type_value if t not in ("string", "number", "integer", "boolean", "null")
+                ]
+                if invalid_variants:
+                    violations.append(
+                        f"{model_name}:{path} type 数组含 {invalid_variants}——"
+                        "DeepSeek 探针实测对此类形态直接 400："
+                        "\"unknown variant 'array', expected one of string, number, "
+                        "integer, boolean, null\"（真实错误原文），这类节点必须保留 "
+                        "anyOf 结构，不能塌缩进 type 数组"
+                    )
             for keyword in ("minLength", "maxLength", "minItems", "maxItems", "format"):
                 if keyword in node:
                     violations.append(f"{model_name}:{path} 残留不受支持的关键字 {keyword}")

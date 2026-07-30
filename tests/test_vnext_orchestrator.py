@@ -2835,6 +2835,239 @@ def test_strict_tool_schema_for_stage_enabled_for_bridge_via_env_var(tmp_path: P
     assert set(schema["required"]) == set(schema["properties"].keys())
 
 
+# --- T34①：thesis retained_conflicts[].conflict_id 严格 schema enum ---------
+#
+# 真实事故（run 20260730_114704，被本改动直接接替的 T31 假设）：合约要求模型
+# "沿用上游 bridge 的 conflict_id 原文"，实测模型把
+# `TC1_restrictive_macro_vs_moderate_valuation` 写成了
+# `C1_restrictive_macro_vs_moderate_valuation`——后缀一字不差，前缀自行改写。
+# 这证明"要求模型原样抄字符串"没有物理约束、不可靠。修正判据：把候选值直接
+# 写进严格 schema 的 `enum`，模型物理上打不出清单外的值——"让它选"而不是
+# "让它抄"。下面几个测试钉住这条修法本身，而不是钉住某一版 sanitize 输出
+# 的具体形状（另一个 worker 正在并行改 llm_engine.sanitize_json_schema_for_
+# strict_tool_calling，会让可选数组字段的路径从 `properties.X.items` 漂移成
+# `properties.X.anyOf[0].items`——两种形态都必须被正确处理，否则线上一旦
+# 采用了后一种形态，enum 注入会静默失效，问题不会在测试里暴露，只会在下一次
+# 真实 run 里重演"抄错编号"）。
+
+
+def test_constrain_thesis_retained_conflict_id_enum_handles_direct_items_ref_path(tmp_path: Path):
+    """形态一：`retained_conflicts` 是必填数组，`items` 是指向 `$defs.Conflict`
+    的 `$ref`（当前 sanitize_json_schema_for_strict_tool_calling 对非 anyOf
+    分支内的 $ref 不做内联展开，真实产出就是这个形状）。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    schema = {
+        "properties": {
+            "retained_conflicts": {
+                "type": "array",
+                "items": {"$ref": "#/$defs/Conflict"},
+            }
+        },
+        "$defs": {
+            "Conflict": {
+                "type": "object",
+                "properties": {
+                    "conflict_id": {"type": ["string", "null"]},
+                    "conflict_type": {"type": "string"},
+                },
+            }
+        },
+    }
+
+    result = orchestrator._constrain_thesis_retained_conflict_id_enum(
+        schema,
+        ["TC1_restrictive_macro_vs_moderate_valuation", "TC2_liquidity_vs_breadth"],
+    )
+
+    assert result["$defs"]["Conflict"]["properties"]["conflict_id"]["enum"] == [
+        "TC1_restrictive_macro_vs_moderate_valuation",
+        "TC2_liquidity_vs_breadth",
+        None,
+    ]
+    # 未涉及的字段必须保持原样，不能被顺手改写。
+    assert "enum" not in result["$defs"]["Conflict"]["properties"]["conflict_type"]
+
+
+def test_constrain_thesis_retained_conflict_id_enum_handles_nullable_anyof_items_path(tmp_path: Path):
+    """形态二：`retained_conflicts` 被 T34②（非必填容器字段可空化）改写成
+    `{"anyOf": [{"type": "array", "items": {...}}, {"type": "null"}]}`，且
+    `items` 内的 `$ref` 已被内联展开成真实 object（这是 fix_anyof 对 anyOf
+    分支内 $ref 的既有处理方式）。enum 注入不能硬编码 `properties.retained_
+    conflicts.items` 这条路径，否则在这种形态下会直接找不到目标字段、静默
+    放弃注入。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    schema = {
+        "properties": {
+            "retained_conflicts": {
+                "anyOf": [
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "conflict_id": {"type": ["string", "null"]},
+                                "conflict_type": {"type": "string"},
+                            },
+                        },
+                    },
+                    {"type": "null"},
+                ]
+            }
+        },
+    }
+
+    result = orchestrator._constrain_thesis_retained_conflict_id_enum(
+        schema, ["TC1_restrictive_macro_vs_moderate_valuation"]
+    )
+
+    conflict_id_node = result["properties"]["retained_conflicts"]["anyOf"][0]["items"]["properties"]["conflict_id"]
+    assert conflict_id_node["enum"] == ["TC1_restrictive_macro_vs_moderate_valuation", None]
+
+
+def test_constrain_thesis_retained_conflict_id_enum_noop_when_no_candidates(tmp_path: Path):
+    """本轮 bridge 一个 conflict_id 都没给时必须原样返回 schema：注入空 enum
+    （或 `enum: [null]`）等于物理上禁止模型填任何编号，而 `Conflict.conflict_id`
+    留空是"本站新发现的冲突"的合法表达（见 contracts.py 里的字段描述），
+    不能被这条后处理堵死；部分 provider 对空 enum 也会直接拒绝请求。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    schema = {
+        "properties": {
+            "retained_conflicts": {
+                "type": "array",
+                "items": {"$ref": "#/$defs/Conflict"},
+            }
+        },
+        "$defs": {
+            "Conflict": {
+                "type": "object",
+                "properties": {"conflict_id": {"type": ["string", "null"]}},
+            }
+        },
+    }
+
+    result = orchestrator._constrain_thesis_retained_conflict_id_enum(schema, [])
+
+    assert "enum" not in result["$defs"]["Conflict"]["properties"]["conflict_id"]
+
+
+def test_collect_thesis_conflict_id_candidates_covers_all_three_sources_and_dedupes(tmp_path: Path):
+    """enum 候选集合必须只取模型这一轮真的看得见的 conflict_id：
+    `high_severity_typed_conflicts[]`、`high_severity_conflicts[]`（同名字段，
+    legacy Conflict 模型）、`bridge_summaries[].typed_conflicts[]`（dict，Bridge
+    v2 原始输出）。三个来源出现同一个 ID 时必须去重，模型看不见的 ID 不该
+    出现在候选集合里。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    synthesis = SynthesisPacket(
+        packet_meta={"data_date": "2026-04-24"},
+        high_severity_typed_conflicts=[
+            TypedConflict(
+                conflict_id="TC1_restrictive_macro_vs_moderate_valuation",
+                conflict_type="valuation_discount_rate",
+                severity="high",
+                description="宏观限制性与估值温和并存。",
+                implication="强结论必须保留风险边界。",
+                involved_layers=["L1", "L4"],
+            )
+        ],
+        high_severity_conflicts=[
+            Conflict(
+                conflict_id="C2_legacy_conflict",
+                conflict_type="legacy_conflict_type",
+                severity="high",
+                description="legacy 冲突描述。",
+                implication="legacy 影响。",
+                involved_layers=["L4", "L5"],
+            )
+        ],
+        bridge_summaries=[
+            {
+                "bridge_type": "macro_valuation",
+                "typed_conflicts": [
+                    # 与 high_severity_typed_conflicts 里的 ID 重复，必须去重。
+                    {"conflict_id": "TC1_restrictive_macro_vs_moderate_valuation", "conflict_type": "x"},
+                    {"conflict_id": "TC3_liquidity_vs_breadth", "conflict_type": "y"},
+                ],
+            }
+        ],
+    )
+
+    candidates = orchestrator._collect_thesis_conflict_id_candidates(synthesis)
+
+    assert candidates == [
+        "TC1_restrictive_macro_vs_moderate_valuation",
+        "C2_legacy_conflict",
+        "TC3_liquidity_vs_breadth",
+    ]
+
+
+def test_run_thesis_wires_dynamic_conflict_id_enum_into_strict_schema_when_enabled(tmp_path: Path, monkeypatch):
+    """接线验证：`_run_thesis` 必须把本轮 `synthesis_packet` 实际给出的
+    conflict_id 集合动态注入严格 schema——不能是每次 run 都一样的静态
+    `model_json_schema()`。同时钉住"未启用严格模式时行为逐字节不变"：不设
+    环境变量时，engine 完全收不到 strict_tool_schema/strict_tool_name。"""
+    valid_thesis = {
+        "environment_assessment": "环境偏紧。",
+        "valuation_assessment": "估值偏高。",
+        "timing_assessment": "趋势仍在。",
+        "main_thesis": "主线仍成立。",
+        "hypothesis_responses": [],
+        "overall_confidence": "medium",
+    }
+    engine = _StrictToolSchemaRecordingFakeLLMEngine({"thesis": json.dumps(valid_thesis, ensure_ascii=False)})
+    synthesis = SynthesisPacket(
+        packet_meta={"data_date": "2026-04-24"},
+        high_severity_typed_conflicts=[
+            TypedConflict(
+                conflict_id="TC1_restrictive_macro_vs_moderate_valuation",
+                conflict_type="valuation_discount_rate",
+                severity="high",
+                description="宏观限制性与估值温和并存。",
+                implication="强结论必须保留风险边界。",
+                involved_layers=["L1", "L4"],
+            )
+        ],
+    )
+
+    # 未启用严格模式：行为必须与试点之前逐字节相同——engine 完全收不到这两个 kwarg。
+    monkeypatch.delenv("NDX_STRICT_TOOL_CALLING_STAGES", raising=False)
+    orchestrator_disabled = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path / "disabled"), llm_engine=engine
+    )
+    orchestrator_disabled._run_thesis(synthesis)
+    assert "strict_tool_schema" not in engine.calls_kwargs[-1]
+    assert "strict_tool_name" not in engine.calls_kwargs[-1]
+
+    # 启用严格模式（thesis 在白名单内）：schema 必须真的按本轮 candidate 动态收紧。
+    monkeypatch.setenv("NDX_STRICT_TOOL_CALLING_STAGES", "thesis")
+    orchestrator_enabled = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path / "enabled"), llm_engine=engine
+    )
+    orchestrator_enabled._run_thesis(synthesis)
+    strict_schema = engine.calls_kwargs[-1]["strict_tool_schema"]
+    items_node = strict_schema["properties"]["retained_conflicts"].get("items")
+    if items_node is None:
+        items_node = next(
+            branch["items"]
+            for branch in strict_schema["properties"]["retained_conflicts"]["anyOf"]
+            if isinstance(branch, dict) and "items" in branch
+        )
+    conflict_object = items_node
+    if "$ref" in items_node:
+        conflict_object = strict_schema["$defs"][items_node["$ref"].rsplit("/", 1)[-1]]
+    assert conflict_object["properties"]["conflict_id"]["enum"] == [
+        "TC1_restrictive_macro_vs_moderate_valuation",
+        None,
+    ]
+
+
 def test_thesis_retries_until_every_candidate_hypothesis_has_auditable_response(tmp_path: Path):
     invalid = {
         "environment_assessment": "环境偏紧。",
@@ -5845,6 +6078,200 @@ def test_field_authority_is_persisted_and_applied_per_claimed_wind_metric(tmp_pa
         set(registry.passports),
         "final",
     ) == []
+
+
+def _t35_erp_test_packet():
+    """真实事故复现材料：真实 run 20260730_114704 的 `analysis_packet.json` 里
+    `L4.get_damodaran_us_implied_erp` 是 availability=available、source_tier=official、
+    `value.erp_t12m_adjusted_payout=4.3`——字段真实存在、取数成功、来源官方，但这个函数
+    从未构造过 MetricAuthority（L4 17 个 get_* 函数里 10 个都没有）。"""
+    packet = _mock_packet()
+    packet.raw_data["L4"]["get_damodaran_us_implied_erp"] = {
+        "value": {"erp_t12m_adjusted_payout": 4.3},
+        "data_quality": {
+            "availability": "available",
+            "source_name": "Damodaran implied ERP",
+            "source_tier": "official",
+            "effective_date": "2026-04-24",
+        },
+    }
+    return packet
+
+
+def _t35_schema_guard_report(orchestrator: "VNextOrchestrator", packet, evidence_ref: str, conflict_id: str):
+    bridge = BridgeMemo.model_validate(
+        {
+            "bridge_type": "macro_valuation",
+            "layers_connected": ["L1", "L4"],
+            "typed_conflicts": [
+                {
+                    "conflict_id": conflict_id,
+                    "conflict_type": "valuation_discount_rate",
+                    "severity": "high",
+                    "description": "隐含股权风险溢价与实际利率对折现率的含义相互矛盾。",
+                    "implication": "估值压缩风险的定价存在分歧。",
+                    "involved_layers": ["L1", "L4"],
+                    "evidence_refs": [evidence_ref],
+                }
+            ],
+            "implication_for_ndx": "保留张力。",
+        }
+    )
+    return orchestrator._run_schema_guard(
+        packet,
+        [],
+        [bridge],
+        ThesisDraft.model_validate(
+            {
+                "environment_assessment": "环境偏紧。",
+                "valuation_assessment": "估值偏高。",
+                "timing_assessment": "趋势待确认。",
+                "main_thesis": "测试。",
+                "overall_confidence": "medium",
+            }
+        ),
+        Critique.model_validate({"overall_assessment": "测试。", "revision_direction": "测试。"}),
+        RiskBoundaryReport.model_validate({"must_preserve_risks": ["测试风险"]}),
+    )
+
+
+def test_schema_guard_treats_real_value_field_without_metric_authority_as_valid_ref(tmp_path: Path):
+    """红灯：真实事故 run 20260730_114704——schema_guard 报
+    `BridgeMemo[0].typed_conflicts[TC1_...].evidence_refs invalid:
+    L4.get_damodaran_us_implied_erp#erp_t12m_adjusted_payout`。核过原始产物：字段真实
+    存在、取数成功、来源官方。它被判非法的唯一原因是 `valid_evidence_refs` 的子引用
+    来源只读 `_field_authority_from_payload`（人工登记的 MetricAuthority 表），而这个
+    函数从未登记过 MetricAuthority——"字段存不存在"（身份）被"这个字段够不够格支撑
+    强结论"（权限分级）那张人工表冒充了。方案 A：valid_evidence_refs 的子引用来源改为
+    MetricAuthority 键与 raw_payload["value"] 真实顶层键的并集，闸门变回纯粹的身份比对。
+    """
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    packet = _t35_erp_test_packet()
+    real_ref = "L4.get_damodaran_us_implied_erp#erp_t12m_adjusted_payout"
+    report = _t35_schema_guard_report(orchestrator, packet, real_ref, "TC1_erp_vs_real_rate")
+    joined = "\n".join(report.consistency_issues)
+    assert real_ref not in joined, joined
+
+
+def test_schema_guard_still_rejects_ref_to_field_that_does_not_exist(tmp_path: Path):
+    """反例：闸门没有被放松成"什么都放行"——`value` 里真的不存在的字段名仍须判非法，
+    否则就不是身份比对而是彻底放行。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    packet = _t35_erp_test_packet()
+    fake_ref = "L4.get_damodaran_us_implied_erp#does_not_exist_field"
+    report = _t35_schema_guard_report(orchestrator, packet, fake_ref, "TC2_fabricated_field")
+    joined = "\n".join(report.consistency_issues)
+    assert fake_ref in joined, joined
+    assert "evidence_refs invalid" in joined
+
+
+def test_field_authority_from_payload_byte_identical_for_registered_metric_authority_payload(tmp_path: Path):
+    """钉住红线：修复①绝不能改动②`_field_authority_from_payload` 对已登记 MetricAuthority
+    payload 的返回值——一个字都不能变。现有 7 个已登记函数的权限是统一的，一旦凭空塞入
+    `audit_only`，这 7 个会集体被判 mixed_field_authority 而降级（orchestrator.py:2891/
+    2898，`field_usages = self._field_authority_usages(field_authority)` /
+    `mixed_field_authority = len(field_usages) > 1`）。这里直接比对返回值逐字节相同，
+    并确认 mixed_field_authority 没有被新引入。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    raw_payload = {
+        "value": {
+            "level": 5.25,
+            "trend": "rising",
+            "MetricAuthority": {
+                "level": {"usage": "core_allowed", "authority": "official_fact"},
+                "trend": {"usage": "core_allowed", "authority": "official_fact"},
+            },
+        },
+        "data_quality": {"source_tier": "official"},
+    }
+    expected = {
+        "level": {"usage": "core_allowed", "authority": "official_fact"},
+        "trend": {"usage": "core_allowed", "authority": "official_fact"},
+    }
+    authority = orchestrator._field_authority_from_payload(raw_payload)
+    assert authority == expected
+    usages = orchestrator._field_authority_usages(authority)
+    assert usages == {"core_allowed"}
+    assert len(usages) == 1  # mixed_field_authority 不应被新引入
+
+
+def test_verify_claim_entry_falls_back_to_parent_authority_for_legal_unregistered_field_ref(tmp_path: Path):
+    """回落：合法但没有字段级 passport 的 ref（真实存在的字段，没有 MetricAuthority 登记）
+    必须拿到父级 passport 的权限，不能被判成"查无此证据"而静默降级/阻断。
+    `_build_evidence_registry` 只对 MetricAuthority 登记过的字段建字段级 passport
+    （orchestrator.py:2930 `for field, field_rule in field_authority.items():`）——放行
+    更多真实字段之后，这些字段在 registry.passports 里没有对应条目，必须靠父级
+    authority_model["real_value_fields"] 做身份比对回落，而不是让
+    `_resolve_claim_evidence_ref` 直接判它不存在。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    registry = EvidenceRegistry(
+        effective_date="2026-07-30",
+        passports={
+            "L4.get_damodaran_us_implied_erp": EvidencePassport(
+                evidence_id="L4.get_damodaran_us_implied_erp",
+                evidence_kind="data",
+                source_tier="official",
+                authority_model={"real_value_fields": ["erp_t12m_adjusted_payout"]},
+                verified=True,
+            ),
+        },
+    )
+    entry = ClaimLedgerEntry(
+        claim_id="claim:test:erp-field-fallback",
+        source_stage="final",
+        claim_text="隐含股权风险溢价（税后支付调整口径）约为 4.3%。",
+        claim_type="valuation",
+        evidence_refs=["L4.get_damodaran_us_implied_erp#erp_t12m_adjusted_payout"],
+        counter_evidence_refs=["L1.get_10y_real_rate"],
+        inference_steps=["ERP 口径核验"],
+        falsification_conditions=["ERP 口径被重新定义"],
+    )
+    result = orchestrator._verify_claim_entry(entry, registry)
+    assert "unverifiable_evidence_refs" not in result.downgrade_reason
+    assert result.authority_status != "blocked"
+    assert result.verified is True, result.downgrade_reason
+
+
+def test_verify_claim_entry_does_not_fall_back_for_fabricated_field_name(tmp_path: Path):
+    """反例：父级存在，但字段名是幻觉/笔误——身份比对不通过，不能被"回落"洗白成合法引用。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    registry = EvidenceRegistry(
+        effective_date="2026-07-30",
+        passports={
+            "L4.get_damodaran_us_implied_erp": EvidencePassport(
+                evidence_id="L4.get_damodaran_us_implied_erp",
+                evidence_kind="data",
+                source_tier="official",
+                authority_model={"real_value_fields": ["erp_t12m_adjusted_payout"]},
+                verified=True,
+            ),
+        },
+    )
+    entry = ClaimLedgerEntry(
+        claim_id="claim:test:erp-field-fabricated",
+        source_stage="final",
+        claim_text="一个编造出来的字段。",
+        claim_type="valuation",
+        evidence_refs=["L4.get_damodaran_us_implied_erp#totally_made_up_field"],
+        counter_evidence_refs=["L1.get_10y_real_rate"],
+        inference_steps=["测试"],
+        falsification_conditions=["测试"],
+    )
+    result = orchestrator._verify_claim_entry(entry, registry)
+    assert (
+        "unverifiable_evidence_refs:L4.get_damodaran_us_implied_erp#totally_made_up_field"
+        in result.downgrade_reason
+    )
 
 
 def _claim_gate_test_registry() -> EvidenceRegistry:

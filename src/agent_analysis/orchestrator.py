@@ -56,7 +56,11 @@ try:
     from .deep_research_canon import L3_STRUCTURAL_PRIORITY_FUNCTIONS, build_layer_canon_prompt, get_indicator_canon
     from .few_shot import build_layer_few_shot_prompt
     from .inquiry_router import InquiryRouter
-    from .llm_engine import LLMEngine, sanitize_json_schema_for_strict_tool_calling
+    from .llm_engine import (
+        LLMEngine,
+        normalize_none_list_fields_for_strict_schema_validation,
+        sanitize_json_schema_for_strict_tool_calling,
+    )
     from .packet_builder import indicator_payload_unavailable_reason
     from .run_review import build_run_review_report
     from .outcome_review import build_outcome_review_report
@@ -107,7 +111,11 @@ except ImportError:
     from deep_research_canon import L3_STRUCTURAL_PRIORITY_FUNCTIONS, build_layer_canon_prompt, get_indicator_canon
     from few_shot import build_layer_few_shot_prompt
     from inquiry_router import InquiryRouter
-    from llm_engine import LLMEngine, sanitize_json_schema_for_strict_tool_calling
+    from llm_engine import (
+        LLMEngine,
+        normalize_none_list_fields_for_strict_schema_validation,
+        sanitize_json_schema_for_strict_tool_calling,
+    )
     from packet_builder import indicator_payload_unavailable_reason
     from run_review import build_run_review_report
     from outcome_review import build_outcome_review_report
@@ -2891,6 +2899,14 @@ class VNextOrchestrator:
                 parent_downgrade_rules.append("mixed_field_authority")
             elif parent_usage and parent_usage != "core_allowed":
                 parent_downgrade_rules.append(f"field_authority_{parent_usage}")
+            # T35 修复（方案 A）：合法性（身份）与权限分级（MetricAuthority）是两件事，
+            # 见 `_run_schema_guard` 里 valid_evidence_refs 的并集扩展。这里把父级
+            # passport 的真实字段名单一并记下（不是新建字段级 passport，不触碰②的红线），
+            # 供 `_verify_claim_entry` 里"合法但未登记 MetricAuthority 的字段引用"回落到
+            # 父级权限时做身份比对，而不是被判成查无此证据。
+            real_value_fields = sorted(
+                (raw_payload.get("value") if isinstance(raw_payload.get("value"), dict) else {}).keys()
+            )
             passports[evidence_id] = EvidencePassport(
                 evidence_id=evidence_id,
                 evidence_kind="data",
@@ -2902,6 +2918,7 @@ class VNextOrchestrator:
                     "cannot_support": list(item.get("misread_guards") or []) if isinstance(item, dict) else [],
                     "requires_confirmation": list(item.get("cross_validation_targets") or []) if isinstance(item, dict) else [],
                     "field_authority": field_authority,
+                    "real_value_fields": real_value_fields,
                     "field_usages": sorted(field_usages),
                     "field_usage": parent_usage,
                     "mixed_field_authority": mixed_field_authority,
@@ -3331,11 +3348,39 @@ class VNextOrchestrator:
             return normalized
         return lower_key_map.get(normalized.lower())
 
+    def _resolve_claim_evidence_ref_with_parent_fallback(
+        self,
+        ref: str,
+        registry: EvidenceRegistry,
+        lower_key_map: Dict[str, str],
+    ) -> Optional[str]:
+        """T35 修复（方案 A）第③步：`_build_evidence_registry` 只对 MetricAuthority
+        登记过的字段建字段级 passport（未登记字段不批量建 passport，避免凭空引入
+        `audit_only` 而把已登记的 7 个函数集体判成 mixed_field_authority）。这意味着
+        schema_guard 放行的"真实但未登记"字段引用在这里查不到自己的 passport——如果
+        直接判"查无此证据"，等于绕了一圈又把身份合法的引用打成幻觉。这里做的是身份
+        比对而非放宽权限：只有当字段名真实出现在父级 payload 的 `value` 里
+        （记在 authority_model["real_value_fields"]，见 `_build_evidence_registry`）才
+        回落到父级 passport 的权限；编造的字段名仍然解析失败、计入 missing_refs。"""
+        resolved = self._resolve_claim_evidence_ref(ref, registry.passports, lower_key_map)
+        if resolved is not None or "#" not in ref:
+            return resolved
+        parent_ref, field_name = self._normalize_evidence_ref_key(ref).split("#", 1)
+        parent_resolved = self._resolve_claim_evidence_ref(parent_ref, registry.passports, lower_key_map)
+        if parent_resolved is None:
+            return None
+        parent_authority = registry.passports[parent_resolved].authority_model
+        parent_authority = parent_authority if isinstance(parent_authority, dict) else {}
+        real_fields = set(parent_authority.get("real_value_fields") or [])
+        if field_name.strip() in real_fields:
+            return parent_resolved
+        return None
+
     def _verify_claim_entry(self, entry: ClaimLedgerEntry, registry: EvidenceRegistry) -> ClaimLedgerEntry:
         strong_tiers = {"official", "licensed_provider", "licensed_manual", "formal_data_source"}
         lower_key_map = {key.lower(): key for key in registry.passports}
         resolved_refs = [
-            (ref, self._resolve_claim_evidence_ref(ref, registry.passports, lower_key_map))
+            (ref, self._resolve_claim_evidence_ref_with_parent_fallback(ref, registry, lower_key_map))
             for ref in entry.evidence_refs
         ]
         missing_refs = [ref for ref, resolved in resolved_refs if resolved is None]
@@ -4022,12 +4067,24 @@ class VNextOrchestrator:
         "bridge", "thesis", "event_card_interpreter", "event_section_summary",
     }
 
-    def _strict_tool_schema_for_stage(self, stage_key: str, model_cls: Type[Any]) -> Optional[Dict[str, Any]]:
+    def _strict_tool_schema_for_stage(
+        self,
+        stage_key: str,
+        model_cls: Type[Any],
+        *,
+        schema_postprocess: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
         """按 `NDX_STRICT_TOOL_CALLING_STAGES` 环境变量（逗号分隔 stage_key）决定
         是否为这次调用启用 DeepSeek strict function calling。未设置该环境变量、
         或 stage_key 不在试点白名单内时返回 None——调用方据此完全跳过 strict 路径，
         与试点之前的行为逐字节相同。这是刻意选择的显式 opt-in 开关，不是配置文件，
-        方便用户在一次真实 run 前后随时打开/关闭做对比，不需要改代码。"""
+        方便用户在一次真实 run 前后随时打开/关闭做对比，不需要改代码。
+
+        `schema_postprocess`（T34①新增）：可选的按本轮 run 动态改写 schema 的钩子，
+        例如 thesis 站把 `retained_conflicts[].conflict_id` 收紧成本轮 bridge 实际
+        给出的编号 enum（见 `_constrain_thesis_retained_conflict_id_enum`）。只有在
+        真正启用严格模式（上面两道判断都通过）时才会被调用一次；未启用时钩子完全
+        不执行，不影响"未启用=逐字节相同"这条保证。"""
         if stage_key not in self._STRICT_TOOL_CALLING_ELIGIBLE_STAGES:
             return None
         enabled_stages = {
@@ -4037,7 +4094,10 @@ class VNextOrchestrator:
         }
         if stage_key not in enabled_stages:
             return None
-        return sanitize_json_schema_for_strict_tool_calling(model_cls.model_json_schema())
+        schema = sanitize_json_schema_for_strict_tool_calling(model_cls.model_json_schema())
+        if schema_postprocess is not None:
+            schema = schema_postprocess(schema)
+        return schema
 
     def _run_bridge(
         self,
@@ -4095,12 +4155,19 @@ class VNextOrchestrator:
             synthesis_packet,
         ):
             return checkpoint
+        conflict_id_candidates = self._collect_thesis_conflict_id_candidates(synthesis_packet)
         thesis = self._run_stage(
             stage_key="thesis",
             stage_name="thesis",
             model_cls=ThesisDraft,
             payload=thesis_payload,
-            strict_tool_schema=self._strict_tool_schema_for_stage("thesis", ThesisDraft),
+            strict_tool_schema=self._strict_tool_schema_for_stage(
+                "thesis",
+                ThesisDraft,
+                schema_postprocess=lambda schema: self._constrain_thesis_retained_conflict_id_enum(
+                    schema, conflict_id_candidates
+                ),
+            ),
             strict_tool_name="emit_thesis_draft",
             validator=lambda candidate: self._validate_thesis_hypothesis_responses(
                 candidate,
@@ -4115,6 +4182,128 @@ class VNextOrchestrator:
             payload=thesis_payload,
         )
         return thesis
+
+    @staticmethod
+    def _collect_thesis_conflict_id_candidates(synthesis_packet: SynthesisPacket) -> List[str]:
+        """收集本轮 thesis 输入（`synthesis_packet`）里模型实际看得见的全部
+        conflict_id，作为严格 schema enum 的候选集合（T34①）。只取模型这一轮
+        真的看得见的编号——它看不见的编号不该允许它填：
+
+        - `high_severity_typed_conflicts[].conflict_id`（TypedConflict，Bridge v2）
+        - `high_severity_conflicts[].conflict_id`（Conflict，legacy 同名字段，可能非空）
+        - `bridge_summaries[].typed_conflicts[].conflict_id`（dict，Bridge v2 原始输出，
+          覆盖面比 high_severity_* 更全——后者只是"必须保留"的子集）
+
+        按上述顺序去重保序返回；不在这里追加 `None`，"允许留空表示本站新发现的
+        冲突"这条语义由调用方（`_constrain_thesis_retained_conflict_id_enum`）负责。
+        """
+        candidates: List[str] = []
+        seen: set = set()
+
+        def _add(conflict_id: Any) -> None:
+            if isinstance(conflict_id, str) and conflict_id and conflict_id not in seen:
+                seen.add(conflict_id)
+                candidates.append(conflict_id)
+
+        for typed_conflict in synthesis_packet.high_severity_typed_conflicts:
+            _add(typed_conflict.conflict_id)
+        for conflict in synthesis_packet.high_severity_conflicts:
+            _add(conflict.conflict_id)
+        for bridge_summary in synthesis_packet.bridge_summaries:
+            for typed_conflict_dict in bridge_summary.typed_conflicts:
+                if isinstance(typed_conflict_dict, dict):
+                    _add(typed_conflict_dict.get("conflict_id"))
+        return candidates
+
+    def _find_strict_schema_array_items_node(self, container_schema: Any) -> Optional[Dict[str, Any]]:
+        """在严格 schema 的数组字段节点里定位 `items` 子 schema，路径无关地兼容
+        两种形态（T34①注入必须两种都命中，理由见类定义处的白名单注释和相关
+        测试）：
+
+        - 必填数组：`{"type": "array", "items": {...}}`
+        - 可空数组（T34②"非必填容器字段改写为可空 anyOf"落地后）：
+          `{"anyOf": [{"type": "array", "items": {...}}, {"type": "null"}]}`
+
+        不能硬编码 `properties.X.items` 这一条路径——sanitize 逻辑在与本改动
+        并行演进，形态会漂移；这里改为递归查找，两种形态、以及未来可能出现的
+        嵌套变体都能命中。
+        """
+        if not isinstance(container_schema, dict):
+            return None
+        items = container_schema.get("items")
+        if isinstance(items, dict):
+            return items
+        branches = container_schema.get("anyOf")
+        if isinstance(branches, list):
+            for branch in branches:
+                found = self._find_strict_schema_array_items_node(branch)
+                if found is not None:
+                    return found
+        return None
+
+    @staticmethod
+    def _resolve_strict_schema_object_node(node: Any, schema: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """把 `items` 节点解析成真正携带 `properties` 的 object schema。
+
+        `sanitize_json_schema_for_strict_tool_calling` 的 `fix_anyof` 只内联展开
+        anyOf 分支内的 `$ref`；顶层（非 anyOf 分支）的 `$ref`——比如必填数组字段的
+        `items: {"$ref": "#/$defs/Conflict"}`——原样保留，要去 `$defs` 里查。已经
+        是内联 object（anyOf 分支内展开过的情形）时直接用。
+        """
+        if not isinstance(node, dict):
+            return None
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            ref_name = ref.rsplit("/", 1)[-1]
+            defs = schema.get("$defs", {})
+            resolved = defs.get(ref_name)
+            return resolved if isinstance(resolved, dict) else None
+        if isinstance(node.get("properties"), dict):
+            return node
+        return None
+
+    def _constrain_thesis_retained_conflict_id_enum(
+        self,
+        schema: Dict[str, Any],
+        candidate_conflict_ids: List[str],
+    ) -> Dict[str, Any]:
+        """T34①：把 `ThesisDraft.retained_conflicts[].conflict_id` 的取值域收紧为
+        「本轮 bridge 实际给出的 conflict_id」∪ null 的 enum。
+
+        真实事故（run 20260730_114704，本改动接替的 T31 假设的证伪证据）：旧判据
+        是"要求模型把 bridge 的 conflict_id 原样抄进这个字段"，结果模型把
+        `TC1_restrictive_macro_vs_moderate_valuation` 写成了
+        `C1_restrictive_macro_vs_moderate_valuation`——后缀一字不差，前缀自行
+        改写。这不是模型能力差，是机制选错了：靠"抄"字符串没有物理约束。改成
+        enum 后模型只能从清单里选，物理上打不出清单外的值。
+
+        `candidate_conflict_ids` 为空（本轮 bridge 一条 conflict_id 都没给）时，
+        原样返回 schema，不注入任何 enum——`Conflict.conflict_id` 留空是"本站新
+        发现的冲突"的合法表达（见 contracts.py 字段描述），注入空 enum 或
+        `enum: [null]` 等于物理上禁止模型填任何编号，语义上说不通；部分 provider
+        对空 enum 还会直接拒绝请求。
+        """
+        if not candidate_conflict_ids:
+            return schema
+        dedup: List[str] = []
+        seen: set = set()
+        for conflict_id in candidate_conflict_ids:
+            if conflict_id and conflict_id not in seen:
+                seen.add(conflict_id)
+                dedup.append(conflict_id)
+        if not dedup:
+            return schema
+        enum_values: List[Optional[str]] = [*dedup, None]
+
+        retained_conflicts_node = schema.get("properties", {}).get("retained_conflicts")
+        items_node = self._find_strict_schema_array_items_node(retained_conflicts_node)
+        conflict_object_schema = self._resolve_strict_schema_object_node(items_node, schema)
+        if conflict_object_schema is None:
+            return schema
+        conflict_id_node = conflict_object_schema.get("properties", {}).get("conflict_id")
+        if isinstance(conflict_id_node, dict):
+            conflict_id_node["enum"] = enum_values
+        return schema
 
     def _validate_thesis_hypothesis_responses(
         self,
@@ -4966,6 +5155,12 @@ class VNextOrchestrator:
             # 这里用代码实际运行时间强制覆盖，确保审计可追溯性
             if hasattr(model_cls, "model_fields") and "generated_at" in model_cls.model_fields:
                 parsed["generated_at"] = datetime.now(timezone.utc)
+            # 无条件把非必填 list 字段收到的显式 null 收回成 []（与
+            # sanitize_json_schema_for_strict_tool_calling 放开的字段集合精确对齐，
+            # 见 llm_engine.py 里两个函数互相指名的 docstring）。不加"仅严格模式"
+            # 开关：非严格模式下模型本来也偶尔返回 null 表示"没有内容"，是同一种
+            # 合法表达，两条路径统一走这一层归一化才不会分叉。
+            parsed = normalize_none_list_fields_for_strict_schema_validation(model_cls, parsed)
             try:
                 validated = model_cls.model_validate(parsed)
             except Exception as exc:
@@ -5703,7 +5898,15 @@ class VNextOrchestrator:
                 parent_ref = f"{layer}.{function_id}"
                 valid_evidence_refs.add(parent_ref)
                 if isinstance(raw_payload, dict):
-                    for field in self._field_authority_from_payload(raw_payload):
+                    # T35 修复（方案 A）：合法性只判身份（这个字段这一轮真实存在吗），
+                    # 不判权限（够不够格支撑强结论）。此前只读 MetricAuthority 人工登记表
+                    # ——L4 17 个 get_* 函数里 10 个从未登记过，字段真实存在、取数成功、
+                    # 来源官方，也会被判"引用不在索引内"（真实事故：run 20260730_114704，
+                    # L4.get_damodaran_us_implied_erp#erp_t12m_adjusted_payout）。这里改成
+                    # MetricAuthority 键与 raw value 真实顶层键的并集，不减少任何现有合法 ref。
+                    value_payload = raw_payload.get("value") if isinstance(raw_payload.get("value"), dict) else {}
+                    field_names = set(self._field_authority_from_payload(raw_payload)) | set(value_payload)
+                    for field in field_names:
                         valid_evidence_refs.add(f"{parent_ref}#{field}")
 
         def _bad_refs(refs: List[str]) -> List[str]:
@@ -6935,6 +7138,10 @@ class VNextOrchestrator:
                 return None
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
+            # 同一条归一化，无条件应用（见 _run_stage 里的调用点注释）：checkpoint
+            # 文件正常情况下来自已校验过的模型 dump，不该再有裸 null，但覆盖这条
+            # 解析入口是本次改动明确要求的——不给旧跑或手改文件留漏网之鱼。
+            payload = normalize_none_list_fields_for_strict_schema_validation(model_cls, payload)
             validated = model_cls.model_validate(payload)
         except Exception:
             return None

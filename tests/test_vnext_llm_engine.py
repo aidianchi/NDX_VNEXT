@@ -237,12 +237,15 @@ def test_sanitize_json_schema_for_strict_tool_calling_meets_deepseek_requirement
                 assert banned not in node, f"{banned} survived in {node.get('title', node)}"
             # 裸 anyOf 节点（没有同级 type）不能survive——要么被 collapse 成
             # type 数组，要么其余分支已被解析成不含 anyOf 自身歧义的具体结构；
-            # 真实 API 明确拒绝"anyOf 但同级没有 type"的形态。
+            # 真实 API 明确拒绝"anyOf 但同级没有 type"的形态。object/array 分支
+            # 都属于"探针验证过保留 anyOf 即可接受"的一类（object 分支来自解析
+            # 后的嵌套模型，array 分支来自②新增的非必填容器可空处理）。
             if "anyOf" in node:
                 assert node.get("type") is not None or any(
-                    isinstance(b, dict) and (b.get("type") == "object" or "properties" in b)
+                    isinstance(b, dict)
+                    and (b.get("type") in ("object", "array") or "properties" in b)
                     for b in node["anyOf"]
-                ), f"裸 anyOf 且无 object 分支必须被 collapse: {node}"
+                ), f"裸 anyOf 且无 object/array 分支必须被 collapse: {node}"
             for value in node.values():
                 walk(value)
         elif isinstance(node, list):
@@ -281,6 +284,212 @@ def test_sanitize_json_schema_for_strict_tool_calling_meets_deepseek_requirement
     assert len(object_branches) == 1
     assert object_branches[0]["additionalProperties"] is False
     assert "principal_contradiction" in sanitized["required"]
+
+
+def test_sanitize_marks_default_factory_list_fields_nullable():
+    """红灯：`required` 必须覆盖 object 全部 properties 是 DeepSeek 硬要求，改不了，
+    但这把每个 `List[X] = Field(default_factory=list)` 字段都逼成"必须交出非空
+    数组"——模型没有真实第三条跨层支撑关系时，也只能为这个字段编一条凑数。
+    放开这些字段可取 null，模型返回 null 时 pydantic 端 `default_factory=list`
+    会兜回 `[]`，contracts.py 和下游消费代码不用改一行。
+
+    用 BridgeMemo.cross_layer_claims（真实契约里的 default_factory=list 字段）
+    做端到端断言：原始 schema 里它不在 required、且是裸 array；sanitize 之后必须
+    仍在 required 里（硬要求不能违反），但字段本身的 schema 必须从裸 array 变成
+    `anyOf: [原 array schema, {"type": "null"}]`。"""
+    from agent_analysis.contracts import BridgeMemo
+    from agent_analysis.llm_engine import sanitize_json_schema_for_strict_tool_calling
+
+    raw_schema = BridgeMemo.model_json_schema()
+    # 前提核实：cross_layer_claims 确实是 default_factory=list 字段——pydantic
+    # 没把它列进 required，且它的原始类型是裸 array（不是 anyOf）。
+    assert "cross_layer_claims" not in raw_schema.get("required", [])
+    assert raw_schema["properties"]["cross_layer_claims"].get("type") == "array"
+
+    sanitized = sanitize_json_schema_for_strict_tool_calling(raw_schema)
+
+    assert "cross_layer_claims" in sanitized["required"], (
+        "DeepSeek strict schema 硬要求 required 覆盖全部 properties，这条改不了"
+    )
+    field_schema = sanitized["properties"]["cross_layer_claims"]
+    assert "anyOf" in field_schema, "非必填数组字段必须可取 null，否则模型被逼为空数组凑数"
+    branch_types = {b.get("type") for b in field_schema["anyOf"] if isinstance(b, dict)}
+    assert branch_types == {"array", "null"}, f"应恰好是 array/null 两个分支，实际 {branch_types}"
+
+    # 原本就必填的数组字段（layers_connected，Field(..., min_length=2)）不应被
+    # 放开成可空——只有 default_factory=list 的非必填字段才该变。
+    layers_field = sanitized["properties"]["layers_connected"]
+    assert "anyOf" not in layers_field
+    assert layers_field.get("type") == "array"
+
+
+def test_fix_anyof_does_not_collapse_array_null_into_type_array():
+    """红灯：`fix_anyof` 把"anyOf 分支全是原始类型"塌缩成 `{"type": [...]}`
+    这条 collapse 逻辑此前把 "array" 也当成原始类型——`Optional[List[str]]`
+    （pydantic 输出 `anyOf: [{type:array,...}, {type:null}]`）因此会被塌缩成
+    `{"type": ["array", "null"]}`。DeepSeek 探针实测对这个形态直接 400：
+    `{"error":{"message":"unknown variant 'array', expected one of string,
+    number, integer, boolean, null", ...}}`。而 `{"anyOf":[{"type":"array",
+    "items":…},{"type":"null"}]}` 探针验证过是被接受的形态，所以正确修法是
+    把 array（以及 object）排除出"可塌缩的原始类型"认定，保留 anyOf 结构，
+    不是反过来把 array 也塌缩进 type 数组。
+
+    这条在改 ②（非必填容器可空）之前就已经是潜伏雷——全仓当前没有一个
+    `Optional[List[X]]` 字段，所以 0 命中；② 落地后 sanitize 会自己产出这种
+    结构，必须先确认 fix_anyof 不会把它塌缩坏。"""
+    from agent_analysis.llm_engine import sanitize_json_schema_for_strict_tool_calling
+
+    raw_schema = {
+        "type": "object",
+        "properties": {
+            "maybe_items": {
+                "anyOf": [
+                    {"type": "array", "items": {"type": "string"}},
+                    {"type": "null"},
+                ]
+            }
+        },
+        "required": ["maybe_items"],
+    }
+
+    sanitized = sanitize_json_schema_for_strict_tool_calling(raw_schema)
+
+    def walk(node):
+        if isinstance(node, dict):
+            type_value = node.get("type")
+            if isinstance(type_value, list):
+                assert "array" not in type_value and "object" not in type_value, (
+                    f"塌缩出了非法的 type 数组 {type_value}——DeepSeek 探针实测对此类"
+                    "形态直接 400：\"unknown variant 'array', expected one of string, "
+                    f"number, integer, boolean, null\"。节点：{node}"
+                )
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(sanitized)
+
+    # 且必须仍然可用：anyOf 结构原样保留，array 分支还在。
+    field_schema = sanitized["properties"]["maybe_items"]
+    assert "anyOf" in field_schema
+    assert any(isinstance(b, dict) and b.get("type") == "array" for b in field_schema["anyOf"])
+
+
+def test_normalize_none_list_fields_turns_default_factory_null_into_empty_list():
+    """红灯：`sanitize_json_schema_for_strict_tool_calling` 把
+    `BridgeMemo.cross_layer_claims`（`default_factory=list`，非必填）在发往
+    DeepSeek 的 schema 里改写成可以取 `null`——但 pydantic 的
+    `List[X] = Field(default_factory=list)` **不接受显式 null**：
+    `default_factory` 只在字段缺失时生效，收到 `{"cross_layer_claims": None}`
+    会直接 `ValidationError`。真实代价：模型一旦老实按新 schema 返回 `null`
+    （这正是①想鼓励的诚实留空），`model_cls.model_validate(...)` 会炸，被
+    `_run_stage` 的 `except` 捕获记成 `schema_validation_error`，白烧一次
+    重试——改动不但没生效，还比改之前更差。这个测试钉住"归一化把 null 收回
+    成 []，校验必须通过"这条修复。"""
+    from agent_analysis.contracts import BridgeMemo
+    from agent_analysis.llm_engine import normalize_none_list_fields_for_strict_schema_validation
+
+    payload = {
+        "bridge_type": "macro_valuation",
+        "layers_connected": ["L1", "L2"],
+        "implication_for_ndx": "test",
+        "cross_layer_claims": None,
+        "conflicts": None,
+    }
+    normalized = normalize_none_list_fields_for_strict_schema_validation(BridgeMemo, payload)
+    assert normalized["cross_layer_claims"] == []
+    assert normalized["conflicts"] == []
+
+    # 归一化之后必须能通过真实校验——这才是这条修复真正要保证的结果，不是
+    # 只看归一化函数本身的输出。
+    validated = BridgeMemo.model_validate(normalized)
+    assert validated.cross_layer_claims == []
+    assert validated.conflicts == []
+
+
+def test_normalize_none_list_fields_recurses_into_nested_contract_lists():
+    """红灯：197 处受影响站点大多在 `$defs` 的嵌套契约里——例如
+    `BridgeMemo.typed_conflicts[].evidence_refs`（`TypedConflict.evidence_refs`
+    同样是 `default_factory=list`）。如果归一化只处理顶层字段、不递归进嵌套
+    模型列表，这些嵌套字段收到 `null` 时依然会在校验阶段炸掉，① 的效果只在
+    顶层生效、嵌套一层就失效。用真实契约的嵌套层级钉住"必须递归"这条要求。"""
+    from agent_analysis.contracts import BridgeMemo
+    from agent_analysis.llm_engine import normalize_none_list_fields_for_strict_schema_validation
+
+    payload = {
+        "bridge_type": "macro_valuation",
+        "layers_connected": ["L1", "L2"],
+        "implication_for_ndx": "test",
+        "typed_conflicts": [
+            {
+                "conflict_id": "conflict:1",
+                "conflict_type": "valuation_discount_rate",
+                "severity": "high",
+                "description": "desc",
+                "implication": "implication",
+                "involved_layers": None,
+                "evidence_refs": None,
+                "event_refs": None,
+                "falsifiers": None,
+            }
+        ],
+    }
+    normalized = normalize_none_list_fields_for_strict_schema_validation(BridgeMemo, payload)
+    nested = normalized["typed_conflicts"][0]
+    assert nested["involved_layers"] == []
+    assert nested["evidence_refs"] == []
+    assert nested["event_refs"] == []
+    assert nested["falsifiers"] == []
+
+    validated = BridgeMemo.model_validate(normalized)
+    assert validated.typed_conflicts[0].evidence_refs == []
+
+
+def test_normalize_none_list_fields_does_not_swallow_required_array_null():
+    """红灯反例（这条最重要，判据不能放宽）：`BridgeMemo.layers_connected` 是
+    必填数组（`Field(..., min_length=2)`），不在 `sanitize_json_schema_for_
+    strict_tool_calling` 放开 null 的字段集合里——它从未被允许在 schema 里取
+    null。模型如果对它返回 `null`，说明输出本身坏了（不是"诚实留空"，跨层
+    分析必须至少连两层），必须仍然校验失败，不能被这层归一化悄悄吞成 `[]`。
+    判据是"该字段有默认值 + 非 Optional 的 list 类型"两者同时满足，
+    `layers_connected` 没有默认值（必填），天然不落进这个集合。"""
+    from agent_analysis.contracts import BridgeMemo
+    from agent_analysis.llm_engine import normalize_none_list_fields_for_strict_schema_validation
+
+    payload = {
+        "bridge_type": "macro_valuation",
+        "layers_connected": None,
+    }
+    normalized = normalize_none_list_fields_for_strict_schema_validation(BridgeMemo, payload)
+    assert normalized["layers_connected"] is None, (
+        "必填数组字段收到 null 必须原样保留（不能被吞成 []），让 pydantic 去报错"
+    )
+
+    import pytest
+    with pytest.raises(Exception):
+        BridgeMemo.model_validate(normalized)
+
+
+def test_normalize_none_list_fields_leaves_missing_fields_for_default_factory():
+    """回归护栏：payload 里字段本来就缺失（模型没提这个 key，而不是显式给
+    null）时，归一化不能替它补上任何值——必须原样让 pydantic 的
+    `default_factory=list` 接管，这是改动前就有的行为，不该被这次改动动到。"""
+    from agent_analysis.contracts import BridgeMemo
+    from agent_analysis.llm_engine import normalize_none_list_fields_for_strict_schema_validation
+
+    payload = {
+        "bridge_type": "macro_valuation",
+        "layers_connected": ["L1", "L2"],
+        "implication_for_ndx": "test",
+        # cross_layer_claims 字段完全缺失，不是 null
+    }
+    normalized = normalize_none_list_fields_for_strict_schema_validation(BridgeMemo, payload)
+    assert "cross_layer_claims" not in normalized, "缺失字段不应被归一化函数补写"
+
+    validated = BridgeMemo.model_validate(normalized)
+    assert validated.cross_layer_claims == []
 
 
 def test_call_ai_uses_strict_tool_calling_when_schema_provided(monkeypatch):

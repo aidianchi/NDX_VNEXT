@@ -6,6 +6,62 @@
 
 ---
 
+## 2026-07-31
+
+### 【关闭 T34】把"要求模型照抄"换成"只能从清单里选"，并卸掉"每个数组都必须填满"的配额压力
+
+**三处改动，一条共同判据**：结构化槽位之所以能让闸门"不判意思"，是因为槽位内容可以拿去和"不是散文的东西"核对。让模型把散文摘进槽位再逐字比对，那叫听写，不叫身份比对。有效做法是**让它选**，不是让它抄。
+
+**① 冲突编号改选单**（接替被 run `20260730_114704` 证伪的 T31：模型把 `TC1_…` 写成 `C1_…`，后缀一字不差、前缀自行改写）。`ThesisDraft.retained_conflicts[].conflict_id` 在严格 schema 里限定为本轮 `synthesis_packet` 实际给出的 conflict_id ∪ null 的 `enum`（`orchestrator.py` `_collect_thesis_conflict_id_candidates` / `_constrain_thesis_retained_conflict_id_enum`）。schema 按 run 动态构造，经 `_strict_tool_schema_for_stage` 新增的 `schema_postprocess` 钩子注入；候选为空时不注入（空 enum 语义上等于禁止模型表达"本站新发现的冲突"）。定位用路径无关递归，同时兼容 `items` 与 `anyOf[0].items` 两种形态。
+
+**② 可选容器字段可空**。`sanitize_json_schema_for_strict_tool_calling` 把**原本不在 `required` 里**的 array 属性改写成 `{"anyOf":[{原 array schema},{"type":"null"}]}`，8 个契约共 197 处站点。`required` 全覆盖是 provider 强制、改不了，所以**可空性才是配额压力的真正开关**：只能是数组的字段等于逼模型凑非空内容。只改发往 API 的 schema，不动 `contracts.py`。
+
+**③ 补闸门**。`fix_anyof` 原会把 ② 造出的 `anyOf[array,null]` 塌缩成 `type:["array","null"]`——探针实测该形式被 DeepSeek 400 拒（`unknown variant 'array'`）。把 `array`/`object` 排除出 collapse 判定，并在 `tests/test_governance_input.py` 加断言：sanitized schema 的 `type` 数组不得含 string/number/integer/boolean/null 以外的变体。
+
+**④ 差点上线即失效的一处，值得单独记**：②的前提"pydantic 收到 null 会走 `default_factory=list`"是**错的**，已实测证伪——`default_factory` 只在**字段缺失**时生效，显式 `null` 直接 `list_type` ValidationError。也就是说 ② 鼓励的行为恰好是系统会罚的行为，不但白改还多烧一次重试。补 `normalize_none_list_fields_for_strict_schema_validation`（与 sanitize 并列放置、docstring 互相指名），判据与 schema 侧**严格同一集合**：`FieldInfo.is_required()` 为 False **且** 注解为非 Optional list。接在 `_run_stage` 与 `_load_stage_checkpoint` 的 `model_validate` 之前。
+
+**红灯测试在哪**：`tests/test_vnext_llm_engine.py`（②可空、③不得塌缩成 `type:["array","null"]`、④四条含反例）、`tests/test_vnext_orchestrator.py`（①两种 schema 形态各一、空清单 noop、候选三来源去重、`_run_thesis` 端到端接线且未启用时逐字节不变）、`tests/test_governance_input.py`（③闸门）。每条均在改动前实跑验证会红。**④的反例最关键**：`BridgeMemo.layers_connected`（必填、`min_length=2`）收到 `null` 必须仍然失败，不得被悄悄吞成 `[]`。
+
+**真实验收**（run `20260731_002156`，四站严格模式）：
+- **①成立**：thesis 4 条 `retained_conflicts` 的 `conflict_id` **全部落在本轮候选集合内**，无一自造。（注意：候选集合取自 `synthesis_packet`，含 bridge 的 `conflicts` 与 `typed_conflicts` 两条通道，比单看 `typed_conflicts` 宽——核对时别只比对后者。）
+- **②③④成立且被真实触发**：`event_card_interpreter` 两张卡对 `supports_hypotheses`/`refutes_hypotheses`/`needs_data_confirmation`/`entities` 显式返回 `null`，`attempts=1 status=ok`，落盘为 `[]`。**没有 ④ 这两站会各烧一次重试**——模型真的用上了这个表达权。
+- 探针（4570 in / 128 out tokens）先行验证四站 sanitized schema 全部被接受，含唯一没验过的 `{"type":["string","null"],"enum":[…,null]}` 形态。
+
+**分辨实验结论（T34④ 的真正目的）**：`resonance_chains` 3 条、`transmission_paths` 4 条，与前两次严格跑一致，**未回落**到非严格基线带（1-2 / 2-3）。关键不在"数字没变"——三次一致本身不构成证据（这个推理方向在 2026-07-30 已经犯过一次）——**而在于同一跑内配额压力确实被卸掉了**：`resonance_chains` 等四个字段在本跑 schema 里确认可空，兄弟站点也确实用了 null，而 bridge 在**有权说"没有"的情况下**仍然填满 3/4。这支持"数据本就支持三条链"，而非配额凑数。
+
+**否决**：未采纳"给未登记字段自动补 `audit_only`"（那是 T35 的诱人写法）——`orchestrator.py:2883` 的 `mixed_field_authority` 会因此把 7 个已登记函数集体降级。未把 `null→[]` 做成"仅严格模式生效"的开关——会让两条路径行为分叉、更难验证。未改 `contracts.py` 字段类型为 `Optional[List[X]]`。`_run_schema_guard` 的后置闸门原样保留：`tool_choice="auto"` 下模型可以不走工具通道，严格模式是概率性保证不是铁保证——本跑再次实测到（见下条）。
+
+### 【关闭 T35】证据编号的合法性判据拿错了名单：把"存不存在"和"够不够格"拆开
+
+**病根**：`_run_schema_guard` 构造 `valid_evidence_refs` 时，子引用（`#field`）来源是 `_field_authority_from_payload` 的返回键——也就是 `MetricAuthority` / `metric_authority` 这张**权限分级表**。于是"这个字段够不够格支撑强结论"被当成了"这个字段存不存在"的名单。L4 的 17 个 `get_*` 里 10 个从未登记，它们的所有子引用因此永久非法。
+
+**实证**（run `20260730_114704`，我亲自核过原始产物）：`L4.get_damodaran_us_implied_erp` 为 `availability=available`、`source_tier=official`、`value.erp_t12m_adjusted_payout=4.3`，字段真实存在、取数成功、来源官方，却被判 invalid。**不是数据缺失，是判据拿错名单。**
+
+**改法（用户批准的方案 A，三段）**：
+① 合法性来源改为 `MetricAuthority 键 ∪ raw_payload["value"] 真实顶层键`——闸门回到纯身份比对。取并集，不减少任何原本合法的 ref。
+② **权限分级一个字不动**，`_field_authority_from_payload` 本体未改，**不给未登记字段自动补 `audit_only`**。这是本次最重要的红线：`orchestrator.py:2883` 的 `mixed_field_authority = len(field_usages) > 1` 一旦被触发，父级 passport 会 `verified=False` 并追加降级规则；凭空注入 `audit_only` 会把 7 个已登记函数集体降级——**修一个病弄坏七个好的**。
+③ 因此出现"合法但无字段级 passport"的新情况：新增 `_resolve_claim_evidence_ref_with_parent_fallback`，先查自身 passport，再查父级并核对字段名确实在父级 `real_value_fields` 里，是则继承父级权限，否则仍判 `missing_refs`。只做身份比对，不放宽编造字段名。
+
+**红灯测试在哪**：`tests/test_vnext_orchestrator.py` 5 条，其中 2 条为真红灯（改前复现真实事故报错逐字一致），另 3 条是行为不变式钉子——反例（`value` 里不存在的字段名仍非法）、不回归（已登记 payload 的 `_field_authority_from_payload` 返回逐字节相同、`mixed_field_authority` 不被新引入）、回落反例。
+
+**离线回放**（真实产物重算，不花钱）：合法 ref 由 104 条增至 459 条，**净增 355、零丢失**（严格超集），目标 ref 由非法转合法。
+
+**验证**：全量 `--cache-clear` **1040 passed**。
+
+**已知副作用，如实登记**：放行集合里混入了元数据键（`#source_file`、`#download_url`、`#retrieval_method` 等，该函数 21 个真实键里占 5 个）。按"闸门只判身份不判意思"这不算 bug，且边际风险低——父级 ref `L4.get_damodaran_us_implied_erp` 本来就合法且带 official tier，引用 `#download_url` 并不比引用父级更危险。**不因此加词表去猜哪个键"够格"**，那正是 T33 判死的那类规则。
+
+**T20 只修好一半，未结案**：bridge 段（`typed_conflicts` 等只受 `schema_guard` 校验）症状消失；但 thesis / final / reviser 三站另有一道 `_validate_stage_evidence_refs`，白名单来自 `synthesis_packet.evidence_index`，而该索引的 `#field` 条目（`orchestrator.py:4415-4418`）**仍然只由 `field_authority` 构造**。模型在这三站引用真实字段名仍会被拒。扩围与否是独立决定，见 `现在.md` 的 T20 行。
+
+**顺带更正一条调查结论**：先前调查报称"MetricAuthority 全仓只在 `tools_L4.py` 出现，L1/L2/L3/L5 均 0 处"。按真实产物逐函数扫描，**L1/L2 同样有登记**（走 `data_quality.metric_authority` 通道，非字面量 `MetricAuthority`），且键名错位不止 L4：`L1.get_fed_funds_rate_path`(3)、`L2.get_vix_term_structure`(1)、`L2.get_crowdedness_dashboard`(1)、`L4.get_m7_capex_cycle`(2)、`L4.get_m7_earnings_blackout_calendar`(1)、`L4.get_m7_buyback_flow`(2)。T20 的影响面据此上修。
+
+### 严格模式的概率性缺口被再次实测到：`event_section_summary` 第七次连挂
+
+run `20260731_002156` 里该站两次尝试均 `parse_error`，**失败原因已与前六次不同**：模型返回的是**普通文本通道**的 JSON（`tool_choice="auto"` 允许它不调用工具，此时 `strict:True` 完全失效），文本里 `这为"AI投资究竟是价值破坏还是生产性资本支出"这一竞争假说` 用了**未转义的半角双引号**，JSON 在第 2 行就断了。两次尝试同一病因。
+
+**这不是闸门尽职，是模型被机制卡死**——按 `CLAUDE.md` 的判据（连续多跑同样失败）已经成立。也不是本次三项改动引入的：`attempts=1` 的 bridge / thesis 走的是工具通道，形状零问题。已作为 T36 记入 `现在.md`，本条只记录实测事实与归因。
+
+---
+
 ## 2026-07-29
 
 ## 2026-07-30

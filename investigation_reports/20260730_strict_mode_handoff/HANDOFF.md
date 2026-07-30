@@ -114,6 +114,15 @@
 
 **这比派人读文本更能分辨**，因为它不依赖单个评读者的主观判断。
 
+> **【关单记录 T34｜2026-07-31】** 四项全部完成并经真实 run `20260731_002156` 验收，详见 `WORK_LOG.md` 2026-07-31。
+>
+> 三条留给后来者的更正，**本文件上文的表述据此作废**：
+> 1. 上文 ② 写"pydantic 收到 `null` 会走 `default_factory=list`，下游逻辑一行不用改"——**这句是错的**，已实测证伪：`default_factory` 只在字段缺失时生效，显式 `null` 直接 `list_type` ValidationError。② 必须配一个 `null→[]` 归一化才成立，判据须与 schema 侧同一集合（`is_required()` 为 False 且注解为非 Optional list）。
+> 2. 上文 ① 写"限定为本轮 bridge 的 `typed_conflicts[].conflict_id`"——实现取的是 `synthesis_packet` 里模型**真看得见**的全部编号，含 bridge 的 `conflicts` 与 `typed_conflicts` 两条通道。核对产出时只比对 `typed_conflicts` 会误判成"模型自造编号"（我核对时踩过一次）。
+> 3. 上文 ④ 的分辨实验判据"条数不掉就是真货"**不够严谨**：三次跑条数一致本身不构成证据（推理方向问题，2026-07-30 已犯过一次）。真正成立的判据是**同一跑内配额压力确实被卸掉**——本跑确认那四个字段在 schema 里可空，且兄弟站点 `event_card_interpreter` 真的返回了 `null`，而 bridge 在有权说"没有"时仍填满 3/4。
+>
+> 另：教训 2（严格模式是概率性保证）在本跑再次被实测到，`event_section_summary` 第七次连挂，病因已变为"走文本通道 + 未转义半角双引号"，已立 T36。
+
 ### T35｜桥接引用了一个不存在的证据编号
 
 `schema_guard` 报 `BridgeMemo[0].typed_conflicts[TC1_…].evidence_refs invalid: L4.get_damodaran_us_implied_erp#erp_t12m_adjusted_payout`。
@@ -123,6 +132,10 @@
 ### ~~T33~~｜已于 2026-07-30 结案，不要重开
 
 用户裁决："这类规则本来就可以删。"三条措辞闸门已删除，保证移交报告渲染（见教训 4）。禁止型规则保留。**不要因为看到 `_HINDSIGHT_OR_CAUSAL_PATTERNS` 还在就以为这条没做完。**
+
+> **【关单记录 T35｜2026-07-31】** 已结案，答案是"命名空间错位"，不是指标缺失——该字段本轮 `availability=available`、`source_tier=official`、值 4.3。用户批准方案 A：合法性改判真实字段名（纯身份），权限分级保持只由 `MetricAuthority` 决定。合法 ref 104→459 条、零丢失，全量 1040 passed。详见 `WORK_LOG.md` 2026-07-31。
+>
+> **上文"与台账 T20 同类病"这句要补一句**：同源没错，但**一次并没有修掉两条**。T35 修的是 `_run_schema_guard` 那道闸门（bridge 段）；thesis / final / reviser 三站走的是 `_validate_stage_evidence_refs`，白名单来自 `synthesis_packet.evidence_index`，那里的 `#field` 条目仍只由登记表构造。T20 剩下的一半是独立决定，见 `现在.md`。
 
 ### T20｜台账旧项，与 T35 同源
 

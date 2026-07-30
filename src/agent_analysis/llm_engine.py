@@ -18,7 +18,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union, get_args, get_origin
 
 # 尝试导入配置
 try:
@@ -42,6 +42,11 @@ try:
 except ImportError:
     GEMINI_AVAILABLE = False
     logging.warning("Google GenAI 库未安装")
+
+try:
+    from pydantic import BaseModel
+except ImportError:  # pragma: no cover - 与 contracts.py 的降级路径保持一致
+    BaseModel = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +96,11 @@ STRICT_SCHEMA_FREE_FORM_OBJECTS: Dict[str, str] = {
         "代码填（orchestrator.py:666），且模型若擅自填会被 :7187 强制置空",
     "FinalAdjudication:$.properties.claim_ledger.anyOf[0].properties.publish_gate":
         "代码填（同上，内联展开的第二处）",
-    "AnalysisRevised:$.properties.rejected_critiques.items":
-        "代码填（orchestrator.py:5429）",
+    "AnalysisRevised:$.properties.rejected_critiques.anyOf[0].items":
+        "代码填（orchestrator.py:5429）。2026-07-30：路径从 `.items` 变成"
+        "`.anyOf[0].items`——该字段是 default_factory=list 且非必填，②落地后"
+        "被包进 anyOf[array, null]，free-form object 挂在 array 分支里面，"
+        "只是路径变了，字段身份和填法都没变",
     "AnalysisRevised:$.properties.degraded_fallback.anyOf[0]":
         "代码填（orchestrator.py:5433）",
 }
@@ -104,6 +112,13 @@ def sanitize_json_schema_for_strict_tool_calling(schema: Dict[str, Any]) -> Dict
     JSON Schema 本身（发给 API、用于约束模型输出的那份契约），不改任何 pydantic
     模型定义——`extra="allow"` 和 `Optional` 字段在 contracts.py 里保持原样，
     校验响应时 pydantic 仍按自己的规则走，两边互不影响。
+
+    这个函数把"非必填的 array 字段"的 schema 放开成可空（见下方 `required` 分支
+    的注释）；`normalize_none_list_fields_for_strict_schema_validation`（就在本
+    文件下方）负责在 `model_cls.model_validate(...)` 之前把模型真返回的 `null`
+    收回成 `[]`——两边是配对的一体两面，**删任何一半都会让另一半失效**：只放开
+    这半边、不做那半边的归一化，模型一旦真的返回 `null`，pydantic 校验会直接
+    炸（`default_factory=list` 不认显式 `None`），比不放开还差。
     """
     import copy
 
@@ -113,8 +128,32 @@ def sanitize_json_schema_for_strict_tool_calling(schema: Dict[str, Any]) -> Dict
             for unsupported_key in ("minLength", "maxLength", "minItems", "maxItems", "format"):
                 cleaned.pop(unsupported_key, None)
             if cleaned.get("type") == "object" and isinstance(cleaned.get("properties"), dict):
+                # `required` 必须覆盖全部 properties 是 DeepSeek strict schema 的硬要求
+                # （少列会 400），这条改不了。但覆盖之前记下原始 required——pydantic
+                # 对 `List[X] = Field(default_factory=list)` 字段不会列进 required，
+                # 这正是可以还给模型的空间：这些字段本来就允许"这次没有"，只是严格
+                # schema 把"required + 只能是 array"这两条捆在一起，逼模型为空
+                # 结果也要凑一条内容出来。
+                #
+                # 只处理原本非 required 的 array 容器字段：把它的 schema 从裸 array
+                # 改写成 anyOf[原 array schema, {"type":"null"}]。DeepSeek 探针实测
+                # 接受这种形态、且模型确实会返回 null；pydantic 端字段仍是
+                # `default_factory=list`，收到 null 会走 default 变回 []——不用改
+                # contracts.py 一行，只改发往 API 的 schema。
+                #
+                # 只处理 array，不处理 object：自由形态 object 由
+                # STRICT_SCHEMA_FREE_FORM_OBJECTS 登记表单独管，这里不动它。
+                original_required = set(cleaned.get("required") or [])
+                properties = cleaned["properties"]
+                for prop_name, prop_schema in properties.items():
+                    if (
+                        prop_name not in original_required
+                        and isinstance(prop_schema, dict)
+                        and prop_schema.get("type") == "array"
+                    ):
+                        properties[prop_name] = {"anyOf": [prop_schema, {"type": "null"}]}
                 cleaned["additionalProperties"] = False
-                cleaned["required"] = list(cleaned["properties"].keys())
+                cleaned["required"] = list(properties.keys())
             return cleaned
         if isinstance(node, list):
             return [strip_and_require(item) for item in node]
@@ -142,20 +181,35 @@ def sanitize_json_schema_for_strict_tool_calling(schema: Dict[str, Any]) -> Dict
                 has_ref_or_object_branch = False
                 for branch in resolved:
                     branch_type = branch.get("type") if isinstance(branch, dict) else None
-                    if branch_type == "object" or (isinstance(branch, dict) and "properties" in branch):
+                    # "array" 和 "object" 都必须排除出"可 collapse 的原始类型"认定。
+                    # 潜伏雷（2026-07-30 修复）：这条 collapse 逻辑原本只为
+                    # Optional[原始类型] 设计，但把 "array" 也当成了原始类型——
+                    # Optional[List[X]] 产出的 `anyOf:[{type:array,...},{type:null}]`
+                    # 会被塌缩成 `{"type":["array","null"]}`，探针实测被 DeepSeek 400
+                    # 拒绝："unknown variant 'array', expected one of string, number,
+                    # integer, boolean, null"。而 `{"anyOf":[{"type":"array",...},
+                    # {"type":"null"}]}` 保留 anyOf 结构探针验证过是被接受的。全仓
+                    # 当前对 array 分支是 0 命中（现有列表字段均非 Optional），是本
+                    # 次改动②（非必填容器字段可空）之前就存在的潜伏风险，②落地后
+                    # 就会真命中，所以必须同一次改掉。
+                    if branch_type in ("object", "array") or (
+                        isinstance(branch, dict) and "properties" in branch
+                    ):
                         has_ref_or_object_branch = True
                     elif isinstance(branch_type, str):
                         primitive_types.append(branch_type)
                     else:
                         has_ref_or_object_branch = True
                 if not has_ref_or_object_branch and primitive_types:
-                    # Optional[原始类型/枚举] 且没有嵌套 object：collapse 成 type 数组，
-                    # 整个去掉 anyOf——DeepSeek 对裸 anyOf 节点要求同级必须有 type。
+                    # Optional[原始类型/枚举] 且没有嵌套 object/array：collapse 成
+                    # type 数组，整个去掉 anyOf——DeepSeek 对裸 anyOf 节点要求同级
+                    # 必须有 type。
                     fixed.pop("anyOf")
                     fixed["type"] = primitive_types if len(primitive_types) > 1 else primitive_types[0]
                 else:
-                    # 含嵌套 object 的分支：保留 anyOf 结构、$ref 已内联展开，
-                    # 不额外加 sibling type（会撞"object with no properties"）。
+                    # 含嵌套 object/array 的分支：保留 anyOf 结构、$ref 已内联展开，
+                    # 不额外加 sibling type（object 分支会撞"object with no
+                    # properties"；array 分支的 type 数组形态会被 400 拒绝）。
                     fixed["anyOf"] = resolved
             return fixed
         if isinstance(node, list):
@@ -163,6 +217,115 @@ def sanitize_json_schema_for_strict_tool_calling(schema: Dict[str, Any]) -> Dict
         return node
 
     return fix_anyof(basic)
+
+
+def _optional_inner_type(annotation: Any) -> Tuple[Any, bool]:
+    """把 `Optional[X]`（即 `Union[X, None]`）拆成 `(X, True)`；非 Optional 原样
+    返回 `(annotation, False)`。只识别恰好两个分支且其中一个是 NoneType 的
+    Union——这是 pydantic 对 `Optional[X]` 的标准展开形态。"""
+    if get_origin(annotation) is Union:
+        branches = [arg for arg in get_args(annotation) if arg is not type(None)]
+        if len(branches) == 1 and type(None) in get_args(annotation):
+            return branches[0], True
+    return annotation, False
+
+
+def _bare_list_item_type(annotation: Any) -> Optional[Any]:
+    """`annotation` 是裸 `List[X]` / `list[X]`（未被 `Optional` 包裹）时返回 `X`，
+    否则返回 `None`。`Optional[List[X]]` 的 `get_origin` 是 `Union` 而不是
+    `list`，所以天然被排除——这正是判据要的"非 Optional 的 list 类型"。"""
+    if get_origin(annotation) is list:
+        args = get_args(annotation)
+        return args[0] if args else Any
+    return None
+
+
+def _is_pydantic_model_type(candidate: Any) -> bool:
+    return BaseModel is not None and isinstance(candidate, type) and issubclass(candidate, BaseModel)
+
+
+def normalize_none_list_fields_for_strict_schema_validation(model_cls: Any, payload: Any) -> Any:
+    """`sanitize_json_schema_for_strict_tool_calling` 那半边把"非必填的 array
+    字段"（`default_factory=list`，因而不在原始 `required` 里）在发往 DeepSeek 的
+    schema 里改写成 `anyOf[原 array schema, {"type":"null"}]`，让模型能诚实地
+    返回 `null` 表示"这次真没有"。这半边负责把模型真返回的 `null` 收回来——
+    **删掉任一半都会让另一半失效**：只放开 schema、不做这层归一化，模型一旦真
+    按新 schema 返回 `null`，`model_cls.model_validate(...)` 会直接炸（`List[X] =
+    Field(default_factory=list)` 只在字段**缺失**时走 default，显式 `None` 会被
+    pydantic 拒绝——`default_factory` 不认 `None`），且被 `_run_stage` 的
+    `except` 捕获记成 `schema_validation_error`，白烧一次重试，比改动前更差。
+
+    判据（必须与 schema 侧那半边精确对齐，不多不少）：只对**同时满足**下列两条
+    的字段做 `None -> []`——
+      1) 该字段在 pydantic 模型里有默认值（`FieldInfo.is_required()` 为 False，
+         覆盖 `default_factory=list` 和 `default=[]` 两种写法）；
+      2) 其注解是**非 Optional** 的 `List[X]` / `list[X]`。
+    必填数组字段（如 `BridgeMemo.layers_connected`，`Field(..., min_length=2)`）
+    收到 `null` 必须仍然报错——那是模型输出坏了，不是"诚实留空"，不能被悄悄吞掉。
+
+    无条件生效，不做"仅严格模式开启时才归一化"的开关：非严格模式下模型本来
+    也偶尔会返回 `null` 表示"没有内容"，那是同一种合法表达；加开关只会让两条
+    路径行为分叉、更难验证，所以两条路径统一走这一层归一化。
+
+    递归处理嵌套模型和模型列表（197 处站点大多在 `$defs` 的嵌套契约里，例如
+    `BridgeMemo.typed_conflicts[].evidence_refs`）——完全靠遍历
+    `model_cls.model_fields` 的类型注解往下走，不靠字段名硬编码，因此新增字段
+    不需要在这里登记。
+    """
+    if not isinstance(payload, dict):
+        return payload
+    model_fields = getattr(model_cls, "model_fields", None)
+    if not model_fields:
+        return payload
+
+    normalized = dict(payload)
+    for field_name, field_info in model_fields.items():
+        if field_name not in normalized:
+            continue
+        value = normalized[field_name]
+        annotation = field_info.annotation
+
+        bare_item_type = _bare_list_item_type(annotation)
+        if bare_item_type is not None:
+            # 裸（非 Optional）List[X] 字段：满足判据条件②。条件①（非必填）
+            # 决定 None 是否可以收回成 []；必填字段收到 None 原样放行，让
+            # pydantic 去报错（这就是 layers_connected 反例要的行为）。
+            if value is None:
+                if not field_info.is_required():
+                    normalized[field_name] = []
+                continue
+            if isinstance(value, list) and _is_pydantic_model_type(bare_item_type):
+                normalized[field_name] = [
+                    normalize_none_list_fields_for_strict_schema_validation(bare_item_type, item)
+                    if isinstance(item, dict)
+                    else item
+                    for item in value
+                ]
+            continue
+
+        if value is None:
+            continue
+
+        inner_type, was_optional = _optional_inner_type(annotation)
+        if was_optional:
+            optional_item_type = _bare_list_item_type(inner_type)
+            if optional_item_type is not None:
+                # Optional[List[X]]：null 在这里本来就是合法值（pydantic 天然
+                # 接受），不需要、也不应该被收回成 []；但列表内部若是嵌套模型
+                # 仍要继续往下递归。
+                if isinstance(value, list) and _is_pydantic_model_type(optional_item_type):
+                    normalized[field_name] = [
+                        normalize_none_list_fields_for_strict_schema_validation(optional_item_type, item)
+                        if isinstance(item, dict)
+                        else item
+                        for item in value
+                    ]
+                continue
+
+        if _is_pydantic_model_type(inner_type) and isinstance(value, dict):
+            normalized[field_name] = normalize_none_list_fields_for_strict_schema_validation(inner_type, value)
+
+    return normalized
 
 
 class LLMEngine:

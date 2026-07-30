@@ -925,7 +925,7 @@ class Conflict(BaseModel):
     """
     conflict_id: Optional[str] = Field(
         None,
-        description="沿用上游 bridge 的 conflict_id 原文；本站新发现的冲突留空"
+        description="从 synthesis_packet 已给出的 conflict_id 中选一个；本站新发现的冲突留空"
     )
     conflict_type: str = Field(
         ...,
