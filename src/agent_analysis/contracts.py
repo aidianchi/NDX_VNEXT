@@ -430,11 +430,23 @@ class EventInterpretationCard(BaseModel):
 
 
 class EventSectionSummary(BaseModel):
-    """外部世界章节的 governed 总结（Q3）。只许引用本轮事件卡，失败宁缺毋滥。"""
+    """外部世界章节的 governed 总结（Q3）。只许引用本轮事件卡。
+
+    T36（2026-07-31）：解析失败不再判整站失败——JSON 外壳解析不出时，代码把原始
+    正文当作 summary_text 收下、照常渲染，但会在产出里另外标记
+    `index_degraded` 降级原因，且该节内容不作为可发布依据（见
+    VNextOrchestrator._build_event_section_summary / _append_final_quality_note）。
+    """
     model_config = {"extra": "forbid"}
 
     summary_text: str = Field(..., min_length=1, description="含 [card:<event_id>] 引用与结尾边界句的总结正文")
-    cited_event_ids: List[str] = Field(default_factory=list, description="正文实际引用的 event_id 列表")
+    cited_event_ids: List[str] = Field(
+        default_factory=list,
+        description=(
+            "正文实际引用的 event_id 列表——由代码从 summary_text 里的 [card:<id>] "
+            "标记正则提取生成，不需要模型另外填写"
+        ),
+    )
 
 
 class IntegratedQuestionAnswer(BaseModel):

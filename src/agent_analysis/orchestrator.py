@@ -213,8 +213,10 @@ STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
     # 用户裁决删除（措辞由代码渲染保证，见 _event_card_validation_errors 的说明）。
     # 仅保留方向越权这条禁止型规则。
     "event_card_interpreter": ("必须涨或必须跌",),
-    # _event_section_summary_validation_errors：卡片引用格式与 2-5 张的引用数量区间
-    "event_section_summary": ("cited_event_ids", "[card:", "至少引用两张"),
+    # _event_section_summary_validation_errors：卡片引用格式与 2-5 张的引用数量区间。
+    # T36（2026-07-31）：cited_event_ids 已改为代码从正文 [card:...] 标记里提取，
+    # 不再要求模型自报这份清单，故从登记里摘下——它不再是"模型必须被告知的字段名"。
+    "event_section_summary": ("[card:", "至少引用两张"),
 }
 
 # 「丙」的豁免名单：`_run_stage` 的 stage_key 在这些调用点是运行时拼出来的，静态扫描
@@ -695,6 +697,9 @@ class VNextOrchestrator:
         # 论证其实是模板凑数。对齐 reviser 的可见度处理，让发布闸门也能看到这条信号。
         if "counter_thesis_deterministic_fallback" in list(hypothesis_competition.fallback_warnings or []):
             self._append_final_quality_note(final_adjudication, "counter_thesis_degraded_deterministic_fallback")
+        # 同理：event_section_summary 走了 T36 的解析失败兜底时把降级信号带进终审
+        # 质量闸门，不新造一套发布闸门。
+        self._annotate_event_section_summary_degradation(final_adjudication, event_interpretation_cards)
         final_claim_ledger = self._build_final_claim_ledger(
             synthesis_packet=synthesis_packet,
             thesis=analysis_revised.revised_thesis,
@@ -1613,12 +1618,9 @@ class VNextOrchestrator:
                 "summary_text": (
                     "100-1500 字总结正文（宽松上限，不必刻意压缩），含引用与结尾边界句。"
                     "引用一律原样抄 event_cards[].citation 字段的值，不要自行拼接、"
-                    f"不要删改 id（本轮示例：{compact_cards[0]['citation'] if compact_cards else '[card:event:<id>]'}）"
+                    f"不要删改 id（本轮示例：{compact_cards[0]['citation'] if compact_cards else '[card:event:<id>]'}）。"
+                    "不需要另外列出引用清单——代码会从正文里的 [card:...] 标记自动提取。"
                 ),
-                "cited_event_ids": [
-                    "正文中实际引用的完整 event_id（与 event_cards[].event_id 逐字相同，"
-                    "含 event: 前缀），必须与正文里的 [card:...] 一一对应"
-                ],
             },
             "boundary": {
                 "event_material_only": True,
@@ -1631,6 +1633,37 @@ class VNextOrchestrator:
                 ),
             },
         }
+
+        def _inject_cited_event_ids(parsed: Dict[str, Any]) -> Dict[str, Any]:
+            # T36：cited_event_ids 不再要求模型自报——那是纯重复劳动，且正是这份
+            # 重复逼出过真实的 JSON 外壳解析失败（模型正文已经内联写了
+            # [card:event:xxx]，还要求它在清单里把同样的编号再抄一遍）。这里不做
+            # allowed_ids 过滤：保持与正文里方括号标记逐字一致，让下面
+            # `_event_section_summary_validation_errors` 的"引用越界"判据照常生效
+            # ——身份合法性判定不因为改成代码导出而放松，只是不再靠模型自己数数。
+            parsed["cited_event_ids"] = self._extract_cited_event_ids_from_text(
+                str(parsed.get("summary_text") or "")
+            )
+            return parsed
+
+        def _raw_text_fallback(raw_text: str, error_kind: str) -> Optional["EventSectionSummary"]:
+            # 只接 parse_error：JSON 外壳本身没解析出来，不是"结构清楚但内容越权/
+            # 不合法"（那些仍必须让原有重试与失败路径生效，不能被这道兜底悄悄放行——
+            # 见 _event_section_summary_validation_errors 的 unknown ids 判据）。
+            if error_kind != "parse_error":
+                return None
+            text = str(raw_text or "").strip()
+            if not text:
+                return None
+            # 先把正文从坏掉的 JSON 外壳里捞出来，否则报告那一节会把花括号和字段名
+            # 渲染给用户看——那是"收下了但没读懂"，不是"不拒收"（ARCHITECTURE.md 3.1c）。
+            # 捞不出来时该方法原样返回，兜底仍然成立，绝不因此变成新的拒收点。
+            prose = self._salvage_text_field_from_broken_json(text, "summary_text")
+            # 索引仍必须过身份合法性：只收本轮真实存在的卡号，未知编号不索引、
+            # 不放行——即使原始正文里写了，也不让它冒充一条可追溯引用。
+            verified_ids = self._extract_cited_event_ids_from_text(prose, allowed_ids=allowed_ids)
+            return EventSectionSummary(summary_text=prose, cited_event_ids=verified_ids)
+
         try:
             summary = self._run_stage(
                 stage_key="event_section_summary",
@@ -1641,6 +1674,7 @@ class VNextOrchestrator:
                     "event_section_summary", EventSectionSummary
                 ),
                 strict_tool_name="emit_event_section_summary",
+                pre_validate_transform=_inject_cited_event_ids,
                 validator=lambda candidate: self._event_section_summary_validation_errors(
                     candidate,
                     allowed_ids=allowed_ids,
@@ -1648,11 +1682,93 @@ class VNextOrchestrator:
                     title_only_majority=title_only_majority,
                     downgrade_required_ids=downgrade_required_ids,
                 ),
+                raw_text_fallback=_raw_text_fallback,
             )
         except Exception as exc:
             logger.warning("Event section summary failed: %s", exc)
             return None, f"{type(exc).__name__}: {str(exc)[:300]}"
-        return _model_dump(summary), ""
+        summary_dict = _model_dump(summary)
+        stage_record = self.stage_diagnostics.get("stages", {}).get("event_section_summary", {})
+        degraded_kind = (
+            stage_record.get("degraded_fallback_kind")
+            if stage_record.get("status") == "degraded_fallback"
+            else None
+        )
+        if degraded_kind:
+            # 牙齿：走了降级路径必须留痕，且不得被当作可发布依据。留痕字段接在这份
+            # artifact 自己身上（供渲染/复核识别"这节是兜底文本，未经索引校验的正常
+            # 治理链"）；能不能发布则交给 run() 里已有的终审质量闸门
+            # （_append_final_quality_note，同一机制此前已用于 reviser_degraded_
+            # unrevised_thesis / counter_thesis_degraded_deterministic_fallback），
+            # 不新造一套发布闸门。
+            summary_dict["index_degraded"] = degraded_kind
+            return summary_dict, f"degraded_fallback:{degraded_kind}"
+        return summary_dict, ""
+
+    _EVENT_CARD_CITATION_ID_PATTERN = re.compile(r"\[card:([^\[\]]+)\]")
+
+    @staticmethod
+    def _salvage_text_field_from_broken_json(raw_text: str, field_name: str) -> str:
+        """从"解析不了的 JSON"里把某个文本字段的正文捞出来，只做形状处理不判语义。
+
+        为什么需要它：降级兜底若把整段原始响应原样当正文收下，报告那一节会渲染出
+        `{ "summary_text": "…", "cited_event_ids": [ … ] }` 这一堆花括号和字段名给用户看。
+        那是"收下了但没读懂"——满足了"不许因形式拒收内容"的字面，却没满足它的目的
+        （`ARCHITECTURE.md` 3.1c）。真实事故 run `20260731_002156`：外壳其实完好，
+        只是正文里有未转义的半角双引号（`这为"AI投资…"这一竞争假说`）把 JSON 从第 2 行截断。
+
+        做法与 `_extract_cited_event_ids_from_text` 同源：正则找形状（键名、引号、下一个
+        键的起点），不理解内容。捞不出来就原样返回入参——**任何情况下都不抛错、不返回空**，
+        否则这道兜底自己就变成了新的拒收点。
+        """
+        text = str(raw_text or "")
+        opening = re.search(r'"%s"\s*:\s*"' % re.escape(field_name), text)
+        if not opening:
+            return text
+        body = text[opening.end():]
+        # 正文结束于"下一个顶层键的起点"；没有下一个键时结束于对象收尾的 `"}`。
+        next_key = re.search(r'"\s*,\s*"[A-Za-z_][A-Za-z0-9_]*"\s*:', body)
+        if next_key:
+            body = body[: next_key.start()]
+        else:
+            body = re.sub(r'"\s*\}\s*$', "", body)
+        if not body.strip():
+            return text
+        # 还原标准 JSON 转义（顺序要紧：先换行后引号，最后反斜杠，避免二次转义）
+        for escaped, plain in (("\\n", "\n"), ("\\t", "\t"), ('\\"', '"'), ("\\\\", "\\")):
+            body = body.replace(escaped, plain)
+        return body.strip()
+
+    @classmethod
+    def _extract_cited_event_ids_from_text(
+        cls,
+        text: str,
+        allowed_ids: Optional[set] = None,
+    ) -> List[str]:
+        """从正文里的 `[card:<event_id>]` 内联标记代码导出引用清单，去重、保序。
+
+        风格对齐 `_reasoned_verdict_bracket_groups` / `_annotate_reasoned_verdict_refs`
+        （见下方两个方法）：只做形状识别（正则找方括号标记），不猜语义。
+
+        `allowed_ids=None`（默认）：不过滤，原样返回正文里出现的每个编号——
+        提供给 `_run_stage` 的 `pre_validate_transform` 用，让下游
+        `_event_section_summary_validation_errors` 的"引用越界"判据仍能看到未过滤
+        的清单、照常拒绝非法编号并触发重试；这是"身份比对不因为改成代码导出而
+        放松"的关键点，不能在这一步偷偷把非法编号滤掉。
+
+        `allowed_ids` 给定时：只保留确实在本轮事件卡范围内的编号——供降级兜底路径
+        （JSON 解析失败、绕过了上面那条重试链）使用，防止兜底文本里出现的编号
+        未经身份校验就被当成合法索引收下。
+        """
+        seen: List[str] = []
+        for raw_id in cls._EVENT_CARD_CITATION_ID_PATTERN.findall(text or ""):
+            candidate_id = raw_id.strip()
+            if not candidate_id or candidate_id in seen:
+                continue
+            if allowed_ids is not None and candidate_id not in allowed_ids:
+                continue
+            seen.append(candidate_id)
+        return seen
 
     _HINDSIGHT_OR_CAUSAL_PATTERNS = (
         r"(?:后来|随后|最终|事后|此后).{0,16}(?:结果|进展|显示|表明|证实|确认|证明|兑现)",
@@ -5046,10 +5162,21 @@ class VNextOrchestrator:
         pre_validate_transform: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
         strict_tool_schema: Optional[Dict[str, Any]] = None,
         strict_tool_name: Optional[str] = None,
+        raw_text_fallback: Optional[Callable[[str, str], Optional[Any]]] = None,
     ) -> Any:
+        """`raw_text_fallback`（T36 新增，默认 None，其余调用点不传，行为逐字节不变）：
+        全部尝试耗尽、即将抛 RuntimeError 前的最后一道兜底，只对"结构本身就没能
+        解析"的失败开放——不放松任何一条内容合法性判据。签名是
+        `(last_raw_response_text, last_error_kind) -> Optional[model_cls 实例]`：
+        返回非 None 就当作本次调用的正常结果收下（写审计、标记 degraded_fallback，
+        不再抛异常）；返回 None 就维持原样抛出 RuntimeError。调用方必须自己判断
+        `last_error_kind`（如只接受 "parse_error"），不能替它兜底——`_run_stage`
+        本身不改变判定 parse_error / schema_validation_error / contract_validation_error
+        的既有逻辑，只是把"耗尽后怎么办"这一步交还给调用方。"""
         prompt = self._compose_prompt(stage_key, model_cls, payload)
         preferred_models = self._preferred_models_for_stage(stage_key)
         last_error = ""
+        last_raw_response = ""
         stage_record: Dict[str, Any] = {
             "stage_key": stage_key,
             "stage_name": stage_name,
@@ -5103,6 +5230,7 @@ class VNextOrchestrator:
                 raw = self.llm_engine.call_with_fallback(active_prompt, **call_kwargs)
             except TypeError:
                 raw = self.llm_engine.call_with_fallback(active_prompt, stage_name=stage_name)
+            last_raw_response = str(raw or "")
             self._save_prompt_audit_text(stage_name, f"attempt_{attempt}.response.raw.txt", str(raw or ""))
             attempt_record["raw_response_file"] = self._prompt_audit_relpath(
                 stage_name,
@@ -5206,6 +5334,20 @@ class VNextOrchestrator:
             self._write_prompt_stage_meta(stage_name, stage_record)
             self._save_stage_diagnostics()
             return validated
+        if raw_text_fallback is not None:
+            last_error_kind = stage_record["errors"][-1]["kind"] if stage_record["errors"] else "unknown"
+            fallback_result = raw_text_fallback(last_raw_response, last_error_kind)
+            if fallback_result is not None:
+                stage_record["status"] = "degraded_fallback"
+                stage_record["degraded_fallback_kind"] = last_error_kind
+                self._save_prompt_audit_json(stage_name, "output.validated.json", _model_dump(fallback_result))
+                stage_record["prompt_audit"]["validated_output_file"] = self._prompt_audit_relpath(
+                    stage_name,
+                    "output.validated.json",
+                )
+                self._write_prompt_stage_meta(stage_name, stage_record)
+                self._save_stage_diagnostics()
+                return fallback_result
         stage_record["status"] = "failed"
         self._write_prompt_stage_meta(stage_name, stage_record)
         self._save_stage_diagnostics()
@@ -5674,6 +5816,28 @@ class VNextOrchestrator:
         if note not in notes:
             notes.append(note)
             final.quality_gate.notes = "；".join(notes)
+
+    def _annotate_event_section_summary_degradation(
+        self,
+        final: FinalAdjudication,
+        event_interpretation_cards: Dict[str, Any],
+    ) -> None:
+        """T36 的牙齿：`_build_event_section_summary` 走解析失败兜底时已经在
+        `event_interpretation_cards.section_summary.index_degraded` 里留痕，但那份
+        artifact 不会被读者当成"能不能发布"的裁决——收下 ≠ 认可。这里把同一个信号
+        接到 reviser_degraded_unrevised_thesis / counter_thesis_degraded_deterministic_
+        fallback 用的同一份终审质量闸门（`final.quality_gate.notes`）上，风格与行为
+        对齐这两条既有先例，不新造一套发布闸门。"""
+        section_summary_meta = (
+            event_interpretation_cards.get("section_summary")
+            if isinstance(event_interpretation_cards, dict)
+            else None
+        )
+        if isinstance(section_summary_meta, dict) and section_summary_meta.get("index_degraded"):
+            self._append_final_quality_note(
+                final,
+                f"event_section_summary_index_degraded:{section_summary_meta['index_degraded']}",
+            )
 
     def _validate_reasoned_verdict_refs(self, candidate: Any, allowed_refs: set[str]) -> List[str]:
         """final_adjudicator.md 白纸黑字："三条主要理由每条必须至少带一个方括号标注

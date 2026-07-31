@@ -31,6 +31,26 @@
 
 **否决**：未采纳"给未登记字段自动补 `audit_only`"（那是 T35 的诱人写法）——`orchestrator.py:2883` 的 `mixed_field_authority` 会因此把 7 个已登记函数集体降级。未把 `null→[]` 做成"仅严格模式生效"的开关——会让两条路径行为分叉、更难验证。未改 `contracts.py` 字段类型为 `Optional[List[X]]`。`_run_schema_guard` 的后置闸门原样保留：`tool_choice="auto"` 下模型可以不走工具通道，严格模式是概率性保证不是铁保证——本跑再次实测到（见下条）。
 
+### 【关闭 T36】事件总结永不失败；两把锁从二选一改成叠加；确立"轨道 > 导出 > 规矩"
+
+**用户确立的原则**（已入 `CLAUDE.md` 常驻边界与执行纪律、`ARCHITECTURE.md` 3.1b/3.1c）：约束该住在哪，按 ① 接口能强制的进 schema（模型零注意力成本）② 代码能从正文导出的别让模型填 ③ 剩下的才进提示词，且只约束"必须交代什么"。压舱石：**结构用来定位，不许用来拒收**；但收下 ≠ 认可，索引缺失必须留痕降级。
+
+**支撑数据（实测，反直觉，值得记住）**：各站提示词里模板（含分析要求 + 格式要求）只占 **0.6%–5.1%**（l2 0.6% / l4 1.5% / critic 2.2% / thesis 5.1%），其余全是资料。**格式规矩用 1-3% 的篇幅造成了 50% 的返工**（T33 统计）——因为一次返工是把整段上下文重读一遍。结论：格式规矩不能按篇幅判断便宜；但真正的大头是投喂量（本跑输入 96.3 万 / 输出 12.4 万，输入占 **88.6%**）。
+
+**① 事件总结不再因形式失败**。`cited_event_ids` 改为**代码从正文的 `[card:<id>]` 内联标记导出**（`_extract_cited_event_ids_from_text`），提示词与 `output_contract` 里的该要求一并删除——模型本来就在正文里写了标记，再要求它单列一遍是纯重复劳动，而正是这份重复逼出了整个 JSON 外壳（历史上还出过"正文与清单不一致"）。`_run_stage` 新增可选 `raw_text_fallback`（默认 `None`，其余 8 个调用点逐字节不变）：重试耗尽且 `error_kind == "parse_error"` 时收下原始文本，标 `status="degraded_fallback"`。
+
+**② 兜底还要"读得下去"，不只是"没丢"**。worker 初版把整段原始响应原样当正文收下——报告那一节会把 `{ "summary_text": …, "cited_event_ids": [ … ] }` 的花括号和字段名渲染给用户看。**那是"收下了但没读懂"，满足了不拒收的字面、没满足它的目的。** 补 `_salvage_text_field_from_broken_json`：只按形状（键名、引号、下一个键的起点）把正文捞出来并还原标准转义，**捞不出来时原样返回**——这道兜底自己绝不许变成新的拒收点。
+
+**③ 牙齿**：降级时产出写 `index_degraded`，并经 `_annotate_event_section_summary_degradation` 把 `event_section_summary_index_degraded:<reason>` 推进 `final.quality_gate.notes`（复用既有 `_append_final_quality_note`，与 `reviser_degraded_unrevised_thesis` / `counter_thesis_degraded_deterministic_fallback` 两处先例并列）。**没有新造发布闸门。**
+
+**④ 身份比对未放松**：正常路径的导出**不过滤** `allowed_ids`，让 `_event_section_summary_validation_errors` 的"引用越界"判据照常拒绝非法编号并触发重试；只有降级兜底路径才按 `allowed_ids` 过滤，防止未经校验的编号冒充可追溯引用。
+
+**⑤ 两把锁叠加**（`llm_engine.py:459-499`）。原为 `if use_strict_tools: … elif use_json_output: response_format=json_object`——**上表单锁就摘语法锁**，而 `tool_choice="auto"` 允许模型不调用工具改回文本，此时两把锁都不在。真实 API 探针实证：两者**可以并存**，唯一硬条件是 system+user 合并文本里必须出现 `json`（否则 400 `Prompt must contain the word 'json' in some form`）；真实提示词本就满足（`event_section_summary` 5 次 / `thesis` 37 次 / `bridge` 17 次，且 `system_constraints.md` 恒含）。已加防御：不满足就不加、记 warning、退回现状。探针另一观察：极简提示词下模型**两次都没走工具通道**——opt-out 是常态而非边缘情形，故语法锁必须装回。
+
+**红灯测试在哪**：`tests/test_vnext_orchestrator.py` 6 条（真实夹具 `tests/fixtures/event_section_summary_20260731_002156_attempt1_unescaped_quote.raw.txt` 逐字节取自真实失败响应，测试先断言它确实让 `json.loads` 抛错，红灯前提不是凭空断言）+ 我补的 2 条（兜底正文不得残留 JSON 外壳；salvage 捞不出来时必须原样返回、绝不抛错）；`tests/test_vnext_llm_engine.py` 1 条（消息不含 `json` 时不得添加 `response_format`）。补的 2 条已用 stub 法实跑验证会红。
+
+**验证**：全量 `--cache-clear` **1047 passed**。
+
 ### 【关闭 T35】证据编号的合法性判据拿错了名单：把"存不存在"和"够不够格"拆开
 
 **病根**：`_run_schema_guard` 构造 `valid_evidence_refs` 时，子引用（`#field`）来源是 `_field_authority_from_payload` 的返回键——也就是 `MetricAuthority` / `metric_authority` 这张**权限分级表**。于是"这个字段够不够格支撑强结论"被当成了"这个字段存不存在"的名单。L4 的 17 个 `get_*` 里 10 个从未登记，它们的所有子引用因此永久非法。

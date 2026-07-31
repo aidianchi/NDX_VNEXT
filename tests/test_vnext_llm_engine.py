@@ -493,10 +493,20 @@ def test_normalize_none_list_fields_leaves_missing_fields_for_default_factory():
 
 
 def test_call_ai_uses_strict_tool_calling_when_schema_provided(monkeypatch):
-    """`strict_tool_schema` 传入时：走 tools/tool_choice 路径，不发送
-    response_format；返回值取自 tool_calls[0].function.arguments，不是
-    message.content——这样上游 `_run_stage` 的 JSON 解析/pydantic 校验管线完全
-    不用改，strict 模式只影响"怎么拿到合法文本"这一步。"""
+    """`strict_tool_schema` 传入时：走 tools/tool_choice 路径；返回值取自
+    tool_calls[0].function.arguments，不是 message.content——这样上游
+    `_run_stage` 的 JSON 解析/pydantic 校验管线完全不用改，strict 模式只影响
+    "怎么拿到合法文本"这一步。
+
+    2026-07-31 任务 B 改判：两把锁必须叠加，不是二选一。旧版本这里断言
+    "不应同时发送 response_format"——但 tool_choice="auto" 允许模型不调用工具、
+    径直改回普通文本作答，这一放行恰好摘掉了表单锁，若语法锁
+    （response_format=json_object）也被 elif 摘掉，就是一层保护都不剩：
+    event_section_summary 真实事故（run 20260731_002156）连续两次因未转义
+    半角双引号 parse_error，走的正是这条路。真实 API 探针验证 tools+strict+
+    tool_choice=auto 同时带 response_format=json_object 会被接受，唯一硬条件是
+    system+user 消息合并后必须含 "json" 字样——系统约束文件本身就含
+    "JSON"（见 test_system_constraints_loaded_from_file），所以这里必然满足。"""
     _patch_engine_dependencies(monkeypatch, "https://api.deepseek.com")
     from agent_analysis.llm_engine import LLMEngine
 
@@ -543,7 +553,10 @@ def test_call_ai_uses_strict_tool_calling_when_schema_provided(monkeypatch):
     )
 
     sent = engine.clients["deepseek"].chat.completions.last_kwargs
-    assert "response_format" not in sent, "strict 模式下不应同时发送 response_format=json_object"
+    assert sent.get("response_format") == {"type": "json_object"}, (
+        "两把锁必须叠加：strict 工具锁不放松，同时必须叠加语法锁，否则"
+        "tool_choice='auto' 让模型不调用工具时会一层保护都不剩"
+    )
     # 真实事故复现（2026-07-26，run codex_strict_bridge_20260726_2032）：强制指定
     # 单个函数名的 tool_choice 在 DeepSeek 默认开启的思考模式下会被拒绝
     # （"Thinking mode does not support this tool_choice"，真实 API 直接复现）。
@@ -554,6 +567,75 @@ def test_call_ai_uses_strict_tool_calling_when_schema_provided(monkeypatch):
     assert sent["tools"][0]["function"]["parameters"] == schema
     assert raw == '{"bridge_type": "macro_valuation"}'
     assert usage["total_tokens"] == 5
+
+
+def test_call_ai_strict_tool_calling_skips_response_format_without_json_keyword(monkeypatch):
+    """任务 B 的防御分支：真实 API 探针证实叠加 response_format=json_object 有一个
+    硬条件——system+user 两条消息合并后必须出现 "json" 字样（不区分大小写），
+    否则 400 `Prompt must contain the word 'json' in some form...`。生产环境里
+    系统约束文件与四个真实 stage 提示词都天然满足这个条件，但代码不能假设"永远
+    满足"，必须在发请求前真的检查，不满足就不加这把锁、退回现状——绝不能让这个
+    改动本身直接把某一站打成 400。这里用一个不含 "json" 字样的假 system 约束
+    + 不含 "json" 的 prompt，验证 response_format 确实被跳过，tools/tool_choice
+    这把表单锁不受影响。"""
+    _patch_engine_dependencies(monkeypatch, "https://api.deepseek.com")
+    from agent_analysis.llm_engine import LLMEngine
+
+    monkeypatch.setattr(
+        LLMEngine,
+        "SYSTEM_CONSTRAINTS",
+        "你不得编造历史胜率、点位或概率数字，必须使用条件语言。",
+    )
+
+    class _ToolCallChatCompletions(_RecordingChatCompletions):
+        def create(self, **kwargs):
+            self.last_kwargs = kwargs
+
+            class _Function:
+                def __init__(self, arguments):
+                    self.arguments = arguments
+
+            class _ToolCall:
+                def __init__(self, arguments):
+                    self.function = _Function(arguments)
+
+            class _Msg:
+                def __init__(self):
+                    self.content = None
+                    self.tool_calls = [_ToolCall('{"bridge_type": "macro_valuation"}')]
+
+            class _Choice:
+                def __init__(self):
+                    self.message = _Msg()
+
+            class _Usage:
+                prompt_tokens = 3
+                completion_tokens = 2
+                total_tokens = 5
+
+            class _Resp:
+                def __init__(self):
+                    self.choices = [_Choice()]
+                    self.usage = _Usage()
+
+            return _Resp()
+
+    engine = LLMEngine(available_models=["deepseek-v4-flash"])
+    engine.clients["deepseek"].chat.completions = _ToolCallChatCompletions()
+
+    schema = {"type": "object", "properties": {"bridge_type": {"type": "string"}}, "additionalProperties": False, "required": ["bridge_type"]}
+    raw, _usage = engine._call_ai(
+        "没有那个词的用户提示", "deepseek-v4-flash", stage="bridge",
+        strict_tool_schema=schema, strict_tool_name="emit_bridge_memo",
+    )
+
+    sent = engine.clients["deepseek"].chat.completions.last_kwargs
+    assert "response_format" not in sent, (
+        "system+user 都不含 'json' 字样时必须跳过 response_format，否则真实 API 会 400"
+    )
+    assert sent["tool_choice"] == "auto", "防御分支不能连带摘掉表单锁"
+    assert sent["tools"][0]["function"]["name"] == "emit_bridge_memo"
+    assert raw == '{"bridge_type": "macro_valuation"}'
 
 
 def test_call_ai_without_strict_schema_is_byte_identical_to_before(monkeypatch):

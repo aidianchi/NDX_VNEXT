@@ -477,6 +477,25 @@ class LLMEngine:
                     if model_name.startswith("deepseek-v4-"):
                         kwargs["reasoning_effort"] = "high"
                         kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+                    # 两把锁叠加，不是二选一：tool_choice="auto" 允许模型不调用工具、
+                    # 改回普通文本作答，这时表单锁（strict tool schema）不生效，若语法锁
+                    # （response_format=json_object）此前已被 elif 摘掉，就会出现一层
+                    # 保护都不剩的真实事故（event_section_summary 未转义引号连挂两次，
+                    # 见 2026-07-30 run 20260731_002156）。真实 API 探针验证：
+                    # tools+strict+tool_choice=auto 同时带 response_format=json_object
+                    # 会被接受，唯一硬条件是 system+user 两条消息合并后必须出现
+                    # "json" 字样（不区分大小写），否则 400
+                    # "Prompt must contain the word 'json' in some form..."。这里做防御：
+                    # 不满足硬条件就不加这把锁，退回现状，绝不能让这个改动直接导致 400。
+                    combined_message_text = f"{messages[0]['content']}\n{messages[1]['content']}"
+                    if "json" in combined_message_text.lower():
+                        kwargs["response_format"] = {"type": "json_object"}
+                    else:
+                        logger.warning(
+                            "  ! [Stage: %s] strict tool 调用未叠加 response_format=json_object："
+                            "system+user 消息都不含 'json' 字样，加上会被 API 判 400，故跳过。",
+                            stage,
+                        )
                 elif use_json_output:
                     kwargs["response_format"] = {"type": "json_object"}
                     if model_name.startswith("deepseek-v4-"):

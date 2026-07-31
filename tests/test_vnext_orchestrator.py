@@ -155,6 +155,30 @@ def _event_card_response(event_id="event:abc", tier="official"):
     )
 
 
+def _event_interpretation_card_for_summary(event_id: str) -> EventInterpretationCard:
+    """T36 event_section_summary 测试共用的最小合法 EventInterpretationCard 构造器。"""
+    return EventInterpretationCard.model_validate(
+        {
+            "event_id": event_id,
+            "fact_summary": "材料事实。",
+            "interpretation": "该事件可能通过折现率渠道影响纳指100估值。",
+            "event_type": "official_calendar",
+            "mechanism_hypothesis": {
+                "financial_link": "discount_rate",
+                "hypothesis": "该事件可能通过折现率渠道影响纳指100估值。",
+            },
+            "limitations": ["事件材料不能证明指数必须涨跌。"],
+            "passport": {
+                "source": "Federal Reserve",
+                "tier": "official",
+                "published_at": "2026-07-31T18:00:00Z",
+                "event_date": "2026-07-31",
+                "effective_date": "2026-07-31",
+            },
+        }
+    )
+
+
 def _write_event_card_inputs(run_dir: Path, events, news_card_ids):
     (run_dir / "news_event_ledger.json").write_text(
         json.dumps({"events": events}, ensure_ascii=False),
@@ -2169,8 +2193,262 @@ def test_event_section_summary_payload_hands_model_a_ready_made_citation(tmp_pat
     ], "每张卡都要带一个可原样抄写的完整引用串"
     contract_text = json.dumps(captured["payload"]["output_contract"], ensure_ascii=False)
     assert "event:" in contract_text, "输出契约必须让模型看见 id 真实带 event: 前缀"
+    contract_keys = set(captured["payload"]["output_contract"].keys())
+    assert contract_keys == {"summary_text"}, (
+        "T36：cited_event_ids 已改为代码从正文提取，output_contract 不应再要求模型"
+        f"自报这份清单，实际键：{contract_keys}"
+    )
 
 
+# ---------------------------------------------------------------------------
+# T36：event_section_summary 永不因 JSON 外壳解析失败而整节消失
+#
+# 病根（真实 run 20260731_002156，两次尝试均复现，原始响应见
+# tests/fixtures/event_section_summary_20260731_002156_attempt1_unescaped_quote.raw.txt）：
+# 模型在 summary_text 正文里写了未转义的半角双引号
+# （`这为"AI投资究竟是价值破坏还是生产性资本支出"这一竞争假说`），json.loads 报
+# `Expecting ',' delimiter`。旧代码把这类 parse_error 当作整站失败：
+# `_build_event_section_summary` 的 except 分支返回 `(None, ...)`，报告里"外部世界"
+# 整节消失，即使模型已经写出了完整、可读、正确引用了 5 张卡的正文。
+#
+# 修法不是继续加 JSON 语法容错（那治标不治本，任何新的转义/逃逸组合都能再复现一次），
+# 而是釜底抽薪：cited_event_ids 本来就是从同一段正文里代码可以自己扫出来的重复劳动
+# （模型已经在正文里内联写了 [card:event:xxx]，还要求它在清单里把同样的编号再抄一遍，
+# 正是这份重复逼出了 JSON 外壳），删掉这项要求；再给"JSON 解析不出来"这一种失败模式
+# （且仅此一种，不含内容违规）开一条兜底：原始文本直接当 summary_text 收下、编号照样
+# 从文本里扫，照常渲染，但必须在产出里留痕降级、接上既有终审质量闸门标记"不作发布依据"。
+# ---------------------------------------------------------------------------
+
+
+def test_event_section_summary_extracts_cited_ids_from_inline_card_markers():
+    """红灯覆盖点②：编号导出——正文含 [card:event:x] 标记，cited_event_ids 必须
+    正确导出、去重、保序。这条独立于任何 LLM 调用，直接测试新增的提取工具函数。"""
+    text = (
+        "先引用一张 [card:event:aaa111]，再引用另一张 [card:event:bbb222]，"
+        "随后重复提到第一张 [card:event:aaa111]（同一事件在正文里被提了两次）。"
+    )
+    ids = VNextOrchestrator._extract_cited_event_ids_from_text(text)
+    assert ids == ["event:aaa111", "event:bbb222"], (
+        "必须按首次出现顺序去重，不能丢单，也不能把重复引用算成两条"
+    )
+
+
+def test_event_section_summary_extracts_cited_ids_filters_by_allowed_ids_when_given():
+    """`allowed_ids` 给定时只保留本轮真实存在的卡号——供降级兜底路径使用，
+    防止未经身份校验的编号被当成合法索引收下。"""
+    text = "[card:event:real1] [card:event:not_a_real_card] [card:event:real2]"
+    ids = VNextOrchestrator._extract_cited_event_ids_from_text(
+        text, allowed_ids={"event:real1", "event:real2"}
+    )
+    assert ids == ["event:real1", "event:real2"]
+
+
+class _RawTextReplayFakeLLMEngine:
+    """把真实捕获的原始响应文本原样重放给 `_run_stage`，`extract_json` 委托给真正的
+    `LLMEngine.extract_json`（而不是玩具版 `json.loads`），这样 parse_error 的判定
+    路径与生产环境逐字节一致——包括它"尝试轻量修复、修复不了就返回 None"的行为。
+    """
+
+    def __init__(self, raw_response: str):
+        from agent_analysis.llm_engine import LLMEngine
+
+        self.raw_response = raw_response
+        self.token_usage = {"total": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
+        self._real_engine = LLMEngine(available_models=[])
+        self.calls = 0
+
+    def call_with_fallback(self, prompt, stage_name="", preferred_models=None):
+        self.calls += 1
+        return self.raw_response
+
+    def extract_json(self, text, stage):
+        return self._real_engine.extract_json(text, stage)
+
+    def get_token_report(self):
+        return self.token_usage
+
+
+def test_event_section_summary_survives_real_unescaped_quote_parse_error(tmp_path: Path):
+    """红灯覆盖点①：真实复现。喂真实捕获的、带未转义半角双引号的响应（run
+    20260731_002156，两次尝试均如此失败）进解析路径。
+
+    改前：两次尝试都 parse_error 耗尽重试，`_build_event_section_summary` 返回
+    `(None, "RuntimeError: ...")`——"外部世界"整节从报告消失。
+    改后：拿到非空 `summary_text`（原始正文兜底）、从中扫出全部 5 个真实事件编号、
+    `index_degraded` 留痕为 "parse_error"，且 `_build_event_section_summary` 的
+    第二个返回值非空——不能被当作未受任何影响的正常产出。
+    """
+    raw_text = (
+        Path(__file__).parent
+        / "fixtures"
+        / "event_section_summary_20260731_002156_attempt1_unescaped_quote.raw.txt"
+    ).read_text(encoding="utf-8")
+
+    # 确认这段夹具真的会让标准 json.loads 报未转义引号错——红灯前提不是凭空断言的。
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(raw_text)
+
+    real_event_ids = [
+        "event:b8f43b7603daa04c",
+        "event:75be16e97675b582",
+        "event:0a457426cdb8f17f",
+        "event:3935663507f48598",
+        "event:ef79ac6a9ed352a4",
+    ]
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=_RawTextReplayFakeLLMEngine(raw_text),
+    )
+    cards = [_event_interpretation_card_for_summary(eid) for eid in real_event_ids]
+
+    summary_dict, summary_failure = orchestrator._build_event_section_summary(
+        cards, events_by_id={}, effective_date="2026-07-31",
+    )
+
+    assert summary_dict is not None, (
+        "T36 之前：parse_error 耗尽重试后整节消失（summary_dict 是 None）。"
+        "现在必须收到降级正文，而不是把整节判定为失败。"
+    )
+    assert summary_dict["summary_text"].strip(), "降级正文不能是空串"
+    assert "AI投资究竟是价值破坏还是生产性资本支出" in summary_dict["summary_text"], (
+        "降级正文必须是模型真实写出的原始内容，不能是代码拼的占位句"
+    )
+    assert set(summary_dict["cited_event_ids"]) == set(real_event_ids), (
+        f"必须从原始正文里扫出全部 5 个真实事件编号，实际：{summary_dict['cited_event_ids']}"
+    )
+    assert summary_dict.get("index_degraded") == "parse_error", (
+        "牙齿：走了降级路径必须在产出里写明降级原因"
+    )
+    assert summary_failure, "第二个返回值必须非空，标记这次调用受到了降级影响"
+    # 兜底不能只做到"没丢内容"，还要做到"用户读得下去"：整段原始响应直接当正文收下，
+    # 报告那一节会把 `{ "summary_text": …, "cited_event_ids": [ … ] }` 的花括号和字段名
+    # 渲染给用户看。那是"收下了但没读懂"，满足了不拒收的字面、没满足它的目的。
+    salvaged = summary_dict["summary_text"]
+    assert not salvaged.lstrip().startswith("{"), f"降级正文不得以 JSON 外壳开头：{salvaged[:60]!r}"
+    assert '"summary_text"' not in salvaged, "降级正文里不得残留字段名"
+    assert "cited_event_ids" not in salvaged, "降级正文里不得残留后续字段的 JSON 结构"
+
+
+def test_salvage_text_field_from_broken_json_never_becomes_a_new_rejection_point():
+    """`_salvage_text_field_from_broken_json` 是降级路径里的降级路径——它自己绝不许失败。
+
+    真实代价（run 20260731_002156）：外壳其实完好，只是正文里的未转义半角双引号把
+    JSON 从第 2 行截断。捞正文靠的是形状（键名、引号、下一个键的起点），不理解内容；
+    捞不出来时必须原样返回入参，否则这道兜底会变成新的拒收点，把刚救回来的内容又丢一次。
+    """
+    orchestrator_cls = VNextOrchestrator
+    broken = '{\n  "summary_text": "他说"这话"很关键。\\n第二段。",\n  "cited_event_ids": [\n    "event:a"\n  ]\n}'
+    salvaged = orchestrator_cls._salvage_text_field_from_broken_json(broken, "summary_text")
+    assert salvaged.startswith("他说"), salvaged
+    assert "cited_event_ids" not in salvaged, "下一个键之后的内容必须被截掉"
+    assert "\n第二段。" in salvaged, "标准 JSON 转义（\\n）必须被还原成真实换行"
+
+    # 三种捞不出来的情形，一律原样返回，绝不抛错、绝不返回空
+    for pathological in ("这根本不是 JSON，就是一段普通中文正文", "", '{"other_field": "x"}'):
+        assert orchestrator_cls._salvage_text_field_from_broken_json(
+            pathological, "summary_text"
+        ) == pathological, f"捞不出来时必须原样返回：{pathological!r}"
+
+
+def test_event_section_summary_unknown_cited_id_still_rejected_end_to_end(tmp_path: Path):
+    """红灯覆盖点③：身份比对没被放松。cited_event_ids 改为代码导出后，正文里写一个
+    不在本轮 allowed_ids 里的编号，必须仍被判非法、不许放行——不能因为不再要求模型
+    自报清单，就顺带放松了"引用必须能在本轮卡片里查到"这条身份校验。
+
+    构造一个**能被正常 JSON 解析**、但正文引用了一个虚构编号的响应，两次尝试都如此
+    （所以不会走 T36 新增的 parse_error 兜底——那条兜底只接 parse_error，这里测的正是
+    它没有被滥用成"什么脏内容都放行"的后门）。预期：耗尽重试后仍然失败。
+    """
+    body = (
+        "据报道，本轮材料围绕利率路径与AI资本开支两条主线展开，官方纪要与媒体转述"
+        "相互补充，具体传导仍需数据层确认，材料质量以标题为主、正文有限。"
+    )
+    bad_response = json.dumps(
+        {
+            "summary_text": (
+                f"{body} [card:event:real_card] [card:event:not_in_this_run]"
+                "以上事件材料不构成主证据，判断以数据层为准。"
+            ),
+        },
+        ensure_ascii=False,
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=UniformEventCardFakeLLMEngine(bad_response),
+    )
+    cards = [
+        _event_interpretation_card_for_summary("event:real_card"),
+        _event_interpretation_card_for_summary("event:another_real_card"),
+    ]
+
+    summary_dict, summary_failure = orchestrator._build_event_section_summary(
+        cards, events_by_id={}, effective_date="2026-07-31",
+    )
+
+    assert summary_dict is None, (
+        "代码导出 cited_event_ids 不能变成放松身份比对的后门：引用了本轮不存在的"
+        "编号，必须仍然判失败，不能被 T36 的降级兜底悄悄放行"
+        "（该兜底只接受 parse_error，这里是结构清楚的 contract_validation_error）"
+    )
+    assert summary_failure and "outside this run" in summary_failure, (
+        f"失败原因应指向未知编号，而不是别的失败模式：{summary_failure}"
+    )
+
+
+def test_annotate_event_section_summary_degradation_appends_quality_note_and_marks_unpublishable(tmp_path: Path):
+    """红灯覆盖点④：牙齿。走降级路径时必须在终审质量闸门留痕，让发布流程能看到
+    "这节内容未经索引校验、不可作发布依据"这个信号——对齐 reviser_degraded_
+    unrevised_thesis / counter_thesis_degraded_deterministic_fallback 已经在用的
+    同一份 `final.quality_gate.notes` 机制（见 test_degraded_reviser_marks_final_
+    quality_gate），不新造一套。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+
+    def _final() -> FinalAdjudication:
+        return FinalAdjudication(
+            approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+            final_stance="中性偏谨慎",
+            confidence=Confidence.MEDIUM,
+            must_preserve_risks=["估值压缩风险"],
+            adjudicator_notes="保留风险边界。",
+        )
+
+    final = _final()
+    # 注：FinalAdjudication 有一条既有的 model_validator，reasoned_verdict 为空时会
+    # 自动生成一条"判决正文缺失"的 quality_gate——这里不假设初始状态是 None，只验证
+    # 降级信号被追加了进去，与既有备注共存（_append_final_quality_note 本就是追加语义）。
+    baseline_notes = str(final.quality_gate.notes if final.quality_gate else "")
+    assert "event_section_summary_index_degraded" not in baseline_notes
+
+    degraded_cards_artifact = {
+        "section_summary": {
+            "summary_text": "……",
+            "cited_event_ids": ["event:x"],
+            "index_degraded": "parse_error",
+        },
+    }
+    orchestrator._annotate_event_section_summary_degradation(final, degraded_cards_artifact)
+
+    assert final.quality_gate is not None, "降级信号必须写入终审质量闸门，不能悄无声息"
+    assert "event_section_summary_index_degraded:parse_error" in final.quality_gate.notes, (
+        f"质量闸门备注必须点名降级原因，实际：{final.quality_gate.notes!r}"
+    )
+
+    # 反向对照：没有降级时不应该额外写入这条特定备注——不能把"总是留一条无意义的
+    # 痕迹"误当成牙齿。
+    clean_final = _final()
+    orchestrator._annotate_event_section_summary_degradation(
+        clean_final, {"section_summary": {"summary_text": "……", "cited_event_ids": ["event:x"]}}
+    )
+    clean_notes = str(clean_final.quality_gate.notes if clean_final.quality_gate else "")
+    assert "event_section_summary_index_degraded" not in clean_notes, (
+        "未走降级路径时不应该产生这条特定的质量闸门备注"
+    )
 
 
 
