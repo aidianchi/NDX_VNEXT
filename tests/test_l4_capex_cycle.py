@@ -176,8 +176,8 @@ def test_capex_cycle_full_contract_and_yoy_for_single_company(monkeypatch):
     assert dq["source_tier"] == tools_L4.SOURCE_TIER_OFFICIAL
     assert dq["vintage_date"] == "2026-01-25"  # latest filed_date among AAPL facts used (2025-12-31 quarter + 25d)
     assert dq["coverage"]["companies_available"] == 1
-    assert dq["metric_authority"]["companies_sec_xbrl"]["usage"] == "core_allowed"
-    assert "companies_yfinance_fallback" not in dq["metric_authority"]
+    assert dq["metric_authority"]["companies"]["usage"] == "core_allowed"
+    assert dq["metric_authority"]["companies"]["authority"] == "sec_xbrl_official_disclosed_fact"
     assert dq["metric_authority"]["yoy_acceleration"]["usage"] == "supporting_only"
     assert dq["pit_safe_summary"]["yfinance_fallback_companies_not_pit_safe"] == []
 
@@ -369,8 +369,7 @@ def test_capex_cycle_authority_and_source_tier_downgraded_for_fallback(monkeypat
 
     assert result["source_tier"] == tools_L4.SOURCE_TIER_THIRD_PARTY  # every available company came via fallback
     dq = result["data_quality"]
-    assert "companies_sec_xbrl" not in dq["metric_authority"]
-    fallback_authority = dq["metric_authority"]["companies_yfinance_fallback"]
+    fallback_authority = dq["metric_authority"]["companies"]
     assert fallback_authority["usage"] == "supporting_only"
     assert fallback_authority["authority"] == "yahoo_normalized_cashflow_third_party_unofficial"
     assert dq["metric_authority"]["m7_aggregate"]["usage"] == "supporting_only"

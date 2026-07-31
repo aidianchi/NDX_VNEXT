@@ -182,11 +182,11 @@ def test_end_to_end_evidence_contract_and_metric_authority(monkeypatch):
     assert quality["availability"] == "available"
     assert quality["point_in_time_note"]
     assert set(quality["metric_authority"]) >= {
-        "path_0_6m",
-        "path_7_12m",
+        "path",
         "state",
-        "slope_12m_and_cuts_priced_bps",
+        "slope_12m",
+        "cuts_priced_bps",
         "effr_anchor",
     }
-    assert quality["metric_authority"]["path_7_12m"]["authority"] == "low_liquidity_far_month"
+    assert "low_liquidity_far_month" in quality["metric_authority"]["path"]["reason"]
     assert quality["metric_authority"]["state"]["usage"] == "supporting_only"

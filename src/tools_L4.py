@@ -5663,8 +5663,14 @@ def get_m7_earnings_blackout_calendar(end_date: str = None) -> Dict[str, Any]:
                 unavailable_by_ticker=errors,
             ),
         }
-        result["data_quality"]["metric_authority"] = {
-            "estimated_blackout_state": _component_metric_authority(
+        # T36：真实顶层键没有单一的 "estimated_blackout_state" 字段——曾经的分组名
+        # 覆盖的是四个独立的顶层字段（per_ticker 里每行的 in_estimated_blackout /
+        # window_start / window_end，加上派生的 count/share/upcoming 日历），拆成
+        # 四条登记，usage/authority/reason 原样沿用。raw_earnings_dates（原始抓取的
+        # 财报日期）和 blackout_rule（静态规则配置）不在这个分组的语义范围内，保持
+        # 不登记。
+        def _blackout_state_authority() -> Dict[str, Any]:
+            return _component_metric_authority(
                 usage="supporting_only",
                 authority="rule_based_timing_context_not_company_disclosure",
                 reason=(
@@ -5673,6 +5679,12 @@ def get_m7_earnings_blackout_calendar(end_date: str = None) -> Dict[str, Any]:
                 ),
                 source=SOURCE_TIER_THIRD_PARTY,
             )
+
+        result["data_quality"]["metric_authority"] = {
+            "per_ticker": _blackout_state_authority(),
+            "m7_in_blackout_count": _blackout_state_authority(),
+            "m7_in_blackout_share_equal_weight": _blackout_state_authority(),
+            "upcoming_28d_calendar": _blackout_state_authority(),
         }
         return result
     except Exception as exc:
@@ -5702,12 +5714,21 @@ def get_m7_earnings_blackout_calendar(end_date: str = None) -> Dict[str, Any]:
                 formula="inclusive [earnings-21 calendar days, earnings+2 calendar days]",
                 anomalies=[reason],
                 pit_approximation="realized_earnings_date_used_as_scheduled_proxy",
+                # T36：value 为 None 时没有真实字段可引用，但仍与可用路径使用同一套
+                # 顶层字段名，保持两条路径的登记表一致（见上面 get_m7_earnings_
+                # blackout_calendar 成功路径的同名拆分说明）。
                 metric_authority={
-                    "estimated_blackout_state": _component_metric_authority(
+                    key: _component_metric_authority(
                         usage="supporting_only",
                         authority="rule_based_timing_context_not_company_disclosure",
                         reason="Unavailable estimated context; no trading inference is permitted.",
                         source=SOURCE_TIER_UNAVAILABLE,
+                    )
+                    for key in (
+                        "per_ticker",
+                        "m7_in_blackout_count",
+                        "m7_in_blackout_share_equal_weight",
+                        "upcoming_28d_calendar",
                     )
                 },
             ),
@@ -5829,7 +5850,7 @@ def get_m7_capex_cycle(end_date: str = None) -> Dict[str, Any]:
                     company_result["fallback_note"] = (
                         "Yahoo Finance normalized quarterly cash-flow capex. No verifiable SEC filing "
                         "date; pit_safe=false. Not an official disclosed fact -- treat as a third-party "
-                        "supporting proxy only, per data_quality.metric_authority.companies_yfinance_fallback."
+                        "supporting proxy only, per data_quality.metric_authority.companies."
                     )
                 if len(quarters_out) < M7_CAPEX_MIN_QUARTERS:
                     company_result["coverage_note"] = (
@@ -6049,28 +6070,49 @@ def get_m7_capex_cycle(end_date: str = None) -> Dict[str, Any]:
             result["data_quality"]["availability"] = "unavailable"
             result["data_quality"]["fallback_reason"] = "no_m7_company_capex_facts_available_from_sec_xbrl_or_yfinance_fallback"
 
+        # T36：真实顶层键是 "companies" (曾拆成两个分组名 companies_sec_xbrl /
+        # companies_yfinance_fallback，两者其实都在描述同一个真实顶层字段
+        # "companies"，只是不同公司走了不同渠道 -- per-company 明细已经在
+        # companies[TICKER].primary_source/pit_safe 里逐条区分。子引用体系只认
+        # 顶层键，所以这里合并为一条，usage 取更保守的一档（跟既有 m7_aggregate
+        # 的降级逻辑一致：一旦混入 fallback 公司就整体降为 supporting_only）。
         metric_authority: Dict[str, Any] = {}
-        if companies_via_sec:
-            metric_authority["companies_sec_xbrl"] = _component_metric_authority(
-                usage="core_allowed",
-                authority="sec_xbrl_official_disclosed_fact",
-                reason=(
+        if companies_via_sec or companies_via_fallback:
+            if companies_via_sec and companies_via_fallback:
+                companies_usage = "supporting_only"
+                companies_authority = "mixed_sec_xbrl_official_and_yahoo_normalized_cashflow_third_party_unofficial"
+                companies_reason = (
+                    "Per-company quarterly capex mixes SEC XBRL official disclosed facts with Yahoo "
+                    "Finance normalized cash-flow fallback rows, which have no verifiable filing date "
+                    "(pit_safe=false) and are subject to third-party normalization/field-drift risk. "
+                    "Check each company's own companies[TICKER].primary_source/pit_safe before treating "
+                    "any single company as an SEC-official disclosed fact; the field authority downgrades "
+                    "to supporting_only whenever any company uses the fallback."
+                )
+                companies_source = SOURCE_TIER_THIRD_PARTY
+            elif companies_via_sec:
+                companies_usage = "core_allowed"
+                companies_authority = "sec_xbrl_official_disclosed_fact"
+                companies_reason = (
                     "Per-company quarterly capex from SEC XBRL is an as-reported official disclosed "
                     "spending fact, not a valuation or earnings-quality claim."
-                ),
-                source=SOURCE_TIER_OFFICIAL,
-            )
-        if companies_via_fallback:
-            metric_authority["companies_yfinance_fallback"] = _component_metric_authority(
-                usage="supporting_only",
-                authority="yahoo_normalized_cashflow_third_party_unofficial",
-                reason=(
+                )
+                companies_source = SOURCE_TIER_OFFICIAL
+            else:
+                companies_usage = "supporting_only"
+                companies_authority = "yahoo_normalized_cashflow_third_party_unofficial"
+                companies_reason = (
                     "SEC XBRL was unavailable for these companies; capex is sourced from Yahoo "
                     "Finance's normalized quarterly cash-flow statement instead. It has no verifiable "
                     "filing date (pit_safe=false) and is subject to third-party normalization/field-"
                     "drift risk; it must not be presented as an SEC-official disclosed fact."
-                ),
-                source=SOURCE_TIER_THIRD_PARTY,
+                )
+                companies_source = SOURCE_TIER_THIRD_PARTY
+            metric_authority["companies"] = _component_metric_authority(
+                usage=companies_usage,
+                authority=companies_authority,
+                reason=companies_reason,
+                source=companies_source,
             )
         metric_authority["m7_aggregate"] = _component_metric_authority(
             usage="supporting_only" if companies_via_fallback else "core_allowed",
@@ -6092,6 +6134,12 @@ def get_m7_capex_cycle(end_date: str = None) -> Dict[str, Any]:
             ),
             source=overall_source_tier,
         )
+        # T36 已知例外，故意不改：真实路径是 value["m7_aggregate"]["yoy_acceleration"]，
+        # 是嵌套字段，不是顶层键，子引用体系（_field_authority_from_payload /
+        # evidence_index）只认顶层键。折进已注册的顶层键 "m7_aggregate" 会两难：
+        # 全 SEC 场景下 m7_aggregate 本可 core_allowed，被这里恒定的 supporting_only
+        # 拖累会错误收紧；反过来放宽又违背"acceleration 不能单独证明盈利兑现"的
+        # 本意。两种都违反"usage 逐条原样沿用"，因此保留原样，不发明不存在的顶层键。
         metric_authority["yoy_acceleration"] = _component_metric_authority(
             usage="supporting_only",
             authority="derived_growth_rate_not_valuation_or_earnings_claim",
@@ -6418,8 +6466,18 @@ def get_m7_buyback_flow(end_date: str = None) -> Dict[str, Any]:
                 },
             ),
         }
+        # T36：真实顶层键是 per_company（曾登记为分组名 actual_buyback_spending，
+        # 1:1 改名）以及 m7_quarterly_total / m7_ttm_total / yoy_pct 三个独立标量
+        # 字段（曾经被 m7_aggregate_and_yoy 这一个分组名覆盖，usage 完全相同，
+        # 拆成三条，reason 原样沿用）。aggregate_context 是描述"哪些公司参与聚合/
+        # 可比"的元数据，不是这个分组本来登记的对象，保持不登记（避免凭空扩大
+        # mixed_field_authority 命中面）。
+        aggregate_and_yoy_authority_reason = (
+            "Aggregates and YoY are deterministic derivatives over the disclosed comparable subset. Buyback contraction "
+            "or expansion remains supporting context and does not override valuation risk."
+        )
         result["data_quality"]["metric_authority"] = {
-            "actual_buyback_spending": _component_metric_authority(
+            "per_company": _component_metric_authority(
                 usage="supporting_only",
                 authority=("mixed_actual_cashflow_facts_and_third_party_normalization" if via_yahoo else "sec_xbrl_actual_cashflow_facts"),
                 reason=(
@@ -6428,13 +6486,22 @@ def get_m7_buyback_flow(end_date: str = None) -> Dict[str, Any]:
                 ),
                 source=source_tier,
             ),
-            "m7_aggregate_and_yoy": _component_metric_authority(
+            "m7_quarterly_total": _component_metric_authority(
                 usage="supporting_only",
                 authority="derived_comparable_subset",
-                reason=(
-                    "Aggregates and YoY are deterministic derivatives over the disclosed comparable subset. Buyback contraction "
-                    "or expansion remains supporting context and does not override valuation risk."
-                ),
+                reason=aggregate_and_yoy_authority_reason,
+                source=source_tier,
+            ),
+            "m7_ttm_total": _component_metric_authority(
+                usage="supporting_only",
+                authority="derived_comparable_subset",
+                reason=aggregate_and_yoy_authority_reason,
+                source=source_tier,
+            ),
+            "yoy_pct": _component_metric_authority(
+                usage="supporting_only",
+                authority="derived_comparable_subset",
+                reason=aggregate_and_yoy_authority_reason,
                 source=source_tier,
             ),
         }
@@ -6469,7 +6536,7 @@ def get_m7_buyback_flow(end_date: str = None) -> Dict[str, Any]:
                 formula=formula,
                 anomalies=[reason],
                 metric_authority={
-                    "actual_buyback_spending": _component_metric_authority(
+                    "per_company": _component_metric_authority(
                         usage="supporting_only",
                         authority="unavailable",
                         reason="No usable actual-spending evidence; no inference is permitted.",

@@ -31,6 +31,31 @@
 
 **否决**：未采纳"给未登记字段自动补 `audit_only`"（那是 T35 的诱人写法）——`orchestrator.py:2883` 的 `mixed_field_authority` 会因此把 7 个已登记函数集体降级。未把 `null→[]` 做成"仅严格模式生效"的开关——会让两条路径行为分叉、更难验证。未改 `contracts.py` 字段类型为 `Optional[List[X]]`。`_run_schema_guard` 的后置闸门原样保留：`tool_choice="auto"` 下模型可以不走工具通道，严格模式是概率性保证不是铁保证——本跑再次实测到（见下条）。
 
+### 【关闭 T20】登记表键名对齐真实字段名（用户选 B：改名字，不放开菜单）
+
+**为什么选 B 不选 A**：另一条路是把 `evidence_index` 的 `#field` 也按真实字段名放开。实测那会让菜单从 104 条涨到 459 条，并把 `#download_url`、`#source_file` 这类元数据摆上菜单。用户裁决："把那些下载链接原文件名摆上菜单是完全的 token 浪费。" **菜单是每站每跑都要重新塞进去的，加进去的不是一次性成本。**
+
+**改法**：把登记键名从概念分组名改成真实顶层字段名。**不是简单改名**——要分辨一对一还是一对多：
+- `L1.get_fed_funds_rate_path`：`path_0_6m` + `path_7_12m` → 合并为 `path`（两者描述同一个真实顶层数组，近端/远端差异已由数组每个元素自带的 `field_authority` 承载）；`slope_12m_and_cuts_priced_bps` → 拆为 `slope_12m` + `cuts_priced_bps`。
+- `L2.get_vix_term_structure`：`vix6m_leg` → `vix6m`（一对一）。
+- `L4.get_m7_capex_cycle`：`companies_sec_xbrl` + `companies_yfinance_fallback` → 合并为 `companies`，usage 取更保守一档（沿用既有 `m7_aggregate` 的条件模式）。
+- `L4.get_m7_earnings_blackout_calendar`：`estimated_blackout_state` → 拆为 `per_ticker` / `m7_in_blackout_count` / `m7_in_blackout_share_equal_weight` / `upcoming_28d_calendar`。
+- `L4.get_m7_buyback_flow`：`actual_buyback_spending` → `per_company`；`m7_aggregate_and_yoy` → 拆为 `m7_quarterly_total` / `m7_ttm_total` / `yoy_pct`。
+
+**只重新表达已有登记，绝不新增字段**。真实字段里没被现有登记覆盖的保持不登记——凭空补一条（尤其补 `audit_only`）会让 `field_usages` 多出一档，触发 `orchestrator.py:2883` 的 `mixed_field_authority`，把父级 passport 打成 `verified=False` 并追加降级规则。
+
+**故意不改的三处**：① `get_m7_capex_cycle#yoy_acceleration` 真实路径是 `value["m7_aggregate"]["yoy_acceleration"]`，是**嵌套**字段，子引用体系只认顶层键；折进 `m7_aggregate` 会两难（全 SEC 时该键可 core_allowed，而 yoy_acceleration 语义要求恒为 supporting_only），两种折法都违反"usage 逐条原样沿用"，故保留并加注释——**不发明不存在的顶层键**。② `get_crowdedness_dashboard#status` 的登记在 `data_evidence.py` 的 `WEAK_METRIC_AUTHORITY_POLICIES`，且该函数当前实现里根本没有叫 `status` 的字段（顶层、嵌套都没有）——不是名字起错，是这个概念没有对应产出，留档待评估。③ `get_cftc_nq_positioning` 本轮 `unavailable`、真实键 0 个，**不能拿一次取不到数的运行去判它错位**（CLAUDE.md"常见误判"）。
+
+**我复核时发现并钉住的一处行为变化**（worker 未主动报告，属"合并"的连带后果）：capex 合并前，**混合渠道**（部分公司走 SEC、部分回落 Yahoo）下会同时登记 `companies_sec_xbrl`(core_allowed) 与 `companies_yfinance_fallback`(supporting_only) → usage 两档 → `mixed_field_authority=True`；合并后只剩一条取保守档的 `companies` → 一档 → 那面旗不再升起。
+
+**判定为可接受且更正确，理由**：真正要防的是"弱字段冒充强证据"。混合渠道下现在**没有任何字段是 core_allowed**（旧写法里 `#companies_sec_xbrl` 反而可以被当 core 引用）——字段级更严了，只有容器那面旗降了，而那面旗本就是同一个真实字段被登记两次、两个 usage 撞出来的假阳性。已补 `test_m7_capex_cycle_mixed_channel_collapses_to_one_usage_tier_without_granting_authority` 同时断言这两件事，让它是被记录的选择而非无人发现的副作用。**该测试已用 `git stash` 回到改前实跑验证会红**（改前实际输出 `{'companies_sec_xbrl': 'core_allowed', …}`）。
+
+**红灯测试在哪**：`tests/test_metric_authority_field_alignment.py` 8 条（7 条 worker 写、1 条我补）。全部调用**真实函数**配 mock 依赖，不用手编 payload。其中端到端那条是 `FINDINGS.md` 事故的逐字复现：改前 `L4.get_m7_buyback_flow#m7_quarterly_total` 不在 `allowed_refs` 里。
+
+**离线回放**（真实产物 `20260730_114704` 的 value 键）：5 个函数登记键全部对齐（除文档化例外）。
+
+**验证**：全量 `--cache-clear` **1055 passed**。旧键名引用点已 grep 并同步（4 个测试文件 + `tools_L4.py:5853` 的 `fallback_note` 字符串）；`test_governance_input.py:505` 与 `FINDINGS.md` 里叙述历史事故的文字**未改**——那是历史记录不是现状断言（CLAUDE.md"历史材料不是现状"）。
+
 ### 【关闭 T36】事件总结永不失败；两把锁从二选一改成叠加；确立"轨道 > 导出 > 规矩"
 
 **用户确立的原则**（已入 `CLAUDE.md` 常驻边界与执行纪律、`ARCHITECTURE.md` 3.1b/3.1c）：约束该住在哪，按 ① 接口能强制的进 schema（模型零注意力成本）② 代码能从正文导出的别让模型填 ③ 剩下的才进提示词，且只约束"必须交代什么"。压舱石：**结构用来定位，不许用来拒收**；但收下 ≠ 认可，索引缺失必须留痕降级。

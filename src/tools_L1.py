@@ -744,7 +744,9 @@ def get_vix_term_structure(end_date: str = None) -> Dict[str, Any]:
                 "reason": "历史分位基于 yfinance ^VIX/^VIX3M 每日收盘计算，不是 Cboe 官方期限结构分位；仅作确认/预警强度参考。",
                 "reference_sources": [],
             },
-            "vix6m_leg": {
+            # T36：真实顶层键是 "vix6m"（曾登记为分组名 vix6m_leg，对不上 value 里
+            # 的真实字段名）。
+            "vix6m": {
                 "source": "third_party_estimate",
                 "usage": "supplementary_only",
                 "authority": "secondary_confirmation_leg_no_percentile",
@@ -848,19 +850,25 @@ def get_fed_funds_rate_path(end_date: str = None) -> Dict[str, Any]:
     }
 
     def _metric_authority() -> Dict[str, Any]:
+        # T36：登记表键名对齐 value 的真实顶层字段名（不是概念分组名），否则模型
+        # 照实抄真实字段名反而被 evidence_index 白名单判违规（见
+        # investigation_reports/20260728_single_source_audit/FINDINGS.md）。
+        # path_0_6m/path_7_12m 曾经是两个分组名，但两者描述的是同一个真实顶层数组
+        # 字段 "path"（近端 0-6 月 vs 远端 7-12 月只是同一数组内部的置信度差异，
+        # 每个元素自带 field_authority 标注），合并成一条登记；
+        # slope_12m_and_cuts_priced_bps 曾经是一个分组名覆盖两个真实顶层标量字段
+        # slope_12m 和 cuts_priced_bps，拆成两条，usage/reason 原样沿用。
         return {
-            "path_0_6m": {
+            "path": {
                 "source": "third_party_unofficial",
                 "usage": "supporting_only",
-                "authority": "supporting",
-                "reason": "近端月度结算价可支持市场定价观察；thin 月按单项 field_authority 继续降级，不能视为 Fed 承诺。",
-                "reference_sources": [],
-            },
-            "path_7_12m": {
-                "source": "third_party_unofficial",
-                "usage": "supporting_only",
-                "authority": "low_liquidity_far_month",
-                "reason": "7-12月合约无论当日成交量如何均属远月低置信观察，不能单独支撑方向结论。",
+                "authority": "mixed_near_and_far_month_liquidity_tiers",
+                "reason": (
+                    "近端（0-6月）月度结算价可支持市场定价观察；thin 月按单项 field_authority 继续降级，"
+                    "不能视为 Fed 承诺。7-12月合约（months_ahead>6）无论当日成交量如何均属远月低置信观察"
+                    "（field_authority=low_liquidity_far_month），不能单独支撑方向结论；数组每个元素自带"
+                    "field_authority 标注可用于区分近端/远端置信度。"
+                ),
                 "reference_sources": [],
             },
             "state": {
@@ -873,7 +881,14 @@ def get_fed_funds_rate_path(end_date: str = None) -> Dict[str, Any]:
                 ),
                 "reference_sources": ["get_hy_oas_bp"],
             },
-            "slope_12m_and_cuts_priced_bps": {
+            "slope_12m": {
+                "source": "third_party_unofficial",
+                "usage": "supporting_only",
+                "authority": "derived_curve_summary",
+                "reason": "由首个合格月和最远合格月推导；horizon_used 若短于12月必须按实际期限解释。",
+                "reference_sources": [],
+            },
+            "cuts_priced_bps": {
                 "source": "third_party_unofficial",
                 "usage": "supporting_only",
                 "authority": "derived_curve_summary",

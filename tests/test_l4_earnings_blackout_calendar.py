@@ -118,9 +118,15 @@ def test_blackout_data_quality_authority_and_full_wiring(monkeypatch):
     result = tools_L4.get_m7_earnings_blackout_calendar("2026-06-23")
 
     assert REQUIRED_DATA_QUALITY_FIELDS <= set(result["data_quality"])
-    authority = result["data_quality"]["metric_authority"]["estimated_blackout_state"]
-    assert authority["usage"] == "supporting_only"
-    assert "not_company_disclosure" in authority["authority"]
+    metric_authority = result["data_quality"]["metric_authority"]
+    for key in (
+        "per_ticker",
+        "m7_in_blackout_count",
+        "m7_in_blackout_share_equal_weight",
+        "upcoming_28d_calendar",
+    ):
+        assert metric_authority[key]["usage"] == "supporting_only"
+        assert "not_company_disclosure" in metric_authority[key]["authority"]
     assert data_evidence_issues(result, function_id="get_m7_earnings_blackout_calendar")["hard_block"] == []
 
     from agent_analysis.deep_research_canon import INDICATOR_CANONS

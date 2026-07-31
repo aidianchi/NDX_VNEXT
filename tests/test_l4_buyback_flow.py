@@ -187,7 +187,10 @@ def test_buyback_data_quality_authority_and_full_wiring(monkeypatch):
     result = tools_L4.get_m7_buyback_flow("2026-07-10")
 
     assert REQUIRED_DATA_QUALITY_FIELDS <= set(result["data_quality"])
-    assert result["data_quality"]["metric_authority"]["actual_buyback_spending"]["usage"] == "supporting_only"
+    metric_authority = result["data_quality"]["metric_authority"]
+    assert metric_authority["per_company"]["usage"] == "supporting_only"
+    for key in ("m7_quarterly_total", "m7_ttm_total", "yoy_pct"):
+        assert metric_authority[key]["usage"] == "supporting_only"
     assert "abs(reported_cash_flow_value)" in result["data_quality"]["formula"]
     assert data_evidence_issues(result, function_id="get_m7_buyback_flow")["hard_block"] == []
 
