@@ -30,7 +30,7 @@
 
 **七路里有三路把严重度报高了，逐条被主对话改判。原因不是能力不足，是上下文隔离的必然代价：**
 
-- 数据层那路报 P0「回测时点泄漏」——它看不到下游 `data_evidence.py:645` 的 `latest_only_source_used_in_backtest` 硬拦 + `packet_builder.py:473` 的 packet 剔除。**脏数据确实被抓下来了，但走不到模型面前。改判 P1。**
+- 数据层那路报 P0「回测时点泄漏」——它看不到下游 `data_evidence.py:645` 的 `latest_only_source_used_in_backtest` 硬拦 + `packet_builder.py:562-575` 的 packet 剔除（2026-08-05 订正：旧写 `:473` 是计数器，非剔除点）。**脏数据确实被抓下来了，但走不到模型面前。改判 P1。**
 - 证据链那路报 P0「权限防线覆盖率个位数百分比」——它用"字符量"当分母，看不到受保护的那 8 条恰好是**全部可发布结论 + 行动翻译**。**改判 P1，但缺口的真实形状要重新表述（见教训 2）。**
 - 测试那路把两个内容无害的误入 git 文件与 pandas 版本越界都报 P0——**分别改判 P2 / P1。**
 
@@ -111,6 +111,8 @@
 
 跨 7 次 run 扫描：同类"VXN 缺失"措辞 0 次复现 → 该症状本次为新发，但产生机制是结构性的。
 
+**2026-08-05 复核增补两条**：① 实际比 20/26 更糟——所谓 6 条非 hollow 全是格式示例/子串误命中/散文引用，**结构化数值供给 0/26**；② **本病的最小止血已并入 T42①，不等 T38 设计定稿**：`integrated_synthesis_report.py:296` 改为先构造 payload、再从 payload 导出 `_allowed_data_refs`（许可 ⊆ 实发在构造上恒真），`_ref_authority_map`（`:356`）返回值捎带 `evidence_index[ref]` 的 `canonical_question` 与 `current_reading`（26 条约 2,800 字符，`L2.get_vxn` 的 `"30.84，10年百分位87.2%"` 就躺在同一 run 的 `synthesis_packet.json` 里）。**渐进披露（T38）的立论因此不再依赖这 20 条，它的理由是深度轴冗余：`evidence_index` 全量 478,178 字符，"问题+读数"投影 10,086（2.1%）、中档投影 28,332（5.9%）——削 94% 而广度一条不砍**（Fable 独立重算，详见 `investigation_reports/20260805_audit_verification/REPORT.md`）。
+
 ### 3.1b 同一根因的第二个实例：预算截断砍掉唯一带数值的材料
 
 `controlled_investigation` 的三条调查中，`inv_e75efe82e7c0` 问的是"半导体链条、AI 权重股和盈利预期有没有同步改善"，但拿到的三份材料**全部是事件层摘要、零 L1-L5/Bridge 数值**。
@@ -137,7 +139,7 @@
 **先前已知的 thesis↔counter_thesis（88%）不是最严重的一对。** 治理四站（critic/risk/reviser/final_adjudicator）两两 **95.6%-97.3%**，其中 `key_evidence_refs` 字段 **116,150 字符四站字节级完全相同**，四次调用累计重复传输 **464,600 字符**。
 
 其余量化：
-- 102 条证据菜单中 **68 条从未被任何一站引用**（L2=36 / L4=17 / L1=9 / L5=4 / L3=2），两套独立实现复现，数字逐字吻合
+- 102 条证据菜单中 **68 条从未被任何一站引用**（L2=36 / L4=17 / L1=9 / L5=4 / L3=2），两套独立实现复现，数字逐字吻合。**2026-08-05 红队口径警告：此数按严格字符串匹配。按指标口径（引用父级即算用到其字段子条目）实为 45 条**——68 里 23 条是被引用 ref 的父级/兄弟（`L2.get_vxn#level` 在内）。作"拼装点各自为政"的诊断成立；**作剪枝输入高估约 50%，照 68 砍会误伤在用指标**。两套"独立复现"同用严格匹配，吻合不能检验口径本身
 - 单次 run 输入 963,419 token / 输出 124,313，**输入占 88.6%**
 - L1-L5 五站合计约占输入 44%，其中原始数据块占各自 47%-91%（L2 90.3% / L4 90.8%）
 - **模板与法典合计只占 2.5%-38%**，越大的站占比越低——**格式规矩不是成本大头，投喂量才是**
@@ -209,6 +211,14 @@ T37 就卡死在这里：想砍那 68 条，但按引用率砍会让下次行情
 
 ### 3.5 已知代价与必须先想清楚的风险
 
+**T38 验收四问（2026-08-05 上编号；其他文档只许引用编号，不许复述内容）**：
+- **Q1** 广度筛选在 A / A′ / B 之间拍板并给出否决另两条的理由（A′ 见 `HANDOFF.md` 第五节 2026-08-05 订正）；
+- **Q2** 每站可取范围的按层强制裁定方案（下方风险 1 的解法，**不解决不动工**）；
+- **Q3** 拼装顺序与前缀缓存的先后（3.2b，下方风险 2）；
+- **Q4** 筛选留痕的落盘字段定义（3.4 原则三；建议锁 `selected_ref_ids` / `excluded_ref_ids` / `selector_version` 三个机器可判字段，不写自然语言理由——写了理由就诱使闸门判意思）。
+
+**前置**：T44④（严格模式开关与 `prompt_cache_hit_tokens` 记进产物）须先于 T38 完成，否则做完无法验证收益。
+
 诚实登记，不粉饰：
 
 1. **【最高风险】按需取用可能成为绕过层间隔离的新通道。** 方向⑦评定「层间隔离」为"代码强制、未找到现实绕过路径"，2026-08-04 逐站实测**用真实提示词文本再次确认干净**：五层 `context_brief.apparent_cross_layer_signals` **全空**、`layer_highlights` 只含本层键、跨层 `L{n}.get_xxx` 全部出现在格式示例中且不带数值、`bridge_memo`/`thesis_draft`/`final_adjudication` 关键字**五层零命中**；counter_thesis 的"不得读取 thesis_draft"同样成立（该串 2 次命中均在禁止清单声明里）。
@@ -274,9 +284,11 @@ T37 就卡死在这里：想砍那 68 条，但按引用率砍会让下次行情
 
 **残留风险**：① 采集产物 `data_collected_v9_<date>.json` 内留存日期/数值错配记录，对不走 `data_evidence_issues` 的任何消费方无保护；② `tools_L4.py:3323` 的空市值行剔除条件带 `and not end_date`，导致 `:3366` `stats["successful"]=len(df)` 在回测下失真（运行日志实证：`成功100/101，yfinance=0/0，Yahoo=0/0`），使 `MIN_FORWARD_QUALITY_CONSTITUENTS(50)` 门槛恒通过；③ 回测下该指标经 hard_block 静默剔除，归因码会把 bug 误导为治理违规。
 
-**可执行线索**：`tools_L4.py:5350` 回落分支加 `end_date` 守卫、回测下改报 `backtest_skipped`；`tools_L4.py:3323` 去掉 `and not end_date`。**必须配真实实现测试**——现有 `tests/test_l4_forward_earnings_quality.py:306-370` 把两条真实路径都 monkeypatch 掉了，是覆盖盲区。
+**可执行线索**：`tools_L4.py:5350` 回落分支加 `end_date` 守卫、回测下改报 `backtest_skipped`；`tools_L4.py:3323` 去掉 `and not end_date`。**必须配真实实现测试**——现有 `tests/test_l4_forward_earnings_quality.py:306-370` 把两条真实路径都 monkeypatch 掉了，是覆盖盲区。同文件 capex/buyback 的 yfinance fallback 是同题正确写法（`tools_L4.py:5806-5827`/`:6224-6245`：`is_live_context` 门 + `period_end <= date_str` 过滤 + 回测显式报不可用），可照抄。
 
-**值得记住的教训**：该漏洞由 2026-07-11 commit `860971d` 引入，而**那次改动的标题正是 "PIT earnings contract"**。规律：**修边界的那次改动最容易在边界上开新口**——改的人注意力全在"我要拦住的那条路"上，顺手加的兜底分支没过同一套审查。
+**验收必须额外覆盖（2026-08-05 红队增补）**：① 下游硬拦有两个结构性逃逸口——`payload["backtest_skipped"]` 为真、或 `availability != "available"`，任一成立硬拦即失效；**本修复若把 fallback 改报 degraded/skipped，必须验证不会顺手关掉硬拦**。② `LATEST_ONLY_FUNCTIONS` 名单是手工维护的，须加一条守护测试：凡函数体触达无 `end_date` 参数的实时源者必须在名单上（`get_m7_earnings_blackout_calendar` 属明示降级例外，需登记豁免理由）。
+
+**值得记住的教训（2026-08-05 改写，旧版 commit 归因被 `git log -S` 证伪——泄漏实由 `5705a71`/2026-06-08 数据源改造引入，非 `860971d`/2026-07-11 PIT 加固，详见 `HANDOFF.md` 教训 3）**：加兜底必须当场配守卫；加固边界的改动，验收范围必须包含同区域**既有**的兜底/降级分支。
 
 ### T40. 判断书两项阅读体验：术语悬浮解释 + 时间戳例外化
 
@@ -300,15 +312,17 @@ T37 就卡死在这里：想砍那 68 条，但按引用率砍会让下次行情
 
 **为什么现在做**：T09 的 T+20 窗口于 2026-08-04 收盘后闭合，**数据第一次出现**。不建落点则打了分也看不见。北极星六问中此问是唯一在 brief 里完全无位置的一问。
 
-### T42. 边界补牙三件（均为"加一次身份/存在性比对"量级，不引入语义判断）
+### T42. 边界补牙四件（均为"加一次身份/存在性比对"量级，不引入语义判断；2026-08-05 由三件扩为四件，新增的①应最先做）
 
-**① 「不得编造」加数字存在性比对。** 当前 `_validate_reasoned_verdict_refs`（`orchestrator.py:5842-5894`）只校验"必须带方括号 evidence_ref"，**不校验引用旁边的数字真假**；`recompute_belt` 只覆盖工具衍生指标，不覆盖 LLM 自撰数字。八条边界中此条是**唯一未找到专门测试**的。判据：**"报告里写的 2.3%，原始 payload 里找不找得到 2.3%"是身份比对，不是语义判断**，符合「闸门不判意思」。
+**① 「许可 ⊆ 实际发送」交叉校验 + 数值捎带（20 条幽灵引用的直接止血，用户 2026-08-05 拍板提前，不等 T38）。** `integrated_synthesis_report.py:296` 的 `_allowed_data_refs(final_adjudication)` 扫完整对象、payload（`:299-318`）只装叙事字段——改为**先构造 payload、再从 payload 导出 refs**，许可 ⊆ 实发在构造上恒真；同时 `_ref_authority_map`（`:356`）返回值捎带 `evidence_index[ref]` 的 `canonical_question` 与 `current_reading`（26 条约 2,800 字符）。配测试断言 `set(allowed_data_refs) ⊆ payload 内出现的 ref 集合`。纯集合包含 + 字段搬运，不判意思。**先例**：`controlled_investigation` 的 `allowed_refs = list(assembled_refs)`（`orchestrator.py:1957`，许可从实发导出）已是同构做法，照它写。验收：重跑综合裁决站，"本轮输入未提供 XX 数值"类回答归零或仅剩真实缺数项。
 
-**② 终审阶段补"保留冲突是否被回应"的编号级校验。** Bridge→Thesis 段查得扎实（`orchestrator.py:6271-6315`，且修过一次真实假阳性事故），**Thesis→Final 段无对等检查**——终审只被要求"带够 3 条引用"，不被要求"覆盖住仍然保留的冲突"。后果：冲突条目仍在结构字段里（"没抹平"形式成立），但终审叙事可完全绕开。**冲突没被删掉，只是没被回答。**
+**② 「不得编造」加数字存在性比对。** 当前 `_validate_reasoned_verdict_refs`（`orchestrator.py:5842-5894`）只校验"必须带方括号 evidence_ref"，**不校验引用旁边的数字真假**；`recompute_belt` 只覆盖工具衍生指标，不覆盖 LLM 自撰数字。八条边界中此条是**唯一未找到专门测试**的。判据：**"报告里写的 2.3%，原始 payload 里找不找得到 2.3%"是身份比对，不是语义判断**，符合「闸门不判意思」。
+
+**③ 终审阶段补"保留冲突是否被回应"的编号级校验。** Bridge→Thesis 段查得扎实（`orchestrator.py:6271-6315`，且修过一次真实假阳性事故），**Thesis→Final 段无对等检查**——终审只被要求"带够 3 条引用"，不被要求"覆盖住仍然保留的冲突"。后果：冲突条目仍在结构字段里（"没抹平"形式成立），但终审叙事可完全绕开。**冲突没被删掉，只是没被回答。**
 
 顺带（同源）：`ThesisDraft.retained_conflicts`（完整 `Conflict` 对象）到 `GovernanceInputPacket.retained_conflict_types` 只剩 `conflict_type` 字符串（`orchestrator.py:4816-4819`）。实测 thesis 保留 4 条，仅 2 条与 bridge 高严重度集合重合，另 2 条只剩标签传下去（内容仍完整保留在 `valuation_assessment`/`timing_assessment` 散文里，人工可读，但下游无法做机器级核对）。
 
-**③ reviser 补 conflict_id 选单。** T34 把 `conflict_id` 改成严格 schema 的 `enum` 只接在 `_run_thesis`；`AnalysisRevised.revised_thesis` 类型同为 `ThesisDraft`，要重新产出同结构的 `retained_conflicts[].conflict_id`，但 reviser 不在 `_STRICT_TOOL_CALLING_ELIGIBLE_STAGES`（`orchestrator.py:4182-4184`），`_normalize_conflict`（`:7381-7388`）只管形状不核对 id 合法性。**T34 那次真实事故（`TC1_…` → `C1_…`，后缀一字不差、前缀自行改写）若在 reviser 重演，当前无任何机制拦截。**
+**④ reviser 补 conflict_id 选单。** T34 把 `conflict_id` 改成严格 schema 的 `enum` 只接在 `_run_thesis`；`AnalysisRevised.revised_thesis` 类型同为 `ThesisDraft`，要重新产出同结构的 `retained_conflicts[].conflict_id`，但 reviser 不在 `_STRICT_TOOL_CALLING_ELIGIBLE_STAGES`（`orchestrator.py:4182-4184`），`_normalize_conflict`（`:7381-7388`）只管形状不核对 id 合法性。**T34 那次真实事故（`TC1_…` → `C1_…`，后缀一字不差、前缀自行改写）若在 reviser 重演，当前无任何机制拦截。**
 
 ### T43. 工程卫生三件
 
@@ -340,6 +354,16 @@ pytest tests/test_contracts.py tests/test_l2_official_positioning.py → 50 pass
 **⑥ T36 至今未经真实验证。** commit `166ef6b` @ `2026-07-31 13:33:54`，最新 run 产物 @ `Jul 31 00:57`，**晚 12.5 小时**。`event_section_summary` 的 `raw_text_fallback` 兜底 + `_annotate_event_section_summary_degradation` 推进 `quality_gate.notes` 这套机制，只有基于冻结夹具的单元测试覆盖，**一次真实 API 调用都没经历过**。**下次真实 run 第一件事就是查它**——它是全系统唯一装了这套新兜底的站点。
 
 ---
+
+### T46. 治理四站的证据集合被正方引用锚定，counter_thesis 零承载（2026-08-05 方向审查发现，Fable 亲手验证后立案）
+
+**病根（已核实）**：`GovernanceInputPacket`（`contracts.py`）共 41 个字段，thesis 相关 20 个、**counter 相关 0 个**；`key_evidence_refs` 的构造（`orchestrator.py:4820-4865`）= 高严重度冲突 refs ∪ thesis 引用过的一切，函数体内 counter_thesis **零命中**。即 critic / risk / reviser / final_adjudicator 四站拿到的证据集合**由正方自己的引用选择定义**——而反驳一个论点最需要的证据，恰是该论点选择不引用的那些。
+
+**定性**：审计总结论"正反双方拿同一份菜单、代码做不出偏科"只在 thesis/counter_thesis 一对上成立（两者同拿完整 `evidence_index`），**过了这一对就不成立**。这是今天就在跑的现状，不是渐进披露引入的新风险；但 T38 若按"以站点问题为锚做 top-K"推进而不先正视它，会把这个以 thesis 为锚的漏斗从"没人注意的实现细节"升格为"经过设计的架构"。
+
+**可执行线索**：最小改法是 `key_evidence_refs` 的来源集合改为 thesis 引用 ∪ counter_thesis 引用（对称锚定）；或治理四站直接拿与 thesis/counter 相同的完整索引（成本见 3.1 的深度投影数据）。方案先行，与 T38 的 Q1 联动但**不并入 T38**——它是"今天就在偏科"的修复，不是"未来怎么供给"的设计。
+
+**验收**：`_build_governance_input_packet` 的证据集合来源对称（代码级可验），或有明确记录的用户拍板选择其他方案；配一条测试断言 counter_thesis 引用的 ref 不会仅因正方未引用而从治理四站消失。
 
 ## 五、三条留给后来者的教训（与第一节的三条并列）
 
