@@ -182,6 +182,49 @@ def test_task_ids_are_never_reused():
     )
 
 
+def test_board_stays_glanceable():
+    """看板是给人一眼看的，细节住锚点文件；超限即细节开始回流。
+
+    2026-08-05 改革的直接起因：owner 反馈"打开就看不懂"。当时 T38 单格塞了
+    500+ 字符的验收细节，而同样内容在工单文件里本来就有完整版本。每次收工
+    往格子里多塞一点都是合理的，累积起来就是不可读——所以用闸门挡，不靠自觉。
+    """
+    text = _read(BOARD)
+    lines = text.splitlines()
+    assert len(lines) <= 110, (
+        f"现在.md 已有 {len(lines)} 行，超过 110 行上限——细节应搬去「细节在哪」指向的文件"
+    )
+    body = _section(text, "## 📋 全部未完成")
+    for line in body.splitlines():
+        match = LEDGER_ROW.match(line.strip())
+        if not match:
+            continue
+        cells = [cell.strip() for cell in match.group(2).split("|")]
+        task_id, one_liner, criterion = match.group(1), cells[0], cells[2]
+        assert len(one_liner) <= 50, (
+            f"{task_id} 的「一句话」有 {len(one_liner)} 字符（上限 50）——它该是标题，不是段落"
+        )
+        assert len(criterion) <= 120, (
+            f"{task_id} 的「怎么算做完」有 {len(criterion)} 字符（上限 120）——"
+            "验收细节写进锚点文件，这里只留一句可判定的话"
+        )
+
+
+def test_letters_stay_recent_and_indexed():
+    """信件正文只保留最近几封；全量目录常驻，早期信整封滚进 docs/archive。
+
+    与 WORK_LOG 按月滚动同理：owner 打开先看目录（每封一句话），要细节再进正文
+    或档案。归档整封搬走、逐字不改——信是历史记录，压缩重写等于改写历史。
+    """
+    text = _read(LETTERS)
+    letters = re.findall(r"^## 第 \d+ 封", text, flags=re.MULTILINE)
+    assert letters, "人话进度报告.md 没有任何信件标题——解析器失效或文件被改坏"
+    assert len(letters) <= 5, (
+        f"人话进度报告.md 正文有 {len(letters)} 封信（上限 5）——最早的整封搬进 docs/archive/，目录里留一句话"
+    )
+    assert "## 📖 目录" in text, "人话进度报告.md 缺少「📖 目录」小节——目录是 owner 的一眼入口"
+
+
 def test_letters_carry_no_ledger():
     """《人话进度报告》是决策记录，不得再承载台账。
 
