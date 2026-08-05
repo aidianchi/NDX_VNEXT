@@ -35,6 +35,7 @@
 - 架构边界：`ARCHITECTURE.md`
 - 指标标准：`RESEARCH_CANON.md`
 - run / 回测复盘：`RUN_REVIEW_CHECKLIST.md`
+- 体检方法论（怎么成批发现毛病，而不是撞一个修一个）：`体检方法.md`
 - 数据边界：`DATA_COVERAGE_REVIEW.md`
 - 完成记录：`WORK_LOG.md`
 - 通俗解释风格：`docs/archive/2026-05/PLAIN_LANGUAGE_*.md`（历史样例，文风可借鉴、内容已过时）

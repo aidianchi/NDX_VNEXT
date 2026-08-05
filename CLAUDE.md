@@ -37,6 +37,7 @@
 | 指标判读、跨层推理标准 | `RESEARCH_CANON.md` |
 | run / 回测复盘流程 | `RUN_REVIEW_CHECKLIST.md` |
 | 回测第一性原理 | `回测原则.md` |
+| 怎么成批发现系统的毛病（体检方法论） | `体检方法.md` |
 | 数据源覆盖与回测数据边界 | `DATA_COVERAGE_REVIEW.md` |
 | 历史材料（不是现状） | `docs/archive/INDEX.md` |
 
