@@ -111,6 +111,8 @@
 
 跨 7 次 run 扫描：同类"VXN 缺失"措辞 0 次复现 → 该症状本次为新发，但产生机制是结构性的。
 
+> **⚠️ 2026-08-05 更正：这句只对"症状"成立，对"缺陷"不成立。** 上面扫的是模型有没有抱怨，而它只在模型恰好被追问时才出声。改扫缺陷本身（数值该给没给）后：**连续 8 次跑命中、最早可见于 2026-07-19、共 41 条**（下限）。缺陷已存在至少 2.5 周、每跑都在发生。见 `investigation_reports/20260805_audit_verification/REPORT.md` 第三之二节与 `sweep_prototype.py`。**教训：扫症状会把"一直在坏"读成"偶然新发"。**
+
 **2026-08-05 复核增补两条**：① 实际比 20/26 更糟——所谓 6 条非 hollow 全是格式示例/子串误命中/散文引用，**结构化数值供给 0/26**；② **本病的最小止血已并入 T42①，不等 T38 设计定稿**：`integrated_synthesis_report.py:296` 改为先构造 payload、再从 payload 导出 `_allowed_data_refs`（许可 ⊆ 实发在构造上恒真），`_ref_authority_map`（`:356`）返回值捎带 `evidence_index[ref]` 的 `canonical_question` 与 `current_reading`（26 条约 2,800 字符，`L2.get_vxn` 的 `"30.84，10年百分位87.2%"` 就躺在同一 run 的 `synthesis_packet.json` 里）。**渐进披露（T38）的立论因此不再依赖这 20 条，它的理由是深度轴冗余：`evidence_index` 全量 478,178 字符，"问题+读数"投影 10,086（2.1%）、中档投影 28,332（5.9%）——削 94% 而广度一条不砍**（Fable 独立重算，详见 `investigation_reports/20260805_audit_verification/REPORT.md`）。
 
 ### 3.1b 同一根因的第二个实例：预算截断砍掉唯一带数值的材料
