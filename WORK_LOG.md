@@ -26,6 +26,22 @@
 
 **详见** `investigation_reports/20260805_audit_verification/REPORT.md`（10 条判定表 + 六问结论 + Fable 复验记录）。
 
+### T42① 止血 + T44④ 留痕：许可改为从实发导出，运行状态开始留痕（两项均未关单，见下）
+
+**T42①（20 条幽灵引用的直接止血）**。病根是许可与内容分处两个来源：`_allowed_data_refs(final_adjudication)` 扫完整判决书发许可，而 payload 只装有限叙事字段，两者从未对齐 → 该站结构化数值供给实为 **0/26**，模型只能如实答"本轮输入未提供 VXN 数值和分位"。
+
+**改法（构造上恒真，不是事后校验）**：`src/integrated_synthesis_report.py` 先拼好真正要发给模型的 payload（新增 `evidence_refs` 与压缩版 `key_support_chains` 两个正式证据字段），再 `allowed_refs = self._allowed_data_refs(payload)`（`:331`）回填。入参改名 `sent_content`（`:685`），docstring 明确"必须传入即将原样发出的内容"。**「许可 ⊆ 实发」因此在物理上不可分叉**——与 `orchestrator.py:1957` 的 `allowed_refs = list(assembled_refs)` 同构（该处即红队复核找到的既有先例）。同时 `_ref_authority_map`（`:372`）返回值由 `Dict[str,str]` 扩为携带 `usage`/`canonical_question`/`current_reading`；`_parse_and_validate` 加 `_authority_usage()` 兼容新旧两种形状；`build()` 与 `write_integrated_synthesis_report()` 透传 `evidence_index`（后者从 `synthesis_packet.json` 加载）。
+
+**T44④（运行留痕，T38 前置，现已解除）**。`orchestrator.py:5189` 逐站落 `strict_tool_schema_enabled`（取自 `_strict_tool_schema_for_stage()` 的真实每站结果，非硬编码）；`llm_engine.py` 五处记 `prompt_cache_hit_tokens`。**null/0 语义分离是刻意的**：provider 不返回该字段时记 `null`（不知道），不记 `0`（确认未命中）；`get_token_report()` 只累加已知站点，全空则整体 `None`。
+
+**红灯测试在哪**：三个测试文件新增断言——`allowed_data_refs ⊆ payload 内出现的 ref 集合`、`evidence_index 提供 current_reading 时该数值出现在发出内容里`、留痕两字段存在且 provider 不返回缓存字段时为 `null`（反例）。
+
+**Fable 亲自复核（未采信施工方转述）**：① 直接调 `_ref_authority_map(['L2.get_vxn'], 真实 registry, 真实 evidence_index)`，返回值确含 `"current_reading": "30.84，10年百分位87.2%，Spot/MA20=1.12"`——正是模型此前声称拿不到的那个数；② 亲跑 `.venv/bin/python -m pytest --cache-clear -q` → **1062 passed, 0 failed**（97.6s），与施工方所报一致；③ grep 确认 `prompt_cache_hit_tokens` 五处无一处 `or 0` / `, 0)` 兜底。
+
+**两项均不关单**：T42 尚余②编造比对、③冲突回应校验、④reviser 选单；T44 尚余 final/critic 开严格模式与 T36 兜底链路真实验证。编号继续存活，台账已改为标注子项完成。
+
+**施工方一处误判（记录以校准）**：报告称"仓库被另一个并发会话提交了 16 次"——实为**本会话主对话自己的提交**（文档改革、系统地图、双路复核、方法论换挡等）。这是本会话第三次出现子 agent 对仓库状态的错误归因（前两次：误删信件引文后归因"历史遗留"、本次误判并发写入）。**判据不变：子 agent 对仓库状态的自述一律用不可变基线复验。** 其对代码改动本身的报告经复核准确。
+
 ### 主方向换挡：T38 → T47，并新增《体检方法》长期方法论文档
 
 **用户拍板（2026-08-05）**："这个是排查问题的最好方法之一……不要先管那些工单其他乱七八糟的问题了"，并提出更根本的一问：**"应该还有一些根本性的体检方法"**——他能想到的只有上下文体检这一种，要求把这一类方法找齐。

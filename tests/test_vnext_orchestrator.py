@@ -3069,6 +3069,33 @@ def test_run_stage_passes_strict_tool_schema_only_when_provided(tmp_path: Path):
     assert engine.calls_kwargs[-1]["strict_tool_name"] == "emit_bridge_output"
 
 
+def test_run_stage_records_strict_tool_schema_enabled_flag(tmp_path: Path):
+    """T44④：llm_stage_diagnostics.json 逐站条目必须留痕 strict_tool_schema_enabled——
+    反映该站本次实际是否启用了严格模式（本次调用有没有真的传 strict_tool_schema），
+    不是全局笼统一个猜测值。"""
+    engine = _StrictToolSchemaRecordingFakeLLMEngine(
+        {"critic": '{"value": "ok"}', "bridge": '{"value": "ok"}'}
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine
+    )
+
+    orchestrator._run_stage(
+        stage_key="critic", stage_name="critic", model_cls=MiniStageModel, payload={}
+    )
+    schema = {"type": "object", "properties": {}, "additionalProperties": False, "required": []}
+    orchestrator._run_stage(
+        stage_key="bridge",
+        stage_name="bridge",
+        model_cls=MiniStageModel,
+        payload={},
+        strict_tool_schema=schema,
+    )
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["stages"]["critic"]["strict_tool_schema_enabled"] is False
+    assert diagnostics["stages"]["bridge"]["strict_tool_schema_enabled"] is True
+
+
 def test_strict_tool_schema_for_stage_defaults_off(tmp_path: Path, monkeypatch):
     """开关默认关闭：不设置环境变量时，即使是试点白名单里的 bridge 站点也拿不到
     schema——这是刻意的显式 opt-in，不是配置文件，方便用户按需临时开关。"""

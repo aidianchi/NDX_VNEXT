@@ -708,3 +708,63 @@ def test_extract_json_repairs_bare_percent_value_slip():
     parsed = engine.extract_json(payload, stage="l5")
 
     assert parsed == {"core_facts": [{"metric": "QQQ OBV 20d Change", "value": "-26.58%"}]}
+
+
+# ---------------------------------------------------------------------------
+# T44④：prompt cache 命中留痕。0 的语义是"确认没命中"，None 的语义是"provider
+# 根本没告诉我们"——两者不可混淆，未提供时必须记 None，不能悄悄填 0 冒充。
+# ---------------------------------------------------------------------------
+
+
+def test_call_ai_records_prompt_cache_hit_tokens_when_provider_returns_it(monkeypatch):
+    _patch_engine_dependencies(monkeypatch, "https://api.deepseek.com")
+    from agent_analysis.llm_engine import LLMEngine
+
+    engine = LLMEngine(available_models=["deepseek-v4-flash"])
+    completions = engine.clients["deepseek"].chat.completions
+    completions.response_content = '{"ok": true}'
+
+    def create_with_cache(**kwargs):
+        completions.last_kwargs = kwargs
+
+        class _Msg:
+            def __init__(self, content: str):
+                self.content = content
+
+        class _Choice:
+            def __init__(self, content: str):
+                self.message = _Msg(content)
+
+        class _Usage:
+            def __init__(self):
+                self.prompt_tokens = 100
+                self.completion_tokens = 20
+                self.total_tokens = 120
+                self.prompt_cache_hit_tokens = 64
+
+        class _Resp:
+            def __init__(self, content: str):
+                self.choices = [_Choice(content)]
+                self.usage = _Usage()
+
+        return _Resp(completions.response_content)
+
+    monkeypatch.setattr(completions, "create", create_with_cache)
+    _raw, usage = engine._call_ai("hello", "deepseek-v4-flash", stage="bridge")
+
+    assert usage.get("prompt_cache_hit_tokens") == 64
+
+
+def test_call_ai_prompt_cache_hit_tokens_is_none_when_provider_omits_it(monkeypatch):
+    """provider 没返回缓存命中字段时必须记 None，不能悄悄填 0 冒充"确认没命中"。"""
+    _patch_engine_dependencies(monkeypatch, "https://api.deepseek.com")
+    from agent_analysis.llm_engine import LLMEngine
+
+    engine = LLMEngine(available_models=["deepseek-v4-flash"])
+    # 默认 _RecordingChatCompletions._Usage 不带 prompt_cache_hit_tokens 属性，
+    # 模拟"这个 provider/这次响应压根没给这个字段"。
+    engine.clients["deepseek"].chat.completions.response_content = '{"ok": true}'
+    _raw, usage = engine._call_ai("hello", "deepseek-v4-flash", stage="bridge")
+
+    assert "prompt_cache_hit_tokens" in usage
+    assert usage["prompt_cache_hit_tokens"] is None

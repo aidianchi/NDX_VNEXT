@@ -508,7 +508,10 @@ class LLMEngine:
                     usage = {
                         "prompt_tokens": getattr(response.usage, 'prompt_tokens', 0),
                         "completion_tokens": getattr(response.usage, 'completion_tokens', 0),
-                        "total_tokens": getattr(response.usage, 'total_tokens', 0)
+                        "total_tokens": getattr(response.usage, 'total_tokens', 0),
+                        # T44④：DeepSeek 等 provider 在 usage 里附带缓存命中 token 数；
+                        # 没有这个属性时必须是 None（“不知道”），不能填 0（“确认没命中”）。
+                        "prompt_cache_hit_tokens": getattr(response.usage, 'prompt_cache_hit_tokens', None),
                     }
                     logger.info(
                         f"  -> Token使用: 输入={usage['prompt_tokens']}, "
@@ -531,7 +534,10 @@ class LLMEngine:
                     usage = {
                         "prompt_tokens": getattr(response.usage_metadata, 'prompt_token_count', 0),
                         "completion_tokens": getattr(response.usage_metadata, 'candidates_token_count', 0),
-                        "total_tokens": getattr(response.usage_metadata, 'total_token_count', 0)
+                        "total_tokens": getattr(response.usage_metadata, 'total_token_count', 0),
+                        # T44④：Gemini 用 cached_content_token_count 表示上下文缓存命中；
+                        # 没有该属性时记 None，不得用 0 冒充“确认没命中”。
+                        "prompt_cache_hit_tokens": getattr(response.usage_metadata, 'cached_content_token_count', None),
                     }
                     logger.info(
                         f"  -> Token使用: 输入={usage['prompt_tokens']}, "
@@ -591,10 +597,13 @@ class LLMEngine:
         choice = ((data.get("choices") or [{}])[0]).get("message", {})
         content = choice.get("content")
         usage_raw = data.get("usage") or {}
+        # T44④：字段本身没出现在响应里时必须是 None（“不知道”），不是 0（“确认没命中”）。
+        raw_cache_hit = usage_raw.get("prompt_cache_hit_tokens")
         usage = {
             "prompt_tokens": int(usage_raw.get("prompt_tokens", 0) or 0),
             "completion_tokens": int(usage_raw.get("completion_tokens", 0) or 0),
             "total_tokens": int(usage_raw.get("total_tokens", 0) or 0),
+            "prompt_cache_hit_tokens": int(raw_cache_hit) if raw_cache_hit is not None else None,
         }
         if usage["total_tokens"]:
             logger.info(
@@ -646,7 +655,11 @@ class LLMEngine:
                         self.token_usage[stage_key] = {
                             "prompt_tokens": usage.get("prompt_tokens", 0),
                             "completion_tokens": usage.get("completion_tokens", 0),
-                            "total_tokens": usage.get("total_tokens", 0)
+                            "total_tokens": usage.get("total_tokens", 0),
+                            # T44④：`usage` 里这个键要么是 provider 给的真实数值，要么是
+                            # `_call_ai` 显式写入的 None——这里不给默认值，原样透传，
+                            # 不能把"没有这个键"和"provider 说是 0"混成同一件事。
+                            "prompt_cache_hit_tokens": usage.get("prompt_cache_hit_tokens"),
                         }
                     return result
                 logger.warning(f"  ! {MODEL_CONFIGS[model_key]['name']} 第 {attempt+1} 次尝试失败，稍后重试...")
@@ -736,11 +749,18 @@ class LLMEngine:
     def get_token_report(self) -> Dict:
         """汇总 token 使用情况"""
         total = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        # T44④：prompt_cache_hit_tokens 只汇总"确实知道"的站点；一个站点都没报告过
+        # 就整体记 None（"不知道"），不能拿默认值 0 参与求和悄悄冒充"确认没命中"。
+        known_cache_hits: List[int] = []
         for key, usage in self.token_usage.items():
             if key == "total":
                 continue
             for field in ["prompt_tokens", "completion_tokens", "total_tokens"]:
                 total[field] += usage.get(field, 0)
+            cache_hit = usage.get("prompt_cache_hit_tokens")
+            if cache_hit is not None:
+                known_cache_hits.append(cache_hit)
+        total["prompt_cache_hit_tokens"] = sum(known_cache_hits) if known_cache_hits else None
         self.token_usage["total"] = total
         return self.token_usage
 

@@ -521,3 +521,83 @@ def test_superseded_markers_on_legacy_fields():
     """红队 I5 裁决：旧结构保留但必须标明已被新裁决取代。"""
     payload, _ = _build(_valid_response())
     assert payload["integrated_judgments"][0]["superseded_by_adjudication"] is True
+
+
+def test_allowed_refs_are_subset_of_payload_content():
+    """T42①-A：许可 ⊆ 实发不变量。allowed_data_refs 必须从 payload 实际发送的内容
+    里导出，不能独立扫描完整 final_adjudication——否则会把只出现在
+    time_horizon_views/portfolio_actions/claim_ledger 等未被复制进 payload 的字段里的
+    ref 也算进许可集合，模型看不到这些 ref 的任何上下文却被告知"可以引用"。"""
+    calls = []
+
+    def caller(prompt, stage_name=""):
+        calls.append(prompt)
+        return _valid_response()
+
+    fa = _final_adjudication()
+    # 这个 ref 只出现在 time_horizon_views 里，不会被复制进 payload 的任何叙事字段。
+    fa["time_horizon_views"] = [{"evidence_refs": ["L3.get_never_sent_ref"], "invalidation_conditions": []}]
+
+    builder = IntegratedSynthesisReportBuilder()
+    builder.build(
+        pure_data_report={"principal_contradictions": []},
+        analysis_packet={"meta": {"data_date": "2026-07-18"}},
+        data_integrity_report={"publish_status": "publishable"},
+        event_narrative_ledger={"events": [{"claims": []}]},
+        event_interpretation_cards=_cards(),
+        final_adjudication=fa,
+        cross_layer_questions=_questions(),
+        llm_caller=caller,
+    )
+    assert calls, "LLM caller 应被调用"
+    prompt = calls[0]
+    start = prompt.index("```json\n") + len("```json\n")
+    end = prompt.rindex("\n```")
+    sent_payload = json.loads(prompt[start:end])
+    allowed = set(sent_payload.get("allowed_data_refs") or [])
+    assert "L3.get_never_sent_ref" not in allowed, (
+        "只出现在 time_horizon_views 里的 ref 未被复制进 payload 正文，"
+        "不应出现在许可集合里（许可 ⊆ 实发不变量）"
+    )
+    payload_body_text = json.dumps(
+        {k: v for k, v in sent_payload.items() if k not in ("allowed_data_refs", "ref_authority")},
+        ensure_ascii=False,
+    )
+    for ref in allowed:
+        assert ref in payload_body_text, f"{ref} 进了许可集合但没出现在实际发送内容里"
+
+
+def test_ref_authority_carries_current_reading_from_evidence_index():
+    """T42①-B：ref_authority 必须捎带 synthesis_packet.evidence_index 里的
+    canonical_question / current_reading，否则模型明明被许可引用某 ref 却拿不到
+    对应的结构化数值，只能回答"本轮输入未提供该数值"。"""
+    calls = []
+
+    def caller(prompt, stage_name=""):
+        calls.append(prompt)
+        return _valid_response()
+
+    fa = _final_adjudication()  # reasoned_verdict 里带 [L1.get_10y_real_rate]，天然会进许可集合
+    evidence_index = {
+        "L1.get_10y_real_rate": {
+            "canonical_question": "实际利率是否处于历史极端位置？",
+            "current_reading": "2.41%，99.4分位",
+        },
+    }
+    builder = IntegratedSynthesisReportBuilder()
+    builder.build(
+        pure_data_report={"principal_contradictions": []},
+        analysis_packet={"meta": {"data_date": "2026-07-18"}},
+        data_integrity_report={"publish_status": "publishable"},
+        event_narrative_ledger={"events": [{"claims": []}]},
+        event_interpretation_cards=_cards(),
+        final_adjudication=fa,
+        cross_layer_questions=_questions(),
+        llm_caller=caller,
+        evidence_index=evidence_index,
+    )
+    assert calls, "LLM caller 应被调用"
+    prompt = calls[0]
+    assert "2.41%，99.4分位" in prompt, (
+        "evidence_index 里的 current_reading 数值必须捎带进发给模型的 payload"
+    )

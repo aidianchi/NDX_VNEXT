@@ -5184,6 +5184,9 @@ class VNextOrchestrator:
             "errors": [],
             "prompt_chars": len(prompt),
             "status": "running",
+            # T44④：留痕该站本次实际是否启用了 DeepSeek strict tool schema——
+            # 反映调用方这次真传没传 strict_tool_schema，不是猜测的全局值。
+            "strict_tool_schema_enabled": strict_tool_schema is not None,
             "model_routing": {
                 "schema_version": self.stage_model_routing.get("schema_version", ""),
                 "preferred_models": preferred_models,

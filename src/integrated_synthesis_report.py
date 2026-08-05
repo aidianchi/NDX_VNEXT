@@ -151,6 +151,7 @@ class IntegratedSynthesisReportBuilder:
         event_interpretation_cards: Optional[Dict[str, Any]] = None,
         data_integrity_report: Optional[Dict[str, Any]] = None,
         evidence_registry: Optional[Dict[str, Any]] = None,
+        evidence_index: Optional[Dict[str, Any]] = None,
         final_claim_ledger: Optional[Dict[str, Any]] = None,
         final_adjudication: Optional[Dict[str, Any]] = None,
         investigation_reports: Optional[List[Dict[str, Any]]] = None,
@@ -200,6 +201,7 @@ class IntegratedSynthesisReportBuilder:
             cross_layer_questions=cross_layer_questions or {},
             publish_gate=publish_gate,
             evidence_registry=evidence_registry,
+            evidence_index=evidence_index,
             llm_caller=llm_caller,
             audit_dir=audit_dir,
         )
@@ -265,6 +267,7 @@ class IntegratedSynthesisReportBuilder:
         cross_layer_questions: Dict[str, Any],
         publish_gate: Dict[str, Any],
         evidence_registry: Optional[Dict[str, Any]] = None,
+        evidence_index: Optional[Dict[str, Any]] = None,
         llm_caller: Optional[Callable[..., Optional[str]]],
         audit_dir: Optional[str | Path],
     ) -> tuple[Optional[Dict[str, Any]], str]:
@@ -293,9 +296,14 @@ class IntegratedSynthesisReportBuilder:
             for i, q in enumerate(_as_list(cross_layer_questions.get("questions")))
             if isinstance(q, dict) and str(q.get("question") or "").strip()
         ][:8]
-        allowed_refs = self._allowed_data_refs(final_adjudication)
-        ref_authority = self._ref_authority_map(allowed_refs, evidence_registry or {})
         effective_date, cards, date_notes = self._enforce_card_effective_dates(cards)
+        # T42①：许可从实发导出，恒真而非事后校验。先把真正要发给模型的叙事字段
+        # 组进 payload（含 key_support_chains / evidence_refs 这两处 FinalAdjudication
+        # 自带的正式证据声明字段），再从 payload 本身扫 allowed_data_refs——这样
+        # “许可集合 ⊆ 实际发送集合”这个不变量在写法上就不可能被违反：allowed_refs
+        # 只可能来自 payload 里已经存在的文本，不会再独立扫描完整 final_adjudication
+        # 从而带回 payload 里根本看不到的 ref（参考先例：orchestrator.py 里
+        # `allowed_refs = list(assembled_refs)` 只在材料真正写入 prompt 之后才导出许可）。
         payload = {
             "effective_date": effective_date,
             "final_stance": str(final_adjudication.get("final_stance") or ""),
@@ -308,14 +316,22 @@ class IntegratedSynthesisReportBuilder:
             "invalidation_conditions": _as_list(final_adjudication.get("invalidation_conditions"))[:8],
             "payoff_assessment": str(final_adjudication.get("payoff_assessment") or ""),
             "priced_narrative": str(final_adjudication.get("priced_narrative") or ""),
-            "allowed_data_refs": allowed_refs,
-            "ref_authority": ref_authority,
+            "evidence_refs": _as_list(final_adjudication.get("evidence_refs"))[:20],
+            "key_support_chains": [
+                self._compact_key_support_chain_for_prompt(chain)
+                for chain in _as_list(final_adjudication.get("key_support_chains"))[:8]
+                if isinstance(chain, dict)
+            ],
             "allowed_investigation_ids": [str(r.get("investigation_id") or "") for r in investigation_reports],
             "event_interpretation_cards": [self._compact_card_for_prompt(card) for card in cards],
             "cards_empty": not cards,
             "investigation_reports": [self._compact_investigation_for_prompt(r) for r in investigation_reports],
             "cross_layer_questions": questions,
         }
+        allowed_refs = self._allowed_data_refs(payload)
+        ref_authority = self._ref_authority_map(allowed_refs, evidence_registry or {}, evidence_index or {})
+        payload["allowed_data_refs"] = allowed_refs
+        payload["ref_authority"] = ref_authority
         prompt = (
             prompt_template
             + "\n\n## 本轮输入\n\n"
@@ -353,16 +369,35 @@ class IntegratedSynthesisReportBuilder:
                 last_error = f"invalid_response: {exc}"
         return None, f"llm_adjudication_failed: {last_error}"
 
-    def _ref_authority_map(self, allowed_refs: List[str], evidence_registry: Dict[str, Any]) -> Dict[str, str]:
+    def _ref_authority_map(
+        self,
+        allowed_refs: List[str],
+        evidence_registry: Dict[str, Any],
+        evidence_index: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """T42①：权限描述之外，捎带 synthesis_packet.evidence_index 里的结构化数值
+        （canonical_question / current_reading），让被许可引用的 ref 同时带着真实读数。
+        取不到就留空字符串，绝不编造或用占位符伪装成真实数值。"""
         passports = evidence_registry.get("passports") if isinstance(evidence_registry.get("passports"), dict) else {}
-        authority: Dict[str, str] = {}
+        index = evidence_index if isinstance(evidence_index, dict) else {}
+        authority: Dict[str, Dict[str, Any]] = {}
         for ref in allowed_refs:
             passport = passports.get(ref)
             usage = ""
             if isinstance(passport, dict):
                 model = passport.get("authority_model") if isinstance(passport.get("authority_model"), dict) else {}
                 usage = str(model.get("field_usage") or passport.get("field_usage") or "")
-            authority[ref] = usage or "unknown"
+            entry = index.get(ref)
+            canonical_question = ""
+            current_reading = ""
+            if isinstance(entry, dict):
+                canonical_question = str(entry.get("canonical_question") or "")
+                current_reading = str(entry.get("current_reading") or "")
+            authority[ref] = {
+                "usage": usage or "unknown",
+                "canonical_question": canonical_question,
+                "current_reading": current_reading,
+            }
         return authority
 
     def _enforce_card_effective_dates(self, cards: List[Dict[str, Any]]) -> tuple[str, List[Dict[str, Any]], List[str]]:
@@ -402,7 +437,13 @@ class IntegratedSynthesisReportBuilder:
         allowed = set(payload.get("allowed_data_refs") or [])
         allowed_inv = {str(i) for i in payload.get("allowed_investigation_ids") or [] if str(i)}
         authority = payload.get("ref_authority") or {}
-        audit_only = {ref for ref, usage in authority.items() if str(usage).strip().lower() in {"audit_only", "audit-only"}}
+
+        def _authority_usage(info: Any) -> str:
+            # T42①：ref_authority 的值从纯字符串换成了带数值的字典；兼容两种形状读 usage。
+            usage = info.get("usage") if isinstance(info, dict) else info
+            return str(usage or "").strip().lower()
+
+        audit_only = {ref for ref, info in authority.items() if _authority_usage(info) in {"audit_only", "audit-only"}}
         notes: List[str] = []
 
         def _split_refs(values: Any, pool: set, tag: str) -> List[str]:
@@ -641,8 +682,14 @@ class IntegratedSynthesisReportBuilder:
         data["conflict_matrix"] = rows
         return data
 
-    def _allowed_data_refs(self, final_adjudication: Dict[str, Any]) -> List[str]:
-        """只从权威 evidence 字段的子树收集 ref（红队 M1：防止形似 ref 的普通文案混入白名单）。"""
+    def _allowed_data_refs(self, sent_content: Dict[str, Any]) -> List[str]:
+        """只从权威 evidence 字段的子树收集 ref（红队 M1：防止形似 ref 的普通文案混入白名单）。
+
+        T42①：调用方必须传入已经构造好、即将原样发给模型的 payload 本身（而不是
+        完整的 final_adjudication）——许可集合由此天然是"实际发送内容"的子集，
+        不会再把 payload 里根本看不到的字段（如 time_horizon_views/portfolio_actions）
+        里的 ref 也算进许可。
+        """
         refs: List[str] = []
         evidence_keys = {"evidence_refs", "counter_evidence_refs", "data_refs", "refs", "supporting_refs"}
 
@@ -666,12 +713,19 @@ class IntegratedSynthesisReportBuilder:
                 for item in value:
                     _walk(item)
 
-        _walk(final_adjudication)
-        for match in re.finditer(r"\[([^\[\]]+)\]", str(final_adjudication.get("reasoned_verdict") or "")):
+        _walk(sent_content)
+        for match in re.finditer(r"\[([^\[\]]+)\]", str(sent_content.get("reasoned_verdict") or "")):
             _collect_pattern(match.group(1))
         if len(refs) > 64:
             refs = refs[:64]
         return refs
+
+    def _compact_key_support_chain_for_prompt(self, chain: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "chain_description": str(chain.get("chain_description") or "")[:300],
+            "evidence_refs": _as_list(chain.get("evidence_refs"))[:8],
+            "weight": chain.get("weight"),
+        }
 
     def _compact_card_for_prompt(self, card: Dict[str, Any]) -> Dict[str, Any]:
         mech = card.get("mechanism_hypothesis") if isinstance(card.get("mechanism_hypothesis"), dict) else {}
@@ -1183,6 +1237,7 @@ def write_integrated_synthesis_report(
         evidence_registry=evidence_registry if evidence_registry is not None else _load_json(registry_path, {}),
         final_claim_ledger=final_claim_ledger if final_claim_ledger is not None else _load_json(claim_ledger_path, {}),
         final_adjudication=_load_json(run_path / "final_adjudication.json", {}),
+        evidence_index=_load_json(run_path / "synthesis_packet.json", {}).get("evidence_index") or {},
         investigation_reports=investigation_reports,
         cross_layer_questions=_load_json(run_path / "cross_layer_questions.json", {}),
         llm_caller=llm_caller,
