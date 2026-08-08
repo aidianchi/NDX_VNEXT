@@ -442,10 +442,12 @@ class VNextOrchestrator:
         max_node_retries: int = 2,
         schema_guard_retry: bool = True,
         resume_from_existing: bool = False,
+        model_mode: str = "",
     ) -> None:
         if not llm_engine and not available_models:
             raise ValueError("At least one available model is required.")
         self.available_models = available_models
+        self.model_mode = (model_mode or "").strip() or os.environ.get("NDX_MODEL_MODE", "").strip()
         self.output_dir = Path(output_dir).resolve()
         self.prompts_dir = Path(prompts_dir) if prompts_dir else Path(__file__).with_name("prompts")
         self.llm_engine = llm_engine or LLMEngine(available_models=available_models)
@@ -1101,24 +1103,53 @@ class VNextOrchestrator:
 
     def _load_stage_model_routing(self) -> Dict[str, Any]:
         path = Path(__file__).resolve().parents[2] / "config" / "stage_model_routing.json"
+        payload: Optional[Dict[str, Any]] = None
         if path.exists():
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(payload, dict):
-                    return payload
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    payload = loaded
             except Exception as exc:
                 logger.warning("Failed to load stage model routing from %s: %s", path, exc)
-        return {
-            "schema_version": "stage_model_routing_v1_default",
-            "stage_preferences": {
-                "counter_thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
-                "thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
-                "reviser": ["deepseek-v4-pro", "deepseek-v4-flash"],
-                "final": ["deepseek-v4-pro", "deepseek-v4-flash"],
-                "event_card_interpreter": ["deepseek-v4-flash", "deepseek-v4-pro"],
-                "event_section_summary": ["deepseek-v4-flash", "deepseek-v4-pro"],
-            },
-        }
+        if payload is None:
+            payload = {
+                "schema_version": "stage_model_routing_v2_default",
+                "modes": {
+                    "default": {
+                        "stage_preferences": {
+                            "counter_thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
+                            "thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
+                            "reviser": ["deepseek-v4-pro", "deepseek-v4-flash"],
+                            "final": ["deepseek-v4-pro", "deepseek-v4-flash"],
+                            "event_card_interpreter": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                            "event_section_summary": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                        }
+                    },
+                    "all_flash": {
+                        "stage_preferences": {
+                            "counter_thesis": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                            "thesis": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                            "reviser": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                            "final": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                            "event_card_interpreter": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                            "event_section_summary": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                        }
+                    },
+                },
+            }
+        # 多模式解析：优先取 modes.<mode>.stage_preferences；旧版单层
+        # stage_preferences 结构（mode 不存在或未配置）时保持向后兼容。
+        modes = payload.get("modes") if isinstance(payload.get("modes"), dict) else {}
+        mode = self.model_mode or str(payload.get("mode") or "default")
+        mode_entry = modes.get(mode) if isinstance(modes.get(mode), dict) else None
+        if mode_entry and isinstance(mode_entry.get("stage_preferences"), dict):
+            resolved = dict(payload)
+            resolved["stage_preferences"] = mode_entry["stage_preferences"]
+        else:
+            resolved = dict(payload)
+        resolved["active_mode"] = mode if mode in modes else "default"
+        resolved["schema_version"] = str(resolved.get("schema_version") or "stage_model_routing_v2")
+        return resolved
 
     def _preferred_models_for_stage(self, stage_key: str) -> List[str]:
         preferences = self.stage_model_routing.get("stage_preferences", {})
@@ -5189,6 +5220,7 @@ class VNextOrchestrator:
             "strict_tool_schema_enabled": strict_tool_schema is not None,
             "model_routing": {
                 "schema_version": self.stage_model_routing.get("schema_version", ""),
+                "active_mode": self.stage_model_routing.get("active_mode", "default"),
                 "preferred_models": preferred_models,
                 "fallback_chain": [model for model in self.available_models if model not in preferred_models],
             },
@@ -8341,10 +8373,12 @@ def run_vnext_analysis(
     available_models: List[str],
     output_dir: str,
     resume_from_existing: bool = False,
+    model_mode: str = "",
 ) -> Dict[str, Any]:
     orchestrator = VNextOrchestrator(
         available_models=available_models,
         output_dir=output_dir,
         resume_from_existing=resume_from_existing,
+        model_mode=model_mode,
     )
     return orchestrator.run(packet)

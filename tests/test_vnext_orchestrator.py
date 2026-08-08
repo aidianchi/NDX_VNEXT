@@ -3024,6 +3024,100 @@ def test_run_stage_uses_stage_model_routing_for_mechanical_stages(tmp_path: Path
     assert diagnostics["stages"]["event_card_interpreter"]["model"] == "deepseek-v4-flash"
 
 
+def test_run_stage_all_flash_mode_for_cognitive_stages(tmp_path: Path):
+    """all_flash 模式下认知裁决站点（thesis）也应 flash 优先：
+    用户诉求是"所有 Agent 全部走 Flash"，不能再让认知阶段默认抢跑 pro。"""
+    engine = RoutingFakeLLMEngine({"thesis": '{"value": "ok"}'})
+    orchestrator = VNextOrchestrator(
+        available_models=["deepseek-v4-flash", "deepseek-v4-pro"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        model_mode="all_flash",
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="thesis",
+        stage_name="thesis",
+        model_cls=MiniStageModel,
+        payload={"example": "payload"},
+    )
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+
+    assert result.value == "ok"
+    assert engine.preferred_models_by_call[0][0] == "deepseek-v4-flash"
+    assert diagnostics["stages"]["thesis"]["model_routing"]["active_mode"] == "all_flash"
+    assert diagnostics["stages"]["thesis"]["model_routing"]["preferred_models"][0] == "deepseek-v4-flash"
+    assert diagnostics["stages"]["thesis"]["model"] == "deepseek-v4-flash"
+
+
+def test_run_stage_default_mode_records_active_mode(tmp_path: Path):
+    """默认模式（不传 model_mode）保持 legacy 行为：认知阶段 pro 优先，
+    且诊断里 active_mode 标记为 default。"""
+    engine = RoutingFakeLLMEngine({"thesis": '{"value": "ok"}'})
+    orchestrator = VNextOrchestrator(
+        available_models=["deepseek-v4-flash", "deepseek-v4-pro"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+    )
+
+    orchestrator._run_stage(
+        stage_key="thesis",
+        stage_name="thesis",
+        model_cls=MiniStageModel,
+        payload={"example": "payload"},
+    )
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+
+    assert engine.preferred_models_by_call[0][0] == "deepseek-v4-pro"
+    assert diagnostics["stages"]["thesis"]["model_routing"]["active_mode"] == "default"
+    assert diagnostics["stages"]["thesis"]["model_routing"]["preferred_models"][0] == "deepseek-v4-pro"
+
+
+def test_run_stage_all_flash_mode_via_env_var(tmp_path: Path, monkeypatch):
+    """NDX_MODEL_MODE=all_flash 环境变量与显式传参等价，均可把认知阶段切到 flash 优先。"""
+    monkeypatch.setenv("NDX_MODEL_MODE", "all_flash")
+    engine = RoutingFakeLLMEngine({"thesis": '{"value": "ok"}'})
+    orchestrator = VNextOrchestrator(
+        available_models=["deepseek-v4-flash", "deepseek-v4-pro"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="thesis",
+        stage_name="thesis",
+        model_cls=MiniStageModel,
+        payload={"example": "payload"},
+    )
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+
+    assert result.value == "ok"
+    assert engine.preferred_models_by_call[0][0] == "deepseek-v4-flash"
+    assert diagnostics["stages"]["thesis"]["model_routing"]["active_mode"] == "all_flash"
+
+
+def test_stage_model_routing_unknown_mode_falls_back_to_default(tmp_path: Path):
+    """未注册的模式名回退到 default，不抛异常、不改变既有行为。"""
+    engine = RoutingFakeLLMEngine({"thesis": '{"value": "ok"}'})
+    orchestrator = VNextOrchestrator(
+        available_models=["deepseek-v4-flash", "deepseek-v4-pro"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        model_mode="does_not_exist",
+    )
+
+    orchestrator._run_stage(
+        stage_key="thesis",
+        stage_name="thesis",
+        model_cls=MiniStageModel,
+        payload={"example": "payload"},
+    )
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+
+    assert engine.preferred_models_by_call[0][0] == "deepseek-v4-pro"
+    assert diagnostics["stages"]["thesis"]["model_routing"]["active_mode"] == "default"
+
+
 class _StrictToolSchemaRecordingFakeLLMEngine(FakeLLMEngine):
     """记录 `call_with_fallback` 每次实际收到的 strict_tool_schema/strict_tool_name，
     用于验证 `_run_stage` 只在明确传入时才把它们递给引擎——绝大多数调用不传，

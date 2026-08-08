@@ -230,7 +230,8 @@ class ResearchConsoleGenerator:
         <section>
           <h2>模型选择</h2>
           <div class="stacked-options" role="radiogroup" aria-label="模型选择">
-            <label><input type="radio" name="modelMode" value="deepseek-v4-flash,deepseek-v4-pro" checked> flash 优先</label>
+            <label><input type="radio" name="modelMode" value="deepseek-v4-flash,deepseek-v4-pro" checked> flash 优先（认知阶段仍走 pro）</label>
+            <label><input type="radio" name="modelMode" value="all_flash"> 全部 Flash（所有 Agent 走 Flash）</label>
             <label><input type="radio" name="modelMode" value="deepseek-v4-pro"> pro only</label>
             <label><input type="radio" name="modelMode" value="custom"> 自定义顺序</label>
           </div>
@@ -626,10 +627,18 @@ applyManualPayloadToForm(initialManualPayload);
 
 function currentModels() {
   const selected = document.querySelector('input[name="modelMode"]:checked');
+  if (selected && selected.value === 'all_flash') {
+    return 'deepseek-v4-flash';
+  }
   if (selected && selected.value === 'custom') {
     return document.getElementById('customModels').value.trim() || 'deepseek-v4-flash,deepseek-v4-pro';
   }
   return selected ? selected.value : 'deepseek-v4-flash,deepseek-v4-pro';
+}
+
+function currentModelModeFlag() {
+  const selected = document.querySelector('input[name="modelMode"]:checked');
+  return selected && selected.value === 'all_flash' ? '--model-mode all_flash' : '';
 }
 
 function selectedRunMode() {
@@ -644,9 +653,14 @@ function selectedModules() {
 
 function modeCommand(mode, models) {
   const modules = selectedModules();
+  const modeFlag = currentModelModeFlag();
   const dataReport = ['python3 src/console_run_all.py', `--models ${models}`, `--workbench-modules ${modules}`, '--skip-legacy-report'];
   const integrated = ['python3 src/console_run_all.py', `--models ${models}`, `--workbench-modules ${modules}`, '--skip-legacy-report', '--enable-news'];
   const eventOnly = ['python3 src/main.py', '--event-only'];
+  if (modeFlag) {
+    dataReport.push(modeFlag);
+    integrated.push(modeFlag);
+  }
   if (document.getElementById('backtestMode').checked && backtestDate.value) {
     dataReport.push(`--date ${backtestDate.value}`);
     integrated.push(`--date ${backtestDate.value}`);

@@ -41,6 +41,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-json", help="Use an existing collector output JSON.")
     parser.add_argument("--models", default="deepseek-v4-flash,deepseek-v4-pro")
     parser.add_argument(
+        "--model-mode",
+        choices=["default", "all_flash"],
+        default="",
+        help="Stage model routing mode. default = cognitive stages pro-first (legacy); all_flash = every stage flash-first.",
+    )
+    parser.add_argument(
         "--workbench-modules",
         default="price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity",
     )
@@ -176,6 +182,7 @@ def main() -> int:
         date=args.date,
         data_json=data_json_path,
         models=args.models,
+        model_mode=args.model_mode,
         enable_news=args.enable_news,
         skip_report=args.skip_legacy_report,
         disable_charts=not args.enable_legacy_charts,

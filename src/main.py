@@ -80,6 +80,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", type=str, help="Run id under output/analysis/vnext. Use for isolated historical experiments.")
     parser.add_argument("--output-dir", type=str, help="Exact output directory for this vNext run.")
     parser.add_argument("--models", type=str, help="Comma-separated model priority override.")
+    parser.add_argument(
+        "--model-mode",
+        type=str,
+        choices=["default", "all_flash"],
+        default="",
+        help="Stage model routing mode. default = cognitive stages pro-first (legacy); all_flash = every stage flash-first.",
+    )
     parser.add_argument("--collect-only", action="store_true", help="Only collect market data JSON, then exit before any LLM calls.")
     parser.add_argument("--enable-news", action="store_true", help="Write an independent official news/event sidecar artifact.")
     parser.add_argument("--enable-component-model", action="store_true", help="Enable yfinance component-model PE computation (default OFF; use Wind + History of Market instead).")
@@ -417,6 +424,9 @@ def _write_resume_hint(run_dir: str, args: argparse.Namespace, data_json: Dict[s
     if getattr(args, "models", None):
         main_parts += ["--models", str(args.models)]
         console_parts += ["--models", str(args.models)]
+    if getattr(args, "model_mode", None):
+        main_parts += ["--model-mode", str(args.model_mode)]
+        console_parts += ["--model-mode", str(args.model_mode)]
     if getattr(args, "enable_news", False):
         main_parts.append("--enable-news")
         console_parts.append("--enable-news")
@@ -680,6 +690,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
             "approval_status": "blocked_by_data_integrity",
             "process_status": "completed_with_data_integrity_block",
             "models": available_models,
+            "model_mode": getattr(args, "model_mode", "") or os.environ.get("NDX_MODEL_MODE", "") or "default",
             "blocked": True,
             "blocking_reasons": integrity_report.get("blocking_reasons", []),
             "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),
@@ -752,6 +763,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         available_models=available_models,
         output_dir=run_dir,
         resume_from_existing=resume_from_existing,
+        model_mode=getattr(args, "model_mode", "") or os.environ.get("NDX_MODEL_MODE", ""),
     )
     artifacts = orchestrator.run(packet)
     claim_ledger = artifacts.get("final_claim_ledger") if isinstance(artifacts, dict) else None
@@ -845,6 +857,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "source_snapshot": source_snapshot_path,
         "outcome_review_report": os.path.join(run_dir, "outcome_review_report.json"),
         "models": available_models,
+        "model_mode": getattr(args, "model_mode", "") or os.environ.get("NDX_MODEL_MODE", "") or "default",
         "strict_backtest_invariants": data_json.get("strict_backtest_invariants", {}),
         "runtime_diagnostics": _runtime_diagnostics_summary(data_json),
         "data_quality_summary": _data_quality_summary(data_json),
