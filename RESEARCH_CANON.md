@@ -536,6 +536,29 @@ print(data.tail())
 
 当前框架仍有三个需要写进研究日志的限制。**一是信用长历史限制**：现行 FRED 可见 ICE/BofA 序列窗口偏短。**二是对象层变动**：2026 的 NDX 方法学更新与 QEW 上市，会影响历史类比。**三是情绪指标透明度有限**：FGI/CNN 更适合作为辅助温度条，而非一级输入。
 
+### NDX 数据源分工与使用边界（并入自原 DATA_COVERAGE_REVIEW.md，2026-08-08）
+
+**L4 估值四源分工**（实时模式）：
+
+- **Wind NDX 指数级快照（主锚）**：`get_ndx_wind_valuation_snapshot` 读取 NDX 指数级 PE/PB/PS、历史分位和 NDX 专属风险溢价。高信任付费源，但不是硬依赖；Wind 不可用或 `NDX_DISABLE_WIND_L4=1` 时显式降级。
+- **Damodaran（背景）**：美国市场 implied ERP 月度参考锚，不替代 NDX 专属风险溢价。
+- **WorldPERatio（参照）**：标准差、滚动均值和相对位置参照，不冒充 Wind 的指数级历史分位。
+- **yfinance/Yahoo/SEC/东财成分模型（解释与对账）**：用于成分、forward、margin、事实对账和轻量校验；成分模型默认关闭、仅审计（`NDX_ENABLE_COMPONENT_MODEL`）。不替代 Wind 的指数级 PE/PB/PS 与风险溢价。
+
+**回测模式底线**：进入 agent 上下文的数据日期不得晚于回测日；当前 Wind 快照、当前网页和 yfinance 最新成分股基本面批量代理默认不进入核心证据。不承诺 first-vintage。
+
+**L3 结构层弱点**：L3 广度指标单源依赖（yfinance 成分面板），且回测下有幸存者防线强制 unavailable——弱点已从"指标缺失"变为"单源依赖 + 读数偏弱"，判断指数内部健康时需降低置信度。
+
+**使用边界（永不过期）**：
+
+- 技术指标只能说明交易节奏和拥挤度，不能证明"便宜"。
+- 代理指标只能说明方向或压力，不能当成官方事实。
+- 估值指标不能自动推出看空结论，必须和盈利、利率、流动性一起看。
+- 当前网页只能说明"当前页面怎么写"，不能自动说明"历史回测日当时能看到什么"。
+- `strict_backtest_invariants.hard_enforced` 只能列已经工程化强制的边界；尚未接入 ALFRED vintage、财报 first-reported、point-in-time universe 的地方必须作为 declared limitation，而不是把 observation date 裁剪包装成完整 point-in-time 回测。
+
+**L2 官方仓位（2026-07-19 起）**：CFTC / FINRA 官方仓位数据已上线，周二快照、月底+21 天可见日建模为系统独有工程细节；这部分是运行时契约，细节以工单为准。
+
 本章小结：**没有数据治理，就没有“权威报告”；没有可复验性，AI 再会说也只是讲故事。**
 
 ## 客观性防火墙与可复制提示卡

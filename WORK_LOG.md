@@ -6,6 +6,27 @@
 
 ---
 
+## 2026-08-08
+
+### 文档体系大整理：合并《系统说明书》、退役四份旧文档、加代码对照测试
+
+**为什么做**：所有者指出核心文档世界观落后于代码现实——实测 9 个代码新模块（event_narrative_ledger、expectation_ledger、news_event_*、vintage_archiver、recompute_belt、state_ledger、outcome_scoring、analog_history 等）在四个核心文档中 0 提及；"修改时间新"不等于"内容新鲜"。所有者拍板：合并为一份人机共读的总纲，删/并过期文档，并把"文档 vs 代码"对照做成机器检查（对应 3.1b：能锁进测试的别只写进提示词）。
+
+**改了什么**：
+- 新增根目录 `系统说明书.md`（总纲）：原《系统说明_人话版.md》全文为骨架（流水线+逐站点四问+token 结算单）+ 原《系统地图.html》卷宗 01 流水线图转 mermaid 嵌第一节 + 原 ARCHITECTURE.md 五块精华并入第四节（4.1 轨道>导出>规矩及实测 / 4.2 六对冲突张力 / 4.3 静态共享运行时隔离 / 4.4 概念词典 / 4.5 L4 发言权 / 4.6 北极星）+ 第五节代码模块地图（覆盖此前 0 提及的模块）+ 文末维护义务。
+- 退役（git mv 到 docs/archive，历史可回溯）：ARCHITECTURE.md、RUN_REVIEW_CHECKLIST.md、DATA_COVERAGE_REVIEW.md、系统说明_人话版.md；docs/系统地图.html 移入 investigation_reports/20260806_t47_context_review/（事故卷宗是 T47 结构病素材，不是系统地图）；NDX_L1-L5_数据与推理链完整体检_20260710.md 早前已归档。
+- 内容安家：RUN_REVIEW 精华 → 体检方法.md 新增"三·五 跑后复盘"节（三档判定/回测专项 10 项/五项复盘/评分复盘）；DATA_COVERAGE 精华 → RESEARCH_CANON.md 数据治理章节（L4 四源分工/L3 弱点/使用边界/L2 官方仓位）。
+- 路由同步：CLAUDE.md / AGENTS.md 路由表与冲突规则改指《系统说明书》，并新增"文档维护纪律"条目；README.md 重写为极简入口（命令全部核对过仍有效）；现在.md 系统地图引用与 T09 锚点改指。
+- tests/test_docs_consistency.py：ROUTE_DOCS 加系统说明书.md、移除 ARCHITECTURE.md；新增 `test_code_modules_are_acknowledged_in_docs`——扫描 src/** 核心业务模块，断言在《系统说明书》或 CLAUDE.md 有概念提及，防"架构长新器官文档零提及"复发（含豁免名单）。
+
+**红灯测试在哪**：`tests/test_docs_consistency.py` 10 passed；全量 1068 passed 0 failed。对照测试首跑即抓到 9 个盲区模块，全部在《系统说明书》第五节补上后转绿。
+
+**否决了什么**：① 不直接删除 ARCHITECTURE/RUN_REVIEW/DATA_COVERAGE——独特价值先安家再退役；② 不把 9 个盲区模块塞进测试豁免名单——那等于承认"文档可以不知道它们"，违背测试初衷；③ 不改 llm_engine.py 的调试落盘逻辑（见下）。
+
+**遗留观察（未动手，等所有者拍板）**：`src/agent_analysis/llm_engine.py`（L687/L705）在 LLM 返回无合法 JSON 时向根目录写 `ai_response_debug_*.txt`——本次清理 43 个历史文件后，跑全量测试又新产生 1 个（event_section_summary 解析失败）。这是根目录垃圾文件的持续来源，建议改为写入 run 目录或临时目录，另立小工单处理。
+
+---
+
 ## 2026-08-06
 
 ### T47 重定义：主目标扶正为"AI 通读找结构病"，新增唯一权威表述文档

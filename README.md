@@ -1,85 +1,29 @@
 # ndx_vnext
 
-`ndx_vnext` 是 NDX 研究系统的下一代流水线。
-
-它的目标不是简单生成一份 HTML 报告，而是生成一条可以追问、可以审计、可以展开阅读的投研推理链。
+`ndx_vnext` 是一条给纳指 100 做投资判断的自动流水线：五个分析员各自独立看自己那摊数据（利率与宏观 / 信用与波动 / 资金行为 / 盈利与估值 / 结构与叙事）→ 跨层对质找冲突 → 正反双方拿同一份证据辩论 → 终审写成判断书。每个数字可追来源，每个判断事后要被打分。产出是一条可追问、可审计、可展开阅读的投研推理链。
 
 ## 先读什么
 
-新读者或新 agent 按这个顺序读：
-
-1. `现在.md`：现在什么状态、下一步做什么、什么在等用户拍板（唯一可声明事项状态的文件）。
-2. `ARCHITECTURE.md`：系统为什么这样设计，哪些原则不能破坏。
+1. `系统说明书.md`：系统全景、逐站点说明、长期原则（先读它建立全局）。
+2. `现在.md`：现在什么状态、下一步做什么、什么在等你拍板（唯一状态源）。
 3. `RESEARCH_CANON.md`：指标怎么读、市场状态怎么诊断的权威研究语料。
-4. `DATA_COVERAGE_REVIEW.md`：哪些数据已经稳定，哪些数据仍然薄弱。
-5. `RUN_REVIEW_CHECKLIST.md`：每次真实运行后如何复盘。
-6. `WORK_LOG.md`：已经完成了什么，按最新在上排列。
-
-如果你是代码 agent，还必须读：
-
-- `AGENTS.md`：Codex 和通用 agent 工作规则。
-- `CLAUDE.md`：Claude Code 独立分支工作规则。
-
-## 当前三条主线
-
-1. 核心系统：L1-L5、Bridge、Thesis、Critic、Risk、Reviser、Final 是否形成干净、可追溯、不抹平冲突的推理链。
-2. 数据基础：采集、标准化、数据源覆盖、缺口和置信度边界是否可靠。
-3. 输出体验：最终是 self-contained HTML、正式前端，还是更高级交互系统；阅读顺序、审美和可审计性都要逐步打磨。
-
-这三条主线不能互相替代。核心系统决定“怎么想”，数据基础决定“凭什么想”，输出体验决定“别人能不能顺着读懂并追问”。
+4. `WORK_LOG.md`：已经完成了什么，按最新在上排列。
+5. 工作规则：`AGENTS.md`（Codex 和通用 agent）、`CLAUDE.md`（Claude Code 独立分支）。
 
 ## 常用命令
 
-当前默认只使用 DeepSeek：
-
-- 首选：`deepseek-v4-flash`
-- 备用：`deepseek-v4-pro`
-
-### macOS / Linux
-
-首次安装：
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -U pip setuptools wheel
-python -m pip install -r requirements.txt
-cp .env.example .env
-```
-
-在 `.env` 中填写：
-
-```bash
-DEEPSEEK_API_KEY=your_deepseek_api_key_here
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-```
-
-可选 Wind L4 数据：
-
-- 如果本机已经配置好 Wind skills 和 Wind API 授权，实时 L4 会优先调用 `get_ndx_wind_valuation_snapshot`，读取 NDX 指数级 PE/PB/PS、历史分位和 NDX 专属风险溢价。
-- Wind 授权和 key 由全局 Wind skill 管理，通常不需要写进本仓库 `.env`。
-- 如果想节省 Wind 积分，或当前环境没有 Wind 授权，可以在 `.env` 中加入：
-
-```bash
-NDX_DISABLE_WIND_L4=1
-```
-
-运行测试：
-
-```bash
-python -m pytest -q
-```
-
-只采集数据快照：
-
-```bash
-python src/main.py --collect-only --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts
-```
+当前默认只使用 DeepSeek：首选 `deepseek-v4-flash`，备用 `deepseek-v4-pro`。
 
 真实运行：
 
 ```bash
 python src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts
+```
+
+只采集数据快照（与分析解耦）：
+
+```bash
+python src/main.py --collect-only --models deepseek-v4-flash,deepseek-v4-pro --skip-report --disable-charts
 ```
 
 生成默认 `brief` 报告：
@@ -88,61 +32,23 @@ python src/main.py --models deepseek-v4-flash,deepseek-v4-pro --skip-report --di
 python src/agent_analysis/vnext_reporter.py --run-dir output/analysis/vnext/<run_id> --template brief
 ```
 
-生成研究控制台：
-
-```bash
-python src/research_console.py
-```
-
-生成交互 workbench：
-
-```bash
-python src/interactive_chart_workbench.py --run-dir output/analysis/vnext/<run_id> --modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity
-```
-
-运行报告视觉回归：
-
-```bash
-python src/report_visual_regression.py --brief-html output/reports/<brief>.html --workbench-html output/reports/<workbench>.html --output-dir output/reports/visual_regression/<label>
-```
-
-### Windows PowerShell
-
 运行测试：
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+```bash
+python -m pytest -q
 ```
 
-生成默认 `brief` 报告：
-
-```powershell
-.\.venv\Scripts\python.exe src\agent_analysis\vnext_reporter.py --run-dir output\analysis\vnext\<run_id> --template brief
-```
+首次安装与 `.env` 配置见 `requirements.txt` 与 `.env.example`。
 
 ## 当前输出入口
 
-- 一键开启控制台：双击仓库根目录的 `open_research_console.command`。它会启动本地 control service、生成控制台页面并打开浏览器。
-- 命令行开启控制台：
-
-```bash
-python src/open_research_console.py
-```
-
-- 备选手动方式：先运行 `python src/control_service.py`，再打开 `http://127.0.0.1:8765`。服务根地址现在会直接显示控制台。
-- 默认阅读入口：`output/reports/vnext_brief_*.html`。
-- 研究控制台：`output/reports/vnext_research_console.html`。
-- 交互 workbench：`output/reports/vnext_workbench_*.html`。
-- 同源图表数据：`output/analysis/vnext/<run_id>/chart_time_series.json`。
-- 视觉回归摘要：`output/reports/visual_regression/<label>/visual_regression_summary.json`。
+- 默认阅读入口：`output/reports/vnext_brief_*.html`
+- 研究控制台：`output/reports/vnext_research_console.html`（一键开启：`python src/open_research_console.py` 或双击 `open_research_console.command`）
+- 交互 workbench：`output/reports/vnext_workbench_*.html`
+- 同源图表数据：`output/analysis/vnext/<run_id>/chart_time_series.json`
 
 `brief` 是连续阅读报告；workbench 是看盘式探索页面；控制台是运行前配置面板。三者不要互相替代。
 
 ## 采集与分析解耦
 
-当前推荐支持两段式运行：
-
-1. 先用 `--collect-only` 生成不可变数据快照和 sidecar。
-2. 再在主机上选择这个数据包，只跑 DeepSeek 分析和报告生成。
-
-这样可以让 yfinance/Yahoo 走更适合的网络路径，让 DeepSeek API 走更稳定的直连路径。无论同机分流还是双机采集，关键是报告必须能追溯到同一个数据快照，而不是在一次完整 run 中反复切换网络。
+支持两段式运行：先用 `--collect-only` 生成不可变数据快照和 sidecar，再在主机上选择这个数据包只跑 DeepSeek 分析和报告生成。这样可以让 yfinance/Yahoo 走更适合的网络路径、DeepSeek API 走更稳定的直连路径；关键是报告必须能追溯到同一个数据快照。

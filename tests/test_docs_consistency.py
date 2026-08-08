@@ -30,7 +30,7 @@ ROUTE_DOCS = [os.path.join(REPO_ROOT, name) for name in (
     "AGENTS.md",
     "README.md",
     "现在.md",
-    "ARCHITECTURE.md",
+    "系统说明书.md",
     "docs/archive/INDEX.md",
 )]
 
@@ -255,3 +255,66 @@ def test_routed_paths_all_exist():
             if not found:
                 broken.append(f"{os.path.basename(source)} → {raw_path}")
     assert not broken, f"文档引用了不存在的路径：{sorted(broken)}"
+
+
+# 代码世界 vs 文档世界对照（2026-08-08 增加）。
+# 背景：实测 9 个代码侧新模块（event_narrative_ledger、expectation_ledger、
+# news_event_*、vintage_archiver、recompute_belt、state_ledger、outcome_scoring 等）
+# 在四个核心文档中 0 提及——架构长出"新器官"，文档连门牌号都没写。修改时间证明不了
+# 内容同步，只有机器检查能挡住漂移（对应项目 3.1b：能锁进测试的别只写进提示词）。
+#
+# 规则：核心业务模块必须在《系统说明书》或 CLAUDE.md 中有概念级提及。
+# 只查"概念是否被文档承认"，不查"描述是否详尽"——详尽度交给维护纪律。
+# 例外（明确不算业务概念）：入口/工具/兼容/基础设施类，见 _DOC_EXEMPT。
+_DOC_EXEMPT = {
+    "main", "config", "api_config", "tools", "tools_common", "legacy_adapter",
+    "browser_sidecar", "manual_data", "prompt_examples", "reasoning_examples",
+    "few_shot", "llm_engine", "vnext_reporter", "report_visual_coverage",
+    "report_visual_regression", "chart_adapter_v6", "interactive_chart_workbench",
+    "research_console", "open_research_console", "control_service", "console_run_all",
+    "qqq_holdings", "chart_generator",
+}
+# 模块名 -> 文档中出现的检索词（下划线/大小写可能不同，统一用小写连续串匹配）
+DOC_CANON = os.path.join(REPO_ROOT, "系统说明书.md")
+
+
+def _module_tokens(module):
+    """把 snake_case 模块名拆成关键 token 集合，去掉工具/层前缀。"""
+    name = module.replace(".py", "")
+    name = re.sub(r"^tools_", "", name)  # tools_L1 -> L1
+    tokens = set(name.split("_"))
+    return {t for t in tokens if len(t) >= 3}  # 去掉 ld/la 之类短噪音
+
+
+def test_code_modules_are_acknowledged_in_docs():
+    """代码侧每个核心业务模块，必须在《系统说明书》或 CLAUDE.md 里被提到。
+
+    防止"架构长出新器官、文档零提及"复发。匹配方式是概念级子串：
+    模块名任一 >=3 字符的 token（或 token 拼接）在文档里出现即算承认。
+    """
+    missing = []
+    doc_text = _read(DOC_CANON) + "\n" + _read(os.path.join(REPO_ROOT, "CLAUDE.md"))
+    doc_text_lower = doc_text.lower()
+
+    for root, _dirs, files in os.walk(os.path.join(REPO_ROOT, "src")):
+        for fname in files:
+            if not fname.endswith(".py") or fname == "__init__.py":
+                continue
+            module = fname[:-3]
+            if module in _DOC_EXEMPT:
+                continue
+            tokens = _module_tokens(module)
+            if not tokens:
+                continue
+            # 任一 token 或"token 直接拼接"出现在文档即算承认（如 ledger、recompute_belt）
+            hit = any(t in doc_text_lower for t in tokens) or any(
+                t1 + t2 in doc_text_lower for t1 in tokens for t2 in tokens if t1 != t2
+            )
+            if not hit:
+                missing.append(f"src/**/{fname}")
+
+    assert not missing, (
+        f"以下代码模块在任何核心文档中都未被提及——架构长出新器官而文档没跟上："
+        f"{sorted(missing)}。请在《系统说明书》或 CLAUDE.md 中补充对应概念，"
+        "不要删模块名硬凑测试。"
+    )
