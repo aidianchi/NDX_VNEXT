@@ -1,0 +1,121 @@
+{
+  "schema_version": "demo_relay_v1",
+  "run_dir": "/Users/aidianchi/Desktop/ndx_mac/output/analysis/vnext/20260731_002156",
+  "note": "离线重装配演示：注入后 IA 本应看到的卡（evidence_excerpt 逐字来自源材料 raw_text_excerpt）",
+  "card_count": 10,
+  "ia_usable_rate_new_policy": 0.3,
+  "fulltext_cards": 3,
+  "title_only_cards": 7,
+  "cards": [
+    {
+      "event_id": "event:ef79ac6a9ed352a4",
+      "fact_summary": "根据Yahoo Finance earnings dates及确定性静默期规则推算，AAPL有预定的财报发布日期。材料仅包含标题与来源元数据，无正文摘录可用。",
+      "interpretation": "仅有标题与日历来源，无法获取财报具体日期、市场预期或管理层指引。AAPL作为NDX最大权重成分股，其定期财报属于盈利路径的关键验证事件，可为当前围绕盈利修正强度与估值合理性的竞争假说提供未来的实际数据输入。但预定日期本身不含任何方向性信息，不能推断业绩好坏或市场反应。",
+      "passport_tier": "third_party_calendar",
+      "mapped_source_id": "src:ef79ac6a9ed352a4",
+      "raw_text_available": false,
+      "evidence_excerpt": "",
+      "evidence_excerpt_ia": "",
+      "verbatim_check": "ok"
+    },
+    {
+      "event_id": "event:75be16e97675b582",
+      "fact_summary": "Yahoo Finance M7 Headlines 于2026年7月30日报道了一篇题为'Meta stock poised for a new losing streak: Earnings call takeaways'的文章，指出Meta股票可能面临新一轮下跌，内容涉及财报电话会议要点。无完整正文可用。",
+      "interpretation": "据该媒体报道，Meta在最近一次财报电话会议后可能面临股价持续下跌压力。由于仅有标题而无正文，具体财报要点不明，但标题基调偏负面。Meta作为M7核心成分股及纳指100重要权重股，若其股价持续走弱，可能对指数层面产生拖累。该报道的负面倾向与当前市场对M7盈利可持续性的关注相呼应。",
+      "passport_tier": "reliable_mainstream_report",
+      "mapped_source_id": "src:75be16e97675b582",
+      "raw_text_available": false,
+      "evidence_excerpt": "",
+      "evidence_excerpt_ia": "",
+      "verbatim_check": "ok"
+    },
+    {
+      "event_id": "event:1d77a2d1bb9e1d35",
+      "fact_summary": "据Yahoo Finance M7 Headlines报道，卫星制造商K2 Space在一轮新融资中获得68亿美元估值。材料仅提供标题，无正文摘录。",
+      "interpretation": "与判断对象关联不足。K2 Space为未上市私营企业，非纳斯达克100成份股，其融资事件对NDX指数走势缺乏直接传导路径。",
+      "passport_tier": "reliable_mainstream_report",
+      "mapped_source_id": "src:1d77a2d1bb9e1d35",
+      "raw_text_available": false,
+      "evidence_excerpt": "",
+      "evidence_excerpt_ia": "",
+      "verbatim_check": "ok"
+    },
+    {
+      "event_id": "event:7392b9f2aa06f502",
+      "fact_summary": "根据标题，2026年7月30日纳斯达克指数反弹，半导体板块上涨，某医疗公司股票在财报前出现波动。无正文可查证更多细节。",
+      "interpretation": "据报道，该材料为一则单日市场快讯，报道纳指在半导体板块带动下反弹，同时提及一只医疗股在财报前有异动。由于仅有标题而无正文，无法确认反弹幅度、领涨个股及医疗公司具体名称与波动方向。一日反弹不能直接否定或确认任何结构性趋势，但若伴随成交量放大和广度改善，可能阶段性缓解市场对持续下跌的担忧。",
+      "passport_tier": "reliable_mainstream_report",
+      "mapped_source_id": "src:7392b9f2aa06f502",
+      "raw_text_available": false,
+      "evidence_excerpt": "",
+      "evidence_excerpt_ia": "",
+      "verbatim_check": "ok"
+    },
+    {
+      "event_id": "event:b8f43b7603daa04c",
+      "fact_summary": "Microsoft (MSFT) stock rose approximately 13% on quarterly earnings. Revenue increased 18% YoY; cloud computing revenue exceeded $100B for the first time. The article highlights $19.6B in free cash flow despite massive AI infrastructure CapEx. Fiscal Q4 2026 (ended June 30): Revenue $90B (vs $76.4B), Net income $35.76B (+31%), EPS $4.81 (vs $3.86). Full FY2026: Revenue $331.8B (+18%), Net income $133.7B (+31%), EPS $17.95 (vs $13.64). Segment YoY growth rates: Microsoft Cloud Revenue +27%, Commercial Remaining Performance Obligation +84%, M365 Commercial Cloud +14%, Consumer Cloud +24%, LinkedIn +12%, Dynamics 365 +13%, Azure and Other Cloud Services +43%, Search Advertising (ex-TAC) +10%. Windows OEM and Devices -7%, Xbox Content and Services -10%. CEO Satya Nadella: 'We are advancing the frontier on the cost-to-outcome curve...' Azure revenue surpassed $100B for the first time; M365 Copilot reached over 30M paid seats.",
+      "interpretation": "MSFT's earnings report shows strong top-line growth, margin expansion, and—critically—$19.6B in free cash flow despite elevated AI capex. The article contrasts this with Tesla and Alphabet, which it says 'faltered' after their reports. For NDX, MSFT as the largest or near-largest index weight postin",
+      "passport_tier": "reliable_mainstream_report",
+      "mapped_source_id": "src:b8f43b7603daa04c",
+      "raw_text_available": true,
+      "evidence_excerpt": "$19.6 Billion: The Microsoft Earnings Number That Matters Most | The Motley Fool Accessibility Menu ▲ S&P 500 + ---% | ▲ Stock Advisor + ---% Join The Motley Fool Search for a company Accessibility ... Help Microsoft ( MSFT +15.09% ) stock is up 13% today on the strength of quarterly earnings that saw revenue increase 18% and cloud computing revenue exceed $100 billion for the first time. But I believe the most significant number in Microsoft’s fiscal fourth-quarter earnings report is $19.6 billion -- the free cash flow the company generated despite its massive capital expenditures on AI infrastructure. While some AI companies such as Tesla and Alphabet faltered after their earnings reports this month, Microsoft appears to be in a much stronger position. Here’s why. Image source: The Motley Fool. First, a look at Microsoft’s quarter Microsoft had strong numbers across the board in its fiscal fourth quarter of 2026 (ending June 30). Revenue was $90 billion, up from $76.4 billion a year ago, and net income was $35.76 billion, an increase of 31% from the same period. Microsoft’s earnings per share came in at $4.81 versus $3.86 in fiscal Q4 2025. For the full year, revenue was $331.8 billion, up 18% from fiscal 2025, and net income of $133.7 billion was up 31% from a year ago. Full-year EPS was $17.95 versus $13.64 in 2025. Microsoft recorded year-over-year revenue gains in nearly every segment this quarter, with only Windows and Xbox lagging. Segment Percentage Y/Y Change Microsoft Cloud Revenue 27% Commercial Remaining Performance Obligation 84% Microsoft 365 Commercial Cloud Revenue 14% Microsoft Consumer Cloud Revenue 24% LinkedIn Revenue 12% Dynamics 365 Revenue 13% Azure and Other Cloud Services Revenue 43% Windows OEM and Devices Revenue (7)% Xbox Content and Services Revenue (10)% Search Advertising Revenue Excluding Traffic Acquisition Costs 10% Source: Microsoft “We are advancing the frontier on the cost-to-outcome curve, ensuring every customer can turn tokens into business results,\" CEO Satya Nadella said. “This year, Azure revenue surpassed $100 billion for the first time, and Microsoft 365 Copilot reached over 30 million paid seats, reflecting the conf",
+      "evidence_excerpt_ia": "$19.6 Billion: The Microsoft Earnings Number That Matters Most | The Motley Fool Accessibility Menu ▲ S&P 500 + ---% | ▲ Stock Advisor + ---% Join The Motley Fool Search for a company Accessibility ... Help Microsoft ( MSFT +15.09% ) stock is up 13% today on the strength of quarterly earnings that saw revenue increase 18% and cloud computing revenue exceed $100 billion for the first time. But I believe the most significant number in Microsoft’s fiscal fourth-quarter earnings report is $19.6 bill",
+      "verbatim_check": "ok"
+    },
+    {
+      "event_id": "event:4a41774d6a5c953b",
+      "fact_summary": "美联储联邦储备委员会于2026年7月30日宣布对两名前银行员工执行以下强制措施：对Regions Bank（阿拉巴马州伯明翰）前员工Simon Alberto Gonzalez发出同意禁止令，原因为挪用客户资金；对First Interstate Bank（蒙大拿州比灵斯）前员工Ralph A. Mojica发出同意禁止令，原因为挪用客户资金及贪污银行资金。",
+      "interpretation": "与判断对象关联不足。该事件为美联储针对两名区域性银行前员工个人不当行为（挪用客户资金/贪污）的常规执法行动，不涉及系统性银行风险、货币政策变动或宏观金融条件变化，与纳斯达克100指数的估值驱动因素、盈利前景、流动性条件或市场结构无可说明的直接或间接关联。",
+      "passport_tier": "official_macro",
+      "mapped_source_id": "src:4a41774d6a5c953b",
+      "raw_text_available": true,
+      "evidence_excerpt": "ï»¿ Federal Reserve Board - Federal Reserve Board issues enforcement actions with former employee of Regions Bank and former employee of First Interstate Bank Skip to main content An official website of the United States Government Here's how you know Official websites use .gov A .gov website belongs to an official government organization in the United States. Secure .gov websites use HTTPS A lock ( ) or https:// means you've safely connected to the .gov website. Share sensitive information only on official, secure websites. Back to Home Board of Governors of the Federal Reserve System Stay Connected Federal Reserve Facebook Page Federal Reserve Instagram Page Federal Reserve YouTube Page Federal Reserve Flickr Page Federal Reserve LinkedIn Page Federal Reserve Threads Page Federal Reserve X Page Federal Reserve Bluesky Page Subscribe to RSS Subscribe to Email Recent Postings Calendar Publications Site Map A-Z index Careers FAQs Videos Contact Toggle Dropdown Menu Main Menu Toggle Button Sections Search Toggle Button Home News & Events Press Releases Press Release July 30, 2026 Federal Reserve Board issues enforcement actions with former employee of Regions Bank and former employee of First Interstate Bank For release at 11:00 a.m. EDT Share The Federal Reserve Board on Thursday announced the execution of the following enforcement actions listed below: Consent prohibition order against Simon Alberto Gonzalez Former employee of Regions Bank, Birmingham, Alabama Misappropriation of customer funds Consent prohibition order against Ralph A. Mojica Former employee of First Interstate Bank, Billings, Montana Misappropriation of customer funds and embezzlement of Bank funds Additional enforcement actions can be searched for here . For media inquiries, please email [email protected] or call 202-452-2955. Attachment 1 (PDF) Attachment 2 (PDF) Last Update: July 30, 2026",
+      "evidence_excerpt_ia": "ï»¿ Federal Reserve Board - Federal Reserve Board issues enforcement actions with former employee of Regions Bank and former employee of First Interstate Bank Skip to main content An official website of the United States Government Here's how you know Official websites use .gov A .gov website belongs to an official government organization in the United States. Secure .gov websites use HTTPS A lock ( ) or https:// means you've safely connected to the .gov website. Share sensitive information only",
+      "verbatim_check": "ok"
+    },
+    {
+      "event_id": "event:82d5d8fb4b9d331a",
+      "fact_summary": "美联储理事会于2026年7月30日宣布对位于伊利诺伊州塞勒姆的Iuka Bancshares, Inc.及The Iuka State Bank执行一项执法行动，行动形式为日期为2026年7月15日的书面协议（Written Agreement）。公告附有PDF附件，并提供了媒体查询联系方式。",
+      "interpretation": "与判断对象关联不足。该执法行动针对一家小型社区银行控股公司及其下属银行，属于美联储日常监管范围内的个案执法，不涉及宏观货币政策或系统性金融条件变化，缺乏可传导至纳斯达克100指数的合理机制。",
+      "passport_tier": "official_macro",
+      "mapped_source_id": "src:82d5d8fb4b9d331a",
+      "raw_text_available": true,
+      "evidence_excerpt": "ï»¿ Federal Reserve Board - Federal Reserve Board issues enforcement action with Iuka Bancshares, Inc. and The Iuka State Bank Skip to main content An official website of the United States Government Here's how you know Official websites use .gov A .gov website belongs to an official government organization in the United States. Secure .gov websites use HTTPS A lock ( ) or https:// means you've safely connected to the .gov website. Share sensitive information only on official, secure websites. Back to Home Board of Governors of the Federal Reserve System Stay Connected Federal Reserve Facebook Page Federal Reserve Instagram Page Federal Reserve YouTube Page Federal Reserve Flickr Page Federal Reserve LinkedIn Page Federal Reserve Threads Page Federal Reserve X Page Federal Reserve Bluesky Page Subscribe to RSS Subscribe to Email Recent Postings Calendar Publications Site Map A-Z index Careers FAQs Videos Contact Toggle Dropdown Menu Main Menu Toggle Button Sections Search Toggle Button Home News & Events Press Releases Press Release July 30, 2026 Federal Reserve Board issues enforcement action with Iuka Bancshares, Inc. and The Iuka State Bank For release at 11:00 a.m. EDT Share The Federal Reserve Board on Thursday announced the execution of the following enforcement action listed below: Iuka Bancshares, Inc., Salem, Illinois and The Iuka State Bank, Salem, Illinois Written Agreement dated July 15, 2026 Additional enforcement actions can be searched for here . For media inquiries, please email [email protected] or call 202-452-2955. Attachment (PDF) Last Update: July 30, 2026",
+      "evidence_excerpt_ia": "ï»¿ Federal Reserve Board - Federal Reserve Board issues enforcement action with Iuka Bancshares, Inc. and The Iuka State Bank Skip to main content An official website of the United States Government Here's how you know Official websites use .gov A .gov website belongs to an official government organization in the United States. Secure .gov websites use HTTPS A lock ( ) or https:// means you've safely connected to the .gov website. Share sensitive information only on official, secure websites. B",
+      "verbatim_check": "ok"
+    },
+    {
+      "event_id": "event:3935663507f48598",
+      "fact_summary": "Yahoo Finance QQQ Headlines于2026年7月30日报道了6月PCE数据：核心PCE同比+3.3%，消费与定价均走高。仅标题可用，无正文摘录。",
+      "interpretation": "该报道标题显示6月核心PCE同比+3.3%，连续高于美联储2%目标。由于仅有标题且无全文，无法确认环比变化幅度、分项构成或市场即时反应。若核心PCE维持3%以上，可能延缓美联储降息启动时点，使实际利率维持高位。",
+      "passport_tier": "reliable_mainstream_report",
+      "mapped_source_id": "src:3935663507f48598",
+      "raw_text_available": false,
+      "evidence_excerpt": "",
+      "evidence_excerpt_ia": "",
+      "verbatim_check": "ok"
+    },
+    {
+      "event_id": "event:d6123e5a5d73f0b2",
+      "fact_summary": "Yahoo Finance QQQ Headlines于2026年7月30日盘前报道，交易所交易基金（ETFs）和股票期指在科技公司财报季期间走高。全文内容不可用，仅标题可供分析。",
+      "interpretation": "该报道标题显示盘前市场在科技财报背景下表现积极，可能暗示部分科技公司财报结果或市场对科技板块的预期偏向正面。但由于全文不可用，无法获知具体哪些科技股财报推动上涨、涨跌幅大小以及报道的详细分析逻辑，解读力度有限。盘前交易流动性通常较低，价格信号对正式开盘的预示作用存在不确定性。",
+      "passport_tier": "reliable_mainstream_report",
+      "mapped_source_id": "src:d6123e5a5d73f0b2",
+      "raw_text_available": false,
+      "evidence_excerpt": "",
+      "evidence_excerpt_ia": "",
+      "verbatim_check": "ok"
+    },
+    {
+      "event_id": "event:0a457426cdb8f17f",
+      "fact_summary": "Yahoo Finance QQQ Headlines于2026年7月29日发布一篇报道，标题为\"AI's Biggest Winners Are Selling Off, and ETFs Are Behaving Strangely\"。无全文正文可用。",
+      "interpretation": "仅据标题推测，该报道描述了AI大赢家股的抛售现象以及相关ETF出现\"反常\"表现。由于缺乏正文，无法判断抛售规模、涉及的个股范围以及ETF反常行为的具体形式（如折溢价异常、成交量骤变或资金流向逆转等）。标题本身暗示资金可能从前期领涨的AI标的中撤出，若ETF行为确实异常，可能反映被动资金或散户情绪出现拐点。但全文缺失限制了推断的置信度。",
+      "passport_tier": "reliable_mainstream_report",
+      "mapped_source_id": "src:0a457426cdb8f17f",
+      "raw_text_available": false,
+      "evidence_excerpt": "",
+      "evidence_excerpt_ia": "",
+      "verbatim_check": "ok"
+    }
+  ]
+}

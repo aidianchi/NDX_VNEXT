@@ -713,6 +713,38 @@ class LLMEngine:
             logger.error(f"  无法保存调试文件: {save_error}")
         return None
 
+    def diagnose_json_error(self, text: str) -> Optional[str]:
+        """定位原始响应里真实的 JSON 语法错误，供解析失败后的重试反馈使用。
+
+        与 extract_json 同款顺序找 JSON 块（`__LOGIC__` script 块 → ```json 围栏 →
+        退化到全文），对找到的块做 `json.loads` 并捕获 `JSONDecodeError`，返回包含
+        错误信息、行:列（相对提取出的 JSON 块）和出错点前后各约 200 字符窗口的
+        诊断文本。找不到块或拿不到 `JSONDecodeError`（例如块本身是合法 JSON 但不是
+        对象）时返回 None——由调用方回退到末尾片段行为。
+
+        只读诊断：不改变 extract_json 的现有行为与接口，自身任何情况下都不抛错。
+        """
+        try:
+            if not text:
+                return None
+            match = re.search(r'<script type="application/json" id="__LOGIC__">(.*?)</script>', text, re.DOTALL)
+            if not match:
+                match = re.search(r'```json\s*\n(.*?)\n```', text, re.DOTALL)
+            block = match.group(1).strip() if match else text.strip()
+            if not block:
+                return None
+            try:
+                json.loads(block)
+            except json.JSONDecodeError as e:
+                window = block[max(0, e.pos - 200): e.pos + 200]
+                return (
+                    f"JSON 语法错误定位: {e.msg}（提取出的 JSON 块内第 {e.lineno} 行第 {e.colno} 列）。"
+                    f" 错误位置前后各约 200 字符：\n{window}"
+                )
+            return None
+        except Exception:
+            return None
+
     def _loads_json_with_light_repair(self, text: str, stage: str) -> Optional[Dict]:
         """Parse model JSON, with a narrow repair for common single-character slips."""
         if not text:

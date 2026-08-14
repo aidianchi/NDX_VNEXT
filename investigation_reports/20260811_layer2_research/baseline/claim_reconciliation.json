@@ -1,0 +1,183 @@
+{
+  "schema_version": "layer2_claim_reconciliation_v1",
+  "sample_seed": 20260811,
+  "run_dir": "output/analysis/vnext/20260731_002156",
+  "total_claims": 24,
+  "verdict_counts": {
+    "原文有": 20,
+    "原文不全": 1,
+    "原文无": 3
+  },
+  "pass_rate_strict": 0.833333,
+  "pass_rate_with_partial": 0.875,
+  "judgments": [
+    {
+      "card_event_id": "event:0a457426cdb8f17f",
+      "source_id": "src:0a457426cdb8f17f",
+      "claim": "Yahoo Finance QQQ Headlines 于 2026-07-29 发布标题为 'AI's Biggest Winners Are Selling Off, and ETFs Are Behaving Strangely' 的报道",
+      "verdict": "原文有",
+      "evidence": "src:0a457426cdb8f17f 的 title 与 published_at 字段：title='AI's Biggest Winners Are Selling Off, and ETFs Are Behaving Strangely'，published_at='Wed, 29 Jul 2026 22:57:32 +0000'（2026-07-29）"
+    },
+    {
+      "card_event_id": "event:0a457426cdb8f17f",
+      "source_id": "src:0a457426cdb8f17f",
+      "claim": "无全文正文可用",
+      "verdict": "原文有",
+      "evidence": "src:0a457426cdb8f17f 的 raw_text_available 字段 = false"
+    },
+    {
+      "card_event_id": "event:1d77a2d1bb9e1d35",
+      "source_id": "src:1d77a2d1bb9e1d35",
+      "claim": "卫星制造商 K2 Space 在一轮新融资中获得 68 亿美元估值",
+      "verdict": "原文有",
+      "evidence": "src:1d77a2d1bb9e1d35 的 title 字段：'Satellite maker K2 Space secures $6.8 billion valuation in new funding round'（$6.8 billion = 68 亿美元）"
+    },
+    {
+      "card_event_id": "event:1d77a2d1bb9e1d35",
+      "source_id": "src:1d77a2d1bb9e1d35",
+      "claim": "材料仅提供标题，无正文摘录",
+      "verdict": "原文有",
+      "evidence": "src:1d77a2d1bb9e1d35 的 raw_text_available 字段 = false"
+    },
+    {
+      "card_event_id": "event:1d77a2d1bb9e1d35",
+      "source_id": "src:1d77a2d1bb9e1d35",
+      "claim": "K2 Space 为未上市私营企业，非纳斯达克100成份股，融资事件对 NDX 指数走势缺乏直接传导路径",
+      "verdict": "原文无",
+      "evidence": "原文仅 title+published_at，无任何字段提供 K2 Space 上市状态/指数成份归属/对 NDX 传导的信息；此为卡片自身推断"
+    },
+    {
+      "card_event_id": "event:75be16e97675b582",
+      "source_id": "src:75be16e97675b582",
+      "claim": "Yahoo Finance M7 Headlines 于 2026-07-30 报道标题为 'Meta stock poised for a new losing streak: Earnings call takeaways' 的文章，指出 Meta 股票可能面临新一轮下跌，内容涉及财报电话会议要点",
+      "verdict": "原文有",
+      "evidence": "src:75be16e97675b582 的 title 与 published_at 字段：title='Meta stock poised for a new losing streak: Earnings call takeaways'，published_at='Thu, 30 Jul 2026 16:11:06 +0000'（2026-07-30）；'poised for a new losing streak' 支撑'可能面临新一轮下跌'"
+    },
+    {
+      "card_event_id": "event:75be16e97675b582",
+      "source_id": "src:75be16e97675b582",
+      "claim": "无完整正文可用",
+      "verdict": "原文有",
+      "evidence": "src:75be16e97675b582 的 raw_text_available 字段 = false"
+    },
+    {
+      "card_event_id": "event:75be16e97675b582",
+      "source_id": "src:75be16e97675b582",
+      "claim": "Meta 在最近一次财报电话会议后可能面临股价持续下跌压力",
+      "verdict": "原文有",
+      "evidence": "src:75be16e97675b582 的 title 字段 'poised for a new losing streak: Earnings call takeaways'（标题层面支撑；正文无）"
+    },
+    {
+      "card_event_id": "event:75be16e97675b582",
+      "source_id": "src:75be16e97675b582",
+      "claim": "Meta 作为 M7 核心成分股及纳指100重要权重股，若股价持续走弱可能对指数层面产生拖累",
+      "verdict": "原文无",
+      "evidence": "原文（title+raw_text_available=false）无任何字段提供 Meta 指数成份/权重信息；此为卡片补充背景与推断"
+    },
+    {
+      "card_event_id": "event:d6123e5a5d73f0b2",
+      "source_id": "src:d6123e5a5d73f0b2",
+      "claim": "Yahoo Finance QQQ Headlines 于 2026-07-30 盘前报道，ETFs 和股票期指在科技公司财报季期间走高",
+      "verdict": "原文有",
+      "evidence": "src:d6123e5a5d73f0b2 的 title 与 published_at 字段：title='Exchange-Traded Funds, Equity Futures Higher Pre-Bell Thursday Amid Tech Earnings'，published_at='Thu, 30 Jul 2026 13:11:32 +0000'（2026-07-30）；'Higher Pre-Bell' 与 'Amid Tech Earnings' 支撑断言"
+    },
+    {
+      "card_event_id": "event:d6123e5a5d73f0b2",
+      "source_id": "src:d6123e5a5d73f0b2",
+      "claim": "全文内容不可用，仅标题可供分析",
+      "verdict": "原文有",
+      "evidence": "src:d6123e5a5d73f0b2 的 raw_text_available 字段 = false"
+    },
+    {
+      "card_event_id": "event:d6123e5a5d73f0b2",
+      "source_id": "src:d6123e5a5d73f0b2",
+      "claim": "盘前市场在科技财报背景下表现积极",
+      "verdict": "原文有",
+      "evidence": "src:d6123e5a5d73f0b2 的 title 字段 'Higher Pre-Bell Thursday Amid Tech Earnings'（标题层面支撑；正文无）"
+    },
+    {
+      "card_event_id": "event:b8f43b7603daa04c",
+      "source_id": "src:b8f43b7603daa04c",
+      "claim": "Microsoft (MSFT) 股价因财报上涨约 13%",
+      "verdict": "原文有",
+      "evidence": "src:b8f43b7603daa04c 的 raw_text_excerpt：'stock is up 13% today on the strength of quarterly earnings'"
+    },
+    {
+      "card_event_id": "event:b8f43b7603daa04c",
+      "source_id": "src:b8f43b7603daa04c",
+      "claim": "Revenue 同比增长 18%",
+      "verdict": "原文有",
+      "evidence": "src:b8f43b7603daa04c 的 raw_text_excerpt：'For the full year, revenue was $331.8 billion, up 18% from fiscal 2025'（全年口径；季度 $90B vs $76.4B 为 +17.8%）"
+    },
+    {
+      "card_event_id": "event:b8f43b7603daa04c",
+      "source_id": "src:b8f43b7603daa04c",
+      "claim": "云计算收入首次超过 1000 亿美元",
+      "verdict": "原文不全",
+      "evidence": "原文为 'Azure revenue surpassed $100 billion for the first time'——原文主体是 Azure（云服务核心）而非笼统的 cloud computing revenue；断言主体与原文有偏差，数字 $100B 一致"
+    },
+    {
+      "card_event_id": "event:b8f43b7603daa04c",
+      "source_id": "src:b8f43b7603daa04c",
+      "claim": "尽管 AI 基础设施资本开支巨大，仍产生 196 亿美元自由现金流",
+      "verdict": "原文有",
+      "evidence": "src:b8f43b7603daa04c 的 raw_text_excerpt：'$19.6 billion -- the free cash flow the company generated despite its massive capital expenditures on AI infrastructure'"
+    },
+    {
+      "card_event_id": "event:b8f43b7603daa04c",
+      "source_id": "src:b8f43b7603daa04c",
+      "claim": "2026 财年 Q4（截至 6/30）：营收 900 亿美元（上年 764 亿）",
+      "verdict": "原文有",
+      "evidence": "src:b8f43b7603daa04c 的 raw_text_excerpt：'fiscal fourth quarter of 2026 (ending June 30). Revenue was $90 billion, up from $76.4 billion a year ago'"
+    },
+    {
+      "card_event_id": "event:b8f43b7603daa04c",
+      "source_id": "src:b8f43b7603daa04c",
+      "claim": "净利润 357.6 亿美元（+31%），EPS 4.81 美元（上年 3.86）",
+      "verdict": "原文有",
+      "evidence": "src:b8f43b7603daa04c 的 raw_text_excerpt：'net income was $35.76 billion, an increase of 31%... earnings per share came in at $4.81 versus $3.86 in fiscal Q4 2025'"
+    },
+    {
+      "card_event_id": "event:b8f43b7603daa04c",
+      "source_id": "src:b8f43b7603daa04c",
+      "claim": "全年：营收 3318 亿（+18%）、净利 1337 亿（+31%）、EPS 17.95（上年 13.64）",
+      "verdict": "原文有",
+      "evidence": "src:b8f43b7603daa04c 的 raw_text_excerpt：'revenue was $331.8 billion, up 18%... net income of $133.7 billion was up 31%... Full-year EPS was $17.95 versus $13.64 in 2025'"
+    },
+    {
+      "card_event_id": "event:b8f43b7603daa04c",
+      "source_id": "src:b8f43b7603daa04c",
+      "claim": "分部同比增速表（Microsoft Cloud +27%、Azure +43% 等）与原文一致",
+      "verdict": "原文有",
+      "evidence": "src:b8f43b7603daa04c 的 raw_text_excerpt 中分部百分比与卡片列举逐一吻合：Microsoft Cloud 27%、Commercial RPO 84%、M365 Commercial 14%、Consumer Cloud 24%、LinkedIn 12%、Dynamics 365 13%、Azure and Other Cloud Services 43%、Search Advertising (ex-TAC) 10%、Windows OEM -7%、Xbox -10%"
+    },
+    {
+      "card_event_id": "event:b8f43b7603daa04c",
+      "source_id": "src:b8f43b7603daa04c",
+      "claim": "CEO 纳德拉引语：'We are advancing the frontier on the cost-to-outcome curve...'",
+      "verdict": "原文有",
+      "evidence": "src:b8f43b7603daa04c 的 raw_text_excerpt 完整包含该引语"
+    },
+    {
+      "card_event_id": "event:b8f43b7603daa04c",
+      "source_id": "src:b8f43b7603daa04c",
+      "claim": "Azure 收入首次破 1000 亿；M365 Copilot 付费席位超 3000 万",
+      "verdict": "原文有",
+      "evidence": "src:b8f43b7603daa04c 的 raw_text_excerpt：'Azure revenue surpassed $100 billion for the first time, and Microsoft 365 Copilot reached over 30 million paid seats'"
+    },
+    {
+      "card_event_id": "event:b8f43b7603daa04c",
+      "source_id": "src:b8f43b7603daa04c",
+      "claim": "文章将 MSFT 与 Tesla、Alphabet 对比，称后者财报后 'faltered'",
+      "verdict": "原文有",
+      "evidence": "src:b8f43b7603daa04c 的 raw_text_excerpt：'Some AI companies such as Tesla and Alphabet faltered after their earnings reports this month'"
+    },
+    {
+      "card_event_id": "event:b8f43b7603daa04c",
+      "source_id": "src:b8f43b7603daa04c",
+      "claim": "MSFT 是 NDX 最大或接近最大的指数权重股",
+      "verdict": "原文无",
+      "evidence": "原文（raw_text_excerpt 2200 字符）无任何字段提供 MSFT 在 NDX 的权重信息；此为卡片补充背景"
+    }
+  ]
+}

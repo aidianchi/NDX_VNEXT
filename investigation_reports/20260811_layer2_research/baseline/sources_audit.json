@@ -1,0 +1,224 @@
+{
+  "schema_version": "layer2_source_audit_v1",
+  "generated_at_utc": "2026-08-11T07:23:31.584268+00:00",
+  "registered_source_count": 15,
+  "audited_source_count": 15,
+  "ledger_file": "/Users/aidianchi/Desktop/ndx_mac/src/news_event_ledger.py",
+  "sources": [
+    {
+      "source_id": "alpha_vantage_news_sentiment",
+      "source_name": "",
+      "container": "hardcoded",
+      "url": "",
+      "trust": "主流",
+      "trust_evidence": "Alpha Vantage NEWS_SENTIMENT API（third_party_news_sentiment），主流第三方数据商",
+      "necessity": "已发生 + 被相信（新闻情感聚合）",
+      "necessity_evidence": "供给新闻情感标签（叙事温度）；与 yahoo 两源、wind_financial_news_ndx 供给重叠（同为新闻聚合）",
+      "overlaps": [
+        "yahoo_finance_qqq_headlines",
+        "yahoo_finance_m7_headlines",
+        "wind_financial_news_ndx"
+      ],
+      "scrapable": "不能",
+      "scrapable_evidence": "需要 API key（get_api_key('alphavantage')），本次 run 实测 skipped_alpha_vantage_disabled_or_missing_key（未配 key 或服务被禁）。有 key 时是稳定 REST 接口"
+    },
+    {
+      "source_id": "bea_news",
+      "source_name": "BEA News",
+      "container": "OFFICIAL_RSS_SOURCES",
+      "url": "https://www.bea.gov/news/rss",
+      "trust": "官方",
+      "trust_evidence": "美国经济分析局官网 RSS（bea.gov/news/rss），authority_tier=official",
+      "necessity": "已发生（宏观数据发布）",
+      "necessity_evidence": "供给已发生的 GDP/PCE 等数据发布；与 bea_release_calendar 互补，无供给重叠",
+      "overlaps": [],
+      "scrapable": "能",
+      "scrapable_evidence": "标准 RSS，无需登录、无需浏览器；本次 run 出活 6 条"
+    },
+    {
+      "source_id": "bea_release_calendar",
+      "source_name": "BEA Release Calendar",
+      "container": "OFFICIAL_CALENDAR_SOURCES",
+      "url": "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics",
+      "trust": "官方",
+      "trust_evidence": "BEA 发布日历 ICS（bea.gov/news/schedule/ics/online-calendar-subscription.ics），官方标准日历格式",
+      "necessity": "将发生（宏观数据发布日期）",
+      "necessity_evidence": "供给将发生的 BEA 数据发布日期（规则语境）；与 bea_news 互补，无供给重叠",
+      "overlaps": [],
+      "scrapable": "能",
+      "scrapable_evidence": "标准 ICS 文件，无需登录、无需浏览器；本次 run 出活 8 条"
+    },
+    {
+      "source_id": "bls_latest",
+      "source_name": "BLS Latest Numbers",
+      "container": "OFFICIAL_RSS_SOURCES",
+      "url": "https://www.bls.gov/feed/bls_latest.rss",
+      "trust": "官方",
+      "trust_evidence": "美国劳工统计局官网 RSS（bls.gov/feed/bls_latest.rss），authority_tier=official",
+      "necessity": "已发生（宏观数据发布）",
+      "necessity_evidence": "供给已发生的宏观数据发布（CPI/就业等）；与 bls_release_calendar 互补（日历只给将发生的发布日期），无供给重叠",
+      "overlaps": [],
+      "scrapable": "能",
+      "scrapable_evidence": "标准 RSS，无需登录、无需浏览器；本次 run 出活 1 条"
+    },
+    {
+      "source_id": "bls_release_calendar",
+      "source_name": "BLS Release Calendar",
+      "container": "OFFICIAL_CALENDAR_SOURCES",
+      "url": "https://www.bls.gov/schedule/news_release/bls.ics",
+      "trust": "官方",
+      "trust_evidence": "BLS 发布日历 ICS（bls.gov/schedule/news_release/bls.ics），官方标准日历格式",
+      "necessity": "将发生（宏观数据发布日期）",
+      "necessity_evidence": "供给将发生的 BLS 数据发布日期（规则语境）；与 bls_latest 互补，无供给重叠",
+      "overlaps": [],
+      "scrapable": "能",
+      "scrapable_evidence": "标准 ICS 文件，无需登录、无需浏览器；本次 run 出活 8 条"
+    },
+    {
+      "source_id": "federal_reserve_press_all",
+      "source_name": "Federal Reserve Press Releases",
+      "container": "OFFICIAL_RSS_SOURCES",
+      "url": "https://www.federalreserve.gov/feeds/press_all.xml",
+      "trust": "官方",
+      "trust_evidence": "美联储官网 RSS（federalreserve.gov/feeds/press_all.xml），代码 authority_tier=official",
+      "necessity": "已发生（政策/金融条件新闻与公告）",
+      "necessity_evidence": "供给已发生的货币政策/金融条件事件；与日历源 fomc_meeting_calendar 是互补（后者只给将发生的日程），无供给重叠",
+      "overlaps": [],
+      "scrapable": "能",
+      "scrapable_evidence": "标准 RSS，无需登录、无需浏览器；本次 run 出活 8 条"
+    },
+    {
+      "source_id": "fomc_meeting_calendar",
+      "source_name": "Federal Reserve FOMC Meeting Calendar",
+      "container": "OFFICIAL_CALENDAR_SOURCES",
+      "url": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+      "trust": "官方",
+      "trust_evidence": "美联储官网 FOMC 日历页（federalreserve.gov/monetarypolicy/fomccalendars.htm），官方日程",
+      "necessity": "将发生（FOMC 会议日程）",
+      "necessity_evidence": "供给将发生的 FOMC 会议日期（规则语境：利率路径关键节点）；与 federal_reserve_press_all 互补，无供给重叠",
+      "overlaps": [],
+      "scrapable": "能",
+      "scrapable_evidence": "无需登录、无需浏览器，直接抓 HTML 解析；本次 run 出活 8 条。注意：是 HTML 页面解析而非标准接口，页面改版会失效"
+    },
+    {
+      "source_id": "m7_earnings_calendar",
+      "source_name": "",
+      "container": "hardcoded",
+      "url": "",
+      "trust": "弱",
+      "trust_evidence": "yfinance 库拉 Yahoo Finance earnings dates + 确定性静默期规则推算（third_party_calendar / third_party_unofficial），非公司官方披露",
+      "necessity": "将发生（M7 财报日期，规则语境）",
+      "necessity_evidence": "供给将发生的 M7 财报日程；是唯一财报日程源，无供给重叠。注意：是规则推算值而非公司确认值",
+      "overlaps": [],
+      "scrapable": "存疑",
+      "scrapable_evidence": "依赖 yfinance 第三方库 + Yahoo 非官方接口，无需登录、无需浏览器；接口稳定性无官方承诺，Yahoo 可能限流/变更。本次 run 出活 2 条"
+    },
+    {
+      "source_id": "nasdaq_index_announcements",
+      "source_name": "Nasdaq Press Center Index Announcements",
+      "container": "OFFICIAL_CALENDAR_SOURCES",
+      "url": "https://www.nasdaq.com/about/press-center",
+      "trust": "官方",
+      "trust_evidence": "Nasdaq 官网新闻中心（nasdaq.com/about/press-center），官方指数公告入口",
+      "necessity": "将发生（指数调整/再平衡公告）",
+      "necessity_evidence": "供给将发生的 NDX 指数再平衡/成分调整公告（规则语境）；无其他源供给此材料，无重叠",
+      "overlaps": [],
+      "scrapable": "不能",
+      "scrapable_evidence": "HTML 页面抓取 + 正则解析（非标准接口），本次 run 实测 Read timed out（读超时 12s）。无需登录/浏览器，但接口不稳定，不满足「接口稳定」"
+    },
+    {
+      "source_id": "reddit_stocks_qqq_search",
+      "source_name": "Reddit r/stocks QQQ Search",
+      "container": "SOCIAL_RSS_SOURCES",
+      "url": "https://www.reddit.com/r/stocks/search.rss?q=QQQ%20OR%20Nasdaq%20100&restrict_sr=on&sort=new&t=week",
+      "trust": "弱",
+      "trust_evidence": "Reddit r/stocks 搜索 RSS，authority_tier=social_discussion，社交讨论噪音源",
+      "necessity": "被相信（市场叙事温度）",
+      "necessity_evidence": "供给散户叙事与情绪（narrative temperature），是全注册表唯一社交源；与任何源无供给重叠",
+      "overlaps": [],
+      "scrapable": "存疑",
+      "scrapable_evidence": "RSS 无需登录、无需浏览器（需带 User-Agent）；但 Reddit 对无登录抓取有速率限制，官方无稳定性承诺，接口可能随时 429。本次 run 出活 8 条"
+    },
+    {
+      "source_id": "sec_submissions",
+      "source_name": "",
+      "container": "hardcoded",
+      "url": "",
+      "trust": "官方",
+      "trust_evidence": "SEC EDGAR 官方 submissions API（data.sec.gov/submissions/CIKxxx.json），authority_tier=official_filing",
+      "necessity": "已发生（8-K/10-Q/10-K 官方申报）",
+      "necessity_evidence": "供给 M7 已发生的官方申报（规则语境：法定披露）；与 wind_company_announcements_m7 供给重叠（本源为原始官方）",
+      "overlaps": [
+        "wind_company_announcements_m7"
+      ],
+      "scrapable": "能",
+      "scrapable_evidence": "官方 JSON API，无需登录（需带 User-Agent 声明），代码已按 0.12s 间隔限速；接口稳定。本次 run 出活 13 条"
+    },
+    {
+      "source_id": "wind_company_announcements_m7",
+      "source_name": "Wind Company Announcements",
+      "container": "WIND_DOC_QUERIES",
+      "url": "",
+      "trust": "授权",
+      "trust_evidence": "Wind 万得金融数据终端（licensed_provider/Wind），持牌商业数据源",
+      "necessity": "已发生（公司公告/财报/指引）",
+      "necessity_evidence": "供给 M7 的公司公告类材料；与 sec_submissions 供给重叠（同为 M7 披露，SEC 为原始官方、Wind 为授权聚合），重叠度高的部分按 SEC 为准",
+      "overlaps": [
+        "sec_submissions"
+      ],
+      "scrapable": "不能",
+      "scrapable_evidence": "走 Wind skill CLI（~/.agents/skills/wind-mcp-skill），依赖本地 skill 目录存在 + Wind 授权连接/登录态，非普通 HTTP 接口。本次 run 因无实体匹配丢弃 1 条"
+    },
+    {
+      "source_id": "wind_financial_news_ndx",
+      "source_name": "Wind Financial News",
+      "container": "WIND_DOC_QUERIES",
+      "url": "",
+      "trust": "授权",
+      "trust_evidence": "Wind 万得金融新闻（licensed_provider/Wind），持牌商业数据源",
+      "necessity": "已发生 + 被相信（财经新闻）",
+      "necessity_evidence": "供给 NDX/宏观财经新闻；与 yahoo 两源、alpha_vantage_news_sentiment 供给重叠（同为市场财经新闻聚合）",
+      "overlaps": [
+        "yahoo_finance_qqq_headlines",
+        "yahoo_finance_m7_headlines",
+        "alpha_vantage_news_sentiment"
+      ],
+      "scrapable": "不能",
+      "scrapable_evidence": "走 Wind skill CLI，依赖本地 skill 目录 + Wind 授权连接/登录态。本次 run 出活 8 条（说明采集时授权可用，但非普通 HTTP 可复现）"
+    },
+    {
+      "source_id": "yahoo_finance_m7_headlines",
+      "source_name": "Yahoo Finance M7 Headlines",
+      "container": "YAHOO_FINANCE_RSS_SOURCES",
+      "url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=AAPL,MSFT,NVDA,AMZN,META,GOOGL,TSLA&region=US&lang=en-US",
+      "trust": "主流",
+      "trust_evidence": "Yahoo Finance RSS 聚合（M7 标的），authority_tier=market_news_aggregator",
+      "necessity": "已发生 + 被相信（M7 市场新闻与叙事）",
+      "necessity_evidence": "供给 M7 的已发生市场新闻；与 yahoo_finance_qqq_headlines 同源不同标的（部分重叠），与 alpha_vantage_news_sentiment 部分重叠",
+      "overlaps": [
+        "yahoo_finance_qqq_headlines",
+        "alpha_vantage_news_sentiment",
+        "wind_financial_news_ndx"
+      ],
+      "scrapable": "能",
+      "scrapable_evidence": "RSS 无需登录、无需浏览器；本次 run 出活 8 条，接口稳定性中等"
+    },
+    {
+      "source_id": "yahoo_finance_qqq_headlines",
+      "source_name": "Yahoo Finance QQQ Headlines",
+      "container": "YAHOO_FINANCE_RSS_SOURCES",
+      "url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=QQQ&region=US&lang=en-US",
+      "trust": "主流",
+      "trust_evidence": "Yahoo Finance RSS 聚合（feeds.finance.yahoo.com），authority_tier=market_news_aggregator，主流财经媒体聚合",
+      "necessity": "已发生 + 被相信（市场新闻与叙事）",
+      "necessity_evidence": "供给已发生的市场新闻与市场叙事；与 yahoo_finance_m7_headlines 同源不同标的（部分重叠），与 alpha_vantage_news_sentiment 同属市场新闻聚合（部分重叠）",
+      "overlaps": [
+        "yahoo_finance_m7_headlines",
+        "alpha_vantage_news_sentiment",
+        "wind_financial_news_ndx"
+      ],
+      "scrapable": "能",
+      "scrapable_evidence": "RSS 无需登录、无需浏览器；本次 run 出活 8 条。注意：Yahoo 偶有反爬/限流，接口稳定性为中等，本次实测可用"
+    }
+  ]
+}

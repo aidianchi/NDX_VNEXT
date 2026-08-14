@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -339,6 +340,30 @@ def _model_dump(value: Any) -> Any:
     if hasattr(value, "dict"):
         return value.dict()
     return value
+
+
+def _inject_evidence_fields(card_dict: Dict[str, Any], event: Dict[str, Any]) -> None:
+    """T49 第二件：把源材料的正文摘录与可用标志逐字注入卡 dict（纯代码搬运，非模型输出）。
+
+    空正文纪律：raw_text_available=false 时 evidence_excerpt 必须为空字符串。
+    契约零改动：只作用于落盘副本；内存/模型对象不含这些字段
+    （EventInterpretationCard 为 extra="forbid"，模型契约一个字不改）。
+    """
+    available = bool(event.get("raw_text_available"))
+    card_dict["evidence_excerpt"] = event.get("raw_text_excerpt") or "" if available else ""
+    card_dict["raw_text_available"] = available
+
+
+def _with_evidence_injected_artifact(
+    artifact: Dict[str, Any],
+    events_by_id: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """返回 artifact 的深拷贝副本，其中每张卡按 event_id 对回源材料注入证据字段。"""
+    injected = copy.deepcopy(artifact)
+    for card in injected.get("cards") or []:
+        if isinstance(card, dict):
+            _inject_evidence_fields(card, events_by_id.get(str(card.get("event_id") or ""), {}))
+    return injected
 
 
 def _enum_value(value: Any) -> Any:
@@ -1566,9 +1591,13 @@ class VNextOrchestrator:
                 }
             )
             cards.append(finalized_card)
+            # T49 第二件：落盘副本带上源材料的正文摘录（逐字注入，非模型输出）；
+            # 内存/模型对象保持契约纯净（EventInterpretationCard extra="forbid"）。
+            card_dict = _model_dump(finalized_card)
+            _inject_evidence_fields(card_dict, event)
             self._save_json(
                 self.output_dir / "event_interpretation_cards" / f"{stage_token}.json",
-                finalized_card,
+                card_dict,
             )
 
         events_by_id = {str(event.get("event_id") or ""): event for event in selected}
@@ -1591,7 +1620,8 @@ class VNextOrchestrator:
                 "injected into L1-L5, Bridge, Thesis, Risk, Reviser, or Final, and must not become evidence_ref."
             ),
         }
-        self._save_json("event_interpretation_cards.json", artifact)
+        # 写盘副本注入证据字段（IA 从文件读卡即可见正文）；内存 artifact 保持契约纯净。
+        self._save_json("event_interpretation_cards.json", _with_evidence_injected_artifact(artifact, events_by_id))
         return artifact
 
     def _build_event_section_summary(
@@ -1637,6 +1667,7 @@ class VNextOrchestrator:
                 "event_date": event.get("event_date") or (card.passport.event_date if card.passport else ""),
                 "raw_text_available": raw_text_available,
                 "limitations": list(card.limitations)[:3],
+                "needs_data_confirmation": list(card.needs_data_confirmation)[:3],
             })
         allowed_ids = {str(card.event_id) for card in cards}
         title_only_majority = title_only_count > len(cards) / 2
@@ -5282,11 +5313,32 @@ class VNextOrchestrator:
             if not isinstance(parsed, dict):
                 raw_text = str(raw or "")
                 tail = raw_text[-400:]
-                last_error = (
-                    f"{stage_name} did not return a parseable JSON object."
-                    f" 原始响应字符数: {len(raw_text)}."
-                    f" 响应末尾片段（用于定位 JSON 语法错误，请检查最后未闭合的数组、对象或字符串）：\n{tail}"
-                )
+                # T47：先尝试定位真实解析错误——旧反馈无条件把嫌疑指向"末尾未闭合"，
+                # 但真实事故（run 20260731_002156）里错误在第 3 行的未转义双引号、
+                # 末尾语法完好，那句指引把模型指去了没有错的地方。拿到真实定位时
+                # 以它为主、末尾片段降为次要参考；拿不到时（测试用简化 engine 没有
+                # diagnose_json_error 方法，或块本身是合法 JSON 但不是对象、拿不到
+                # JSONDecodeError）回退到原有末尾片段行为。
+                diagnosis = None
+                diagnose = getattr(self.llm_engine, "diagnose_json_error", None)
+                if callable(diagnose):
+                    try:
+                        diagnosis = diagnose(raw_text)
+                    except Exception:
+                        diagnosis = None
+                if diagnosis:
+                    last_error = (
+                        f"{stage_name} did not return a parseable JSON object."
+                        f" 原始响应字符数: {len(raw_text)}."
+                        f" {diagnosis}"
+                        f" 响应末尾片段（次要参考——真实错误位置以上面定位为准，未必在末尾）：\n{tail}"
+                    )
+                else:
+                    last_error = (
+                        f"{stage_name} did not return a parseable JSON object."
+                        f" 原始响应字符数: {len(raw_text)}."
+                        f" 响应末尾片段（用于定位 JSON 语法错误，请检查最后未闭合的数组、对象或字符串）：\n{tail}"
+                    )
                 stage_record["errors"].append(
                     {
                         "attempt": attempt,

@@ -744,6 +744,9 @@ class IntegratedSynthesisReportBuilder:
             "limitations": _as_list(card.get("limitations"))[:3],
             "source_tier": passport.get("tier"),
             "event_date": passport.get("event_date") or passport.get("published_at"),
+            # T49 第二件：IA 侧摘录再截断到 500 字符（够核对、控成本），并带可用标志。
+            "evidence_excerpt": str(card.get("evidence_excerpt") or "")[:500],
+            "raw_text_available": bool(card.get("raw_text_available")),
         }
 
     def _compact_investigation_for_prompt(self, report: Dict[str, Any]) -> Dict[str, Any]:

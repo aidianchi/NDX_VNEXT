@@ -38,6 +38,9 @@ TOPIC_INDEX_STRUCTURE = "topic:index_structure"
 TOPIC_VALUATION_EARNINGS = "topic:valuation_earnings"
 TOPIC_TREND_EXECUTION = "topic:trend_execution"
 
+# 正文摘录截断上限（T49 第二件：由 2.2k 提升到 8k 字符，正文宁多勿少，token 成本可忽略）
+RAW_TEXT_EXCERPT_LIMIT = 8000
+
 M7_SEC_CIKS = {
     "AAPL": "0000320193",
     "MSFT": "0000789019",
@@ -253,7 +256,7 @@ class _ReadableTextParser(HTMLParser):
             self.parts.append(text)
 
 
-def _extract_readable_text(raw: str, limit: int = 2200) -> str:
+def _extract_readable_text(raw: str, limit: int = RAW_TEXT_EXCERPT_LIMIT) -> str:
     text = raw or ""
     lower_start = text[:1200].lower()
     if "<rss" in lower_start or "<feed" in lower_start:
@@ -322,7 +325,7 @@ class NewsEvent:
             "event_date": event_date,
             "information_available_at": self.published_at,
             "raw_text_available": bool(self.raw_text_available),
-            "raw_text_excerpt": _clean_text(self.raw_text, 2200) if self.raw_text_available else "",
+            "raw_text_excerpt": _clean_text(self.raw_text, RAW_TEXT_EXCERPT_LIMIT) if self.raw_text_available else "",
             "raw_text_hash": hashlib.sha1(hash_basis.encode("utf-8")).hexdigest(),
             "collection_status": self.collection_status if self.published_at else "date_uncertain",
             "relevance_tags": self.relevance_tags,
@@ -844,7 +847,7 @@ class NewsEventLedgerBuilder:
                 "retrieved_at": _iso_utc(self.collected_at),
                 "effective_date_passed": parsed is None or effective is None or parsed <= effective,
                 "raw_text_available": bool(event.raw_text_available),
-                "raw_text_excerpt": _clean_text(event.raw_text, 2200) if event.raw_text_available else "",
+                "raw_text_excerpt": _clean_text(event.raw_text, RAW_TEXT_EXCERPT_LIMIT) if event.raw_text_available else "",
                 "raw_text_hash": hashlib.sha1(hash_basis.encode("utf-8")).hexdigest(),
                 "collection_status": event.collection_status if parsed else "date_uncertain",
                 "layer_boundary": "layer_2_source_record_only_not_l1_l5_evidence",
@@ -1071,7 +1074,7 @@ class NewsEventLedgerBuilder:
             raw = self.fetch_text(url, self._headers(), self.timeout)
         except Exception as exc:
             return "", f"body_fetch_failed:{str(exc)[:120]}"
-        body = _extract_readable_text(raw, 2200)
+        body = _extract_readable_text(raw, RAW_TEXT_EXCERPT_LIMIT)
         if not body:
             return "", "body_fetch_empty_or_unreadable"
         return body, "body_fetch_ok"

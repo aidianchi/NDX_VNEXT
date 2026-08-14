@@ -1,0 +1,329 @@
+{
+  "schema_version": "layer2_baseline_v1",
+  "run_dir": "/Users/aidianchi/Desktop/ndx_mac/output/analysis/vnext/20260731_002156",
+  "metrics": [
+    {
+      "metric": "1_fulltext_rate",
+      "definition": "raw_text_available=false 的材料占比",
+      "total_materials": 86,
+      "raw_text_available_true": 17,
+      "raw_text_available_false": 69,
+      "fulltext_rate": 0.802326
+    },
+    {
+      "metric": "2_source_tier_distribution",
+      "definition": "按 source_type 统计条数与占比（枚举全集以代码 governance.source_tiers 为准）",
+      "declared_tier_count": 9,
+      "total_materials": 86,
+      "distribution": [
+        {
+          "source_type": "official_macro",
+          "count": 15,
+          "ratio": 0.174419
+        },
+        {
+          "source_type": "official_filing",
+          "count": 13,
+          "ratio": 0.151163
+        },
+        {
+          "source_type": "company_disclosure",
+          "count": 0,
+          "ratio": 0.0
+        },
+        {
+          "source_type": "aggregator_report",
+          "count": 0,
+          "ratio": 0.0
+        },
+        {
+          "source_type": "official",
+          "count": 24,
+          "ratio": 0.27907
+        },
+        {
+          "source_type": "third_party_calendar",
+          "count": 2,
+          "ratio": 0.023256
+        },
+        {
+          "source_type": "reliable_mainstream_report",
+          "count": 24,
+          "ratio": 0.27907
+        },
+        {
+          "source_type": "market_narrative",
+          "count": 8,
+          "ratio": 0.093023
+        },
+        {
+          "source_type": "unverified_signal",
+          "count": 0,
+          "ratio": 0.0
+        }
+      ],
+      "observed_types_not_in_universe": [],
+      "declared_not_observed": [
+        "aggregator_report",
+        "company_disclosure",
+        "unverified_signal"
+      ]
+    },
+    {
+      "metric": "3_claim_reconciliation",
+      "definition": "固定种子抽 5 张事件卡，断言对回原文。脚本输出机械层证据；语义判定（原文有/无/不全）见报告",
+      "sample_seed": 20260811,
+      "sample_size": 5,
+      "mechanically_mapped_to_source": 5,
+      "mechanically_unmapped": 0,
+      "samples": [
+        {
+          "card_event_id": "event:0a457426cdb8f17f",
+          "mapped_source_id": "src:0a457426cdb8f17f",
+          "source_record_found": true,
+          "provider": "yahoo_finance_qqq_headlines",
+          "title": "AI's Biggest Winners Are Selling Off, and ETFs Are Behaving Strangely",
+          "raw_text_available": false,
+          "raw_text_excerpt": "",
+          "card_fact_summary": "Yahoo Finance QQQ Headlines于2026年7月29日发布一篇报道，标题为\"AI's Biggest Winners Are Selling Off, and ETFs Are Behaving Strangely\"。无全文正文可用。",
+          "card_interpretation": "仅据标题推测，该报道描述了AI大赢家股的抛售现象以及相关ETF出现\"反常\"表现。由于缺乏正文，无法判断抛售规模、涉及的个股范围以及ETF反常行为的具体形式（如折溢价异常、成交量骤变或资金流向逆转等）。标题本身暗示资金可能从前期领涨的AI标的中撤出，若ETF行为确实异常，可能反映被动资金或散户情绪出现拐点。但全文缺失限制了推断的置信度。"
+        },
+        {
+          "card_event_id": "event:1d77a2d1bb9e1d35",
+          "mapped_source_id": "src:1d77a2d1bb9e1d35",
+          "source_record_found": true,
+          "provider": "yahoo_finance_m7_headlines",
+          "title": "Satellite maker K2 Space secures $6.8 billion valuation in new funding round",
+          "raw_text_available": false,
+          "raw_text_excerpt": "",
+          "card_fact_summary": "据Yahoo Finance M7 Headlines报道，卫星制造商K2 Space在一轮新融资中获得68亿美元估值。材料仅提供标题，无正文摘录。",
+          "card_interpretation": "与判断对象关联不足。K2 Space为未上市私营企业，非纳斯达克100成份股，其融资事件对NDX指数走势缺乏直接传导路径。"
+        },
+        {
+          "card_event_id": "event:75be16e97675b582",
+          "mapped_source_id": "src:75be16e97675b582",
+          "source_record_found": true,
+          "provider": "yahoo_finance_m7_headlines",
+          "title": "Meta stock poised for a new losing streak: Earnings call takeaways",
+          "raw_text_available": false,
+          "raw_text_excerpt": "",
+          "card_fact_summary": "Yahoo Finance M7 Headlines 于2026年7月30日报道了一篇题为'Meta stock poised for a new losing streak: Earnings call takeaways'的文章，指出Meta股票可能面临新一轮下跌，内容涉及财报电话会议要点。无完整正文可用。",
+          "card_interpretation": "据该媒体报道，Meta在最近一次财报电话会议后可能面临股价持续下跌压力。由于仅有标题而无正文，具体财报要点不明，但标题基调偏负面。Meta作为M7核心成分股及纳指100重要权重股，若其股价持续走弱，可能对指数层面产生拖累。该报道的负面倾向与当前市场对M7盈利可持续性的关注相呼应。"
+        },
+        {
+          "card_event_id": "event:d6123e5a5d73f0b2",
+          "mapped_source_id": "src:d6123e5a5d73f0b2",
+          "source_record_found": true,
+          "provider": "yahoo_finance_qqq_headlines",
+          "title": "Exchange-Traded Funds, Equity Futures Higher Pre-Bell Thursday Amid Tech Earnings",
+          "raw_text_available": false,
+          "raw_text_excerpt": "",
+          "card_fact_summary": "Yahoo Finance QQQ Headlines于2026年7月30日盘前报道，交易所交易基金（ETFs）和股票期指在科技公司财报季期间走高。全文内容不可用，仅标题可供分析。",
+          "card_interpretation": "该报道标题显示盘前市场在科技财报背景下表现积极，可能暗示部分科技公司财报结果或市场对科技板块的预期偏向正面。但由于全文不可用，无法获知具体哪些科技股财报推动上涨、涨跌幅大小以及报道的详细分析逻辑，解读力度有限。盘前交易流动性通常较低，价格信号对正式开盘的预示作用存在不确定性。"
+        },
+        {
+          "card_event_id": "event:b8f43b7603daa04c",
+          "mapped_source_id": "src:b8f43b7603daa04c",
+          "source_record_found": true,
+          "provider": "yahoo_finance_m7_headlines",
+          "title": "$19.6 Billion: The Microsoft Earnings Number That Matters Most",
+          "raw_text_available": true,
+          "raw_text_excerpt": "$19.6 Billion: The Microsoft Earnings Number That Matters Most | The Motley Fool Accessibility Menu ▲ S&P 500 + ---% | ▲ Stock Advisor + ---% Join The Motley Fool Search for a company Accessibility ... Help Microsoft ( MSFT +15.09% ) stock is up 13% today on the strength of quarterly earnings that s",
+          "card_fact_summary": "Microsoft (MSFT) stock rose approximately 13% on quarterly earnings. Revenue increased 18% YoY; cloud computing revenue exceeded $100B for the first time. The article highlights $19.6B in free cash flow despite massive AI infrastructure CapEx. Fiscal Q4 2026 (ended June 30): Revenue $90B (vs $76.4B), Net income $35.76B (+31%), EPS $4.81 (vs $3.86). Full FY2026: Revenue $331.8B (+18%), Net income $133.7B (+31%), EPS $17.95 (vs $13.64). Segment YoY growth rates: Microsoft Cloud Revenue +27%, Commercial Remaining Performance Obligation +84%, M365 Commercial Cloud +14%, Consumer Cloud +24%, LinkedIn +12%, Dynamics 365 +13%, Azure and Other Cloud Services +43%, Search Advertising (ex-TAC) +10%. Windows OEM and Devices -7%, Xbox Content and Services -10%. CEO Satya Nadella: 'We are advancing the frontier on the cost-to-outcome curve...' Azure revenue surpassed $100B for the first time; M365 Copilot reached over 30M paid seats.",
+          "card_interpretation": "MSFT's earnings report shows strong top-line growth, margin expansion, and—critically—$19.6B in free cash flow despite elevated AI capex. The article contrasts this with Tesla and Alphabet, which it says 'faltered' after their reports. For NDX, MSFT as the largest or near-largest index weight posting such cash-generating AI results supports the view that mega-cap AI spending is productive rather than value-destructive. However, the article's framing includes the author's opinion ('I believe'), and index-level implications require confirmation that other M7 components show similar FCF dynamics. This single data point cannot prove a broad trend but offers evidence consistent with the '过度反应/估值修复' narrative."
+        }
+      ]
+    },
+    {
+      "metric": "4_vacuum_coverage",
+      "definition": "注册源中本次运行有明确「有/无新事件」记录的比例；静默无记录=真空",
+      "registered_count": 15,
+      "covered_count": 15,
+      "coverage_rate": 1.0,
+      "silent_vacuum_sources": [],
+      "per_source": [
+        {
+          "source_id": "alpha_vantage_news_sentiment",
+          "has_answer": true,
+          "answer": "无新事件",
+          "evidence": "source_errors: [{\"source_id\": \"alpha_vantage_news_sentiment\", \"error\": \"skipped_alpha_vantage_disabled_or_missing_key\"}]"
+        },
+        {
+          "source_id": "bea_news",
+          "has_answer": true,
+          "answer": "有新事件",
+          "evidence": "event_source_raw.jsonl 有材料"
+        },
+        {
+          "source_id": "bea_release_calendar",
+          "has_answer": true,
+          "answer": "有新事件",
+          "evidence": "event_source_raw.jsonl 有材料"
+        },
+        {
+          "source_id": "bls_latest",
+          "has_answer": true,
+          "answer": "有新事件",
+          "evidence": "event_source_raw.jsonl 有材料"
+        },
+        {
+          "source_id": "bls_release_calendar",
+          "has_answer": true,
+          "answer": "有新事件",
+          "evidence": "event_source_raw.jsonl 有材料"
+        },
+        {
+          "source_id": "federal_reserve_press_all",
+          "has_answer": true,
+          "answer": "有新事件",
+          "evidence": "event_source_raw.jsonl 有材料"
+        },
+        {
+          "source_id": "fomc_meeting_calendar",
+          "has_answer": true,
+          "answer": "有新事件",
+          "evidence": "event_source_raw.jsonl 有材料"
+        },
+        {
+          "source_id": "m7_earnings_calendar",
+          "has_answer": true,
+          "answer": "有新事件",
+          "evidence": "event_source_raw.jsonl 有材料"
+        },
+        {
+          "source_id": "nasdaq_index_announcements",
+          "has_answer": true,
+          "answer": "无新事件",
+          "evidence": "source_errors: [{\"source_id\": \"nasdaq_index_announcements\", \"error\": \"HTTPSConnectionPool(host='www.nasdaq.com', port=443): Read timed out. (read timeout=12)\"}]"
+        },
+        {
+          "source_id": "reddit_stocks_qqq_search",
+          "has_answer": true,
+          "answer": "有新事件",
+          "evidence": "event_source_raw.jsonl 有材料"
+        },
+        {
+          "source_id": "sec_submissions",
+          "has_answer": true,
+          "answer": "有新事件",
+          "evidence": "event_source_raw.jsonl 有材料"
+        },
+        {
+          "source_id": "wind_company_announcements_m7",
+          "has_answer": true,
+          "answer": "无新事件",
+          "evidence": "source_errors: [{\"source_id\": \"wind_company_announcements_m7\", \"error\": \"dropped_no_entity_match\", \"count\": 1}]"
+        },
+        {
+          "source_id": "wind_financial_news_ndx",
+          "has_answer": true,
+          "answer": "有新事件",
+          "evidence": "event_source_raw.jsonl 有材料"
+        },
+        {
+          "source_id": "yahoo_finance_m7_headlines",
+          "has_answer": true,
+          "answer": "有新事件",
+          "evidence": "event_source_raw.jsonl 有材料"
+        },
+        {
+          "source_id": "yahoo_finance_qqq_headlines",
+          "has_answer": true,
+          "answer": "有新事件",
+          "evidence": "event_source_raw.jsonl 有材料"
+        }
+      ]
+    },
+    {
+      "metric": "5_ia_usable_rate",
+      "definition": "IA 输入事件卡关键字段（时间/来源/等级/正文）完整的卡占比",
+      "measurable": true,
+      "input_artifact": "integrated_synthesis_report.json::event_interpretation_cards",
+      "total_cards": 10,
+      "complete_cards": 0,
+      "usable_rate": 0.0,
+      "per_card": [
+        {
+          "event_id": "event:ef79ac6a9ed352a4",
+          "has_time": true,
+          "has_source": true,
+          "has_tier": true,
+          "has_raw_text_field": false,
+          "complete": false
+        },
+        {
+          "event_id": "event:75be16e97675b582",
+          "has_time": true,
+          "has_source": true,
+          "has_tier": true,
+          "has_raw_text_field": false,
+          "complete": false
+        },
+        {
+          "event_id": "event:1d77a2d1bb9e1d35",
+          "has_time": true,
+          "has_source": true,
+          "has_tier": true,
+          "has_raw_text_field": false,
+          "complete": false
+        },
+        {
+          "event_id": "event:7392b9f2aa06f502",
+          "has_time": true,
+          "has_source": true,
+          "has_tier": true,
+          "has_raw_text_field": false,
+          "complete": false
+        },
+        {
+          "event_id": "event:b8f43b7603daa04c",
+          "has_time": true,
+          "has_source": true,
+          "has_tier": true,
+          "has_raw_text_field": false,
+          "complete": false
+        },
+        {
+          "event_id": "event:4a41774d6a5c953b",
+          "has_time": true,
+          "has_source": true,
+          "has_tier": true,
+          "has_raw_text_field": false,
+          "complete": false
+        },
+        {
+          "event_id": "event:82d5d8fb4b9d331a",
+          "has_time": true,
+          "has_source": true,
+          "has_tier": true,
+          "has_raw_text_field": false,
+          "complete": false
+        },
+        {
+          "event_id": "event:3935663507f48598",
+          "has_time": true,
+          "has_source": true,
+          "has_tier": true,
+          "has_raw_text_field": false,
+          "complete": false
+        },
+        {
+          "event_id": "event:d6123e5a5d73f0b2",
+          "has_time": true,
+          "has_source": true,
+          "has_tier": true,
+          "has_raw_text_field": false,
+          "complete": false
+        },
+        {
+          "event_id": "event:0a457426cdb8f17f",
+          "has_time": true,
+          "has_source": true,
+          "has_tier": true,
+          "has_raw_text_field": false,
+          "complete": false
+        }
+      ]
+    }
+  ]
+}

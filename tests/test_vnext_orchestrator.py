@@ -2200,6 +2200,61 @@ def test_event_section_summary_payload_hands_model_a_ready_made_citation(tmp_pat
     )
 
 
+def test_event_section_summary_payload_includes_needs_data_confirmation(tmp_path: Path):
+    """T47 红灯：同一批事件卡，integrated_adjudicator 材料里每张都带
+    needs_data_confirmation（契约 contracts.EventInterpretationCard 本就有此字段），
+    event_section_summary 的 compact_cards 手工挑字段时漏了它（真实 run
+    20260731_002156：adjudicator 10/10 张带、summary 0/10 张带）。
+    总结模型要履行"如实说明哪些判断还缺正式数据确认"的提示词要求，
+    就必须在输入材料里看得见这个字段；截断风格照 limitations（[:3]）。
+    """
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    confirmations = {
+        "event:aaa111": ["L1 联邦基金利率是否同步确认"],
+        "event:bbb222": ["L4 盈利预期是否上修", "L2 信用利差是否走阔"],
+        "event:ccc333": [],
+        "event:ddd444": [f"待确认项{i}" for i in range(5)],
+    }
+    cards = [
+        _event_interpretation_card_for_summary(event_id).model_copy(
+            update={"needs_data_confirmation": needs}
+        )
+        for event_id, needs in confirmations.items()
+    ]
+
+    captured: dict = {}
+
+    def _capture(*, payload, **kwargs):
+        captured["payload"] = payload
+        raise RuntimeError("stop before llm call")
+
+    orchestrator._run_stage = _capture
+    orchestrator._build_event_section_summary(
+        cards,
+        events_by_id={},
+        effective_date="2026-07-31",
+    )
+
+    payload_cards = captured["payload"]["event_cards"]
+    assert len(payload_cards) == len(confirmations)
+    for payload_card in payload_cards:
+        event_id = payload_card["event_id"]
+        assert "needs_data_confirmation" in payload_card, (
+            f"compact card {event_id} 缺 needs_data_confirmation 字段——"
+            "总结模型看不到它就无法说明哪些判断还缺正式数据确认"
+        )
+        expected = confirmations[event_id][:3]
+        assert payload_card["needs_data_confirmation"] == expected, (
+            f"{event_id} 的 needs_data_confirmation 值必须原样透传（照 limitations "
+            f"风格截断到前 3 条），期望 {expected}，实际 "
+            f"{payload_card['needs_data_confirmation']}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # T36：event_section_summary 永不因 JSON 外壳解析失败而整节消失
 #
@@ -5006,6 +5061,157 @@ def test_run_stage_parse_error_feedback_includes_response_excerpt(tmp_path: Path
         "can locate the syntax error instead of regenerating blind."
     )
     assert "response length" in second_prompt.lower() or "原始响应字符数" in second_prompt
+
+
+class _RealParsingFakeLLMEngine:
+    """第一次返回坏 JSON、第二次返回好 JSON；`extract_json` 与 `diagnose_json_error`
+    都委托给真正的 `LLMEngine`（而不是玩具版 `json.loads`），保证 parse_error 的
+    判定与错误定位路径和生产环境逐字节一致。
+    """
+
+    def __init__(self, broken_payload: str):
+        from agent_analysis.llm_engine import LLMEngine
+
+        self.broken_payload = broken_payload
+        self.calls = 0
+        self.prompts = []
+        self._real_engine = LLMEngine(available_models=[])
+
+    def call_with_fallback(self, prompt, stage_name=""):
+        self.calls += 1
+        self.prompts.append(prompt)
+        return self.broken_payload if self.calls == 1 else '{"value": "ok"}'
+
+    def extract_json(self, text, stage):
+        return self._real_engine.extract_json(text, stage)
+
+    def diagnose_json_error(self, text):
+        return self._real_engine.diagnose_json_error(text)
+
+    def get_token_report(self):
+        return {}
+
+
+def test_run_stage_parse_error_feedback_locates_real_error_not_tail(tmp_path: Path):
+    """T47 红灯：真实事故 run 20260731_002156——响应第 3 行 fact_summary 内嵌
+    未转义 ASCII 双引号导致解析失败，但旧重试反馈写"请检查最后未闭合的数组、
+    对象或字符串"并附末尾 400 字符（末尾语法完好），把错误位置指错了。
+
+    修复后：反馈必须以真实 JSON 语法错误位置为主（错误信息 + 行:列 + 出错点
+    前后窗口），末尾片段只作次要参考。
+    """
+    padding = "y" * 600
+    broken_payload = (
+        '{\n'
+        '  "value": "ok",\n'
+        '  "fact_summary": "材料称 "通胀见顶" 后市场反弹",\n'
+        '  "padding": "' + padding + '"\n'
+        '}'
+    )
+    # 红灯前提不是凭空断言：这段响应真的会让标准 json.loads 在第 3 行报错，
+    # 且响应总长超过 400 字符——末尾片段语法完好、看不到出错位置，
+    # 旧反馈只附末尾等于把模型指向一个没有错的地方。
+    with pytest.raises(json.JSONDecodeError) as exc_info:
+        json.loads(broken_payload)
+    assert exc_info.value.lineno == 3
+    assert len(broken_payload) > 400
+
+    engine = _RealParsingFakeLLMEngine(broken_payload)
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="mini",
+        stage_name="mini_stage",
+        model_cls=MiniStageModel,
+        payload={"example": "payload"},
+    )
+
+    assert result.value == "ok"
+    assert engine.calls == 2
+    second_prompt = engine.prompts[1]
+    assert "上一次返回未通过结构校验" in second_prompt
+    assert "JSON 语法错误定位" in second_prompt, (
+        "修复后重试反馈必须给出真实解析错误定位，而不是只附末尾片段"
+    )
+    assert "第 3 行" in second_prompt, (
+        "错误发生在第 3 行（fact_summary 内嵌未转义双引号），反馈必须带上真实行号"
+    )
+    assert "请检查最后未闭合的数组、对象或字符串" not in second_prompt, (
+        "拿到真实错误定位时，不许再保留这句把模型指向末尾的误导措辞"
+    )
+
+
+def test_run_stage_parse_error_feedback_unclosed_tail_still_points_near_end(tmp_path: Path):
+    """末尾真的未闭合时，新定位必须仍然指向末尾附近——行为不能比旧的末尾片段差。"""
+    sentinel = "BROKEN_TAIL_MARKER_FOR_TEST"
+    padding = "x" * 600
+    broken_payload = (
+        "{\n  \"value\": \"partial\",\n  \"more\": [\n    "
+        + padding
+        + "\n    \"unterminated string  // "
+        + sentinel
+    )
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(broken_payload)
+
+    engine = _RealParsingFakeLLMEngine(broken_payload)
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="mini",
+        stage_name="mini_stage",
+        model_cls=MiniStageModel,
+        payload={"example": "payload"},
+    )
+
+    assert result.value == "ok"
+    assert engine.calls == 2
+    second_prompt = engine.prompts[1]
+    assert "JSON 语法错误定位" in second_prompt
+    assert sentinel in second_prompt, (
+        "末尾未闭合时，错误定位窗口必须覆盖末尾哨兵——不能把真实在末尾的错误指到别处"
+    )
+
+
+def test_run_stage_parse_error_feedback_falls_back_to_tail_when_no_locatable_error(tmp_path: Path):
+    """回退路径锁死：响应是合法 JSON 但不是对象（例如数组）时，extract_json 返回
+    非 dict 同样走 parse_error 分支，但拿不到 JSONDecodeError——反馈必须回退到
+    原有末尾片段行为，行为与改前一致。"""
+    sentinel = "TAIL_FALLBACK_MARKER_FOR_TEST"
+    padding = "z" * 600
+    broken_payload = '["' + padding + '", "' + sentinel + '"]'
+    # 红灯前提：这段响应是合法 JSON（数组），json.loads 不报错——没有可定位的语法错误。
+    assert isinstance(json.loads(broken_payload), list)
+
+    engine = _RealParsingFakeLLMEngine(broken_payload)
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+    )
+
+    result = orchestrator._run_stage(
+        stage_key="mini",
+        stage_name="mini_stage",
+        model_cls=MiniStageModel,
+        payload={"example": "payload"},
+    )
+
+    assert result.value == "ok"
+    assert engine.calls == 2
+    second_prompt = engine.prompts[1]
+    assert "请检查最后未闭合的数组、对象或字符串" in second_prompt, (
+        "拿不到真实错误定位时必须回退到原有末尾片段行为"
+    )
+    assert sentinel in second_prompt, "回退路径仍须把末尾片段带给模型"
 
 
 def test_run_stage_overrides_llm_generated_at_hallucination(tmp_path: Path):
