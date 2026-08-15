@@ -86,6 +86,12 @@
 - `l2_analyst.md` 指标语义清单补两条：CFTC 纳指期货非商业持仓（官方但只覆盖期货、周度变化是背景不是时机、极端不得单独驱动方向、历史分位未接归档不可用）；FINRA 月度保证金债务（全市场口径非纳指专属、月度滞后只做杠杆周期背景、名义高不等于见顶、须与 HY OAS/净流动性/腾落线交叉确认）。措辞与 `data_evidence.py` 的 authority/downgrade_rules 逐条对齐，不越权。
 - **验证结果**：`tests/test_prompt_guardrails.py` + `tests/test_docs_consistency.py` 22 passed。股息率洞（06 定案洞 1）按 08-15 裁决作废、未建。
 
+### 【关闭 T48】25 站配餐单 v0 全部定稿（08-15）
+
+- 四站条目（critic/risk/反方/论点）上午已定稿；余站 11 类条目（L1-L5、bridge、受控调查、事件卡模板×10 实例、ESS、reviser、final、IA）由两路独立 AI 设计 + 红队 + 根线程对质，`配餐单_v0_余站条目.md` 经所有者逐条过目定稿。25 站配餐单 v0 完成，T48 关闭、编号退役。
+- 随定稿批准两处 C6 供给改动：①bridge 事件字段按 4.7 恒空 + 机器检查"evidence_refs 不得含 event: 前缀"；②reviser/final 包移除 Thesis 版 `synthesis_guidance`、`pricing_expectation_ledger`、`evidence_registry_summary`，`key_evidence_refs` 只给 ref key + 权限 + 聚合读数（成分级明细留审计 artifact）。两处归 C6 装配点施工。
+- 配餐单把 C6/C8 的施工归属分好：五层"三集合对账"、桥接矩阵补全、调查材料截断标注等归 C6 的 20 项检查；A6 失败占位装配、IA 菜单补全（ESS/竞争假说清单/question_answers 事件侧）归 C8。
+
 ### 六问架构重审跑完并定案：骨架不动，几处小修；定案文档一篇顶所有
 
 **为什么做**：所有者对北极星与不变原则产生怀疑（文档写了"判断质量可测量地变好"，所有者不认），立六问独立对质（P1 前提检验 / P2 目的与校准 / P3 五层切法 / P4 隔离真实性 / P5 编排合理性 / P6 决策翻译层），先 P6 试水认可后再全跑。
