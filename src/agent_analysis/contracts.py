@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 NDX Agent vNext SubAgent 架构 - 数据契约模块
 
@@ -1448,6 +1448,9 @@ class SynthesisPacket(BaseModel):
         default_factory=dict,
         description="可追溯证据索引，键形如 L1.get_10y_real_rate"
     )
+    # 【08-15 裁决 · 挂起】IA 取事件卡走 source_artifacts 路径，不走本字段；
+    # 当前为空实现/死字段，维持现状并写注释。若未来启用，必须先定语义与
+    # 与 source_artifacts 的边界，不得悄悄塞事件进第一层。
     event_index: Dict[str, Dict[str, Any]] = Field(
         default_factory=dict,
         description="可选事件索引，键形如 event:<dedupe_id>；不得作为数值证据"

@@ -121,6 +121,14 @@
 - 对 C7：补采原型按 T48 原方案**自焊小循环（复用 llm_engine）**，DSH 留作原型验收后的候选，不前置选型。【关闭 T-DSH】编号退役。四份调研文件归档于 `investigation_reports/20260813_architecture_northstar_revisit/`（A面/B面/红队/结论汇总）。
 - **执行纪律事故（记以校准）**：本条目收口时先提交、文档闸门后红（下一步同时点名 T49 与 T-DSH），属"红灯照提交"违规；随即修复为只点名 T49 并补提交（fbb5ad5）。教训与 08-05 同款：文档闸门必须跑绿再 commit，不看顺序看结果。
 
+### 【关闭 T49】C7 补采原型交付 + Kimi 验收通过（08-15/16）
+
+- 按已批预算口径（≤10 次 v4-flash）完成 C7：`scripts/layer2_supplement_prototype/` 自焊小循环（planner→白名单工具→reader→四条镣铐机器校验→重试≤2）、三性判定常驻脚本（`three_tests.py` 只读 baseline 输出名单不删源）、政策文件（授权源可靠 + 所有者裁决覆盖：Wind 两源 pass、alpha_vantage 挂起且不进撤出名单）。
+- 真实补采任务 `runs/ag1_real`：4 次 v4-flash 调用、13,023 token；SEC browse-edgar 403 如实报错、data.sec.gov 抓到数据；产出 1 张诚实材料卡（事实逐字来自 fetched_cache、解读带假设标记、needs_data_confirmation 三条、状态 degraded 如实标注部分工具失败）。
+- Kimi（外部验收 AI）明卷+暗卷：四条镣铐逐字段通过、数字零编造、白名单无越界、三性输出与政策一致；暗卷四项篡改（fact 塞"可能"、非法 tier、清空 needs、未来时间戳）全部被拒。有条件通过项的 P2（run_summary 记模型、source_url 白名单复核、独立运行 import、README/BLOCKED）已全部修复，最终 **42 passed**。
+- `event_index` 按 A3 裁决挂起并在 `contracts.py` 写注释（IA 走 source_artifacts 路径，此字段是死字段，启用前必须先定语义）。
+- 【关闭 T49】编号退役。剩余批次 C8-C19 无台账编号，按"新事新号"立 **T51**（C8-C19 剩余施工），下一步指向 T51。
+
 ### 六问架构重审跑完并定案：骨架不动，几处小修；定案文档一篇顶所有
 
 **为什么做**：所有者对北极星与不变原则产生怀疑（文档写了"判断质量可测量地变好"，所有者不认），立六问独立对质（P1 前提检验 / P2 目的与校准 / P3 五层切法 / P4 隔离真实性 / P5 编排合理性 / P6 决策翻译层），先 P6 试水认可后再全跑。

@@ -1,0 +1,1 @@
+{"tools":[{"tool":"fetch_official_url","args":{"url":"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000320193&type=8-K&dateb=&owner=include&count=10","max_chars":8000}}]}
