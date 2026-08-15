@@ -36,7 +36,9 @@ ROUTE_DOCS = [os.path.join(REPO_ROOT, name) for name in (
 
 VALID_STATUSES = {"可以做", "进行中", "等你", "后排", "等条件"}
 
-LEDGER_ROW = re.compile(r"^\|\s*(T\d+)\s*\|(.+)\|\s*$")
+# 台账编号以 T+数字 为主；T-DSH 是 2026-08-15 所有者立项时的命名（非数字、仅此一种），
+# 必须同样进闸门受检——否则该行会被解析器静默漏掉，计数与格式检查全部失效。
+LEDGER_ROW = re.compile(r"^\|\s*(T\d+|T-DSH)\s*\|(.+)\|\s*$")
 CLOSED_IN_HISTORY = re.compile(r"【关闭\s*(T\d+)】")
 ROUTED_PATH = re.compile(r"`([\w一-鿿./*_-]+\.(?:md|json|py|toml))`")
 
