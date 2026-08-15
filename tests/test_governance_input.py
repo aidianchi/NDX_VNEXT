@@ -1,6 +1,7 @@
 """GovernanceInputPacket unit tests — ensure narrow input preserves critical signals."""
 
 import ast
+import json
 import os
 import sys
 from pathlib import Path
@@ -10,7 +11,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from agent_analysis.contracts import (
     AnalysisPacket,
+    AnalysisRevised,
     BridgeMemo,
+    CompetingHypothesis,
     Confidence,
     Conflict,
     ContextBrief,
@@ -716,6 +719,209 @@ def test_governance_input_risk_retry_injects_schema_feedback_without_thesis(tmp_
     # retry 路径仍然论证盲
     assert gov_input.thesis_main == ""
     assert gov_input.thesis_key_support_chains == []
+
+
+# ── 拍板③ + T46：counter 反方原文与反证引用进 critic/reviser/final，risk 恒空 ──
+
+def test_governance_input_counter_thesis_refs_enter_critic_but_not_risk(tmp_path: Path):
+    orchestrator = _orchestrator(tmp_path)
+    synthesis = SynthesisPacket(
+        evidence_index={
+            "L1.conflict_ref": {"layer": "L1"},
+            "L1.counter_only_ref": {"layer": "L1"},
+        },
+        high_severity_typed_conflicts=[
+            TypedConflict(
+                conflict_id="c1",
+                conflict_type="valuation_discount_rate",
+                severity="high",
+                description="冲突描述。",
+                implication="必须保留。",
+                evidence_refs=["L1.conflict_ref"],
+            )
+        ],
+        competing_hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_counter_1",
+                hypothesis_text="反方原文：趋势证据说明压力已部分消化。",
+                source="counter_thesis",
+                support_evidence_refs=["L1.counter_only_ref"],
+                counter_evidence_refs=["L1.conflict_ref"],
+                diagnostic_evidence_refs=[],
+                status="candidate",
+            )
+        ],
+    )
+    thesis = ThesisDraft(
+        main_thesis="谨慎观望。",
+        environment_assessment="偏紧。",
+        valuation_assessment="偏高。",
+        timing_assessment="脆弱。",
+        overall_confidence=Confidence.MEDIUM,
+    )
+
+    gov_critic = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+    )
+    gov_risk = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+        consumer="risk",
+    )
+
+    # counter 独有的 ref 必须进 critic 包
+    assert gov_critic.counter_thesis_hypotheses == [
+        {
+            "hypothesis_id": "hyp_counter_1",
+            "hypothesis_text": "反方原文：趋势证据说明压力已部分消化。",
+            "status": "candidate",
+            "support_evidence_refs": ["L1.counter_only_ref"],
+            "counter_evidence_refs": ["L1.conflict_ref"],
+            "diagnostic_evidence_refs": [],
+        }
+    ]
+    assert "L1.counter_only_ref" in gov_critic.key_evidence_refs
+
+    # risk 包 counter_thesis_hypotheses 恒空，且不并入 counter 独有 ref
+    assert gov_risk.counter_thesis_hypotheses == []
+    assert "L1.counter_only_ref" not in gov_risk.key_evidence_refs
+    assert "L1.conflict_ref" in gov_risk.key_evidence_refs
+
+
+# ── 拍板②：终审收原稿 + 修订稿 + 修订说明 ──
+
+def test_governance_input_final_carries_thesis_original_critic_does_not(tmp_path: Path):
+    orchestrator = _orchestrator(tmp_path)
+    synthesis = SynthesisPacket(evidence_index={})
+    thesis = ThesisDraft(
+        main_thesis="原稿主论点。",
+        environment_assessment="原稿环境。",
+        valuation_assessment="原稿估值。",
+        timing_assessment="原稿时机。",
+        overall_confidence=Confidence.MEDIUM,
+    )
+    revised_thesis = ThesisDraft(
+        main_thesis="修订稿主论点。",
+        environment_assessment="修订稿环境。",
+        valuation_assessment="修订稿估值。",
+        timing_assessment="修订稿时机。",
+        overall_confidence=Confidence.MEDIUM,
+    )
+    analysis_revised = AnalysisRevised(
+        revision_summary="修订说明：吸收批评并改写主论点。",
+        revised_thesis=revised_thesis,
+    )
+
+    gov_final = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=revised_thesis,
+        analysis_revised=analysis_revised,
+        consumer="final",
+        thesis_original=thesis,
+    )
+    gov_critic = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+    )
+
+    assert gov_final.thesis_main == "修订稿主论点。"
+    assert gov_final.thesis_original is not None
+    assert gov_final.thesis_original["main_thesis"] == "原稿主论点。"
+    assert gov_final.revision_summary == "修订说明：吸收批评并改写主论点。"
+    assert gov_critic.thesis_original is None
+
+
+# ── 08-15 已批：reviser/final 去噪音字段 + 证据索引瘦身 ──
+
+def test_governance_input_reviser_final_drop_noise_fields_and_slim_key_evidence(tmp_path: Path):
+    orchestrator = _orchestrator(tmp_path)
+    # 让 critic 的 pricing_expectation_ledger 非空，证明 reviser/final 确实清空。
+    (tmp_path / "expectation_vs_realized.json").write_text(
+        json.dumps(
+            {
+                "metric_authority": "supporting_only",
+                "effective_date": "2026-04-28",
+                "downgrade_rules": [],
+                "status": "available_for_supporting_use",
+                "earnings_expectations": {"status": "ok", "windows": []},
+                "rate_path": {"status": "ok", "comparisons": []},
+                "volatility_premium": {"status": "ok"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    long_series = [{"index": n, "note": "逐票审计明细" + "甲" * 100} for n in range(10)]
+    synthesis = SynthesisPacket(
+        packet_meta={"data_date": "2026-04-28"},
+        evidence_index={
+            "L1.long_ref": {
+                "field_value": {
+                    "value": {"aggregate": 1.5, "coverage": "full"},
+                    "raw_series": long_series,
+                }
+            }
+        },
+        evidence_registry_summary={"schema_version": "evidence_registry_v1", "passport_count": 3},
+        synthesis_guidance=["只能整合，不得重做指标分析。"],
+        high_severity_typed_conflicts=[
+            TypedConflict(
+                conflict_id="c_long",
+                conflict_type="valuation_discount_rate",
+                severity="high",
+                description="冲突描述。",
+                implication="必须保留。",
+                evidence_refs=["L1.long_ref"],
+            )
+        ],
+    )
+    thesis = ThesisDraft(
+        main_thesis="中性。",
+        environment_assessment="中性。",
+        valuation_assessment="中性。",
+        timing_assessment="中性。",
+        overall_confidence=Confidence.MEDIUM,
+    )
+
+    gov_critic = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+    )
+    gov_reviser = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+        consumer="reviser",
+    )
+    gov_final = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+        consumer="final",
+    )
+
+    # critic 默认行为保留这些字段
+    assert gov_critic.synthesis_guidance == ["只能整合，不得重做指标分析。"]
+    assert gov_critic.evidence_registry_summary["passport_count"] == 3
+    assert gov_critic.pricing_expectation_ledger != {}
+
+    # reviser/final 去噪音字段
+    for gov_input in (gov_reviser, gov_final):
+        assert gov_input.synthesis_guidance == []
+        assert gov_input.evidence_registry_summary == {}
+        assert gov_input.pricing_expectation_ledger == {}
+
+    # reviser/final 的 key_evidence_refs 瘦身：ref key 集合不动、聚合字段逐字节不变、
+    # 超长明细被压成 _prompt_summary。
+    for gov_input in (gov_reviser, gov_final):
+        assert set(gov_input.key_evidence_refs.keys()) == {"L1.long_ref"}
+        field_value = gov_input.key_evidence_refs["L1.long_ref"]["field_value"]
+        assert field_value["value"] == {"aggregate": 1.5, "coverage": "full"}
+        assert field_value["raw_series"]["_prompt_summary"] is True
+        assert field_value["raw_series"]["count"] == 10
+
+    # critic 不瘦身，完整明细仍在
+    critic_field_value = gov_critic.key_evidence_refs["L1.long_ref"]["field_value"]
+    assert critic_field_value["raw_series"] == long_series
 
 
 # ── 护栏测试：governance prompt 中继续禁止编造历史概率 ──

@@ -12,6 +12,7 @@ import tools_L4
 from agent_analysis.contracts import (
     AgentBudget,
     AgentSpec,
+    AnalysisPacket,
     AnalysisRevised,
     ApprovalStatus,
     BridgeMemo,
@@ -7653,3 +7654,183 @@ def test_event_section_summary_validator_enforces_citation_and_boundary_contract
                 downgrade_required_ids={"event_aaa11111"},
             )
         )
+
+
+# ── T47 C6 装配点：④ 去预置 state / 预置跨层结论 ──
+
+def test_layer_stage_payload_purifies_preloaded_state(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    packet = AnalysisPacket(
+        meta={"data_date": "2026-04-28"},
+        raw_data={},
+        facts_by_layer={
+            "L1": {
+                "state": "restrictive",
+                "summary": "L1状态: 流动性偏紧。关键事实: 实际利率 1.95%。缺口=信用利差未读。",
+                "key_metrics": ["get_10y_real_rate"],
+            }
+        },
+    )
+    context = orchestrator._build_context_brief(packet)
+
+    payload = orchestrator._build_layer_stage_payload(packet, context, "L1")
+
+    assert "state" not in payload["layer_facts"]
+    assert not payload["layer_facts"]["summary"].startswith("状态:")
+    assert payload["layer_facts"]["summary"].startswith("关键事实:")
+    assert "缺口=信用利差未读。" in payload["layer_facts"]["summary"]
+
+    # 落盘 analysis_packet 仍含 state（审计本体不动）
+    orchestrator._save_json("analysis_packet.json", packet)
+    saved = json.loads((tmp_path / "analysis_packet.json").read_text(encoding="utf-8"))
+    assert saved["facts_by_layer"]["L1"]["state"] == "restrictive"
+    assert "L1状态: 流动性偏紧。" in saved["facts_by_layer"]["L1"]["summary"]
+
+
+def test_run_bridge_payload_drops_event_refs_and_purifies_cross_layer_signals(
+    tmp_path: Path, monkeypatch
+):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    packet = AnalysisPacket(
+        meta={"data_date": "2026-04-28"},
+        raw_data={},
+        event_refs={"event:news_001": {"title": "事件新闻"}},
+    )
+    context = ContextBrief(
+        data_summary="data",
+        task_description="task",
+        layer_highlights={"L1": ["流动性偏紧"]},
+        apparent_cross_layer_signals=["预置跨层信号"],
+        special_attention=["原有关注"],
+    )
+    captured = {}
+
+    def fake_run_stage(self, **kwargs):
+        captured.update(kwargs.get("payload") or {})
+        return BridgeMemo(
+            bridge_type="macro_valuation",
+            layers_connected=["L1", "L4"],
+            implication_for_ndx="fine",
+        )
+
+    monkeypatch.setattr(VNextOrchestrator, "_run_stage", fake_run_stage)
+
+    orchestrator._run_bridge(packet, context, [])
+
+    assert "event_refs" not in captured
+    assert captured["context_brief"]["apparent_cross_layer_signals"] == []
+    assert captured["context_brief"]["layer_highlights"] == {}
+    assert captured["context_brief"]["special_attention"] == ["检查高严重度冲突是否被完整保留。"]
+    assert captured["context_brief"]["data_summary"] == "data"
+    assert captured["context_brief"]["task_description"] == "task"
+
+
+def test_validate_bridge_memo_v2_rejects_event_prefixed_evidence_refs(tmp_path: Path):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    bridge_with_event_ref = BridgeMemo(
+        bridge_type="macro_valuation",
+        layers_connected=["L1", "L4"],
+        typed_conflicts=[
+            TypedConflict(
+                conflict_id="event_backed_conflict",
+                conflict_type="valuation_discount_rate",
+                severity="high",
+                description="冲突描述。",
+                mechanism="事件不应作为证据。",
+                implication="必须保留。",
+                involved_layers=["L1", "L4"],
+                evidence_refs=["event:news_001"],
+                falsifiers=["正式数据出现。"],
+            )
+        ],
+        implication_for_ndx="fine",
+    )
+
+    errors = orchestrator._validate_bridge_memo_v2(bridge_with_event_ref)
+
+    assert any("事件不得作为 evidence_ref" in error for error in errors)
+
+    bridge_ok = BridgeMemo(
+        bridge_type="macro_valuation",
+        layers_connected=["L1", "L4"],
+        typed_conflicts=[
+            TypedConflict(
+                conflict_id="ordinary_conflict",
+                conflict_type="valuation_discount_rate",
+                severity="high",
+                description="冲突描述。",
+                mechanism="正式数据支撑。",
+                implication="必须保留。",
+                involved_layers=["L1", "L4"],
+                evidence_refs=["L1.get_fed_funds_rate"],
+                falsifiers=["正式数据出现。"],
+            )
+        ],
+        implication_for_ndx="fine",
+    )
+
+    assert orchestrator._validate_bridge_memo_v2(bridge_ok) == []
+
+
+# ── T47 C6 装配点：⑥ 受控调查材料截断标注 + 立场字段剥离 ──
+
+def test_controlled_investigation_material_strips_stance_fields_and_marks_truncation(
+    tmp_path: Path,
+):
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    ref = "layer_cards/L1.json"
+    path = tmp_path / ref
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "dominant_side": "利率压力。",
+                "action_implication": "保留风险边界。",
+                "action_constraint": "不支持重仓",
+                "仓位事实": "保证金仓位处于低位",  # 合法事实键，按白名单规则不得误删
+                "rates_block": "实际利率约束" + "甲" * 6000,
+                "unrelated": "不相关材料",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    materials = orchestrator._read_allowed_context_notes(
+        [ref],
+        max_refs=1,
+        question="实际利率能确认什么？",
+    )
+
+    assert len(materials) == 1
+    material = materials[0]
+    assert "dominant_side" not in material
+    assert "action_implication" not in material
+    assert "action_constraint" not in material
+    assert "不支持重仓" not in material
+    assert "[已剥离立场字段]" in material
+    # 白名单外的事实键必须保留：直接测剥离函数（材料截断可能把无关键切出视野）
+    stripped, removed = orchestrator._strip_material_stance_fields(
+        {"dominant_side": "x", "仓位事实": "保证金仓位处于低位"}
+    )
+    assert removed == ["dominant_side"]
+    assert stripped["仓位事实"] == "保证金仓位处于低位"
+    assert "[已截断" in material
+    assert material.endswith("[/M1]")
+    assert len(material) <= 4000

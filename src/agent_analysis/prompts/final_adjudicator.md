@@ -80,6 +80,8 @@
 - `known_data_gaps`
 - `critique_overall / critique_cross_layer_issues`
 - `revision_summary`
+- **thesis_original**: 修订前原稿；修订稿与原稿必须都能对照，修订说明要写清改了什么。
+- **counter_thesis_hypotheses**: 反方假说原文（来源 counter_thesis），用于检查论点是否选择性回应反方证据。
 
 ## 输出格式
 

@@ -631,6 +631,7 @@ class VNextOrchestrator:
             risk_report=risk_report,
             schema_report=schema_report,
             layer_cards=layer_cards,
+            consumer="reviser",
         )
         reviser_payload = {"governance_input": _model_dump(gov_input_reviser)}
         analysis_revised = self._load_reviser_checkpoint(reviser_payload)
@@ -686,6 +687,8 @@ class VNextOrchestrator:
             schema_report=schema_report,
             analysis_revised=analysis_revised,
             layer_cards=layer_cards,
+            consumer="final",
+            thesis_original=thesis,
         )
         final_payload = {
             "governance_input": _model_dump(gov_input_final),
@@ -794,6 +797,7 @@ class VNextOrchestrator:
             schema_report=schema_report,
         )
         self._save_json("post_run_reflection_library.json", reflection_library)
+        self._run_persistent_checks()
 
         return {
             "context_brief": context_brief,
@@ -979,11 +983,31 @@ class VNextOrchestrator:
         return {
             "context_brief": _model_dump(layer_context_brief),
             "layer": layer,
-            "layer_facts": _model_dump(packet.facts_by_layer.get(layer)),
+            "layer_facts": self._purify_layer_facts_for_prompt(_model_dump(packet.facts_by_layer.get(layer))),
             "layer_raw_data": packet.raw_data.get(layer, {}),
             "manual_overrides": self._build_layer_manual_overrides(packet, layer),
             "runtime_boundary_policy_id": "layer_runtime_input_policy_v1",
         }
+
+    def _purify_layer_facts_for_prompt(self, facts: Any) -> Any:
+        """拍板⑤：发给 L1-L5 的 layer_facts 用净化副本，落盘 analysis_packet 不动。
+
+        去掉预置 state 与 summary 开头的“<层>状态: <值>。”段，只保留“关键事实: …”与
+        “缺口=…”部分；层的状态判断必须由层分析师自己从数据得出。
+        """
+        if not isinstance(facts, dict):
+            return facts
+        cleaned = dict(facts)
+        cleaned.pop("state", None)
+        summary = cleaned.get("summary")
+        if isinstance(summary, str):
+            # 只剥“关键事实”之前的前导段（状态句）；没有“关键事实”时才按状态句正则剥，
+            # 避免 summary 后段出现“状态: X。”时把关键事实一并误删。
+            if "关键事实" in summary:
+                cleaned["summary"] = summary[summary.index("关键事实"):]
+            else:
+                cleaned["summary"] = re.sub(r"^.*?状态: [^。]*。", "", summary, count=1)
+        return cleaned
 
     def _build_layer_input_policy(self, layer: str) -> Dict[str, Any]:
         layer = layer.upper()
@@ -2263,18 +2287,29 @@ class VNextOrchestrator:
                 total_chars += len(notes[-1])
                 continue
             excerpt = raw_text
-            if isinstance(payload, dict) and question:
-                keywords = self._investigation_question_keywords(question)
-                ranked_blocks: List[tuple[int, int, str, Any]] = []
-                for index, (key, value) in enumerate(payload.items()):
-                    searchable = f"{key} {json.dumps(value, ensure_ascii=False, default=str)}".lower()
-                    score = sum(1 for keyword in keywords if keyword in searchable)
-                    if score:
-                        ranked_blocks.append((score, -index, str(key), value))
-                if ranked_blocks:
-                    ranked_blocks.sort(reverse=True)
-                    selected = {key: value for _, _, key, value in ranked_blocks}
-                    excerpt = json.dumps(selected, ensure_ascii=False, indent=2, default=str)
+            stance_note = ""
+            if isinstance(payload, dict):
+                # 配餐单余站条目第 4 类：序列化前递归删除立场/仓位字段，调查员只
+                # 看事实面；允许在材料里显示“已剥离立场字段”而不是静默消失。
+                stripped_payload, stripped_keys = self._strip_material_stance_fields(payload)
+                if stripped_keys:
+                    stance_note = "\n[已剥离立场字段]"
+                if question:
+                    keywords = self._investigation_question_keywords(question)
+                    ranked_blocks: List[tuple[int, int, str, Any]] = []
+                    for index, (key, value) in enumerate(stripped_payload.items()):
+                        searchable = f"{key} {json.dumps(value, ensure_ascii=False, default=str)}".lower()
+                        score = sum(1 for keyword in keywords if keyword in searchable)
+                        if score:
+                            ranked_blocks.append((score, -index, str(key), value))
+                    if ranked_blocks:
+                        ranked_blocks.sort(reverse=True)
+                        selected = {key: value for _, _, key, value in ranked_blocks}
+                        excerpt = json.dumps(selected, ensure_ascii=False, indent=2, default=str)
+                    else:
+                        excerpt = json.dumps(stripped_payload, ensure_ascii=False, indent=2, default=str)
+                else:
+                    excerpt = json.dumps(stripped_payload, ensure_ascii=False, indent=2, default=str)
 
             remaining = 12000 - total_chars
             if remaining <= 0:
@@ -2282,13 +2317,45 @@ class VNextOrchestrator:
             material_index = len(notes) + 1
             prefix = f"[M{material_index}] artifact={ref}\n"
             suffix = f"\n[/M{material_index}]"
-            material = prefix + excerpt[: max(0, 4000 - len(prefix) - len(suffix))] + suffix
+            truncation_note = "\n[已截断：本材料 JSON 可能不闭合，仅部分内容可见，禁止据此补全未显示内容。]"
+            max_excerpt_len = max(0, 4000 - len(prefix) - len(suffix))
+            if len(excerpt) + len(stance_note) > max_excerpt_len:
+                content_budget = max(0, max_excerpt_len - len(truncation_note) - len(stance_note))
+                excerpt_trimmed = excerpt[:content_budget] + stance_note + truncation_note
+            else:
+                excerpt_trimmed = excerpt + stance_note
+            material = prefix + excerpt_trimmed + suffix
             material = material[:remaining]
             notes.append(material)
             total_chars += len(material)
             if assembled_refs is not None:
                 assembled_refs.append(ref)
         return notes
+
+    def _strip_material_stance_fields(self, value: Any) -> Tuple[Any, List[str]]:
+        """递归删除材料 dict 里的立场字段，返回 (净化副本, 被剥离的键列表)。
+
+        删除规则：仅按立场键名白名单剥离 `dominant_side` / `action_implication` /
+        `action_constraint`，不按字符串内容猜测，避免误删材料里合法的仓位事实字段。
+        调用方只写通用说明“已剥离立场字段”（不列键名，避免常设检查把说明本身
+        误判为立场字段泄漏）。
+        """
+        stripped_keys: List[str] = []
+
+        def _strip(node: Any) -> Any:
+            if isinstance(node, dict):
+                cleaned: Dict[str, Any] = {}
+                for key, item in node.items():
+                    if key in {"dominant_side", "action_implication", "action_constraint"}:
+                        stripped_keys.append(key)
+                        continue
+                    cleaned[key] = _strip(item)
+                return cleaned
+            if isinstance(node, list):
+                return [_strip(item) for item in node]
+            return node
+
+        return _strip(value), list(dict.fromkeys(stripped_keys))
 
     def _validate_investigation_material_citations(
         self,
@@ -4297,12 +4364,10 @@ class VNextOrchestrator:
         layer_cards: List[LayerCard],
     ) -> BridgeMemo:
         bridge_payload = {
-            "context_brief": _model_dump(context_brief),
+            "context_brief": _model_dump(self._purify_bridge_context_brief(context_brief)),
             "candidate_cross_layer_links": [_model_dump(link) for link in packet.candidate_cross_layer_links],
             "layer_cards": [_model_dump(card) for card in layer_cards],
         }
-        if packet.event_refs:
-            bridge_payload["event_refs"] = packet.event_refs
         checkpoint = self._load_stage_checkpoint(
             self.bridge_dir / "bridge_0.json",
             BridgeMemo,
@@ -4874,6 +4939,7 @@ class VNextOrchestrator:
         analysis_revised: Optional[AnalysisRevised] = None,
         layer_cards: Optional[List[LayerCard]] = None,
         consumer: str = "critic",
+        thesis_original: Optional[ThesisDraft] = None,
     ) -> GovernanceInputPacket:
         """Build a compressed governance input packet for Critic / Risk / Reviser / Final.
 
@@ -4887,11 +4953,15 @@ class VNextOrchestrator:
         - Key evidence refs (subset related to high-severity conflicts and thesis support chains)
         - Known data gaps (especially L3 breadth)
 
-        consumer="critic" 保持既有行为不变（reviser/final 也走这条）。
+        consumer="critic" 保持既有行为不变。
+        consumer="reviser"/"final" = 基础同 critic（含 counter 原文与反证引用），
+        但去噪音：synthesis_guidance/pricing_expectation_ledger/
+        evidence_registry_summary 清空，key_evidence_refs 的 field_value 超长明细
+        递归压成 _prompt_summary。consumer="final" 额外填 thesis_original 原稿。
         consumer="risk" = 论证盲分料版：清空全部 thesis_* 字段，改由
         layer_summaries + 冲突面 + Bridge 主要矛盾候选提供事实面，key_evidence_refs
         只从冲突 evidence_refs 与 layer_summaries.indicator_refs 重建，不从 thesis
-        支撑链/假说回应/仓位/时间尺度/读者结论里收集。
+        支撑链/假说回应/仓位/时间尺度/读者结论里收集；counter_thesis_hypotheses 恒空。
         """
         # ── Thesis summary ──
         thesis_confidence = getattr(thesis.overall_confidence, "value", str(thesis.overall_confidence)) if thesis.overall_confidence else "medium"
@@ -4913,6 +4983,34 @@ class VNextOrchestrator:
         # events at the memo level that don't appear in typed conflicts).
         for bridge_summary in synthesis_packet.bridge_summaries:
             all_event_refs.update(bridge_summary.get("event_refs", []) if isinstance(bridge_summary, dict) else getattr(bridge_summary, "event_refs", []) or [])
+
+        # ── Counter thesis 原文与反证引用（拍板③ + T46）：critic/reviser/final
+        #    把来源为 counter_thesis 的假说原文带上，并把三类 evidence_refs 并入
+        #    all_evidence_refs；risk 论证盲不并（它只从 risk_evidence_refs 取）。 ──
+        counter_thesis_hypotheses: List[Dict[str, Any]] = []
+        counter_thesis_evidence_refs: set = set()
+        for hypothesis in getattr(synthesis_packet, "competing_hypotheses", []) or []:
+            if isinstance(hypothesis, dict):
+                hypothesis_dict = dict(hypothesis)
+            else:
+                hypothesis_dict = _model_dump(hypothesis) or {}
+            if hypothesis_dict.get("source") != "counter_thesis":
+                continue
+            support_refs = list(hypothesis_dict.get("support_evidence_refs") or [])
+            counter_refs = list(hypothesis_dict.get("counter_evidence_refs") or [])
+            diagnostic_refs = list(hypothesis_dict.get("diagnostic_evidence_refs") or [])
+            counter_thesis_hypotheses.append({
+                "hypothesis_id": hypothesis_dict.get("hypothesis_id"),
+                "hypothesis_text": hypothesis_dict.get("hypothesis_text"),
+                "status": hypothesis_dict.get("status"),
+                "support_evidence_refs": support_refs,
+                "counter_evidence_refs": counter_refs,
+                "diagnostic_evidence_refs": diagnostic_refs,
+            })
+            counter_thesis_evidence_refs.update(support_refs)
+            counter_thesis_evidence_refs.update(counter_refs)
+            counter_thesis_evidence_refs.update(diagnostic_refs)
+        all_evidence_refs.update(counter_thesis_evidence_refs)
 
         # ── Risk = 论证盲：key_evidence_refs 只从冲突面 + Bridge 主要矛盾候选 + 各层
         #    摘要的 indicator_refs 重建，绝不从 thesis 支撑链、假说回应、仓位、时间尺度、
@@ -4966,6 +5064,7 @@ class VNextOrchestrator:
         for item in [thesis_principal_contradiction] + thesis_secondary_contradictions + thesis_price_reflection_map:
             if isinstance(item, dict):
                 all_evidence_refs.update(item.get("evidence_refs", []) or [])
+                all_evidence_refs.update(item.get("counterevidence_refs", []) or [])
 
         evidence_refs_for_packet = risk_evidence_refs if consumer == "risk" else all_evidence_refs
         key_evidence_refs: Dict[str, Dict[str, Any]] = {}
@@ -5036,8 +5135,9 @@ class VNextOrchestrator:
             _model_dump(item) for item in getattr(synthesis_packet, "principal_contradictions", []) or []
         ]
 
-        if consumer == "risk":
-            # 配餐单：risk 提示词未列 pricing_expectation_ledger，不给。
+        if consumer == "risk" or consumer in {"reviser", "final"}:
+            # 配餐单：risk 提示词未列 pricing_expectation_ledger，不给；
+            # 08-15 已批：reviser/final 去噪音字段，也不给。
             pricing_expectation_ledger: Dict[str, Any] = {}
         else:
             pricing_expectation_ledger = self._pricing_expectation_ledger_summary(synthesis_packet)
@@ -5087,7 +5187,20 @@ class VNextOrchestrator:
                 critique_overall=critique_overall,
                 critique_cross_layer_issues=list(critique_cross_layer),
                 revision_summary=revision_summary,
+                thesis_original=None,
+                counter_thesis_hypotheses=[],
             )
+
+        if consumer in {"reviser", "final"}:
+            # 08-15 已批：reviser/final 去噪音字段 + 证据索引瘦身。ref key 集合不动，
+            # 只压 field_value 里 >8 条且 >800 字符的超长明细列表。
+            evidence_registry_summary_packet: Dict[str, Any] = {}
+            synthesis_guidance_packet: List[str] = []
+            key_evidence_refs = self._slim_governance_key_evidence_refs(key_evidence_refs)
+        else:
+            evidence_registry_summary_packet = dict(getattr(synthesis_packet, "evidence_registry_summary", {}) or {})
+            synthesis_guidance_packet = list(synthesis_packet.synthesis_guidance) if synthesis_packet.synthesis_guidance else []
+        thesis_original_packet = _model_dump(thesis_original) if consumer == "final" and thesis_original is not None else None
 
         return GovernanceInputPacket(
             thesis_main=thesis.main_thesis or "",
@@ -5123,14 +5236,16 @@ class VNextOrchestrator:
             false_safety_risks=false_safety_risks,
             key_evidence_refs=key_evidence_refs,
             key_event_refs=key_event_refs,
-            evidence_registry_summary=dict(getattr(synthesis_packet, "evidence_registry_summary", {}) or {}),
+            evidence_registry_summary=evidence_registry_summary_packet,
             pricing_expectation_ledger=pricing_expectation_ledger,
             known_data_gaps=list(dict.fromkeys(known_data_gaps)),  # 去重
             unresolved_questions=list(dict.fromkeys(unresolved_questions)),  # 去重
-            synthesis_guidance=list(synthesis_packet.synthesis_guidance) if synthesis_packet.synthesis_guidance else [],
+            synthesis_guidance=synthesis_guidance_packet,
             critique_overall=critique_overall,
             critique_cross_layer_issues=list(critique_cross_layer),
             revision_summary=revision_summary,
+            thesis_original=thesis_original_packet,
+            counter_thesis_hypotheses=counter_thesis_hypotheses,
         )
 
     def _pricing_expectation_ledger_summary(self, synthesis_packet: SynthesisPacket) -> Dict[str, Any]:
@@ -5311,6 +5426,21 @@ class VNextOrchestrator:
                 if function_id in layer_function_ids
             },
         }
+
+    def _purify_bridge_context_brief(self, context_brief: ContextBrief) -> ContextBrief:
+        """拍板⑤：bridge payload 的 context_brief 换净化副本。
+
+        去掉 Python 预生成的跨层信号与各层摘要，Bridge 只能从五张层卡自己找跨层
+        关系；全局 context_brief.json 落盘不动。
+        """
+        return ContextBrief(
+            data_summary=context_brief.data_summary,
+            layer_highlights={},
+            apparent_cross_layer_signals=[],
+            task_description=context_brief.task_description,
+            special_attention=["检查高严重度冲突是否被完整保留。"],
+            generated_at=getattr(context_brief, "generated_at", None),
+        )
 
     def _run_stage(
         self,
@@ -6222,6 +6352,28 @@ class VNextOrchestrator:
                 errors.append(f"bridge.transmission_paths[{path_id}].evidence_refs must not be empty.")
             if not str(path.implication or "").strip():
                 errors.append(f"bridge.transmission_paths[{path_id}].implication is required.")
+        # 4.7 口径：事件永不进第一层，bridge 的 evidence_refs 不得含 event: 前缀。
+        for container_name, container in (
+            ("typed_conflicts", bridge.typed_conflicts),
+            ("resonance_chains", bridge.resonance_chains),
+            ("transmission_paths", bridge.transmission_paths),
+        ):
+            for item in container:
+                if container_name == "typed_conflicts":
+                    item_id = str(getattr(item, "conflict_id", None) or "typed_conflict")
+                elif container_name == "resonance_chains":
+                    item_id = str(getattr(item, "chain_id", None) or "resonance_chain")
+                else:
+                    item_id = str(getattr(item, "path_id", None) or "transmission_path")
+                for ref in getattr(item, "evidence_refs", []) or []:
+                    if str(ref).startswith("event:"):
+                        errors.append(
+                            f"bridge.{container_name}[{item_id}].evidence_refs "
+                            f"事件不得作为 evidence_ref：{ref}"
+                        )
+        # 顶层 event_refs 同样恒空（三明治口径）：输出非空即污染事故。
+        if getattr(bridge, "event_refs", None):
+            errors.append("bridge.event_refs must stay empty: 事件永不进第一层（含治理链）。")
         return errors
 
     def _run_schema_guard(
@@ -6883,6 +7035,26 @@ class VNextOrchestrator:
             return {key: cls._slim_long_list_for_prompt(item) for key, item in value.items()}
         return value
 
+    def _slim_governance_key_evidence_refs(
+        self,
+        key_evidence_refs: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        """A 档证据索引瘦身：只压 field_value，ref key 集合不动、聚合字段逐字节不变。
+
+        供 reviser/final 的 governance_input.key_evidence_refs 使用；critic 默认行为
+        不回退（仍拿完整 evidence_index 子集）。完整明细继续留在落盘的
+        synthesis_packet.json / evidence_registry.json 中。
+        """
+        slimmed: Dict[str, Dict[str, Any]] = {}
+        for ref, entry in key_evidence_refs.items():
+            if not isinstance(entry, dict) or "field_value" not in entry:
+                slimmed[ref] = entry
+                continue
+            entry_copy = dict(entry)
+            entry_copy["field_value"] = self._slim_long_list_for_prompt(entry_copy["field_value"])
+            slimmed[ref] = entry_copy
+        return slimmed
+
     def _strip_empty_event_prompt_fields(self, payload: Any) -> Any:
         if isinstance(payload, dict):
             stripped: Dict[str, Any] = {}
@@ -6971,7 +7143,6 @@ class VNextOrchestrator:
         return "\n\n".join(parts)
 
     def _compose_bridge_prompt(self, prompt_body: str, payload: Optional[Dict[str, Any]] = None) -> str:
-        has_event_input = payload is None or bool(payload.get("event_refs"))
         bridge_contract = (
             "## vNext v2 Bridge Contract\n"
             "Bridge 的职责不是重新解释单个指标，而是读取各 LayerCard 的 indicator_analyses、layer_synthesis、"
@@ -6996,15 +7167,11 @@ class VNextOrchestrator:
             "- unresolved_questions: 仍需 Thesis/Critic/Risk 保留的问题。\n"
             "旧字段 conflicts 仍要填写，用于兼容；typed_conflicts 是更高优先级的 Bridge v2 产物。\n"
         )
-        if has_event_input:
-            bridge_contract += (
-                "如果输入包含 event_refs，Bridge 可以引用 event_ref 解释触发/背景/观察，但不得把事件写成 evidence_ref，也不得说事件“证明”某个数值指标结论。\n"
-            "\n## 顶层 BridgeMemo.event_refs 字段类型（强约束）\n"
-            "- BridgeMemo.event_refs 类型固定为 List[str]，只放事件 ID 字符串，例如：[\"event:6479503280a4bf43\", \"event:f71e0fd17b6261c5\"]。\n"
-            "- 输入里的 event_refs 是 Dict[event_id, 事件元数据]（标题、来源、时间），仅供你引用 ID；禁止把这种 dict 形态复制到输出。\n"
-            "- 不要写成 {\"event:xxx\": \"...\"} 之类的 dict、对象或映射；如果没有要保留的事件，请写 []。\n"
-            "- typed_conflicts/resonance_chains/transmission_paths 内部的 event_refs 同样是 List[str]。\n"
-            )
+        bridge_contract += (
+            "\n## 事件纪律（三明治口径，恒空）\n"
+            "- 本轮输入不包含任何事件材料；BridgeMemo.event_refs 必须保持为空列表 []。\n"
+            "- 不得自行引入事件 ID、不得把事件写成 evidence_ref；evidence_refs 中出现 event: 前缀会被校验器打回。\n"
+        )
         return f"{bridge_contract}\n\n{prompt_body}"
 
     def _compose_thesis_prompt(self, prompt_body: str, payload: Optional[Dict[str, Any]] = None) -> str:
@@ -7288,6 +7455,50 @@ class VNextOrchestrator:
             json.dump(_model_dump(payload), handle, ensure_ascii=False, indent=2)
             handle.write("\n")
         self._record_stage_artifact(path)
+
+    def _run_persistent_checks(self) -> Dict[str, Any]:
+        """常设检查接线：懒导入 A/B 两包，以本 run 的 output_dir 为 run_dir 执行。
+
+        两条结果合并写 `persistent_checks_report.json`；任何异常只写 failed 汇总，
+        绝不让主链崩溃。检查包未交付时写 status="modules_missing"。
+        """
+        report_path = "persistent_checks_report.json"
+        try:
+            from agent_analysis.persistent_checks_a import run_checks_a
+            from agent_analysis.persistent_checks_b import run_checks_b
+        except ImportError:
+            report = {
+                "schema_version": "vnext_persistent_checks_v1",
+                "status": "modules_missing",
+                "passed_count": 0,
+                "failed_count": 0,
+                "checks": [],
+            }
+            self._save_json(report_path, report)
+            return report
+        try:
+            checks_a = run_checks_a(self.output_dir)
+            checks_b = run_checks_b(self.output_dir)
+            checks = [*checks_a, *checks_b]
+            passed_count = sum(1 for check in checks if check.get("passed"))
+            report = {
+                "schema_version": "vnext_persistent_checks_v1",
+                "status": "ok",
+                "passed_count": passed_count,
+                "failed_count": len(checks) - passed_count,
+                "checks": checks,
+            }
+        except Exception as exc:  # noqa: BLE001 —— 常设检查绝不拖垮主链
+            report = {
+                "schema_version": "vnext_persistent_checks_v1",
+                "status": "failed",
+                "passed_count": 0,
+                "failed_count": 0,
+                "checks": [],
+                "error": str(exc),
+            }
+        self._save_json(report_path, report)
+        return report
 
     def _load_stage_manifest(self) -> Dict[str, Any]:
         if self.stage_manifest_path.exists():

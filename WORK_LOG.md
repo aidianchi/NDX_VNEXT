@@ -92,6 +92,19 @@
 - 随定稿批准两处 C6 供给改动：①bridge 事件字段按 4.7 恒空 + 机器检查"evidence_refs 不得含 event: 前缀"；②reviser/final 包移除 Thesis 版 `synthesis_guidance`、`pricing_expectation_ledger`、`evidence_registry_summary`，`key_evidence_refs` 只给 ref key + 权限 + 聚合读数（成分级明细留审计 artifact）。两处归 C6 装配点施工。
 - 配餐单把 C6/C8 的施工归属分好：五层"三集合对账"、桥接矩阵补全、调查材料截断标注等归 C6 的 20 项检查；A6 失败占位装配、IA 菜单补全（ESS/竞争假说清单/question_answers 事件侧）归 C8。
 
+### C6 代码施工收工（案卷干净版 + 20 项常设检查 + 装配点②-⑤，重跑基线未跑）
+
+**为什么做**：T47 收口余量；8.10 拍板②-⑤ + 08-15 两项供给改动 + 配餐单余站条目要求。
+
+**做了什么**：
+
+- 四份历史案卷重写干净版（worker 执行、根线程逐段复核 diff）：被推翻段落换成一行"已由 08-11 三明治重决策推翻，现口径见对照稿"；§8 第 7 项按勘误头正向改写为"bridge/治理站事件字段恒空、非空即报警"；其余内容逐字保留。
+- 20 项常设机器检查落地：`persistent_checks_a.py`（PC-01~10）+ `persistent_checks_b.py`（PC-11~20），各配 24 项合成测试（反例先红后绿）；C3 后的第 1/2 项按新世界改写（critic/risk 身份检查、risk 证据窗口=冲突∪层摘要）；第 7 项反向断言。在旧 run 20260731 上如实跑出历史病清单（多数红 = 旧跑未反映已落地修复）。
+- 装配点：①反方原文与反证引用进 critic/reviser/final（risk 恒空）；②终审收原稿+修订稿+修订说明（`thesis_original`）；③reviser/final 去 Thesis 版 synthesis_guidance、pricing_expectation_ledger、evidence_registry_summary，key_evidence_refs 只压超长明细、聚合字段与 ref key 不动；④层输入去预置 state、bridge 去预置跨层结论（落盘本体不动）；⑤bridge 事件注入删除 + evidence_refs 禁 event: 前缀 + 顶层 event_refs 恒空校验；⑥受控调查材料剥离立场键白名单 + 截断标注；⑦常设检查在 run 尾部自动落盘 `persistent_checks_report.json`，系统说明书登记新模块。
+- reviewer 只读复核"有条件通过"：P1 一条（PC-16 把反方合法独立性字段 forbidden_context_refs 误判为病）与 8 条 P2 全部由根线程修复；修复后 **254 passed**、`git diff --check` 干净。
+
+**剩余风险**：重跑基线未跑（花钱，预算待所有者批）；20 项检查在旧 run 上的红大多对应历史病，新 run 后应以新报告复核——A6 占位（PC-05）、事件站措辞矛盾（PC-10）等仍会红到 C8 修完，属已知。
+
 ### 六问架构重审跑完并定案：骨架不动，几处小修；定案文档一篇顶所有
 
 **为什么做**：所有者对北极星与不变原则产生怀疑（文档写了"判断质量可测量地变好"，所有者不认），立六问独立对质（P1 前提检验 / P2 目的与校准 / P3 五层切法 / P4 隔离真实性 / P5 编排合理性 / P6 决策翻译层），先 P6 试水认可后再全跑。

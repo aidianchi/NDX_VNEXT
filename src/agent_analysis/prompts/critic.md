@@ -30,6 +30,7 @@
 - **known_data_gaps**: 已知数据缺口（尤其是 L3 广度数据）
 - **synthesis_guidance**: 给下游的约束指令
 - **objective_firewall_summary**: 客观性防火墙摘要（投资对象、发言权、反证）
+- **counter_thesis_hypotheses**: 反方假说原文（来源 counter_thesis），用于检查论点是否选择性回应反方证据。
 
 ## 输出格式
 

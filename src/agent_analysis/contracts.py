@@ -2019,6 +2019,18 @@ class GovernanceInputPacket(BaseModel):
     # ── 修订摘要（final） ──
     revision_summary: Optional[str] = Field(None, description="Reviser 修订说明")
 
+    # ── 终审原稿对照（拍板②） ──
+    thesis_original: Optional[Dict[str, Any]] = Field(
+        None,
+        description="修订前 Thesis 原稿，仅 final 填充",
+    )
+
+    # ── 反方原文与反证引用（拍板③ + T46） ──
+    counter_thesis_hypotheses: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="来源为 counter_thesis 的竞争假说原文（critic/reviser/final 填充；risk 恒空）",
+    )
+
 
 # ============================================================================
 # 修订与裁决

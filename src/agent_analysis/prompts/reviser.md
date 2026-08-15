@@ -51,7 +51,7 @@
 - **schema_passed / schema_structural_issues / schema_consistency_issues / schema_missing_fields**: Schema Guard 的结构问题
 - **key_evidence_refs**: 与高严重度冲突和 Thesis 支撑链相关的关键证据引用（修正数据引用错误时对照用）
 - **known_data_gaps**: 已知数据缺口（修订时需明确标注，不要假装数据充足）
-- **synthesis_guidance**: 给下游的约束指令
+- **counter_thesis_hypotheses**: 反方假说原文（来源 counter_thesis），用于检查论点是否选择性回应反方证据。
 
 ## 输出格式
 
