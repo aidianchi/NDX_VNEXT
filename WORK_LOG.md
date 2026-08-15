@@ -52,6 +52,25 @@
 
 **否决/未做**：B3/B5 只进系统说明书、不进两份总纲（你裁）；Codex 调度节是搬家不是删除，全文留在 `.codex/agents/README.md`；未推翻 07-28「config.toml 不进 git」的旧裁定。
 
+### 配餐单 v0 四站条目定稿 + C2 口径锁定 + C3 分料上线（08-15）
+
+**为什么做**：A2 配餐单已同意；C2/C3 是 T50 的省钱与公平性施工。两路最高质量 AI 并行独立设计（`配餐单_v0_建设稿.md`、`配餐单_v0_红队稿.md`），根线程逐条对质后合成 `配餐单_v0_四站条目.md`，所有者逐条过目定稿。
+
+**关键事实（推翻 06 定案的成本账）**：07-25 瘦身已把两站提示词输入从 518,835/534,150 字符压到约 142,867/159,000 字符——"56 万→15 万"的大头早已入账；当前再整删 field_value 只再省 12.4%（thesis 包）与约 11.7%（counter 包）。红队实测：整删会制造"读数在眼前、底稿不可查"的假精确，并使 thesis"估值强结论必须引 #Field 子条目"失去执行前提。**所有者裁：C2 选 A 档**——只删审计级明细、保留聚合统计与发言权元数据，用测试锁死口径，不再多删。
+
+**做了什么**：
+
+- C2-A：`test_vnext_orchestrator.py` 新增口径锁定测试（field_value 键不得整删、聚合字段逐字节不变、只压超长列表、ref key 集合不变）。
+- C3 分料：`GovernanceInputPacket` 新增 `layer_summaries` 字段；`_build_governance_input_packet` 加 `consumer` 参数——critic/reviser/final 默认路径不变；risk 论证盲版清空全部 thesis_* 字段、从冲突 + 层摘要 indicator_refs 重建 key_evidence_refs、不给事件/注册摘要/台账/guidance；首跑与 retry 两条调用路径都盲。
+- `risk_sentinel.md` 同批改写输入节、失效条件检查、主要矛盾检查；角色定义与"必须遵守"里两处 Thesis 残留（reviewer P1）改为盲读口径。
+- 论证盲对照实验方案预注册：`T50-3_论证盲对照实验_方案.md`（两组同题完整报告、B 组不设输出禁令、固定判分清单、每组 3 次、主终点看终审采纳率与共同盲区）。
+- `系统说明书.md` 2.5/2.6 与流水线第 8 步同步改为"critic/risk 分料"新口径（文档维护纪律）。
+- reviewer 只读复核：有条件通过；P1 两处已修，P2 补了 retry-risk 测试与 dict/model 兼容写法。
+
+**验证结果**：`.venv/bin/python -m pytest tests/test_governance_input.py tests/test_vnext_orchestrator.py tests/test_vnext_llm_engine.py tests/test_prompt_guardrails.py tests/test_docs_consistency.py -q` → **219 passed**；`git diff --check` 干净；改动文件 = 白名单 5 个 + 状态/说明书 2 个。
+
+**剩余风险**：论证盲对照实验只预注册了方案、runner 未实现（要花 API 钱，预算已批）；risk 首轮包仍序列化 7 个恒空壳字段（reviewer P2，影响很小，暂不扩改）；C4 洞 2 未做。
+
 ### 六问架构重审跑完并定案：骨架不动，几处小修；定案文档一篇顶所有
 
 **为什么做**：所有者对北极星与不变原则产生怀疑（文档写了"判断质量可测量地变好"，所有者不认），立六问独立对质（P1 前提检验 / P2 目的与校准 / P3 五层切法 / P4 隔离真实性 / P5 编排合理性 / P6 决策翻译层），先 P6 试水认可后再全跑。

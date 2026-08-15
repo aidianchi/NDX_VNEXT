@@ -561,11 +561,17 @@ class VNextOrchestrator:
             filename="critique.json",
         )
 
+        gov_input_risk = self._build_governance_input_packet(
+            synthesis_packet=synthesis_packet,
+            thesis=thesis,
+            layer_cards=layer_cards,
+            consumer="risk",
+        )
         risk_report = self._run_and_save(
             stage_key="risk",
             stage_name="risk",
             model_cls=RiskBoundaryReport,
-            payload={"governance_input": _model_dump(gov_input_critic)},
+            payload={"governance_input": _model_dump(gov_input_risk)},
             filename="risk_boundary_report.json",
         )
 
@@ -592,11 +598,18 @@ class VNextOrchestrator:
                 payload={"governance_input": _model_dump(gov_input_critic_retry)},
                 filename="critique.json",
             )
+            gov_input_risk_retry = self._build_governance_input_packet(
+                synthesis_packet=synthesis_packet,
+                thesis=thesis,
+                layer_cards=layer_cards,
+                schema_report=schema_report,
+                consumer="risk",
+            )
             risk_report = self._run_and_save(
                 stage_key="risk",
                 stage_name="risk_retry",
                 model_cls=RiskBoundaryReport,
-                payload={"governance_input": _model_dump(gov_input_critic_retry)},
+                payload={"governance_input": _model_dump(gov_input_risk_retry)},
                 filename="risk_boundary_report.json",
             )
             schema_report = self._run_schema_guard(
@@ -4860,6 +4873,7 @@ class VNextOrchestrator:
         schema_report: Optional[SchemaGuardReport] = None,
         analysis_revised: Optional[AnalysisRevised] = None,
         layer_cards: Optional[List[LayerCard]] = None,
+        consumer: str = "critic",
     ) -> GovernanceInputPacket:
         """Build a compressed governance input packet for Critic / Risk / Reviser / Final.
 
@@ -4872,6 +4886,12 @@ class VNextOrchestrator:
         - Thesis support chains and their evidence refs
         - Key evidence refs (subset related to high-severity conflicts and thesis support chains)
         - Known data gaps (especially L3 breadth)
+
+        consumer="critic" 保持既有行为不变（reviser/final 也走这条）。
+        consumer="risk" = 论证盲分料版：清空全部 thesis_* 字段，改由
+        layer_summaries + 冲突面 + Bridge 主要矛盾候选提供事实面，key_evidence_refs
+        只从冲突 evidence_refs 与 layer_summaries.indicator_refs 重建，不从 thesis
+        支撑链/假说回应/仓位/时间尺度/读者结论里收集。
         """
         # ── Thesis summary ──
         thesis_confidence = getattr(thesis.overall_confidence, "value", str(thesis.overall_confidence)) if thesis.overall_confidence else "medium"
@@ -4893,6 +4913,32 @@ class VNextOrchestrator:
         # events at the memo level that don't appear in typed conflicts).
         for bridge_summary in synthesis_packet.bridge_summaries:
             all_event_refs.update(bridge_summary.get("event_refs", []) if isinstance(bridge_summary, dict) else getattr(bridge_summary, "event_refs", []) or [])
+
+        # ── Risk = 论证盲：key_evidence_refs 只从冲突面 + Bridge 主要矛盾候选 + 各层
+        #    摘要的 indicator_refs 重建，绝不从 thesis 支撑链、假说回应、仓位、时间尺度、
+        #    读者结论里收集（配餐单 v0 第四节第 1 条）。 ──
+        risk_evidence_refs: set = set()
+        for conflict in synthesis_packet.high_severity_typed_conflicts:
+            refs = (
+                getattr(conflict, "evidence_refs", [])
+                if hasattr(conflict, "evidence_refs")
+                else conflict.get("evidence_refs", [])
+            )
+            risk_evidence_refs.update(refs or [])
+        for conflict in synthesis_packet.high_severity_conflicts:
+            # 普通 Conflict 契约没有 evidence_refs，getattr 兜底空列表；保留遍历是为了
+            # 将来契约补字段时这里自动生效，且与任务书"typed 与普通 conflict"口径一致。
+            risk_evidence_refs.update(getattr(conflict, "evidence_refs", []) or [])
+        for contradiction in getattr(synthesis_packet, "principal_contradictions", []) or []:
+            refs = (
+                getattr(contradiction, "evidence_refs", [])
+                if hasattr(contradiction, "evidence_refs")
+                else contradiction.get("evidence_refs", [])
+            )
+            risk_evidence_refs.update(refs or [])
+        for summary in getattr(synthesis_packet, "layer_summaries", []) or []:
+            indicator_refs = getattr(summary, "indicator_refs", []) or []
+            risk_evidence_refs.update(indicator_refs[:12])  # 最多 12 个/层
 
         thesis_key_support_chains = [_model_dump(chain) for chain in thesis.key_support_chains]
         thesis_hypothesis_responses = list(getattr(thesis, "hypothesis_responses", []) or [])
@@ -4921,15 +4967,17 @@ class VNextOrchestrator:
             if isinstance(item, dict):
                 all_evidence_refs.update(item.get("evidence_refs", []) or [])
 
+        evidence_refs_for_packet = risk_evidence_refs if consumer == "risk" else all_evidence_refs
         key_evidence_refs: Dict[str, Dict[str, Any]] = {}
-        for ref in sorted(all_evidence_refs):
+        for ref in sorted(evidence_refs_for_packet):
             if ref in synthesis_packet.evidence_index:
                 key_evidence_refs[ref] = synthesis_packet.evidence_index[ref]
 
         key_event_refs: Dict[str, Dict[str, Any]] = {}
-        for ref in sorted(all_event_refs):
-            if ref in synthesis_packet.event_index:
-                key_event_refs[ref] = synthesis_packet.event_index[ref]
+        if consumer != "risk":
+            for ref in sorted(all_event_refs):
+                if ref in synthesis_packet.event_index:
+                    key_event_refs[ref] = synthesis_packet.event_index[ref]
 
         # ── Known data gaps: collect from layer cards, schema, and bridge ──
         known_data_gaps: List[str] = []
@@ -4988,7 +5036,58 @@ class VNextOrchestrator:
             _model_dump(item) for item in getattr(synthesis_packet, "principal_contradictions", []) or []
         ]
 
-        pricing_expectation_ledger = self._pricing_expectation_ledger_summary(synthesis_packet)
+        if consumer == "risk":
+            # 配餐单：risk 提示词未列 pricing_expectation_ledger，不给。
+            pricing_expectation_ledger: Dict[str, Any] = {}
+        else:
+            pricing_expectation_ledger = self._pricing_expectation_ledger_summary(synthesis_packet)
+
+        if consumer == "risk":
+            # ── risk = 论证盲：只给事实面与冲突面，thesis 的任何散文与结构一律清空 ──
+            return GovernanceInputPacket(
+                thesis_main="",
+                thesis_environment="",
+                thesis_valuation="",
+                thesis_timing="",
+                thesis_confidence="",
+                thesis_dependencies=[],
+                thesis_key_support_chains=[],
+                thesis_hypothesis_responses=[],
+                retained_conflict_types=[],
+                thesis_state_diagnosis="",
+                thesis_priced_narrative="",
+                thesis_payoff_assessment="",
+                thesis_time_horizon_views=[],
+                thesis_portfolio_actions=[],
+                thesis_confirmation_cost="",
+                thesis_invalidation_conditions=[],
+                thesis_reader_conclusion={},
+                thesis_principal_contradiction=None,
+                thesis_secondary_contradictions=[],
+                thesis_price_reflection_map=[],
+                layer_summaries=[_model_dump(item) for item in getattr(synthesis_packet, "layer_summaries", []) or []],
+                high_severity_typed_conflicts=high_severity_typed,
+                principal_contradictions=principal_contradictions,
+                objective_firewall_summary=obj_firewall,
+                schema_passed=schema_passed,
+                schema_structural_issues=list(schema_structural),
+                schema_consistency_issues=list(schema_consistency),
+                schema_missing_fields=list(schema_missing),
+                must_preserve_risks=must_preserve_risks,
+                opportunity_costs=opportunity_costs,
+                confirmation_costs=confirmation_costs,
+                false_safety_risks=false_safety_risks,
+                key_evidence_refs=key_evidence_refs,
+                key_event_refs={},
+                evidence_registry_summary={},
+                pricing_expectation_ledger=pricing_expectation_ledger,
+                known_data_gaps=list(dict.fromkeys(known_data_gaps)),  # 去重
+                unresolved_questions=list(dict.fromkeys(unresolved_questions)),  # 去重
+                synthesis_guidance=[],
+                critique_overall=critique_overall,
+                critique_cross_layer_issues=list(critique_cross_layer),
+                revision_summary=revision_summary,
+            )
 
         return GovernanceInputPacket(
             thesis_main=thesis.main_thesis or "",

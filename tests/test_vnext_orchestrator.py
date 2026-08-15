@@ -869,6 +869,43 @@ def test_slim_long_list_for_prompt_only_compresses_lists_past_both_thresholds():
     assert slimmed_small == small_list
 
 
+def test_slim_evidence_index_for_prompt_keeps_aggregates_and_only_compresses_lists(tmp_path: Path):
+    """C2-A 口径锁定：field_value 键不得整删，聚合字段逐字节不变，只有超长列表被压成摘要。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    payload = {"synthesis_packet": _mini_synthesis_packet_dict_for_slimming_test()}
+
+    sanitized = orchestrator._slim_evidence_index_for_prompt(payload, "synthesis_packet")
+    sp = sanitized["synthesis_packet"]
+
+    # A 档：ref key 集合（含 parent#field 子 ref）压缩前后完全一致
+    assert set(sp["evidence_index"].keys()) == {
+        "L4.get_ndx_pe_and_earnings_yield",
+        "L4.get_ndx_earnings_revision_metrics#slope_30d",
+    }
+
+    child_ref = "L4.get_ndx_earnings_revision_metrics#slope_30d"
+    # A 档：field_value 键仍然存在（键不得整删）
+    assert "field_value" in sp["evidence_index"][child_ref]
+    field_value = sp["evidence_index"][child_ref]["field_value"]
+
+    # 聚合字段逐字节不变
+    assert field_value["value"] == 0.040793811
+    assert field_value["unit"] == "decimal_change"
+    assert field_value["coverage"] == {"included_constituents": 90, "total_constituents": 103}
+
+    # 超长列表被压成 {"_prompt_summary": True, "count": ..., "sample": ..., "note": ...} 形态
+    constituents = field_value["constituents"]
+    assert isinstance(constituents, dict)
+    assert constituents["_prompt_summary"] is True
+    assert constituents["count"] == 20
+    assert len(constituents["sample"]) == 3
+    assert "note" in constituents
+
+
 def test_run_thesis_end_to_end_prompt_file_omits_oversized_constituent_rows(tmp_path: Path):
     """端到端：经过真实 _run_stage / _compose_prompt 落到磁盘的 prompt 文本里，
     没进样本的逐票明细行必须真的消失，而不是只在单元测试里裁过一次。"""

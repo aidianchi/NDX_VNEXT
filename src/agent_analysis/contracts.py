@@ -1949,6 +1949,12 @@ class GovernanceInputPacket(BaseModel):
         description="Thesis 消费/修正后的价格反映地图",
     )
 
+    # ── C3 论证盲分料：五层摘要只进 risk 版，critic/reviser/final 恒空 ──
+    layer_summaries: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="五层摘要（L1-L5 LayerSynthesisItem 序列化）；仅 risk 论证盲分料版填充，critic/reviser/final 恒空"
+    )
+
     # ── 必须不丢失的高严重度冲突 ──
     high_severity_typed_conflicts: List[Dict[str, Any]] = Field(
         default_factory=list,

@@ -24,6 +24,7 @@ from agent_analysis.contracts import (
     LayerCard,
     ObjectiveFirewallSummary,
     RiskBoundaryReport,
+    SchemaGuardReport,
     SecondaryContradiction,
     SynthesisPacket,
     ThesisDraft,
@@ -450,6 +451,271 @@ def test_governance_input_carries_decision_semantics_fields(tmp_path: Path):
     assert gov_input.false_safety_risks == ["风险消失时价格也可能不便宜"]
     assert "L4.get_ndx_pe_and_earnings_yield" in gov_input.key_evidence_refs
     assert "L5.get_ta_indicators" in gov_input.key_evidence_refs
+
+
+# ── C3 分料测试：risk = 论证盲，critic 默认行为不回退 ──
+
+def test_governance_input_risk_version_carries_no_thesis_content(tmp_path: Path):
+    orchestrator = _orchestrator(tmp_path)
+    synthesis = SynthesisPacket(
+        evidence_index={
+            "L1.get_10y_real_rate": {"layer": "L1"},
+            "L4.get_ndx_pe_and_earnings_yield": {"layer": "L4"},
+        },
+        layer_summaries=[
+            {
+                "layer": "L1",
+                "local_conclusion": "流动性偏紧。",
+                "indicator_refs": ["L1.get_10y_real_rate"],
+            }
+        ],
+    )
+    thesis = ThesisDraft(
+        main_thesis="谨慎观望：高利率压制估值。",
+        environment_assessment="宏观偏紧。",
+        valuation_assessment="估值偏高。",
+        timing_assessment="趋势脆弱。",
+        overall_confidence=Confidence.MEDIUM,
+        dependencies=["盈利增速 > 10%"],
+        key_support_chains=[
+            KeySupportChain(
+                chain_description="真实利率压制估值。",
+                evidence_refs=["L1.get_10y_real_rate"],
+                weight=0.5,
+            )
+        ],
+        hypothesis_responses=[
+            {
+                "hypothesis_id": "hyp_1",
+                "verdict": "absorb_partially",
+                "reasoning": "部分吸收趋势解释。",
+                "evidence_refs": ["L1.get_10y_real_rate"],
+            }
+        ],
+        time_horizon_views=[
+            {
+                "horizon": "one_to_three_months",
+                "view": "赔率中性。",
+                "action_implication": "观望。",
+                "evidence_refs": ["L1.get_10y_real_rate"],
+            }
+        ],
+        portfolio_actions=[
+            {
+                "bucket": "tactical_position",
+                "action": "等待。",
+                "rationale": "等待确认。",
+                "evidence_refs": ["L1.get_10y_real_rate"],
+            }
+        ],
+        retained_conflicts=[
+            Conflict(
+                conflict_type="valuation_discount_rate",
+                severity="high",
+                description="高利率 vs 高估值",
+                implication="估值压力必须保留。",
+                involved_layers=["L1", "L4"],
+            ),
+        ],
+        state_diagnosis="高压环境。",
+        priced_narrative="坏消息部分计入价格。",
+        payoff_assessment="风险收益中性。",
+        confirmation_cost="等待确认有机会成本。",
+        invalidation_conditions=["信用利差走阔"],
+        reader_conclusion={"one_liner": "等待更明确信号。"},
+        principal_contradiction=PrincipalContradiction(
+            contradiction_id="panic_priced_vs_unconfirmed_risk",
+            summary="风险未解除但价格可能已反映。",
+            why_principal="决定战术仓节奏。",
+            dominant_side="风险未解除。",
+            secondary_side="赔率改善。",
+            price_reflection="partially_reflected",
+            action_implication="分批。",
+            evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+        ),
+        secondary_contradictions=[
+            SecondaryContradiction(
+                contradiction_id="breadth_vs_trend",
+                summary="广度约束反弹质量。",
+                why_secondary="约束加仓速度。",
+                action_constraint="不支持满仓。",
+                evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+            )
+        ],
+        price_reflection_map=[
+            PriceReflectionAssessment(
+                target="panic_priced_vs_unconfirmed_risk",
+                reflected_state="partially_reflected",
+                rationale="估值压缩说明部分计入。",
+                evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+            )
+        ],
+    )
+
+    gov_input = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+        consumer="risk",
+    )
+
+    # 任务书要求至少查这五个；这里把全部 thesis_* 字段都查一遍
+    assert gov_input.thesis_main == ""
+    assert gov_input.thesis_environment == ""
+    assert gov_input.thesis_valuation == ""
+    assert gov_input.thesis_timing == ""
+    assert gov_input.thesis_confidence == ""
+    assert gov_input.thesis_dependencies == []
+    assert gov_input.thesis_key_support_chains == []
+    assert gov_input.thesis_hypothesis_responses == []
+    assert gov_input.retained_conflict_types == []
+    assert gov_input.thesis_state_diagnosis == ""
+    assert gov_input.thesis_priced_narrative == ""
+    assert gov_input.thesis_payoff_assessment == ""
+    assert gov_input.thesis_time_horizon_views == []
+    assert gov_input.thesis_portfolio_actions == []
+    assert gov_input.thesis_confirmation_cost == ""
+    assert gov_input.thesis_invalidation_conditions == []
+    assert gov_input.thesis_reader_conclusion == {}
+    assert gov_input.thesis_principal_contradiction is None
+    assert gov_input.thesis_secondary_contradictions == []
+    assert gov_input.thesis_price_reflection_map == []
+
+
+def test_governance_input_risk_layer_summaries_critic_empty(tmp_path: Path):
+    orchestrator = _orchestrator(tmp_path)
+    synthesis = SynthesisPacket(
+        evidence_index={"L4.get_ndx_pe_and_earnings_yield": {"layer": "L4"}},
+        layer_summaries=[
+            {
+                "layer": "L4",
+                "local_conclusion": "估值偏高。",
+                "layer_synthesis": "估值压缩风险存在。",
+                "indicator_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+                "key_evidence": ["NDX PE: 32.5"],
+                "risk_flags": ["估值压缩"],
+                "confidence": "medium",
+            }
+        ],
+    )
+    thesis = ThesisDraft(
+        main_thesis="中性。",
+        environment_assessment="中性。",
+        valuation_assessment="中性。",
+        timing_assessment="中性。",
+        overall_confidence=Confidence.MEDIUM,
+    )
+
+    gov_input_risk = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+        consumer="risk",
+    )
+    gov_input_critic = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+    )
+
+    assert len(gov_input_risk.layer_summaries) == 1
+    assert gov_input_risk.layer_summaries[0]["layer"] == "L4"
+    assert gov_input_risk.layer_summaries[0]["local_conclusion"] == "估值偏高。"
+    assert gov_input_risk.layer_summaries[0]["indicator_refs"] == ["L4.get_ndx_pe_and_earnings_yield"]
+    assert gov_input_critic.layer_summaries == []
+
+
+def test_governance_input_risk_key_evidence_refs_exclude_thesis_only_refs(tmp_path: Path):
+    orchestrator = _orchestrator(tmp_path)
+    synthesis = SynthesisPacket(
+        evidence_index={
+            "L1.conflict_ref": {"layer": "L1"},
+            "L2.layer_ref": {"layer": "L2"},
+            "L3.thesis_only_ref": {"layer": "L3"},
+        },
+        high_severity_typed_conflicts=[
+            TypedConflict(
+                conflict_id="c1",
+                conflict_type="valuation_discount_rate",
+                severity="high",
+                description="冲突描述。",
+                implication="必须保留。",
+                evidence_refs=["L1.conflict_ref"],
+            )
+        ],
+        layer_summaries=[
+            {
+                "layer": "L2",
+                "local_conclusion": "风险偏好恶化。",
+                "indicator_refs": ["L2.layer_ref"],
+            }
+        ],
+    )
+    thesis = ThesisDraft(
+        main_thesis="谨慎。",
+        environment_assessment="偏紧。",
+        valuation_assessment="偏高。",
+        timing_assessment="脆弱。",
+        overall_confidence=Confidence.MEDIUM,
+        key_support_chains=[
+            KeySupportChain(
+                chain_description="只被 thesis 支撑链引用的证据。",
+                evidence_refs=["L3.thesis_only_ref"],
+                weight=0.3,
+            )
+        ],
+    )
+
+    gov_input_risk = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+        consumer="risk",
+    )
+    gov_input_critic = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+    )
+
+    # risk 论证盲：key_evidence_refs 只来自冲突与层摘要，不来自 thesis 支撑链
+    assert "L1.conflict_ref" in gov_input_risk.key_evidence_refs
+    assert "L2.layer_ref" in gov_input_risk.key_evidence_refs
+    assert "L3.thesis_only_ref" not in gov_input_risk.key_evidence_refs
+
+    # critic 默认行为不回退：thesis 支撑链引用的 ref 仍会进入 key_evidence_refs
+    assert "L1.conflict_ref" in gov_input_critic.key_evidence_refs
+    assert "L3.thesis_only_ref" in gov_input_critic.key_evidence_refs
+
+
+def test_governance_input_risk_retry_injects_schema_feedback_without_thesis(tmp_path: Path):
+    """schema_guard_retry 路径：risk 拿 schema 反馈，但仍然论证盲。"""
+    orchestrator = _orchestrator(tmp_path)
+    synthesis = SynthesisPacket(
+        evidence_index={"L1.get_10y_real_rate": {"layer": "L1"}},
+        layer_summaries=[],
+    )
+    thesis = ThesisDraft(
+        main_thesis="谨慎。",
+        environment_assessment="偏紧。",
+        valuation_assessment="偏高。",
+        timing_assessment="脆弱。",
+        overall_confidence=Confidence.MEDIUM,
+    )
+    schema_report = SchemaGuardReport(
+        passed=False,
+        structural_issues=["thesis 缺字段"],
+        missing_fields=["claim_ledger"],
+    )
+
+    gov_input = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+        schema_report=schema_report,
+        consumer="risk",
+    )
+
+    assert gov_input.schema_passed is False
+    assert gov_input.schema_structural_issues == ["thesis 缺字段"]
+    assert gov_input.schema_missing_fields == ["claim_ledger"]
+    # retry 路径仍然论证盲
+    assert gov_input.thesis_main == ""
+    assert gov_input.thesis_key_support_chains == []
 
 
 # ── 护栏测试：governance prompt 中继续禁止编造历史概率 ──
