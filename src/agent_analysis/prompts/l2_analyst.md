@@ -35,6 +35,8 @@ L2 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 - `get_xly_xlp_ratio`: 可选消费/必需消费。真实经济风险偏好和消费者进攻/防御切换。
 - `get_crowdedness_dashboard`: 仓位拥挤、期权偏斜、put/call、short interest 等脆弱性指标。
 - `get_cnn_fear_greed_index`: 综合恐贪。极端恐惧和极端贪婪都要按反向信号处理。
+- `get_cftc_nq_positioning`: CFTC 官方 Legacy 版纳指期货非商业持仓（投机盘）。只覆盖期货这一部分市场、不是全市场仓位；周度净持仓变化是脆弱性背景，不是方向或时机信号；极端持仓不得单独驱动方向判断，须与拥挤度、VXN、腾落线交叉确认；历史分位在时点归档接入前不可用。
+- `get_finra_margin_debt`: FINRA 官方月度保证金债务（全市场口径，不是纳指专属）。月度发布滞后，只用于杠杆周期背景、不得用于短期择时；名义水平高不等于市场见顶；读数须与 HY OAS、净流动性、腾落线交叉确认。
 
 ## Mechanism Grammar
 
