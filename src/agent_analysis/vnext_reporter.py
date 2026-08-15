@@ -3901,7 +3901,7 @@ class VNextReportGenerator:
             date_text = _display_date(card.get("published_at")) or "日期待核"
             excerpt = _fact_excerpt(card.get("raw_text_excerpt"))
             read_state = "已读正文" if interpretation_card and str(card.get("raw_text_excerpt") or "").strip() else "仅标题与片段 · 降级阅读"
-            meta_line = " · ".join(part for part in (source_name, self._tier_zh(source_tier), read_state) if part)
+            meta_line = " · ".join(part for part in (source_name, self._tier_zh(source_tier), read_state, "未经第三层对质") if part)
             fold = ""
             if interpretation_card:
                 mechanism_hypothesis = interpretation_card.get("mechanism_hypothesis", {})
@@ -3934,7 +3934,7 @@ class VNextReportGenerator:
                 fold = f'<div class="em ev-excerpt">{_escape(excerpt)}</div>'
             return (
                 f'<div class="evrow"><div class="ed">{_escape(date_text)}</div>'
-                f'<div class="et"><b>{_escape(title)}</b><div class="em">{_escape(meta_line)}</div>{fold}</div></div>'
+                f'<div class="et"><span class="tag sans">候选材料</span><b>{_escape(title)}</b><div class="em">{_escape(meta_line)}</div>{fold}</div></div>'
             )
 
         visible_rows = "".join(event_row(card_id) for card_id in ordered_card_ids[:8])
@@ -3980,7 +3980,7 @@ class VNextReportGenerator:
         return f"""
 <section class="{_escape(section_class)}" id="{_escape(section_id)}">
   <div class="sec-head"><span class="tag sans">{_escape(section_kicker)}</span><h2>{_escape(section_title)}</h2></div>
-  <p class="section-note">事件材料不进入主证据链、不构成判断依据；它们的职责是解释与预警。</p>
+  <p class="section-note">本节展示的是第二层候选材料，带认识论标签，未经第三层综合裁决；判断以数据层为准。事件材料不进入主证据链、不构成判断依据；它们的职责是解释与预警。</p>
   <div class="sec-grid">
   <div class="sec-main">
   {intro_html}
@@ -4258,7 +4258,7 @@ class VNextReportGenerator:
     {summary_html or f"<p>{_escape(event.get('notes') or '官方来源事件；只作为背景和触发条件，不替代指标证据。')}</p>"}
     {link_html}
   </div>
-  <div class="news-tags">{''.join(tags)}</div>
+  <div class="news-tags"><span class="tag sans">候选材料</span><span>未经第三层对质</span>{''.join(tags)}</div>
 </article>
 """
             )
@@ -4294,7 +4294,7 @@ class VNextReportGenerator:
 <section class="panel news-panel" id="news">
   <div class="section-kicker">03 · 新闻源</div>
   <h2>新闻中文概要、股市影响与市场连接观察</h2>
-  <p class="section-note">这里只展示官方事件底账、官方宏观 RSS、M7 SEC filings、中文概要、可能影响通道，以及事件日前后市场序列的轻量观察。事件可以解释触发背景，但不能替代任何指标证据。</p>
+  <p class="section-note">本节展示的是第二层候选材料，带认识论标签，未经第三层综合裁决；判断以数据层为准。这里只展示官方事件底账、官方宏观 RSS、M7 SEC filings、中文概要、可能影响通道，以及事件日前后市场序列的轻量观察。事件可以解释触发背景，但不能替代任何指标证据。</p>
   {aggregate_html}
   <div class="news-grid">{''.join(rows) if rows else empty}</div>
   {boundary}

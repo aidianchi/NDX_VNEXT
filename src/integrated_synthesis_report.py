@@ -78,6 +78,14 @@ def _as_list(value: Any) -> List[Any]:
     return value if isinstance(value, list) else []
 
 
+def _is_deterministic_stub(report: Dict[str, Any]) -> bool:
+    """兼容实测到的字符串形态（"True"/"False"）与布尔形态的 stub 标记。"""
+    value = report.get("is_deterministic_stub", True)
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y", "stub"}
+    return bool(value)
+
+
 def _compact_refs(values: List[Any], limit: int = 8) -> List[str]:
     refs: List[str] = []
     for value in values:
@@ -156,6 +164,7 @@ class IntegratedSynthesisReportBuilder:
         final_adjudication: Optional[Dict[str, Any]] = None,
         investigation_reports: Optional[List[Dict[str, Any]]] = None,
         cross_layer_questions: Optional[Dict[str, Any]] = None,
+        competing_hypotheses: Optional[List[Dict[str, Any]]] = None,
         llm_caller: Optional[Callable[..., Optional[str]]] = None,
         audit_dir: Optional[str | Path] = None,
         output_path: Optional[str | Path] = None,
@@ -168,12 +177,13 @@ class IntegratedSynthesisReportBuilder:
         event_interpretation_cards = event_interpretation_cards or {}
         evidence_registry = evidence_registry or {}
         final_claim_ledger = final_claim_ledger or {}
+        all_investigation_reports = [r for r in (investigation_reports or []) if isinstance(r, dict)]
         time_consistency = self._check_time_consistency(
             analysis_packet=analysis_packet or {},
             final_adjudication=final_adjudication or {},
             event_interpretation_cards=event_interpretation_cards,
             cross_layer_questions=cross_layer_questions or {},
-            investigation_reports=[r for r in (investigation_reports or []) if isinstance(r, dict)],
+            investigation_reports=all_investigation_reports,
         )
         publish_gate = self._publish_gate(
             data_integrity_report,
@@ -194,10 +204,9 @@ class IntegratedSynthesisReportBuilder:
         adjudication, llm_note = self._llm_adjudication(
             final_adjudication=final_adjudication or {},
             cards=[card for card in _as_list((event_interpretation_cards or {}).get("cards"))[:10] if isinstance(card, dict)],
-            investigation_reports=[
-                r for r in (investigation_reports or [])
-                if isinstance(r, dict) and not r.get("is_deterministic_stub", True)
-            ][:3],
+            investigation_reports=all_investigation_reports,
+            competing_hypotheses=competing_hypotheses or [],
+            event_layer_summary=event_layer_summary,
             cross_layer_questions=cross_layer_questions or {},
             publish_gate=publish_gate,
             evidence_registry=evidence_registry,
@@ -212,7 +221,7 @@ class IntegratedSynthesisReportBuilder:
             conflict_rows=(
                 _as_list(adjudication.get("conflict_matrix")) if isinstance(adjudication, dict) else []
             ),
-            investigation_reports=[r for r in (investigation_reports or []) if isinstance(r, dict)],
+            investigation_reports=all_investigation_reports,
             evidence_registry=evidence_registry,
         )
         payload = {
@@ -264,6 +273,8 @@ class IntegratedSynthesisReportBuilder:
         final_adjudication: Dict[str, Any],
         cards: List[Dict[str, Any]],
         investigation_reports: List[Dict[str, Any]],
+        competing_hypotheses: List[Dict[str, Any]],
+        event_layer_summary: Dict[str, Any],
         cross_layer_questions: Dict[str, Any],
         publish_gate: Dict[str, Any],
         evidence_registry: Optional[Dict[str, Any]] = None,
@@ -291,11 +302,41 @@ class IntegratedSynthesisReportBuilder:
         except OSError:
             return None, "prompt_file_missing"
 
-        questions = [
-            {"question_id": str(q.get("question_id") or q.get("id") or f"q{i}"), "question": str(q.get("question") or "")}
-            for i, q in enumerate(_as_list(cross_layer_questions.get("questions")))
-            if isinstance(q, dict) and str(q.get("question") or "").strip()
-        ][:8]
+        questions = []
+        for i, q in enumerate(_as_list(cross_layer_questions.get("questions"))):
+            if not isinstance(q, dict) or not str(q.get("question") or "").strip():
+                continue
+            questions.append({
+                "question_id": str(q.get("question_id") or q.get("id") or f"q{i}"),
+                "question": str(q.get("question") or ""),
+                "event_refs": [
+                    str(ref).strip()
+                    for ref in _as_list(q.get("event_refs"))
+                    if str(ref).strip()
+                ][:20],
+            })
+        questions = questions[:8]
+        non_stub_reports = [
+            report for report in investigation_reports
+            if isinstance(report, dict) and not _is_deterministic_stub(report)
+            and str(report.get("finding") or "").strip() and not report.get("llm_failure")
+        ]
+        gap_reports = [
+            report for report in investigation_reports
+            if isinstance(report, dict) and (
+                _is_deterministic_stub(report)
+                or report.get("llm_failure")
+                or not str(report.get("finding") or "").strip()
+            )
+        ]
+        investigation_gaps = [
+            {
+                "investigation_id": report.get("investigation_id"),
+                "status": "deterministic_stub" if _is_deterministic_stub(report) else "llm_failure",
+                "note": "本调查未返回有效报告",
+            }
+            for report in gap_reports
+        ]
         effective_date, cards, date_notes = self._enforce_card_effective_dates(cards)
         # T42①：许可从实发导出，恒真而非事后校验。先把真正要发给模型的叙事字段
         # 组进 payload（含 key_support_chains / evidence_refs 这两处 FinalAdjudication
@@ -322,10 +363,15 @@ class IntegratedSynthesisReportBuilder:
                 for chain in _as_list(final_adjudication.get("key_support_chains"))[:8]
                 if isinstance(chain, dict)
             ],
-            "allowed_investigation_ids": [str(r.get("investigation_id") or "") for r in investigation_reports],
+            "competing_hypotheses": self._compact_competing_hypotheses_for_prompt(competing_hypotheses),
+            "event_layer_summary": self._compact_event_layer_summary_for_prompt(event_layer_summary),
+            "allowed_investigation_ids": [str(r.get("investigation_id") or "") for r in non_stub_reports[:3]],
             "event_interpretation_cards": [self._compact_card_for_prompt(card) for card in cards],
             "cards_empty": not cards,
-            "investigation_reports": [self._compact_investigation_for_prompt(r) for r in investigation_reports],
+            "investigation_reports": [
+                self._compact_investigation_for_prompt(r) for r in non_stub_reports[:3]
+            ],
+            "investigation_gaps": investigation_gaps,
             "cross_layer_questions": questions,
         }
         allowed_refs = self._allowed_data_refs(payload)
@@ -433,6 +479,10 @@ class IntegratedSynthesisReportBuilder:
 
         card_ids = {str(card.get("event_id") or "") for card in cards}
         question_by_id = {q["question_id"]: q["question"] for q in questions}
+        question_event_refs_by_id = {
+            q["question_id"]: {str(ref).strip() for ref in _as_list(q.get("event_refs")) if str(ref).strip()}
+            for q in questions
+        }
         question_ids = set(question_by_id)
         allowed = set(payload.get("allowed_data_refs") or [])
         allowed_inv = {str(i) for i in payload.get("allowed_investigation_ids") or [] if str(i)}
@@ -461,6 +511,22 @@ class IntegratedSynthesisReportBuilder:
                         kept.append(ref)
                 elif ref:
                     notes.append(f"rejected_unknown_ref:{tag}:{ref}")
+            return kept
+
+        def _split_event_refs(values: Any, question_id: str) -> List[str]:
+            """N2-3：事件侧引用只保留 payload 事件卡 id 或本问题 event_refs 里的 id。"""
+            pool = set(card_ids)
+            pool.update(question_event_refs_by_id.get(question_id, set()))
+            normalized_pool = {re.sub(r"^event[:_]", "", ref) for ref in pool}
+            kept: List[str] = []
+            for raw in values if isinstance(values, list) else []:
+                ref = str(raw).strip()
+                normalized = re.sub(r"^event[:_]", "", ref)
+                if ref in pool or normalized in normalized_pool:
+                    if ref not in kept:
+                        kept.append(ref)
+                elif ref:
+                    notes.append(f"rejected_unknown_event_ref:{question_id}:{ref}")
             return kept
 
         # 六档硬闸门（C2/C3）：data_support 只留白名单内的非 audit-only ref。
@@ -499,12 +565,14 @@ class IntegratedSynthesisReportBuilder:
                     "answer": "未作答",
                     "data_refs": [],
                     "investigation_refs": [],
+                    "event_refs": [],
                     "missing_evidence": missing_evidence,
                 }
                 cleaned_by_id[qid] = answer
                 continue
             answer["data_refs"] = _split_refs(answer.get("data_refs"), allowed, f"qa:{qid}")
             answer["investigation_refs"] = _split_refs(answer.get("investigation_refs"), allowed_inv, f"qa:{qid}")
+            answer["event_refs"] = _split_event_refs(answer.get("event_refs"), qid)
             if answer.get("answer_status") == "answered_by_data" and not (answer["data_refs"] or answer["investigation_refs"]):
                 answer["answer_status"] = "cannot_answer_yet"
                 notes.append(f"answer_downgraded_no_evidence:{qid}")
@@ -530,6 +598,7 @@ class IntegratedSynthesisReportBuilder:
                 "answer": "未作答",
                 "data_refs": [],
                 "investigation_refs": [],
+                "event_refs": [],
                 "missing_evidence": [_MISSING_EVIDENCE_PLACEHOLDER],
             })
         data["question_answers"] = cleaned_answers
@@ -646,7 +715,7 @@ class IntegratedSynthesisReportBuilder:
             answer["question_id"] = qid
             if not str(answer.get("question") or "").strip():
                 answer["question"] = question_text.get(qid, qid or "未知问题")
-            for list_key in ("data_refs", "investigation_refs", "missing_evidence"):
+            for list_key in ("data_refs", "investigation_refs", "event_refs", "missing_evidence"):
                 answer[list_key] = _to_text_list(answer.get(list_key))
             answer["answer"] = _to_text(answer.get("answer")) or "未作答"
             if not answer["data_refs"]:
@@ -757,6 +826,87 @@ class IntegratedSynthesisReportBuilder:
             "claims_challenged": _as_list(report.get("claims_challenged"))[:5],
             "cannot_establish": _as_list(report.get("cannot_establish"))[:5],
             "confidence": report.get("confidence"),
+        }
+
+    def _compact_competing_hypotheses_for_prompt(
+        self,
+        hypotheses: Any,
+    ) -> List[Dict[str, Any]]:
+        """N2-1：治理链竞争假说清单进 IA，只带四字段、控条数与文本长度。"""
+        compacted: List[Dict[str, Any]] = []
+        for hypothesis in _as_list(hypotheses):
+            if not isinstance(hypothesis, dict):
+                continue
+            compacted.append({
+                "hypothesis_id": hypothesis.get("hypothesis_id"),
+                "hypothesis_text": str(hypothesis.get("hypothesis_text") or "")[:300],
+                "status": hypothesis.get("status"),
+                "source": hypothesis.get("source"),
+            })
+            if len(compacted) >= 12:
+                break
+        return compacted
+
+    def _compact_event_layer_summary_for_prompt(
+        self,
+        summary: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """N2-2：第二层自己的事件报告进 IA，只取可用的摘要/正文文本。
+
+        实读 event_layer_summary.json 没有 governed_summary/summary_text 顶层键，
+        正文散在 most_important_events/minimum_fact、most_important_claims/claim_text、
+        highest_confidence_explanations/minimum_fact、strongest_counterevidence、
+        unexplained_items/reason 里；这里把可用文本收束成一段 ≤1500 字符的摘要。
+        """
+        if not isinstance(summary, dict) or not summary:
+            return {"summary": "", "cards_available": False}
+        parts: List[str] = []
+        for key in ("governed_summary", "summary_text"):
+            text = summary.get(key)
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+        cards = summary.get("cards")
+        if isinstance(cards, list):
+            for card in cards:
+                if not isinstance(card, dict):
+                    continue
+                for key in ("summary", "summary_text", "minimum_fact", "claim_text", "text"):
+                    text = card.get(key)
+                    if isinstance(text, str) and text.strip():
+                        parts.append(text.strip())
+                        break
+        for entry in _as_list(summary.get("most_important_events")):
+            if isinstance(entry, dict):
+                text = entry.get("minimum_fact") or entry.get("summary") or entry.get("summary_text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        for entry in _as_list(summary.get("most_important_claims")):
+            if isinstance(entry, dict):
+                text = entry.get("claim_text") or entry.get("summary") or entry.get("summary_text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        for entry in _as_list(summary.get("highest_confidence_explanations")):
+            if isinstance(entry, dict):
+                text = entry.get("minimum_fact") or entry.get("summary") or entry.get("summary_text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        for entry in _as_list(summary.get("strongest_counterevidence")):
+            if isinstance(entry, str) and entry.strip():
+                parts.append(entry.strip())
+            elif isinstance(entry, dict):
+                text = entry.get("reason") or entry.get("summary") or entry.get("summary_text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        for entry in _as_list(summary.get("unexplained_items")):
+            if isinstance(entry, dict):
+                text = entry.get("reason") or entry.get("summary") or entry.get("summary_text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        text = "；".join(parts).strip()
+        cards_available = bool(text or cards or _as_list(summary.get("most_important_events")) or _as_list(summary.get("most_important_claims")))
+        return {
+            "summary": text[:1500],
+            "cards_available": cards_available,
         }
 
     def _write_audit(self, audit_dir: Optional[str | Path], attempt: int, prompt: str, raw: Optional[str]) -> bool:
@@ -1229,6 +1379,9 @@ def write_integrated_synthesis_report(
             report = _load_json(report_file, {})
             if isinstance(report, dict):
                 investigation_reports.append(report)
+    synthesis_packet = _load_json(run_path / "synthesis_packet.json", {})
+    if not isinstance(synthesis_packet, dict):
+        synthesis_packet = {}
     payload = IntegratedSynthesisReportBuilder().build(
         pure_data_report=pure_data_report if pure_data_report is not None else _load_json(pure_path, {}),
         analysis_packet=_load_json(run_path / "analysis_packet.json", {}),
@@ -1240,7 +1393,8 @@ def write_integrated_synthesis_report(
         evidence_registry=evidence_registry if evidence_registry is not None else _load_json(registry_path, {}),
         final_claim_ledger=final_claim_ledger if final_claim_ledger is not None else _load_json(claim_ledger_path, {}),
         final_adjudication=_load_json(run_path / "final_adjudication.json", {}),
-        evidence_index=_load_json(run_path / "synthesis_packet.json", {}).get("evidence_index") or {},
+        evidence_index=synthesis_packet.get("evidence_index") or {},
+        competing_hypotheses=synthesis_packet.get("competing_hypotheses") or [],
         investigation_reports=investigation_reports,
         cross_layer_questions=_load_json(run_path / "cross_layer_questions.json", {}),
         llm_caller=llm_caller,

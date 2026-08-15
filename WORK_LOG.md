@@ -129,6 +129,14 @@
 - `event_index` 按 A3 裁决挂起并在 `contracts.py` 写注释（IA 走 source_artifacts 路径，此字段是死字段，启用前必须先定语义）。
 - 【关闭 T49】编号退役。剩余批次 C8-C19 无台账编号，按"新事新号"立 **T51**（C8-C19 剩余施工），下一步指向 T51。
 
+### C8 收工（T51 第一步）：IA 菜单补全四样 + 外部世界标签化（08-16）
+
+- N2：①治理链 `competing_hypotheses` 进 IA（≤12 条、每条文 ≤300 字符，只进 IA 不回第一层）；②第二层事件报告 `event_layer_summary` 进 IA（≤1500 字符摘要，不进 allowed_data_refs）；③question_answers 新增可选 `event_refs`（仅第三层对质可用，`answered_by_data` 判据不变，非法事件 ref 清洗留痕 `rejected_unknown_event_ref:`）；④失败调查显性占位 `investigation_gaps`（stub/llm_failure 分栏，allowed_investigation_ids 只含非 stub）——A6 从"静默缺席"改为"显性占位"。
+- N3：brief 世界章节与 cockpit/atlas/workbench 完整模板的事件行都加"候选材料 + 未经第三层对质"标签，章节开头加声明句；IA 已裁决区不贴候选标签。
+- `persistent_checks_a.py` 的 PC-05 同步改为 `委托数 == allowed + gaps` 且 `reports == allowed`，含占位的 run 不再误报。
+- reviewer 只读复核：无 P0；P1（PC-05 未跟 C8）与 P2（完整模板标签覆盖、任务书验收措辞）已全部修复。相关测试 **148 passed**。
+- 未花钱（全程 Fake/离线装配验收）。T51 剩 C10-C19。
+
 ### 六问架构重审跑完并定案：骨架不动，几处小修；定案文档一篇顶所有
 
 **为什么做**：所有者对北极星与不变原则产生怀疑（文档写了"判断质量可测量地变好"，所有者不认），立六问独立对质（P1 前提检验 / P2 目的与校准 / P3 五层切法 / P4 隔离真实性 / P5 编排合理性 / P6 决策翻译层），先 P6 试水认可后再全跑。

@@ -306,6 +306,30 @@ def test_pc05_pass_counts_match(tmp_path: Path):
     assert result["passed"] is True
 
 
+def test_pc05_pass_with_explicit_gap_placeholder(tmp_path: Path):
+    """C8 后：失败调查以 investigation_gaps 显性占位，不得再当静默缺席。"""
+    _write_json(
+        tmp_path / "inquiry_router_output.json",
+        {"agent_specs": [{"agent_id": "a"}, {"agent_id": "b"}, {"agent_id": "c"}]},
+    )
+    _write_ia_prompt(
+        tmp_path,
+        {
+            "allowed_investigation_ids": ["inv_a", "inv_b"],
+            "investigation_reports": [
+                {"investigation_id": "inv_a"},
+                {"investigation_id": "inv_b"},
+            ],
+            "investigation_gaps": [
+                {"investigation_id": "inv_c", "status": "deterministic_stub"}
+            ],
+        },
+    )
+    result = _result_by_id(run_checks_a(tmp_path), "PC-05")
+    assert result["passed"] is True
+    assert "investigation_gaps=1" in result["detail"]
+
+
 def test_pc05_fail_silent_absence(tmp_path: Path):
     _write_json(
         tmp_path / "inquiry_router_output.json",
@@ -323,7 +347,7 @@ def test_pc05_fail_silent_absence(tmp_path: Path):
     )
     result = _result_by_id(run_checks_a(tmp_path), "PC-05")
     assert result["passed"] is False
-    assert "失败调查静默缺席" in result["detail"]
+    assert "调查数对不上" in result["detail"]
 
 
 # ──────────────────────────────────────────────────────────────────────────

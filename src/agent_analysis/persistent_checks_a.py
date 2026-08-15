@@ -568,23 +568,29 @@ def _check_pc05(run_dir: Path) -> Dict[str, Any]:
 
     allowed_ids = payload.get("allowed_investigation_ids")
     reports = payload.get("investigation_reports")
+    gaps = payload.get("investigation_gaps")
     if not isinstance(allowed_ids, list):
         allowed_ids = []
     if not isinstance(reports, list):
         reports = []
+    if not isinstance(gaps, list):
+        gaps = []
 
     delegated = len(agent_specs)
     allowed = len(allowed_ids)
     reported = len(reports)
-    passed = delegated == allowed and delegated == reported
+    gap_count = len(gaps)
+    # C8 后失败调查 = 显性占位（investigation_gaps），不再静默缺席：
+    # 委托数 = 非 stub 报告数 + 占位数；allowed_investigation_ids 只含非 stub。
+    passed = delegated == allowed + gap_count and reported == allowed
     detail = (
         f"agent_specs={delegated}, allowed_investigation_ids={allowed}, "
-        f"investigation_reports={reported}"
+        f"investigation_reports={reported}, investigation_gaps={gap_count}"
     )
     if not passed:
-        detail += "；失败调查静默缺席（C8 待修占位装配）"
+        detail += "；调查数对不上（可能是真静默缺席，也可能是占位装配未接线）"
     return _result("PC-05", "委托调查 vs 进 IA 报告数对账（A6）", passed, detail,
-                   "inquiry_router_output.json:agent_specs vs IA payload:allowed_investigation_ids/investigation_reports")
+                   "inquiry_router_output.json:agent_specs vs IA payload:allowed_investigation_ids/investigation_reports/investigation_gaps")
 
 
 # ──────────────────────────────────────────────────────────────────────────

@@ -461,6 +461,10 @@ class IntegratedQuestionAnswer(BaseModel):
     answer: str = Field(..., min_length=1, description="回答正文；答不了就写明缺什么")
     data_refs: List[str] = Field(default_factory=list, description="支撑回答的数据 evidence refs")
     investigation_refs: List[str] = Field(default_factory=list, description="支撑回答的调查报告 id")
+    event_refs: List[str] = Field(
+        default_factory=list,
+        description="事件侧引用（仅第三层对质可用，不得进第一层）",
+    )
     missing_evidence: List[str] = Field(default_factory=list, description="尚缺的检验数据")
 
     @model_validator(mode="after")

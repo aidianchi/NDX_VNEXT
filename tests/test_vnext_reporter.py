@@ -711,6 +711,54 @@ def test_world_section_renders_governed_summary_only_when_present():
     assert "今天最值得盯的是" not in without_summary
 
 
+def test_world_section_labels_event_cards_as_candidate_material():
+    reporter = VNextReportGenerator()
+    mechanism = {
+        "news_cards": [
+            {
+                "news_id": "news:candidate",
+                "title": "候选事件标题",
+                "source_name": "Federal Reserve",
+                "published_at": "2026-07-18",
+                "raw_text_excerpt": "官方发布声明。",
+            }
+        ]
+    }
+
+    html = reporter._event_mechanism_report_section(mechanism, {})
+
+    assert "候选材料" in html
+    assert "未经第三层对质" in html
+    assert "本节展示的是第二层候选材料，带认识论标签，未经第三层综合裁决；判断以数据层为准。" in html
+    # 标签与定位声明必须逐条出现在事件行上，且与 tier/read_state 并列。
+    assert html.count("未经第三层对质") >= 1
+    assert "Federal Reserve" in html
+
+
+def test_news_section_labels_event_rows_as_candidate_material():
+    reporter = VNextReportGenerator()
+    html = reporter._news_section({
+        "news_event_ledger": {
+            "events": [
+                {
+                    "event_id": "event:news1",
+                    "title": "新闻标题",
+                    "source_tier": "official",
+                    "published_at": "2026-07-18",
+                    "notes": "官方来源事件。",
+                }
+            ]
+        },
+        "news_event_data_links": {},
+        "news_layer_analysis": {},
+    })
+
+    assert "候选材料" in html
+    assert "未经第三层对质" in html
+    assert "本节展示的是第二层候选材料，带认识论标签，未经第三层综合裁决；判断以数据层为准。" in html
+    assert "新闻标题" in html
+
+
 def test_brief_world_keeps_expectation_ledger_inside_its_section():
     reporter = VNextReportGenerator()
     html = reporter._brief_world_section(

@@ -92,6 +92,7 @@ def _build(llm_response, **kwargs):
 
     builder = IntegratedSynthesisReportBuilder()
     investigation_reports = kwargs.pop("investigation_reports", [])
+    cross_layer_questions = kwargs.pop("cross_layer_questions", None)
     payload = builder.build(
         pure_data_report={"principal_contradictions": []},
         analysis_packet={"meta": {"data_date": "2026-07-18"}},
@@ -99,12 +100,129 @@ def _build(llm_response, **kwargs):
         event_narrative_ledger={"events": [{"claims": []}]},
         event_interpretation_cards=_cards(),
         final_adjudication=_final_adjudication(),
-        cross_layer_questions=_questions(),
+        cross_layer_questions=cross_layer_questions if cross_layer_questions is not None else _questions(),
         investigation_reports=investigation_reports,
         llm_caller=caller,
         **kwargs,
     )
     return payload, calls
+
+
+def _sent_payload(calls):
+    prompt = calls[0]
+    start = prompt.index("```json\n") + len("```json\n")
+    end = prompt.rindex("\n```")
+    return json.loads(prompt[start:end])
+
+
+def test_competing_hypotheses_are_compacted_into_payload():
+    payload, calls = _build(
+        _valid_response(),
+        competing_hypotheses=[
+            {
+                "hypothesis_id": "hyp_a",
+                "hypothesis_text": "甲" * 310,
+                "status": "leading",
+                "source": "bridge_v2",
+                "support_evidence_refs": ["L1.get_10y_real_rate"],
+            },
+            {"hypothesis_id": "hyp_b", "hypothesis_text": "乙", "status": "candidate", "source": "counter_thesis"},
+        ],
+    )
+    assert payload["integrated_adjudication"] is not None
+    sent = _sent_payload(calls)
+    compacted = sent["competing_hypotheses"]
+    assert len(compacted) == 2
+    assert compacted[0]["hypothesis_id"] == "hyp_a"
+    assert compacted[0]["hypothesis_text"] == "甲" * 300
+    assert compacted[0]["status"] == "leading"
+    assert compacted[0]["source"] == "bridge_v2"
+    assert set(compacted[0]) == {"hypothesis_id", "hypothesis_text", "status", "source"}
+
+
+def test_event_layer_summary_is_compacted_into_payload():
+    payload, calls = _build(
+        _valid_response(),
+        event_layer_summary={
+            "most_important_events": [{"event_cluster_id": "event_cluster:1", "minimum_fact": "美联储发布声明。"}],
+            "most_important_claims": [{"claim_text": "某公司财测上修。"}],
+            "strongest_counterevidence": ["时间邻近不等于因果证明。"],
+        },
+    )
+    assert payload["integrated_adjudication"] is not None
+    sent = _sent_payload(calls)
+    summary = sent["event_layer_summary"]
+    assert "美联储发布声明" in summary["summary"]
+    assert "某公司财测上修" in summary["summary"]
+    assert "时间邻近不等于因果证明" in summary["summary"]
+    assert summary["cards_available"] is True
+
+    payload_empty, calls_empty = _build(_valid_response())
+    sent_empty = _sent_payload(calls_empty)
+    assert sent_empty["event_layer_summary"] == {"summary": "", "cards_available": False}
+
+
+def test_question_event_refs_are_carried_and_sanitized():
+    questions = _questions()
+    questions["questions"][0]["event_refs"] = ["event:abc12345", "event:from_question"]
+
+    data = json.loads(_valid_response())
+    data["question_answers"][0].update({
+        "answer_status": "answered_by_data",
+        "answer": "数据同步确认。",
+        "data_refs": ["L1.get_10y_real_rate"],
+        "investigation_refs": [],
+        "event_refs": ["event:abc12345", "event_ghost", "event_abc12345"],
+        "missing_evidence": [],
+    })
+    payload, calls = _build(json.dumps(data, ensure_ascii=False), cross_layer_questions=questions)
+    assert payload["integrated_adjudication"] is not None
+    sent = _sent_payload(calls)
+    assert sent["cross_layer_questions"][0]["event_refs"] == ["event:abc12345", "event:from_question"]
+
+    adj = payload["integrated_adjudication"]
+    answer = adj["question_answers"][0]
+    assert answer["answer_status"] == "answered_by_data"
+    assert answer["event_refs"] == ["event:abc12345", "event_abc12345"]
+    assert any("rejected_unknown_event_ref:q1:event_ghost" in note for note in adj["notes"])
+
+
+def test_answered_by_data_with_only_event_refs_still_downgraded():
+    questions = _questions()
+    questions["questions"][0]["event_refs"] = ["event:abc12345"]
+
+    data = json.loads(_valid_response())
+    data["question_answers"][0].update({
+        "answer_status": "answered_by_data",
+        "answer": "只有事件侧来源。",
+        "data_refs": [],
+        "investigation_refs": [],
+        "event_refs": ["event:abc12345"],
+        "missing_evidence": [],
+    })
+    payload, _ = _build(json.dumps(data, ensure_ascii=False), cross_layer_questions=questions)
+    answer = payload["integrated_adjudication"]["question_answers"][0]
+    assert answer["answer_status"] == "cannot_answer_yet"
+    assert answer["event_refs"] == ["event:abc12345"]
+    assert answer["missing_evidence"] == ["缺口未由模型明示，需人工补记"]
+
+
+def test_investigation_gaps_split_stub_reports():
+    reports = [
+        {"investigation_id": "inv_good1", "is_deterministic_stub": False, "finding": "有效发现一", "effective_date": "2026-07-18"},
+        {"investigation_id": "inv_good2", "is_deterministic_stub": False, "finding": "有效发现二", "effective_date": "2026-07-18"},
+        {"investigation_id": "inv_stub", "is_deterministic_stub": True, "finding": "本轮未执行真实调查", "effective_date": "2026-07-18"},
+    ]
+    payload, calls = _build(_valid_response(), investigation_reports=reports)
+    assert payload["integrated_adjudication"] is not None
+    sent = _sent_payload(calls)
+    assert [r["investigation_id"] for r in sent["investigation_reports"]] == ["inv_good1", "inv_good2"]
+    assert sent["allowed_investigation_ids"] == ["inv_good1", "inv_good2"]
+    gaps = sent["investigation_gaps"]
+    assert len(gaps) == 1
+    assert gaps[0]["investigation_id"] == "inv_stub"
+    assert gaps[0]["status"] == "deterministic_stub"
+    assert gaps[0]["note"] == "本调查未返回有效报告"
 
 
 def test_successful_adjudication_and_unanswered_question_note():
