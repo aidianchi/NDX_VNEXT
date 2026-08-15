@@ -2287,13 +2287,15 @@ class VNextOrchestrator:
                 total_chars += len(notes[-1])
                 continue
             excerpt = raw_text
-            stance_note = ""
+            stripped_keys: List[str] = []
             if isinstance(payload, dict):
-                # 配餐单余站条目第 4 类：序列化前递归删除立场/仓位字段，调查员只
-                # 看事实面；允许在材料里显示“已剥离立场字段”而不是静默消失。
+                # 配餐单余站条目第 4 类：序列化前递归删除立场字段，调查员只看事实面。
+                # 用 JSON 字段标“已剥离”而不是在 JSON 外贴注记，保证材料块始终是
+                # 可解析的完整 JSON（PC-06 机器检查要求）。
                 stripped_payload, stripped_keys = self._strip_material_stance_fields(payload)
                 if stripped_keys:
-                    stance_note = "\n[已剥离立场字段]"
+                    stripped_payload["_stance_fields_stripped"] = True
+                    stripped_payload["_stance_fields_stripped_count"] = len(stripped_keys)
                 if question:
                     keywords = self._investigation_question_keywords(question)
                     ranked_blocks: List[tuple[int, int, str, Any]] = []
@@ -2305,6 +2307,9 @@ class VNextOrchestrator:
                     if ranked_blocks:
                         ranked_blocks.sort(reverse=True)
                         selected = {key: value for _, _, key, value in ranked_blocks}
+                        if stripped_keys:
+                            selected["_stance_fields_stripped"] = True
+                            selected["_stance_fields_stripped_count"] = len(stripped_keys)
                         excerpt = json.dumps(selected, ensure_ascii=False, indent=2, default=str)
                     else:
                         excerpt = json.dumps(stripped_payload, ensure_ascii=False, indent=2, default=str)
@@ -2317,13 +2322,43 @@ class VNextOrchestrator:
             material_index = len(notes) + 1
             prefix = f"[M{material_index}] artifact={ref}\n"
             suffix = f"\n[/M{material_index}]"
-            truncation_note = "\n[已截断：本材料 JSON 可能不闭合，仅部分内容可见，禁止据此补全未显示内容。]"
             max_excerpt_len = max(0, 4000 - len(prefix) - len(suffix))
-            if len(excerpt) + len(stance_note) > max_excerpt_len:
-                content_budget = max(0, max_excerpt_len - len(truncation_note) - len(stance_note))
-                excerpt_trimmed = excerpt[:content_budget] + stance_note + truncation_note
+            if len(excerpt) > max_excerpt_len:
+                # 截断时发“合法的截断信封”，不发半截 JSON：preview 是字符串，
+                # 信封本身可解析，模型被明确禁止据此补全未显示内容。
+                # 先算信封固定开销，再定 preview 预算，使整块材料仍恰好贴住 4000 上限。
+                envelope = {
+                    "_material_truncated": True,
+                    "artifact": ref,
+                    "note": "材料 JSON 超过调查预算，已截断；完整内容在磁盘 artifact，禁止据此补全未显示内容。",
+                    "preview": "",
+                }
+                if stripped_keys:
+                    envelope["_stance_fields_stripped"] = True
+                    envelope["_stance_fields_stripped_count"] = len(stripped_keys)
+                overhead = len(json.dumps(envelope, ensure_ascii=False, indent=2, default=str))
+                preview_budget = max(0, max_excerpt_len - overhead)
+                # preview 里的引号/反斜杠会被 JSON 转义、实际长度膨胀，迭代收缩到
+                # 信封序列化后确定 ≤ max_excerpt_len，绝不用切片切断 JSON。
+                for _ in range(6):
+                    envelope["preview"] = excerpt[:preview_budget]
+                    serialized = json.dumps(envelope, ensure_ascii=False, indent=2, default=str)
+                    if len(serialized) <= max_excerpt_len:
+                        break
+                    preview_budget = max(0, preview_budget - (len(serialized) - max_excerpt_len) - 10)
+                # 用无转义安全字符把信封补齐到上限，保持每块材料恰好 4000、总额恰好 12000。
+                while len(serialized) < max_excerpt_len:
+                    padded = json.dumps(
+                        {**envelope, "preview": envelope["preview"] + "甲"},
+                        ensure_ascii=False, indent=2, default=str,
+                    )
+                    if len(padded) > max_excerpt_len:
+                        break
+                    envelope["preview"] += "甲"
+                    serialized = padded
+                excerpt_trimmed = serialized
             else:
-                excerpt_trimmed = excerpt + stance_note
+                excerpt_trimmed = excerpt
             material = prefix + excerpt_trimmed + suffix
             material = material[:remaining]
             notes.append(material)
@@ -5135,12 +5170,10 @@ class VNextOrchestrator:
             _model_dump(item) for item in getattr(synthesis_packet, "principal_contradictions", []) or []
         ]
 
-        if consumer == "risk" or consumer in {"reviser", "final"}:
-            # 配餐单：risk 提示词未列 pricing_expectation_ledger，不给；
-            # 08-15 已批：reviser/final 去噪音字段，也不给。
-            pricing_expectation_ledger: Dict[str, Any] = {}
-        else:
-            pricing_expectation_ledger = self._pricing_expectation_ledger_summary(synthesis_packet)
+        # 配餐单 v0（所有者过目定稿）：pricing_expectation_ledger 自标
+        # supporting_only / forbidden_as_core_ref，critic/risk/reviser/final
+        # 四个治理站提示词都不把它列为输入，一律不给；台账留磁盘审计。
+        pricing_expectation_ledger: Dict[str, Any] = {}
 
         if consumer == "risk":
             # ── risk = 论证盲：只给事实面与冲突面，thesis 的任何散文与结构一律清空 ──

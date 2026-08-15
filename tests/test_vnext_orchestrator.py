@@ -7824,13 +7824,17 @@ def test_controlled_investigation_material_strips_stance_fields_and_marks_trunca
     assert "action_implication" not in material
     assert "action_constraint" not in material
     assert "不支持重仓" not in material
-    assert "[已剥离立场字段]" in material
+    assert "_stance_fields_stripped" in material
+    assert "_material_truncated" in material
     # 白名单外的事实键必须保留：直接测剥离函数（材料截断可能把无关键切出视野）
     stripped, removed = orchestrator._strip_material_stance_fields(
         {"dominant_side": "x", "仓位事实": "保证金仓位处于低位"}
     )
     assert removed == ["dominant_side"]
     assert stripped["仓位事实"] == "保证金仓位处于低位"
-    assert "[已截断" in material
     assert material.endswith("[/M1]")
     assert len(material) <= 4000
+    # 材料块本体必须是可解析的完整 JSON（PC-06 机器检查要求）
+    import re as _re
+    body = _re.search(r"\[M1\][^\n]*\n(.*?)\[/M1\]", material, _re.S).group(1)
+    assert json.loads(body)["_material_truncated"] is True

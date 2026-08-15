@@ -899,10 +899,11 @@ def test_governance_input_reviser_final_drop_noise_fields_and_slim_key_evidence(
         consumer="final",
     )
 
-    # critic 默认行为保留这些字段
+    # critic 默认行为：synthesis_guidance / evidence_registry_summary 保留；
+    # pricing_expectation_ledger 按配餐单 v0 对四个治理站一律不给（台账留磁盘审计）。
     assert gov_critic.synthesis_guidance == ["只能整合，不得重做指标分析。"]
     assert gov_critic.evidence_registry_summary["passport_count"] == 3
-    assert gov_critic.pricing_expectation_ledger != {}
+    assert gov_critic.pricing_expectation_ledger == {}
 
     # reviser/final 去噪音字段
     for gov_input in (gov_reviser, gov_final):

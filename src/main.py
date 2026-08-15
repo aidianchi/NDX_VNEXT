@@ -804,6 +804,9 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         event_narrative_ledger_path=event_narrative_ledger_path or None,
         llm_caller=orchestrator.llm_engine.call_with_fallback,
     )
+    # C6：主编排器尾部的常设检查跑在 IA 之前；IA 跑完后重跑一次，
+    # 让 PC-04/05 能读到 IA 的 prompt payload（对账与 unknown 告警）。
+    orchestrator._run_persistent_checks()
 
     report_path = ""
     if not args.skip_report and claim_gate_status != "blocked":

@@ -155,7 +155,8 @@ def test_next_action_points_at_a_live_task():
     这一行是 owner 的持续否决权入口，指向幽灵编号会让否决落空。
     """
     section = _section(_read(BOARD), "## ▶️ 我接下来要做的")
-    referenced = set(re.findall(r"T\d+", section))
+    # T-DSH 是 2026-08-15 立项的非数字编号（台账解析器已支持），下一步同样可指向它。
+    referenced = set(re.findall(r"T\d+|T-DSH", section))
     assert referenced, "「我接下来要做的」没有指名任何编号"
     assert len(referenced) == 1, f"「下一件」必须只有一件，实际写了：{sorted(referenced)}"
     live = {task_id for task_id, *_ in _ledger()}
