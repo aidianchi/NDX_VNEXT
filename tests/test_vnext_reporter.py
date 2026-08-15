@@ -2515,6 +2515,93 @@ def test_timestamp_chip_appears_in_brief_html(tmp_path: Path):
     assert "证据合约" in html
 
 
+def test_brief_glossary_marks_risk_boundary_and_evidence_permission_terms():
+    """C11：brief 只对风险边界 / 证据权限两类关键术语挂悬浮解释，不铺满全文。"""
+    reporter = VNextReportGenerator(reports_dir="/tmp")
+
+    risks_html = reporter._risks_section(
+        {
+            "final_adjudication": {"invalidation_conditions": ["【转空】信用利差扩大"]},
+            "risk_boundary_report": {"failure_conditions": [], "must_preserve_risks": []},
+            "golden_pit_checklist": {},
+        },
+        section_kicker="05 · 改判条件",
+        include_change_fold=True,
+    )
+    assert 'data-glossary-term="改判条件"' in risks_html
+    assert "预先写下的、一旦出现就需要推翻或修正当前判断的具体条件" in risks_html
+
+    card_html = reporter._brief_full_indicator_card(
+        "L1",
+        {
+            "function_id": "get_fed_funds_rate",
+            "metric": "Fed Funds",
+            "current_reading": "5.25%",
+            "canonical_question": "政策利率是多少？",
+            "permission_type": "supporting_only",
+            "misread_guards": [],
+            "falsifiers": [],
+        },
+        {
+            "synthesis_packet": {"packet_meta": {"data_date": "2026-05-13"}},
+            "analysis_packet": {"meta": {}},
+            "source_snapshot": {},
+        },
+    )
+    assert 'data-glossary-term="证据发言权"' in card_html
+    assert "这条证据在本轮被允许回答什么问题、不能越权证明什么" in card_html
+
+
+def test_brief_full_indicator_card_shows_timestamp_only_when_stale():
+    """C11：时间戳例外化——数据日期早于分析有效日期才显示，新鲜或无法判定时不显示。"""
+    reporter = VNextReportGenerator(reports_dir="/tmp")
+    artifacts = {
+        "synthesis_packet": {"packet_meta": {"data_date": "2026-05-13"}},
+        "analysis_packet": {"meta": {}},
+        "source_snapshot": {},
+    }
+    base_item = {
+        "function_id": "get_fed_funds_rate",
+        "metric": "Fed Funds",
+        "current_reading": "5.25%",
+        "canonical_question": "政策利率是多少？",
+        "permission_type": "supporting_only",
+        "misread_guards": [],
+        "falsifiers": [],
+    }
+    stale_item = dict(
+        base_item,
+        data_quality={
+            "data_date": "2026-05-12",
+            "provider": "FRED",
+            "source_name": "FRED",
+            "source_url": "https://fred.stlouisfed.org",
+        },
+    )
+    fresh_item = dict(
+        base_item,
+        data_quality={
+            "data_date": "2026-05-13",
+            "provider": "FRED",
+            "source_name": "FRED",
+            "source_url": "https://fred.stlouisfed.org",
+        },
+    )
+    missing_date_item = dict(
+        base_item,
+        data_quality={"provider": "CBOE"},
+    )
+
+    stale_html = reporter._brief_full_indicator_card("L1", stale_item, artifacts)
+    fresh_html = reporter._brief_full_indicator_card("L1", fresh_item, artifacts)
+    missing_html = reporter._brief_full_indicator_card("L1", missing_date_item, artifacts)
+
+    assert "timestamp-chip" in stale_html
+    assert "数据时间：2026-05-12" in stale_html
+    assert "timestamp-chip" not in fresh_html
+    assert "timestamp-chip" not in missing_html
+
+
 # --- 个人决策翻译 (personal policy translation) ---
 # Fixture profile uses obviously-fake, clearly-synthetic amounts (never the
 # real IPS numbers, which only live in config/user_decision_profile.local.json

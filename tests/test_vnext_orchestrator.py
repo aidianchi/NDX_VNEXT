@@ -3293,21 +3293,17 @@ def test_strict_tool_schema_for_stage_defaults_off(tmp_path: Path, monkeypatch):
     assert orchestrator._strict_tool_schema_for_stage("bridge", BridgeMemo) is None
 
 
-def test_strict_tool_schema_for_stage_only_covers_pilot_allowlist(tmp_path: Path, monkeypatch):
-    """即使环境变量把某个非试点站点也列进去，也不会启用——试点范围收窄到代码里
-    显式列出的 `_STRICT_TOOL_CALLING_ELIGIBLE_STAGES`，环境变量只能在这个白名单
-    内做子集选择，不能扩大试点范围。
-
-    2026-07-29 扩围后白名单为 bridge / thesis / event_card_interpreter /
-    event_section_summary（T29 离线体检确认这四个的严格 schema 零问题）；critic 与
-    final 仍在白名单外——`FinalAdjudication` 有 3 处自由形态 object，开了会被 API 拒。
-    """
-    monkeypatch.setenv("NDX_STRICT_TOOL_CALLING_STAGES", "critic,final,thesis")
+def test_strict_tool_schema_for_stage_honors_allowlist(tmp_path: Path, monkeypatch):
+    """环境变量只能作为白名单的子集选择：白名单外的站点即使被点名也不启用；
+    白名单内（2026-08-16 扩围后含 reviser / final / critic）的站点点名后必须启用。"""
+    monkeypatch.setenv("NDX_STRICT_TOOL_CALLING_STAGES", "critic,final,reviser,thesis,risk")
     orchestrator = VNextOrchestrator(
         available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
     )
-    assert orchestrator._strict_tool_schema_for_stage("critic", Critique) is None
-    assert orchestrator._strict_tool_schema_for_stage("final", FinalAdjudication) is None
+    assert orchestrator._strict_tool_schema_for_stage("risk", RiskBoundaryReport) is None
+    assert orchestrator._strict_tool_schema_for_stage("critic", Critique) is not None
+    assert orchestrator._strict_tool_schema_for_stage("final", FinalAdjudication) is not None
+    assert orchestrator._strict_tool_schema_for_stage("reviser", AnalysisRevised) is not None
     # 反面：白名单内的站点，环境变量点名后必须真的启用（钉住本次扩围）。
     assert orchestrator._strict_tool_schema_for_stage("thesis", ThesisDraft) is not None
 
@@ -3498,6 +3494,45 @@ def test_collect_thesis_conflict_id_candidates_covers_all_three_sources_and_dedu
         "C2_legacy_conflict",
         "TC3_liquidity_vs_breadth",
     ]
+
+
+def test_constrain_reviser_conflict_id_enum_injects_into_both_conflict_paths(tmp_path: Path):
+    """T42④：reviser 的 `revised_thesis.retained_conflicts` 与 `remaining_conflicts`
+    都要重新产出 `Conflict.conflict_id`，enum 选单必须覆盖这两条路径；空候选时
+    不注入 enum，保留"本站新发现冲突留空"的合法表达。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+
+    def _schema():
+        return {
+            "properties": {
+                "revised_thesis": {"$ref": "#/$defs/ThesisDraft"},
+                "remaining_conflicts": {"type": "array", "items": {"$ref": "#/$defs/Conflict"}},
+            },
+            "$defs": {
+                "ThesisDraft": {
+                    "properties": {
+                        "retained_conflicts": {"type": "array", "items": {"$ref": "#/$defs/Conflict"}},
+                    }
+                },
+                "Conflict": {"properties": {"conflict_id": {"type": ["string", "null"]}}},
+            },
+        }
+
+    result = orchestrator._constrain_reviser_conflict_id_enum(
+        _schema(),
+        ["TC1_restrictive_macro_vs_moderate_valuation", "TC3_liquidity_vs_breadth"],
+    )
+    conflict_id_node = result["$defs"]["Conflict"]["properties"]["conflict_id"]
+    assert conflict_id_node["enum"] == [
+        "TC1_restrictive_macro_vs_moderate_valuation",
+        "TC3_liquidity_vs_breadth",
+        None,
+    ]
+
+    noop = orchestrator._constrain_reviser_conflict_id_enum(_schema(), [])
+    assert "enum" not in noop["$defs"]["Conflict"]["properties"]["conflict_id"]
 
 
 def test_run_thesis_wires_dynamic_conflict_id_enum_into_strict_schema_when_enabled(tmp_path: Path, monkeypatch):
@@ -4903,6 +4938,96 @@ def test_reasoned_verdict_tolerates_comma_joined_refs_inside_one_bracket(tmp_pat
         allowed,
     )
     assert one_bracket and "3 separate [bracket] groups" in one_bracket[0]
+
+
+def test_reasoned_verdict_flags_numbers_absent_from_stage_payload(tmp_path: Path):
+    """T42②：判决正文里的百分数/小数必须逐字出现在终审实际收到的 payload 中。
+    "报告里写的 2.3%，原始 payload 里找不找得到 2.3%"是身份比对，不是语义判断。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    allowed = {
+        "L1.get_fed_funds_rate",
+        "L4.get_ndx_pe_and_earnings_yield",
+        "L5.get_qqq_technical_indicators",
+    }
+
+    class _V:
+        def __init__(self, verdict): self.reasoned_verdict = verdict
+
+    verdict = (
+        "第一，实际利率 2.3% 压制估值 [L1.get_fed_funds_rate]；"
+        "第二，估值分位 87.2% 偏高 [L4.get_ndx_pe_and_earnings_yield]；"
+        "第三，趋势质量一般 [L5.get_qqq_technical_indicators]。"
+    )
+    source_text = json.dumps(
+        {
+            "governance_input": {
+                "key_evidence_refs": {
+                    "L1.get_fed_funds_rate": {"current_reading": "实际利率 2.3%"},
+                    "L4.get_ndx_pe_and_earnings_yield": {"current_reading": "分位 87.2%"},
+                }
+            }
+        },
+        ensure_ascii=False,
+    )
+
+    assert orchestrator._validate_reasoned_verdict_refs(_V(verdict), allowed, source_text=source_text) == []
+
+    fabricated = verdict.replace("2.3%", "9.9%")
+    errors = orchestrator._validate_reasoned_verdict_refs(_V(fabricated), allowed, source_text=source_text)
+    assert errors and "9.9%" in errors[0]
+
+    # 不传 source_text 的既有调用点不启用数字存在性比对，行为不变。
+    assert orchestrator._validate_reasoned_verdict_refs(_V(fabricated), allowed) == []
+
+
+def test_final_conflict_responses_requires_retained_high_conflict_ids(tmp_path: Path):
+    """T42③：终审必须用编号覆盖 thesis 保留的高严重度冲突——编号没出现就是没
+    回应，不判回应对措辞（身份比对）。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    thesis = ThesisDraft.model_validate(
+        {
+            "environment_assessment": "环境偏紧。",
+            "valuation_assessment": "估值偏高。",
+            "timing_assessment": "趋势仍在。",
+            "main_thesis": "中性偏谨慎。",
+            "overall_confidence": "medium",
+            "retained_conflicts": [
+                {
+                    "conflict_id": "TC1_restrictive_macro_vs_moderate_valuation",
+                    "conflict_type": "rates_vs_valuation",
+                    "severity": "high",
+                    "description": "高利率与高估值并存。",
+                    "implication": "估值压缩风险。",
+                    "involved_layers": ["L1", "L4"],
+                }
+            ],
+        }
+    )
+
+    def _final(*, conflict_refs=(), notes="保留风险边界。"):
+        return FinalAdjudication(
+            approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+            final_stance="中性偏谨慎",
+            confidence=Confidence.MEDIUM,
+            must_preserve_risks=["估值压缩风险"],
+            adjudicator_notes=notes,
+            principal_contradiction={"contradiction_id": "rates_vs_valuation", "conflict_refs": list(conflict_refs)},
+        )
+
+    ok = _final(conflict_refs=["TC1_restrictive_macro_vs_moderate_valuation"])
+    assert orchestrator._validate_final_conflict_responses(ok, thesis) == []
+
+    missing = _final()
+    errors = orchestrator._validate_final_conflict_responses(missing, thesis)
+    assert errors and "TC1_restrictive_macro_vs_moderate_valuation" in errors[0]
 
 
 def test_final_adjudication_tolerates_bare_claim_ledger_entry_list():

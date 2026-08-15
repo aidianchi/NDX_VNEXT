@@ -131,6 +131,10 @@ INDICATOR_GLOSSARY = {
     "Trailing PE": "静态市盈率，用价格除以过去已实现盈利。",
     "M7": "纳斯达克七家大型科技公司组合的简称。",
     "NDX/NDXE": "纳斯达克 100 指数与其等权版本的相对比值，用来观察集中度。",
+    # C11（T40）：brief 只对"风险边界 / 证据权限"这两类关键术语挂悬浮解释，
+    # 不铺满全文；其余高频指标缩写继续只在 layers/cockpit/atlas/workbench 使用。
+    "改判条件": "预先写下的、一旦出现就需要推翻或修正当前判断的具体条件；本节是它的唯一正本。",
+    "证据发言权": "这条证据在本轮被允许回答什么问题、不能越权证明什么；它不替代其他层或其他证据的结论。",
 }
 
 
@@ -4493,9 +4497,13 @@ class VNextReportGenerator:
             f"<li>{_escape(_label(item, 'risk_flag'))}</li>"
             for item in _as_list(risk.get("must_preserve_risks"))
         )
+        kicker_html = _escape(section_kicker)
+        if "改判条件" in section_kicker:
+            prefix, suffix = section_kicker.split("改判条件", 1)
+            kicker_html = f"{_escape(prefix)}{_glossary_term('改判条件', unique_id='brief-risks')}{_escape(suffix)}"
         return f"""
 <section class="panel sec" id="risks">
-  <div class="sec-head"><span class="tag sans">{_escape(section_kicker)}</span><h2>如果发生这些事，我就改判断</h2></div>
+  <div class="sec-head"><span class="tag sans">{kicker_html}</span><h2>如果发生这些事，我就改判断</h2></div>
   <p class="section-note">改判条件的唯一正本；其他章节只链接到这里，避免同一句话反复放大。</p>
   <div class="flip-list">{''.join(flip_rows) or '<p>暂无结构化改判条件。</p>'}</div>
   {f'<div class="risk-board"><h3>临界观察</h3><div class="boundary-pills">{boundary_pills}</div></div>' if boundary_pills else ''}
@@ -4937,6 +4945,45 @@ class VNextReportGenerator:
   <div class="gauge-lab"><span>低</span><strong>{bounded:.1f}% 分位</strong><span>高</span></div>
 </div>"""
 
+    def _brief_analysis_effective_date(self, artifacts: Dict[str, Any]) -> str:
+        """brief 用来判定"数据是否陈旧"的本次分析有效日期。
+
+        沿用现有口径：synthesis_packet.packet_meta.data_date 优先，其次
+        analysis_packet.meta.data_date / backtest_date，最后是 source_snapshot
+        的 effective_date。只取 YYYY-MM-DD 前缀做字符串比较，不做时区换算。
+        """
+        synthesis = artifacts.get("synthesis_packet", {})
+        meta = synthesis.get("packet_meta", {}) if isinstance(synthesis, dict) else {}
+        analysis_packet = artifacts.get("analysis_packet", {})
+        analysis_meta = analysis_packet.get("meta", {}) if isinstance(analysis_packet, dict) else {}
+        snapshot = artifacts.get("source_snapshot", {}) if isinstance(artifacts.get("source_snapshot"), dict) else {}
+        return str(
+            meta.get("data_date")
+            or analysis_meta.get("data_date")
+            or analysis_meta.get("backtest_date")
+            or snapshot.get("effective_date")
+            or ""
+        ).strip()
+
+    def _brief_stale_timestamp_chip(self, item: Dict[str, Any], artifacts: Dict[str, Any]) -> str:
+        """仅在指标数据日期早于本次分析有效日期时渲染时间戳（T40 例外化）。"""
+        data_quality = item.get("data_quality")
+        if not isinstance(data_quality, dict) or not data_quality:
+            return ""
+        data_time = _display_date(self._evidence_data_time(data_quality))
+        effective_date = _display_date(self._brief_analysis_effective_date(artifacts))
+        # 只有两边都能取到 YYYY-MM-DD 日期前缀时才做比较；"未记录"/"N/A"/空值
+        # 都视为无法判定，不显示时间戳（避免把无法判定渲染成"陈旧"）。
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", data_time):
+            return ""
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", effective_date):
+            return ""
+        if data_time >= effective_date:
+            return ""
+        # brief 用 REF_DIGEST_JS，不接 [data-contract-ref] 的抽屉 JS；这里只渲染
+        # 时间/来源/缺口，不带"证据合约"按钮，避免出现一个点了没反应的死按钮。
+        return self._timestamp_chip(data_quality, ref="")
+
     def _brief_full_indicator_card(self, layer: str, item: Dict[str, Any], artifacts: Dict[str, Any]) -> str:
         function_id = str(item.get("function_id") or "")
         ref = f"{layer}.{function_id}"
@@ -4946,13 +4993,15 @@ class VNextReportGenerator:
         gauge = self._brief_quantile_gauge(function_id, quantile)
         guards = "".join(f"<li>{_escape(value)}</li>" for value in _as_list(item.get("misread_guards")))
         falsifiers = "".join(f"<li>{_escape(value)}</li>" for value in _as_list(item.get("falsifiers")))
+        stale_timestamp_chip = self._brief_stale_timestamp_chip(item, artifacts)
         return f"""
 <article class="indicator-card" data-evidence-ref="{_escape(ref)}">
   <button type="button" class="ref-chip" data-ref="{_escape(ref)}">{_escape(self._brief_metric_label(layer, item))}</button>
   <p class="reading">{_escape(item.get('current_reading') or '')}</p>
+  {stale_timestamp_chip}
   {gauge}
   <p>{_escape(item.get('narrative') or '')}</p>
-  <details class="canon-box"><summary>证据发言权</summary><p>{_escape(item.get('canonical_question') or item.get('permission_type') or '未记录')}</p><ul>{guards or '<li>无额外误读边界。</li>'}</ul><h4>反证</h4><ul>{falsifiers or '<li>未记录。</li>'}</ul></details>
+  <details class="canon-box"><summary>{_glossary_term('证据发言权', unique_id=f'brief-{ref}')}</summary><p>{_escape(item.get('canonical_question') or item.get('permission_type') or '未记录')}</p><ul>{guards or '<li>无额外误读边界。</li>'}</ul><h4>反证</h4><ul>{falsifiers or '<li>未记录。</li>'}</ul></details>
 </article>
 """
 

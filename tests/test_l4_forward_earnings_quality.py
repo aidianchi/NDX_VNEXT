@@ -563,6 +563,107 @@ def test_realtime_forward_earnings_does_not_request_historical_constituents(monk
     assert df["ticker"].tolist() == ["AAPL"]
 
 
+def test_backtest_component_snapshot_counts_missing_market_cap_as_failed(monkeypatch):
+    """T39 红灯：回测下 yfinance/Yahoo 都是 latest-only 源会被跳过，合并行没有
+    market_cap。旧逻辑 `if not merged.get("market_cap") and not end_date` 让这些空行
+    照样进 df，`stats["successful"]=len(df)` 虚高，MIN_FORWARD_QUALITY_CONSTITUENTS
+    门槛在回测下恒通过。修复后空市值行必须计入 failed_tickers。"""
+    requested = {"end_date": None}
+
+    def fake_components(end_date=None):
+        requested["end_date"] = end_date
+        return ["AAPL"]
+
+    def fail_if_called(_ticker):
+        raise AssertionError("live yfinance/Yahoo source must not be called in backtest")
+
+    monkeypatch.setattr(tools_L4, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_L4, "get_ndx100_components", fake_components)
+    monkeypatch.setattr(tools_L4, "_fetch_yfinance_info_best_effort", fail_if_called)
+    monkeypatch.setattr(tools_L4, "_fetch_yahoo_quote_summary_direct", fail_if_called)
+    monkeypatch.setattr(
+        tools_L4,
+        "_enrich_component_rows_with_official_checks",
+        lambda df, end_date=None, include_current_web_checks=True: (
+            df,
+            {"sec_xbrl": {"checked": 0, "available": 0}, "eastmoney": {"checked": 0, "available": 0}},
+        ),
+    )
+    tools_L4.reset_l4_component_snapshot_cache()
+
+    df, stats = tools_L4.get_ndx_components_data_yf_v5(end_date="2026-06-07")
+
+    assert requested["end_date"] == "2026-06-07"
+    assert stats["successful"] == 0
+    assert stats["failed"] == 1
+    assert stats["failed_tickers"] == ["AAPL"]
+    assert len(df) == 0
+
+
+def test_backtest_forward_earnings_does_not_fall_back_to_live_yfinance_revisions(monkeypatch):
+    """T39 红灯：首选 yahoo PIT 路径不可用时，回测下不得无守卫回落到实时
+    `_m7_eps_revision_snapshot`（yfinance eps_trend 恒返回实时一致预期）。"""
+    monkeypatch.setattr(tools_L4, "_component_model_enabled", lambda: True)
+    monkeypatch.setattr(tools_L4, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_L4, "MIN_FORWARD_PE_STOCKS", 2)
+    monkeypatch.setattr(tools_L4, "MIN_FORWARD_QUALITY_CONSTITUENTS", 2)
+    df = pd.DataFrame(
+        [
+            {
+                "ticker": "AAPL",
+                "market_cap": 700.0,
+                "trailing_pe": 28.0,
+                "forward_pe": 23.0,
+                "forward_eps": 8.0,
+                "trailing_eps": 7.0,
+                "profit_margin": 0.25,
+                "gross_margin": 0.45,
+                "operating_margin": 0.31,
+            },
+            {
+                "ticker": "MSFT",
+                "market_cap": 300.0,
+                "trailing_pe": 32.0,
+                "forward_pe": 25.0,
+                "forward_eps": 10.0,
+                "trailing_eps": 8.0,
+                "profit_margin": 0.35,
+                "gross_margin": 0.69,
+                "operating_margin": 0.44,
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        tools_L4,
+        "get_ndx_components_data_yf_v5",
+        lambda end_date=None: (
+            df,
+            {
+                "coverage": 1.0,
+                "successful": 2,
+                "total_tickers": 2,
+                "source_counts": {"yahoo_quote_summary": {"attempted": 2, "available": 2}},
+                "primary_source_by_field": tools_L4.L4_COMPONENT_FIELD_SOURCE_POLICY,
+                "component_conflict_gate": {"status": "clean"},
+            },
+        ),
+    )
+
+    def fail_if_live_revision_called(market_caps=None):
+        raise AssertionError("live yfinance EPS revision fallback must not be called in backtest")
+
+    monkeypatch.setattr(tools_L4, "_m7_eps_revision_snapshot", fail_if_live_revision_called)
+
+    result = tools_L4.get_ndx_forward_earnings_quality(end_date="2026-06-07")
+    revisions = result["value"]["m7"]["eps_revisions"]
+
+    assert revisions["availability"] == "backtest_skipped"
+    assert revisions["backtest_skipped"] is True
+    assert revisions["primary_source"] == "yfinance_fallback"
+    assert revisions["weighted_next_year_eps_revision_30d_pct"] is None
+    assert revisions["revision_direction_30d"] == "unavailable"
+
+
 def test_realtime_equity_risk_premium_keeps_valuation_in_realtime_mode(monkeypatch):
     requested = {}
 

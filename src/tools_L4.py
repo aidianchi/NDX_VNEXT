@@ -3320,7 +3320,7 @@ def get_ndx_component_fundamentals_snapshot(end_date: str = None) -> Tuple[pd.Da
             source_errors["yahoo_quote_summary"] = "backtest_skipped_latest_only_source"
 
         merged = _merge_component_source_rows(ticker, yfinance_row, yahoo_row, source_errors)
-        if not merged.get("market_cap") and not end_date:
+        if not merged.get("market_cap"):
             failed_tickers.append(original_ticker)
             continue
         if merged.get("component_source_disagreements"):
@@ -5349,12 +5349,24 @@ def get_ndx_forward_earnings_quality(end_date: str = None) -> Dict[str, Any]:
         eps_revision_primary_source = "yahoo_quote_summary"
         if m7_revisions.get("availability") != "available":
             yahoo_unavailable_reason = m7_revisions.get("reason") or "yahoo_snapshot_missing_eps_revision"
-            m7_revisions = _m7_eps_revision_snapshot(market_caps)
+            if end_date:
+                # T39：回测下 yfinance eps_trend / earnings_estimate 恒返回实时一致预期，
+                # 不能证明回测日可见，必须跳过而不是无守卫回落。
+                m7_revisions = {
+                    "availability": "backtest_skipped",
+                    "reason": "yfinance_fallback_disabled_not_live_context_pit_unsafe",
+                    "members": {},
+                    "backtest_skipped": True,
+                    "weighted_next_year_eps_revision_30d_pct": None,
+                    "revision_direction_30d": "unavailable",
+                }
+            else:
+                m7_revisions = _m7_eps_revision_snapshot(market_caps)
             eps_revision_primary_source = "yfinance_fallback"
             m7_revisions["fallback_reason"] = yahoo_unavailable_reason
         m7_revisions["primary_source"] = eps_revision_primary_source
         m7_available = int((m7_revisions.get("coverage") or {}).get("available_members") or 0)
-        if m7_available < MIN_M7_QUALITY_MEMBERS:
+        if m7_available < MIN_M7_QUALITY_MEMBERS and not m7_revisions.get("backtest_skipped"):
             m7_revisions["weighted_next_year_eps_revision_30d_pct"] = None
             m7_revisions["revision_direction_30d"] = "unavailable"
             m7_revisions["availability"] = "insufficient_coverage"

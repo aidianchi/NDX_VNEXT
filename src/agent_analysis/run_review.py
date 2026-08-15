@@ -5,7 +5,10 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from agent_analysis.contracts import PRICE_REFLECTION_CATEGORY_KEYS
+try:
+    from .contracts import PRICE_REFLECTION_CATEGORY_KEYS
+except ImportError:
+    from contracts import PRICE_REFLECTION_CATEGORY_KEYS
 
 try:
     from .contracts import RunReviewFinding, RunReviewReport

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 NDX Agent vNext SubAgent 架构 - LLM 引擎
 
@@ -14,6 +14,7 @@ NDX Agent vNext SubAgent 架构 - LLM 引擎
 
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime
@@ -22,10 +23,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union, get_args, get_origin
 
 # 尝试导入配置
 try:
-    from ..config import MODEL_CONFIGS
+    from ..config import MODEL_CONFIGS, path_config
     from ..api_config import get_api_key, get_base_url, get_extra_headers, get_requests_proxies
 except ImportError:
-    from config import MODEL_CONFIGS
+    from config import MODEL_CONFIGS, path_config
     from api_config import get_api_key, get_base_url, get_extra_headers, get_requests_proxies
 
 # AI 客户端导入
@@ -216,7 +217,74 @@ def sanitize_json_schema_for_strict_tool_calling(schema: Dict[str, Any]) -> Dict
             return [fix_anyof(item) for item in node]
         return node
 
-    return fix_anyof(basic)
+    fixed = fix_anyof(basic)
+    # 登记表里"代码填"的自由形态 object 本就不该出现在发给模型的 schema 里
+    # （模型没机会填，DeepSeek 还会因 object 无 properties 直接 400）。这里按
+    # 登记表的"代码填"标注，在 sanitize 后的树上按路径剪掉；"模型填"的自由对象
+    # 原样保留（它们所在的 stage 要么不在严格白名单，要么需要进一步权衡）。
+    _REMOVED = object()
+
+    def prune(node: Any, path: str) -> Any:
+        if isinstance(node, dict):
+            cleaned = dict(node)
+            if isinstance(cleaned.get("properties"), dict):
+                props = dict(cleaned["properties"])
+                for prop_name in list(props):
+                    prop_path = f"{path}.properties.{prop_name}"
+                    pruned = prune(props[prop_name], prop_path)
+                    if pruned is _REMOVED:
+                        props.pop(prop_name, None)
+                    else:
+                        props[prop_name] = pruned
+                cleaned["properties"] = props
+                # 剪掉字段后 required 必须与剩余 properties 同步，否则 provider 会拒
+                # "required 未覆盖全部 properties"。
+                if props:
+                    cleaned["required"] = list(props.keys())
+                else:
+                    cleaned.pop("required", None)
+            if isinstance(cleaned.get("anyOf"), list):
+                branches = []
+                for index, branch in enumerate(cleaned["anyOf"]):
+                    pruned = prune(branch, f"{path}.anyOf[{index}]")
+                    if pruned is not _REMOVED:
+                        branches.append(pruned)
+                if not branches:
+                    return _REMOVED
+                if len(branches) == 1 and isinstance(branches[0], dict) and branches[0].get("type") == "null":
+                    return _REMOVED
+                cleaned["anyOf"] = branches
+            # 其余键（含 $defs 等嵌套定义）也要递归剪枝，路径与登记表逐段对齐。
+            for key in list(cleaned):
+                if key in {"properties", "anyOf"}:
+                    continue
+                pruned = prune(cleaned[key], f"{path}.{key}")
+                if pruned is _REMOVED:
+                    cleaned.pop(key, None)
+                else:
+                    cleaned[key] = pruned
+            if cleaned.get("type") == "object" and "properties" not in cleaned:
+                reason = next(
+                    (
+                        value
+                        for key, value in STRICT_SCHEMA_FREE_FORM_OBJECTS.items()
+                        if key.split(":", 1)[1] == path
+                    ),
+                    None,
+                )
+                if isinstance(reason, str) and reason.startswith("代码填"):
+                    return _REMOVED
+            return cleaned
+        if isinstance(node, list):
+            pruned_items = []
+            for index, item in enumerate(node):
+                pruned = prune(item, f"{path}[{index}]")
+                if pruned is not _REMOVED:
+                    pruned_items.append(pruned)
+            return pruned_items
+        return node
+
+    return prune(fixed, "$")
 
 
 def _optional_inner_type(annotation: Any) -> Tuple[Any, bool]:
@@ -331,8 +399,11 @@ def normalize_none_list_fields_for_strict_schema_validation(model_cls: Any, payl
 class LLMEngine:
     """可复用的 LLM 调用引擎（从 legacy analyzer 提取）"""
 
-    def __init__(self, available_models: List[str]):
+    def __init__(self, available_models: List[str], debug_dir: Optional[str] = None):
         self.available_models = available_models
+        # B25：AI 响应解析失败的调试文件不再写仓库根目录。优先级：
+        # 显式参数 > NDX_DEBUG_DIR 环境变量 > output/debug_archive/。
+        self.debug_dir = debug_dir
         self.successful_model = None
         self.token_usage = {
             "total": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -395,6 +466,31 @@ class LLMEngine:
     def _promote_deepseek_base_url(base_url: Optional[str]) -> Optional[str]:
         promoted, _enabled = LLMEngine._resolve_deepseek_base_url(base_url)
         return promoted
+
+    def _debug_dir(self) -> Path:
+        """解析 AI 响应解析失败调试文件的落盘目录。
+
+        选择（按优先级）：构造函数显式传入的 `debug_dir` > 环境变量
+        `NDX_DEBUG_DIR` > `output/debug_archive/`。这样即使调用方没有 run 目录
+        上下文，也不会再把调试文件写进仓库根目录。
+        """
+        if self.debug_dir:
+            return Path(self.debug_dir)
+        env_dir = os.environ.get("NDX_DEBUG_DIR")
+        if env_dir:
+            return Path(env_dir)
+        return Path(path_config.output_dir) / "debug_archive"
+
+    def _save_debug_response(self, stage: str, body: str) -> None:
+        directory = self._debug_dir()
+        debug_filename = f"ai_response_debug_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            with open(directory / debug_filename, "w", encoding="utf-8") as f:
+                f.write(body)
+            logger.warning(f"  原始响应已保存至: {directory / debug_filename}")
+        except Exception as save_error:
+            logger.error(f"  无法保存调试文件: {save_error}")
 
     # System-level constraints loaded from external prompt file.
     # Falls back to inline string if file is missing.
@@ -684,16 +780,13 @@ class LLMEngine:
                 json.loads(json_block)
             except json.JSONDecodeError as e:
                 logger.error(f"  ! [Stage: {stage}] AI返回了格式错误的JSON: {e}")
-                debug_filename = f"ai_response_debug_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-                try:
-                    with open(debug_filename, "w", encoding="utf-8") as f:
-                        f.write(f"=== {stage} Stage Debug Info ===\n")
-                        f.write(f"Error: {e}\n\n")
-                        f.write(f"Extracted JSON block:\n{json_block}\n\n")
-                        f.write(f"Full response:\n{text}")
-                    logger.warning(f"  原始响应已保存至: {debug_filename}")
-                except Exception as save_error:
-                    logger.error(f"  无法保存调试文件: {save_error}")
+                self._save_debug_response(
+                    stage,
+                    f"=== {stage} Stage Debug Info ===\n"
+                    f"Error: {e}\n\n"
+                    f"Extracted JSON block:\n{json_block}\n\n"
+                    f"Full response:\n{text}",
+                )
                 return None
 
         raw_text = text.strip()
@@ -702,15 +795,12 @@ class LLMEngine:
             return parsed
 
         logger.warning(f"  ! [Stage: {stage}] 在AI响应中未找到任何有效的JSON块。")
-        debug_filename = f"ai_response_debug_{stage}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-        try:
-            with open(debug_filename, "w", encoding="utf-8") as f:
-                f.write(f"=== {stage} Stage Debug Info ===\n")
-                f.write("No valid JSON block found.\n\n")
-                f.write(f"Full response:\n{text}")
-            logger.warning(f"  原始响应已保存至: {debug_filename}")
-        except Exception as save_error:
-            logger.error(f"  无法保存调试文件: {save_error}")
+        self._save_debug_response(
+            stage,
+            f"=== {stage} Stage Debug Info ===\n"
+            "No valid JSON block found.\n\n"
+            f"Full response:\n{text}",
+        )
         return None
 
     def diagnose_json_error(self, text: str) -> Optional[str]:

@@ -18,6 +18,9 @@ from agent_analysis.contracts import (
     Conflict,
     ContextBrief,
     CoreFact,
+    Critique,
+    EventInterpretationCard,
+    EventSectionSummary,
     FinalAdjudication,
     PriceReflectionAssessment,
     PrincipalContradiction,
@@ -1282,8 +1285,13 @@ def test_strict_tool_schema_free_form_objects_are_registered():
     for name, model_cls in sorted(_stage_contracts().items()):
         _walk(sanitize_json_schema_for_strict_tool_calling(model_cls.model_json_schema()), "$", name)
 
+    code_filled = {
+        key for key, reason in STRICT_SCHEMA_FREE_FORM_OBJECTS.items()
+        if str(reason).startswith("代码填")
+    }
     unregistered = sorted(set(found) - set(STRICT_SCHEMA_FREE_FORM_OBJECTS))
-    stale = sorted(set(STRICT_SCHEMA_FREE_FORM_OBJECTS) - set(found))
+    stale = sorted(set(STRICT_SCHEMA_FREE_FORM_OBJECTS) - set(found) - code_filled)
+    left_code_filled = sorted(set(found) & code_filled)
     assert not unregistered, (
         f"新增了未登记的自由形态 object：{unregistered}。"
         "它会让对应 stage 无法开启严格模式——请登记并写清由谁填，或把字段类型收窄。"
@@ -1291,8 +1299,51 @@ def test_strict_tool_schema_free_form_objects_are_registered():
     assert not stale, (
         f"登记表里这些条目已经不存在了：{stale}。修好了就从表里删掉，别留过期登记。"
     )
+    assert not left_code_filled, (
+        f"这些登记为'代码填'的自由对象应被 sanitizer 剪掉，却仍在发给模型的 schema 里："
+        f"{left_code_filled}"
+    )
     for key, reason in STRICT_SCHEMA_FREE_FORM_OBJECTS.items():
         assert "填" in reason, f"登记项 {key} 没写清由谁填——那是决定修法的关键信息"
+
+
+def test_strict_eligible_stage_schemas_have_no_free_form_objects():
+    """严格模式白名单内的站，sanitize 后不得残留"无 properties 的 object"。
+
+    2026-08-16 T44：final/reviser/critic 纳入白名单的前提，就是 sanitizer
+    把登记为"代码填"的自由对象从发给模型的 schema 里剪掉；这条守护测试
+    防止将来白名单扩进一个还带着自由对象的站，真跑时被 DeepSeek 400 拒绝。
+    """
+    from agent_analysis.llm_engine import sanitize_json_schema_for_strict_tool_calling
+
+    stage_models = {
+        "bridge": BridgeMemo,
+        "thesis": ThesisDraft,
+        "event_card_interpreter": EventInterpretationCard,
+        "event_section_summary": EventSectionSummary,
+        "reviser": AnalysisRevised,
+        "final": FinalAdjudication,
+        "critic": Critique,
+    }
+    offenders = []
+    for stage, model_cls in stage_models.items():
+        schema = sanitize_json_schema_for_strict_tool_calling(model_cls.model_json_schema())
+
+        def _walk(node, path):
+            if isinstance(node, dict):
+                if node.get("type") == "object" and "properties" not in node:
+                    offenders.append(f"{stage}:{path}")
+                for key, value in node.items():
+                    _walk(value, f"{path}.{key}")
+            elif isinstance(node, list):
+                for index, value in enumerate(node):
+                    _walk(value, f"{path}[{index}]")
+
+        _walk(schema, "$")
+    assert not offenders, (
+        f"严格模式白名单内的站，sanitize 后仍有无 properties 的 object：{offenders}。"
+        "代码填的自由对象应被 sanitizer 剪掉；模型填的对象则说明该站还不该进严格白名单。"
+    )
 
 
 # ── 丙：登记不能靠人记得——反射枚举所有带 validator 的 stage（2026-07-28 用户裁决） ──

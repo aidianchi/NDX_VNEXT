@@ -181,7 +181,9 @@ STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
     # 2026-07-28 追加 claim_ledger：它是 FinalAdjudication 的可选字段，但形状是硬约束
     # （必须是对象不是数组）。真实事故 run 20260728_110702——说明书里 grep 命中 0 次，
     # 模型只能猜形状、猜成裸列表，终审第一次尝试即被 pydantic 拒，整跑硬崩。
-    "final": ("evidence_index", "三条主要理由", "claim_ledger"),
+    # 2026-08-16 T42②/③追加两个关键词：数字存在性比对（判决正文里的百分数/小数
+    # 必须逐字来自输入）与 conflict_refs（终审必须用编号覆盖保留的高严重度冲突）。
+    "final": ("evidence_index", "三条主要理由", "claim_ledger", "数字", "conflict_refs"),
     # _validate_counter_thesis_draft + CompetingHypothesis 必填字段（真实事故 run
     # 20260724_223804：counter_thesis.md 从未逐字写过 hypothesis_text /
     # falsification_conditions，模型两次尝试各猜错一个字段名，约 28 万 prompt token
@@ -559,6 +561,8 @@ class VNextOrchestrator:
             model_cls=Critique,
             payload={"governance_input": _model_dump(gov_input_critic)},
             filename="critique.json",
+            strict_tool_schema=self._strict_tool_schema_for_stage("critic", Critique),
+            strict_tool_name="emit_critique",
         )
 
         gov_input_risk = self._build_governance_input_packet(
@@ -597,6 +601,8 @@ class VNextOrchestrator:
                 model_cls=Critique,
                 payload={"governance_input": _model_dump(gov_input_critic_retry)},
                 filename="critique.json",
+                strict_tool_schema=self._strict_tool_schema_for_stage("critic", Critique),
+                strict_tool_name="emit_critique",
             )
             gov_input_risk_retry = self._build_governance_input_packet(
                 synthesis_packet=synthesis_packet,
@@ -634,6 +640,7 @@ class VNextOrchestrator:
             consumer="reviser",
         )
         reviser_payload = {"governance_input": _model_dump(gov_input_reviser)}
+        conflict_id_candidates = self._collect_thesis_conflict_id_candidates(synthesis_packet)
         analysis_revised = self._load_reviser_checkpoint(reviser_payload)
         if analysis_revised is None:
             try:
@@ -642,6 +649,16 @@ class VNextOrchestrator:
                     stage_name="reviser",
                     model_cls=AnalysisRevised,
                     payload=reviser_payload,
+                    # T42④：reviser 重新产出同结构的 retained_conflicts[].conflict_id，
+                    # 必须与 thesis 站同款 enum 选单，防止模型抄写时自行改写编号前缀。
+                    strict_tool_schema=self._strict_tool_schema_for_stage(
+                        "reviser",
+                        AnalysisRevised,
+                        schema_postprocess=lambda schema: self._constrain_reviser_conflict_id_enum(
+                            schema, conflict_id_candidates
+                        ),
+                    ),
+                    strict_tool_name="emit_analysis_revised",
                     # 两道 pre-validate 降级，顺序不可颠倒：
                     # 1) 遗漏继承——reviser 整个漏掉的 revised_thesis 字段从 thesis 原稿原样
                     #    搬回并留痕（键存在则一律不碰，见 _carry_forward_reviser_thesis_fields）；
@@ -693,6 +710,7 @@ class VNextOrchestrator:
         final_payload = {
             "governance_input": _model_dump(gov_input_final),
         }
+        final_source_text = json.dumps(final_payload, ensure_ascii=False, default=str)
         final_adjudication = self._load_stage_checkpoint(
             "final_adjudication.json",
             FinalAdjudication,
@@ -706,6 +724,8 @@ class VNextOrchestrator:
                 stage_name="final_adjudicator",
                 model_cls=FinalAdjudication,
                 payload=final_payload,
+                strict_tool_schema=self._strict_tool_schema_for_stage("final", FinalAdjudication),
+                strict_tool_name="emit_final_adjudication",
                 validator=lambda candidate: (
                     self._validate_stage_evidence_refs(
                         candidate,
@@ -715,6 +735,11 @@ class VNextOrchestrator:
                     + self._validate_reasoned_verdict_refs(
                         candidate,
                         set(synthesis_packet.evidence_index.keys()),
+                        source_text=final_source_text,
+                    )
+                    + self._validate_final_conflict_responses(
+                        candidate,
+                        analysis_revised.revised_thesis,
                     )
                 ),
             )
@@ -4356,8 +4381,13 @@ class VNextOrchestrator:
     # 相对 5 次非严格跑的基线带全面上移（字符 9097-13079→19837、共振链 1-2→3、传导路径
     # 2-3→4，内容核验非凑数）。T29 离线体检确认另外三个站的严格 schema 同样零问题，
     # 故一并纳入白名单。仍需环境变量逐个点名才会真正启用。
+    # 2026-08-16 扩围（T42④/T44①）：reviser 纳入白名单以便给
+    # `revised_thesis.retained_conflicts[].conflict_id` 注入与 thesis 同款的 enum 选单；
+    # final / critic 纳入白名单——T44 核实 FinalAdjudication 的 3 处自由形态 object
+    # 全部是代码事后填、模型从不需要填，Critique 则 0 处自由形态 object。
     _STRICT_TOOL_CALLING_ELIGIBLE_STAGES = {
         "bridge", "thesis", "event_card_interpreter", "event_section_summary",
+        "reviser", "final", "critic",
     }
 
     def _strict_tool_schema_for_stage(
@@ -4553,6 +4583,52 @@ class VNextOrchestrator:
             return node
         return None
 
+    def _constrain_conflict_id_enum_for_paths(
+        self,
+        schema: Dict[str, Any],
+        candidate_conflict_ids: List[str],
+        paths: tuple,
+    ) -> Dict[str, Any]:
+        """按给定路径给 `Conflict.conflict_id` 注入 enum 选单的通用实现。
+
+        `paths` 是 schema 内指向 `List[Conflict]` 数组字段的属性路径元组，例如
+        `(("retained_conflicts",),)` 或 `(("revised_thesis", "retained_conflicts"),
+        ("remaining_conflicts",))`。路径上的 `$ref` 节点会先解析成真正的 object
+        schema，再继续向下走；兼容 sanitize 后两种数组形态（直接 items / anyOf
+        包裹）。所有路径最终都指向同一个 `$defs.Conflict` 时，enum 只会在同一处
+        节点上设置一次，重复设置无副作用。
+        """
+        if not candidate_conflict_ids:
+            return schema
+        dedup: List[str] = []
+        seen: set = set()
+        for conflict_id in candidate_conflict_ids:
+            if conflict_id and conflict_id not in seen:
+                seen.add(conflict_id)
+                dedup.append(conflict_id)
+        if not dedup:
+            return schema
+        enum_values: List[Optional[str]] = [*dedup, None]
+
+        for path in paths:
+            node: Any = schema
+            for part in path:
+                node = self._resolve_strict_schema_object_node(node, schema)
+                if not isinstance(node, dict):
+                    node = None
+                    break
+                node = node.get("properties", {}).get(part)
+            if not isinstance(node, dict):
+                continue
+            items_node = self._find_strict_schema_array_items_node(node)
+            conflict_object_schema = self._resolve_strict_schema_object_node(items_node, schema)
+            if conflict_object_schema is None:
+                continue
+            conflict_id_node = conflict_object_schema.get("properties", {}).get("conflict_id")
+            if isinstance(conflict_id_node, dict):
+                conflict_id_node["enum"] = enum_values
+        return schema
+
     def _constrain_thesis_retained_conflict_id_enum(
         self,
         schema: Dict[str, Any],
@@ -4574,27 +4650,30 @@ class VNextOrchestrator:
         `enum: [null]` 等于物理上禁止模型填任何编号，语义上说不通；部分 provider
         对空 enum 还会直接拒绝请求。
         """
-        if not candidate_conflict_ids:
-            return schema
-        dedup: List[str] = []
-        seen: set = set()
-        for conflict_id in candidate_conflict_ids:
-            if conflict_id and conflict_id not in seen:
-                seen.add(conflict_id)
-                dedup.append(conflict_id)
-        if not dedup:
-            return schema
-        enum_values: List[Optional[str]] = [*dedup, None]
+        return self._constrain_conflict_id_enum_for_paths(
+            schema,
+            candidate_conflict_ids,
+            (("retained_conflicts",),),
+        )
 
-        retained_conflicts_node = schema.get("properties", {}).get("retained_conflicts")
-        items_node = self._find_strict_schema_array_items_node(retained_conflicts_node)
-        conflict_object_schema = self._resolve_strict_schema_object_node(items_node, schema)
-        if conflict_object_schema is None:
-            return schema
-        conflict_id_node = conflict_object_schema.get("properties", {}).get("conflict_id")
-        if isinstance(conflict_id_node, dict):
-            conflict_id_node["enum"] = enum_values
-        return schema
+    def _constrain_reviser_conflict_id_enum(
+        self,
+        schema: Dict[str, Any],
+        candidate_conflict_ids: List[str],
+    ) -> Dict[str, Any]:
+        """T42④：reviser 输出的 `AnalysisRevised.revised_thesis` 与 `remaining_conflicts`
+        都是 `Conflict` 结构，要重新产出同结构的 `conflict_id`。把 thesis 站已验证的
+        enum 选单机制原样接到 reviser 站：模型只能从本轮 bridge 实际给出的编号里选，
+        不能在抄写时自行改写前缀（T34 事故 `TC1_…` → `C1_…` 的重演路径就此物理关闭）。
+        """
+        return self._constrain_conflict_id_enum_for_paths(
+            schema,
+            candidate_conflict_ids,
+            (
+                ("revised_thesis", "retained_conflicts"),
+                ("remaining_conflicts",),
+            ),
+        )
 
     def _validate_thesis_hypothesis_responses(
         self,
@@ -6188,7 +6267,12 @@ class VNextOrchestrator:
                 f"event_section_summary_index_degraded:{section_summary_meta['index_degraded']}",
             )
 
-    def _validate_reasoned_verdict_refs(self, candidate: Any, allowed_refs: set[str]) -> List[str]:
+    def _validate_reasoned_verdict_refs(
+        self,
+        candidate: Any,
+        allowed_refs: set[str],
+        source_text: Optional[str] = None,
+    ) -> List[str]:
         """final_adjudicator.md 白纸黑字："三条主要理由每条必须至少带一个方括号标注
         的 evidence_ref……这是硬要求，一个都没有等于整段作废。"但此前这条规则只在
         生成之后由 `_annotate_reasoned_verdict_refs` 做软性标注（写进
@@ -6204,6 +6288,11 @@ class VNextOrchestrator:
         pydantic 校验（`test_final_stage_retries_after_overlong_reasoned_verdict`
         锁定的既有行为），这里只是把"必须带引用"这条也提到同一严重度，不额外放大
         终审阶段本来就有的爆炸半径。
+
+        `source_text`（T42②）是终审这一站实际收到的 payload 文本。传了就额外做
+        "数字存在性比对"：判决正文里出现的百分数 / 小数值必须逐字出现在本次输入
+        中——"报告里写的 2.3%，原始 payload 里找不找得到 2.3%"是身份比对，不是
+        语义判断，符合「闸门不判意思」。
         """
         verdict = str(getattr(candidate, "reasoned_verdict", "") or "").strip()
         if not verdict:
@@ -6252,6 +6341,18 @@ class VNextOrchestrator:
             return [
                 f"reasoned_verdict cites refs outside evidence_index: {unresolved[:5]}"
             ]
+        if source_text is not None:
+            missing_numbers = [
+                token
+                for token in self._reasoned_verdict_numeric_tokens(verdict)
+                if token not in source_text
+            ]
+            if missing_numbers:
+                return [
+                    "reasoned_verdict contains numbers that are not present in the stage "
+                    "payload (identity check, not semantic): "
+                    f"{missing_numbers[:5]}. Only use numbers that appear verbatim in the input."
+                ]
         return []
 
     @staticmethod
@@ -6268,6 +6369,19 @@ class VNextOrchestrator:
             if refs:
                 groups.append(refs)
         return groups
+
+    @staticmethod
+    def _reasoned_verdict_numeric_tokens(verdict: str) -> List[str]:
+        """提取判决正文里"像数据"的数字 token：百分数（含整数百分数）和小数。
+        只做身份比对用——这些 token 必须逐字出现在终审实际收到的 payload 里。
+        不提取纯整数（如"三条理由""纳斯达克100"里的 3/100），避免把行文数字
+        误判成编造数据；也不提取 evidence_ref 里的编号（如 L1）。"""
+        tokens: List[str] = []
+        for match in re.finditer(r"\d+(?:\.\d+)?\s*%|\d+\.\d+", verdict):
+            token = re.sub(r"\s+", "", match.group(0))
+            if token not in tokens:
+                tokens.append(token)
+        return tokens
 
     def _annotate_reasoned_verdict_refs(
         self,
@@ -6293,6 +6407,54 @@ class VNextOrchestrator:
                 final,
                 "reasoned_verdict_unresolved_refs:" + ",".join(dict.fromkeys(unresolved)),
             )
+
+    def _validate_final_conflict_responses(
+        self,
+        candidate: Any,
+        thesis: ThesisDraft,
+    ) -> List[str]:
+        """T42③：Thesis→Final 段补"保留冲突是否被回应"的编号级校验。
+
+        Bridge→Thesis 段已查得扎实（`_run_schema_guard` 里的 retained_conflicts
+        认亲），Thesis→Final 段此前无对等检查——终审只被要求"带够 3 条引用"，
+        不被要求"覆盖住仍然保留的冲突"。后果：冲突条目仍在结构字段里（"没抹平"
+        形式成立），但终审叙事可完全绕开。**冲突没被删掉，只是没被回答。**
+
+        这里只做身份比对：thesis 保留的、带 `conflict_id` 的高严重度冲突，其编号
+        必须逐字出现在终审输出的 `principal_contradiction.conflict_refs`、
+        `reasoned_verdict` 或 `adjudicator_notes` 里。不判意思——不回应对措辞、
+        不看回应质量；编号没出现就是没覆盖，把缺失编号原样喂回重试。
+        """
+        retained_high_conflict_ids = [
+            str(getattr(conflict, "conflict_id", "") or "").strip()
+            for conflict in (getattr(thesis, "retained_conflicts", []) or [])
+            if str(getattr(getattr(conflict, "severity", ""), "value", getattr(conflict, "severity", ""))).lower() == "high"
+            and str(getattr(conflict, "conflict_id", "") or "").strip()
+        ]
+        if not retained_high_conflict_ids:
+            return []
+
+        haystack_parts: List[str] = [
+            str(getattr(candidate, "reasoned_verdict", "") or ""),
+            str(getattr(candidate, "adjudicator_notes", "") or ""),
+            str(getattr(candidate, "final_stance", "") or ""),
+        ]
+        principal = getattr(candidate, "principal_contradiction", None)
+        if principal is not None:
+            haystack_parts.append(" ".join(getattr(principal, "conflict_refs", []) or []))
+            haystack_parts.append(str(getattr(principal, "contradiction_id", "") or ""))
+        for secondary in getattr(candidate, "secondary_contradictions", []) or []:
+            haystack_parts.append(str(getattr(secondary, "contradiction_id", "") or ""))
+        haystack = "\n".join(haystack_parts)
+
+        missing = [conflict_id for conflict_id in dict.fromkeys(retained_high_conflict_ids) if conflict_id not in haystack]
+        if missing:
+            return [
+                "final must respond to or preserve retained high-severity conflicts; "
+                "missing conflict ids in final principal_contradiction.conflict_refs / "
+                f"reasoned_verdict / adjudicator_notes: {missing[:5]}"
+            ]
+        return []
 
     def _validate_layer_card_v2(
         self,
@@ -7423,6 +7585,8 @@ class VNextOrchestrator:
         filename: str,
         validator: Optional[Callable[[Any], List[str]]] = None,
         pre_validate_transform: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+        strict_tool_schema: Optional[Dict[str, Any]] = None,
+        strict_tool_name: Optional[str] = None,
     ) -> Any:
         checkpoint = self._load_stage_checkpoint(
             filename,
@@ -7440,6 +7604,8 @@ class VNextOrchestrator:
             payload=payload,
             validator=validator,
             pre_validate_transform=pre_validate_transform,
+            strict_tool_schema=strict_tool_schema,
+            strict_tool_name=strict_tool_name,
         )
         self._save_json(filename, result)
         path = Path(filename)
