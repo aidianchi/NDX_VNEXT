@@ -5,8 +5,9 @@
 是已完工内容。根因是同一状态被手抄在多份文档里，靠纪律同步，忘一次即永久错位。
 
 结构上的解法是消灭副本：`现在.md` 是唯一可以声明事项状态的文件。因此本模块的
-断言全部是"良构性"与"对照只增不改的历史"，**没有一条在校验两份副本是否相等**——
-需要对账测试，就说明结构里还有冗余。
+断言几乎全部是"良构性"与"对照只增不改的历史"；唯一例外是 AGENTS.md 与 CLAUDE.md
+的逐字一致断言（2026-08-15 C1 定：两份总纲必须一字不差，防双轨漂移）。其余
+**没有一条在校验两份副本是否相等**——需要对账测试，就说明结构里还有冗余。
 """
 
 import glob
@@ -182,6 +183,17 @@ def test_task_ids_are_never_reused():
         f"编号 {reused} 已在 WORK_LOG.md 标记关闭，却又出现在现在.md 台账里。"
         "新事项必须用新编号，不得复用退役编号。"
     )
+
+
+def test_agents_and_claude_are_identical():
+    """AGENTS.md 与 CLAUDE.md 必须逐字一致（2026-08-15 C1 定）。
+
+    两份都是每次开工注入的总纲；历史上只同步过"沟通方式"一节、没有闸门，
+    随后各长各的。以 CLAUDE.md 为基准整份同步，且首行标题也统一。
+    """
+    agents = _read(os.path.join(REPO_ROOT, "AGENTS.md"))
+    claude = _read(os.path.join(REPO_ROOT, "CLAUDE.md"))
+    assert agents == claude, "AGENTS.md 与 CLAUDE.md 不一致——以 CLAUDE.md 为基准整份同步（首行标题也须一致）"
 
 
 def test_board_stays_glanceable():

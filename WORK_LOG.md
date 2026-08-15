@@ -33,7 +33,24 @@
 
 **验证结果**：`tests/test_docs_consistency.py` 10 passed；提交后 `git status` 干净。
 
-**剩余风险**：C1-C19 均未施工；T-DSH 的非数字编号已纳入闸门（仅此一种格式，未来新增编号格式仍需同步改闸门）。
+**剩余风险**：C2-C19 未施工；T-DSH 的非数字编号已纳入闸门（仅此一种格式，未来新增编号格式仍需同步改闸门）。
+
+### C1 收工：北极星三总纲同步 + AGENTS/CLAUDE 逐字一致 + Codex 调度节搬家
+
+**为什么做**：06 定案施工清单第 1 条；B1/B2/B3/B5 按 08-15 裁决口径执行。
+
+**改了什么**：
+
+- `CLAUDE.md`：首行统一为「# 项目总纲」；北极星行换成 06 定案 L33 定稿句（逐字）；三支柱第三条「校准闭环常开」→「校准闭环后置」（只改半句，分层校准工程本体仍排最后）；文档路由表新增一行指向 `.codex/config.toml`。
+- `AGENTS.md`：以 CLAUDE.md 为基准整份同步，两文件逐字节相同（含首行）。
+- `.codex/agents/README.md`（新建、git 跟踪）：原 AGENTS.md「Codex 调度与成本控制」节要点原样迁入。**落点修正**：原计划落 `.codex/config.toml`，但该文件按 2026-07-28 所有者裁定属本机配置、不进 git（`.gitignore` L74 有明文）；本节内容属项目资产、必须可审计，故落到同属 .codex 生态且被跟踪的 `agents/README.md`，两份总纲路由同步指向它。
+- `系统说明书.md`：4.6 换成定稿北极星句；4.6 后补 B3「判断→决策连接维持现状 = 有意识接受的缺口」；4.3 补 B5 边界声明（材料层真实隔离可审计，挡不住模型训练先验，不为此新增机制）。
+- `01_架构校准探讨底稿.md` L68 事实错误改正：AGENTS.md 当时并无北极星，是「新增」不是「改旧版」。
+- `tests/test_docs_consistency.py`：新增 `test_agents_and_claude_are_identical`（两总纲逐字一致断言），模块 docstring 同步说明。
+
+**验证结果**：`diff AGENTS.md CLAUDE.md` 为空；`tests/test_docs_consistency.py` 11 passed。
+
+**否决/未做**：B3/B5 只进系统说明书、不进两份总纲（你裁）；Codex 调度节是搬家不是删除，全文留在 `.codex/agents/README.md`；未推翻 07-28「config.toml 不进 git」的旧裁定。
 
 ### 六问架构重审跑完并定案：骨架不动，几处小修；定案文档一篇顶所有
 
