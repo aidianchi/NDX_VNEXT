@@ -2057,6 +2057,14 @@ class AnalysisRevised(BaseModel):
     # 展示位，无下游依据。
     revision_summary: str = Field(..., description="修订说明")
 
+    # 机器对账清单（2026-08-16 新口径）：修订说明声称改过的字段名，逐项必须能在
+    # revised_thesis 实物中找到（防自述不可靠——曾自称"添加 why_retained 解释"、
+    # 实物无此字段）。PC-03 逐项核对；老产物缺此字段时按未提供处理，不因缺字段判病。
+    revision_claimed_fields: List[str] = Field(
+        default_factory=list,
+        description="本次修订真正改动过的 revised_thesis 叶子字段名清单（机器对账用）",
+    )
+
     # 采纳的批评
     accepted_critiques: List[str] = Field(default_factory=list, description="采纳的批评")
 

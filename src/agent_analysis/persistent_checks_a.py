@@ -9,7 +9,7 @@
 每一条检查对应 03 根本审查总报告 §3 的 A 类发现：
     PC-01  A1（C3 版 critic/risk 分料身份）
     PC-02  A2（C3 版治理站引用全集对账）
-    PC-03  A3 + 拍板②（final 输入含修订内容）
+    PC-03  A3 + 拍板②（final 输入含修订内容 + 修订说明机器对账）
     PC-04  A5（IA ref_authority unknown 占比告警）
     PC-05  A6（委托调查 vs 进 IA 报告数对账）
     PC-06  A7（CI 材料闭合性 + 立场字段检测）
@@ -412,6 +412,24 @@ _THESIS_FIELD_MAP = {
 }
 
 
+def _leaf_key_names(value: Any, acc: Optional[set] = None) -> set:
+    """收集一棵 JSON 树里出现过的全部 dict 键名（叶子与容器都算）。
+
+    PC-03 机器对账用：revision_claimed_fields 声称改过的字段名，必须是修订稿
+    实物里真实出现过的键名——身份比对，不解析散文意思。
+    """
+    if acc is None:
+        acc = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            acc.add(key)
+            _leaf_key_names(item, acc)
+    elif isinstance(value, list):
+        for item in value:
+            _leaf_key_names(item, acc)
+    return acc
+
+
 def _check_pc03(run_dir: Path) -> Dict[str, Any]:
     analysis_revised_path = run_dir / "analysis_revised.json"
     final_dir = run_dir / "prompt_audit" / "final_adjudicator"
@@ -463,22 +481,48 @@ def _check_pc03(run_dir: Path) -> Dict[str, Any]:
     revision_ok = isinstance(revision_summary, str) and bool(revision_summary)
     thesis_original_present = "thesis_original" in final_gi
 
+    # ── 修订说明机器对账（08-16 新口径）：声称改过的字段必须逐项在修订稿实物
+    #    里存在。老产物缺 revision_claimed_fields 时按"未声称"处理，不因缺字段判病。
+    claimed_raw = analysis_revised.get("revision_claimed_fields")
+    claimed_fields: List[str] = []
+    claimed_shape_bad = False
+    if claimed_raw is not None:
+        if not isinstance(claimed_raw, list) or not all(
+            isinstance(item, str) and bool(item) for item in claimed_raw
+        ):
+            claimed_shape_bad = True
+        else:
+            claimed_fields = [str(item) for item in claimed_raw]
+    actual_leaf_names = _leaf_key_names(revised_thesis)
+    missing_claimed = sorted({name for name in claimed_fields if name not in actual_leaf_names})
+    if claimed_shape_bad:
+        claimed_detail = "revision_claimed_fields 形状非法（须为非空字符串列表）"
+    elif claimed_fields:
+        claimed_detail = (
+            f"revision_claimed_fields {len(claimed_fields)} 项"
+            f"{'全部命中修订稿实物' if not missing_claimed else f'，{len(missing_claimed)} 项不在实物中: {missing_claimed}'}"
+        )
+    else:
+        claimed_detail = "revision_claimed_fields 未提供或为空（老产物按未声称处理）"
+    claimed_ok = not claimed_shape_bad and not missing_claimed
+
     if not thesis_original_present:
         # 装配点②尚未上线：诚实报缺，不许当通过。
-        detail = "thesis_original 未上线（待 C6 装配点②）"
+        detail = f"thesis_original 未上线（待 C6 装配点②）；{claimed_detail}"
         if mismatches:
             detail += f"；且 thesis_* 与 revised_thesis 不一致: {mismatches}"
         else:
             detail += "；thesis_* 与 revised_thesis 逐字段一致"
-        return _result("PC-03", "final 输入含修订内容（A3 + 拍板②）", False, detail,
+        return _result("PC-03", "final 输入含修订内容+修订说明机器对账（A3 + 拍板②）", False, detail,
                        "prompt_audit/final_adjudicator:governance_input; analysis_revised.json")
 
-    passed = not mismatches and revision_ok
+    passed = not mismatches and revision_ok and claimed_ok
     detail = (
         f"thesis_original 存在; revision_summary={'非空' if revision_ok else '空'}; "
+        f"{claimed_detail}; "
         f"thesis_* 与 revised_thesis{'全部一致' if not mismatches else '不一致: ' + str(mismatches)}"
     )
-    return _result("PC-03", "final 输入含修订内容（A3 + 拍板②）", passed, detail,
+    return _result("PC-03", "final 输入含修订内容+修订说明机器对账（A3 + 拍板②）", passed, detail,
                    "prompt_audit/final_adjudicator:governance_input; analysis_revised.json")
 
 
@@ -815,7 +859,7 @@ def _check_pc10(run_dir: Path) -> Dict[str, Any]:
 _CHECKS = [
     ("PC-01", "critic/risk 分料身份检查（A1 的 C3 版）", _check_pc01),
     ("PC-02", "治理站引用全集对账（A2 的 C3 版）", _check_pc02),
-    ("PC-03", "final 输入含修订内容（A3 + 拍板②）", _check_pc03),
+    ("PC-03", "final 输入含修订内容+修订说明机器对账（A3 + 拍板②）", _check_pc03),
     ("PC-04", "IA ref_authority unknown 占比告警（A5）", _check_pc04),
     ("PC-05", "委托调查 vs 进 IA 报告数对账（A6）", _check_pc05),
     ("PC-06", "CI 材料闭合性 + 立场字段检测（A7）", _check_pc06),

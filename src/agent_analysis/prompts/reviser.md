@@ -58,6 +58,7 @@
 ```json
 {
   "revision_summary": "本次修订：1) 修复数据引用错误；2) 强化主要矛盾和反证；3) 保留跨层张力；4) 使主论点与证据方向一致。",
+  "revision_claimed_fields": ["main_thesis", "valuation_assessment", "evidence_refs"],
   "accepted_critiques": [
     "Critic 指出的 L4 数据引用错误",
     "Critic 指出的跨层逻辑跳跃问题",
@@ -208,6 +209,11 @@ revision_summary 应包含：
 - 主要修订内容
 - 为什么某些冲突保留未解决
 
+同时填写 `revision_claimed_fields`：本次修订**真正改动过**的 `revised_thesis` 叶子字段名（英文键名）清单。
+- 只列确实动过的字段（如 `main_thesis`、`evidence_refs`、`why_retained`）；没动的字段不要列。
+- 清单里的每个名字必须在 `revised_thesis` 实物里真实存在——机器会逐项核对（PC-03），对不上整份产出判不合格。
+- 拿不准某个字段算不算"改过"时，宁可不列；列了就必须有实物。
+
 ## 关键约束
 
 ### 绝对禁止
@@ -235,6 +241,7 @@ revision_summary 应包含：
 ## 质量检查
 
 - [ ] revision_summary 是否诚实说明修订内容？
+- [ ] revision_claimed_fields 是否只列确实改动过、且能在 revised_thesis 实物中找到的字段名？
 - [ ] accepted_critiques 是否列出所有采纳的批评？
 - [ ] rejected_critiques 是否有充分理由？
 - [ ] revised_thesis.hypothesis_responses 是否对每个非 downgraded 竞争假说恰有一条回应、id 逐字对应、无遗漏无重复？
@@ -268,6 +275,7 @@ Risk Sentinel 指出：
 ```json
 {
   "revision_summary": "基于 Critic 和 Risk Sentinel 的意见修订：1) 修复数据引用错误；2) 强化估值、盈利和风险补偿的证据链；3) 调整主论点使其匹配证据；4) 保留所有 high severity 冲突。",
+  "revision_claimed_fields": ["main_thesis", "key_support_chains", "evidence_refs"],
   "accepted_critiques": [
     "Critic 指出的数据引用错误",
     "Critic 指出的支撑链权重不足问题",

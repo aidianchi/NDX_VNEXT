@@ -189,6 +189,7 @@ def test_pc03_pass_c6_online(tmp_path: Path):
         tmp_path / "analysis_revised.json",
         {
             "revision_summary": "根据批评修订了主论点",
+            "revision_claimed_fields": ["main_thesis"],
             "revised_thesis": {"main_thesis": "REVISED", "environment_assessment": "E"},
             "degraded_fallback": None,
         },
@@ -206,6 +207,88 @@ def test_pc03_pass_c6_online(tmp_path: Path):
     )
     result = _result_by_id(run_checks_a(tmp_path), "PC-03")
     assert result["passed"] is True
+    assert "全部命中修订稿实物" in result["detail"]
+
+
+def test_pc03_pass_claimed_nested_field_present(tmp_path: Path):
+    # 前科场景的反面：修订说明声称改了 why_retained，修订稿实物里确实有。
+    _write_json(
+        tmp_path / "analysis_revised.json",
+        {
+            "revision_summary": "补了保留冲突的 why_retained 解释",
+            "revision_claimed_fields": ["main_thesis", "why_retained"],
+            "revised_thesis": {
+                "main_thesis": "REVISED",
+                "retained_conflicts": [{"why_retained": "张力必须保留"}],
+            },
+            "degraded_fallback": None,
+        },
+    )
+    _write_payload(
+        _stage(tmp_path, "final_adjudicator"),
+        {
+            "governance_input": {
+                "thesis_original": {"main_thesis": "ORIGINAL"},
+                "thesis_main": "REVISED",
+                "revision_summary": "补了保留冲突的 why_retained 解释",
+            }
+        },
+    )
+    result = _result_by_id(run_checks_a(tmp_path), "PC-03")
+    assert result["passed"] is True
+    assert "全部命中修订稿实物" in result["detail"]
+
+
+def test_pc03_fail_claimed_field_missing_from_revised_thesis(tmp_path: Path):
+    # 前科场景：修订说明自称"添加 why_retained 解释"，修订稿实物里没有——必须拦下。
+    _write_json(
+        tmp_path / "analysis_revised.json",
+        {
+            "revision_summary": "添加了 why_retained 解释",
+            "revision_claimed_fields": ["main_thesis", "why_retained"],
+            "revised_thesis": {"main_thesis": "REVISED"},
+            "degraded_fallback": None,
+        },
+    )
+    _write_payload(
+        _stage(tmp_path, "final_adjudicator"),
+        {
+            "governance_input": {
+                "thesis_original": {"main_thesis": "ORIGINAL"},
+                "thesis_main": "REVISED",
+                "revision_summary": "添加了 why_retained 解释",
+            }
+        },
+    )
+    result = _result_by_id(run_checks_a(tmp_path), "PC-03")
+    assert result["passed"] is False
+    assert "why_retained" in result["detail"]
+    assert "不在实物中" in result["detail"]
+
+
+def test_pc03_fail_claimed_fields_bad_shape(tmp_path: Path):
+    _write_json(
+        tmp_path / "analysis_revised.json",
+        {
+            "revision_summary": "修订了",
+            "revision_claimed_fields": "main_thesis",
+            "revised_thesis": {"main_thesis": "REVISED"},
+            "degraded_fallback": None,
+        },
+    )
+    _write_payload(
+        _stage(tmp_path, "final_adjudicator"),
+        {
+            "governance_input": {
+                "thesis_original": {"main_thesis": "ORIGINAL"},
+                "thesis_main": "REVISED",
+                "revision_summary": "修订了",
+            }
+        },
+    )
+    result = _result_by_id(run_checks_a(tmp_path), "PC-03")
+    assert result["passed"] is False
+    assert "形状非法" in result["detail"]
 
 
 def test_pc03_fail_thesis_original_not_online(tmp_path: Path):

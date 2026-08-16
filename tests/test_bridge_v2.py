@@ -488,7 +488,7 @@ def test_bridge_normalize_dedupes_transmission_path_ids_and_fills_implication(tm
     assert orchestrator._validate_bridge_memo_v2(memo) == []
 
 
-def test_bridge_prompt_anchors_event_refs_as_string_list(tmp_path: Path):
+def test_bridge_prompt_anchors_event_refs_must_stay_empty(tmp_path: Path):
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
         output_dir=str(tmp_path),
@@ -497,6 +497,7 @@ def test_bridge_prompt_anchors_event_refs_as_string_list(tmp_path: Path):
 
     prompt = orchestrator._compose_bridge_prompt("body")
 
-    assert "BridgeMemo.event_refs" in prompt
-    assert "List[str]" in prompt
-    assert '["event:' in prompt
+    # C6 三明治口径：Bridge 不消费事件，提示词必须锚定 event_refs 恒空并禁止自引事件 ID。
+    assert "BridgeMemo.event_refs 必须保持为空列表 []" in prompt
+    assert "不得自行引入事件 ID" in prompt
+    assert "event: 前缀会被校验器打回" in prompt

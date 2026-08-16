@@ -196,7 +196,7 @@ def test_main_ledger_double_failure_still_does_not_block(monkeypatch, tmp_path: 
     assert pipeline_main._write_expectation_ledger_non_blocking(str(tmp_path), "2026-07-18") == ""
 
 
-def test_governance_gets_pit_matched_compact_ledger_without_core_refs(tmp_path: Path):
+def test_governance_withholds_pit_matched_ledger_per_v0_menu(tmp_path: Path):
     ledger = build_expectation_ledger(
         effective_date="2026-07-18",
         vintage_root=tmp_path / "missing",
@@ -221,13 +221,10 @@ def test_governance_gets_pit_matched_compact_ledger_without_core_refs(tmp_path: 
         synthesis_packet=SynthesisPacket(packet_meta={"data_date": "2026-07-18"}),
         thesis=thesis,
     )
-    summary = governance.pricing_expectation_ledger
-    assert summary["metric_authority"] == "supporting_only"
-    assert summary["artifact_ref"] == "expectation_vs_realized.json"
-    assert summary["usage_rule"] == "pricing_narrative_support_only; forbidden_as_core_ref"
-    assert "premium_series" not in json.dumps(summary)
-    assert "ticker_changes" not in json.dumps(summary)
-    assert "evidence_refs" not in json.dumps(summary)
+    # 配餐单 v0 新口径：pricing_expectation_ledger 对四个治理站一律不给，
+    # 台账只落盘供审计；治理包内该字段恒为空对象。
+    assert governance.pricing_expectation_ledger == {}
+    assert json.loads((tmp_path / "expectation_vs_realized.json").read_text(encoding="utf-8")) == ledger
 
 
 def test_governance_rejects_mismatched_or_overclaimed_ledger(tmp_path: Path):
