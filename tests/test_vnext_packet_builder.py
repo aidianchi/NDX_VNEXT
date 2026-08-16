@@ -174,6 +174,8 @@ def test_packet_builder_hides_inactive_manual_metric_values_and_carries_backtest
 
     assert packet.manual_overrides["metrics"] == {}
     assert packet.manual_overrides["inactive_metric_count"] == 1
+    # B5：未启用手工配置的占位日期不得当"当前数据日期"送进各层。
+    assert packet.manual_overrides["date"] == ""
     assert packet.meta["backtest_data_boundaries"][0]["function_id"] == "get_ndx_pe_and_earnings_yield"
     assert packet.context["backtest_data_boundaries"][0]["future_upgrade"] == "historical source"
     assert packet.meta["strict_backtest_invariants"]["schema_version"] == "strict_backtest_invariants_v1"

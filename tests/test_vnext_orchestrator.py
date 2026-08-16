@@ -1166,7 +1166,9 @@ def test_l4_prompt_drops_audit_bookkeeping_without_dropping_metric_body(tmp_path
     assert "source_switches" not in prompt
     assert '"value"' not in manifest_text
     assert "PE_TTM" not in manifest_text
-    assert '"count": 12' in manifest_text
+    # B6：指标清单不再重复供给 data_quality（完整块只在 Runtime Input 一份）。
+    assert '"data_quality"' not in manifest_text
+    assert "large_rows" not in manifest_text
     assert '"row": 0' not in manifest_text
     assert '"PE_TTM": 36.6' in runtime_input
     assert '"EarningsYield": 2.73' in runtime_input
@@ -2229,13 +2231,10 @@ def test_event_section_summary_payload_hands_model_a_ready_made_citation(tmp_pat
         "[card:event:3a4f8fe4369bd167]",
         "[card:event:4c46665e1c0dbd9e]",
     ], "每张卡都要带一个可原样抄写的完整引用串"
-    contract_text = json.dumps(captured["payload"]["output_contract"], ensure_ascii=False)
-    assert "event:" in contract_text, "输出契约必须让模型看见 id 真实带 event: 前缀"
-    contract_keys = set(captured["payload"]["output_contract"].keys())
-    assert contract_keys == {"summary_text"}, (
-        "T36：cited_event_ids 已改为代码从正文提取，output_contract 不应再要求模型"
-        f"自报这份清单，实际键：{contract_keys}"
-    )
+    # B3 修复：output_contract 已从 payload 移除，引用规则并入 boundary.citation_rule。
+    assert "output_contract" not in captured["payload"]
+    assert "citation_rule" in captured["payload"]["boundary"]
+    assert "不要删改 id" in captured["payload"]["boundary"]["citation_rule"]
 
 
 def test_event_section_summary_payload_includes_needs_data_confirmation(tmp_path: Path):
@@ -2899,7 +2898,8 @@ def test_schema_guard_still_flags_genuinely_dropped_high_conflict(tmp_path: Path
     assert "C1_expensive_vs_restrictive" in joined
 
 
-def test_layer_indicator_manifest_carries_data_quality(tmp_path: Path):
+def test_layer_indicator_manifest_drops_duplicate_data_quality(tmp_path: Path):
+    # B6 修复：指标清单只列导航字段；data_quality 完整块只在 Runtime Input 一份。
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
         output_dir=str(tmp_path),
@@ -2923,7 +2923,7 @@ def test_layer_indicator_manifest_carries_data_quality(tmp_path: Path):
     )
 
     assert manifest[0]["source_tier"] == "component_model"
-    assert manifest[0]["data_quality"]["formula"] == "NDX FCF yield - 10Y Treasury yield"
+    assert "data_quality" not in manifest[0]
 
 
 def test_layer_payload_normalization_backfills_indicator_evidence_refs(tmp_path: Path):
@@ -4727,6 +4727,34 @@ def test_layer_prompt_documents_local_conclusion_as_required_field(tmp_path: Pat
     assert "local_conclusion" in prompt
     assert "500" in prompt
     assert "必填" in prompt
+
+
+def test_annotate_percentile_scales_declares_0_1_and_0_100(tmp_path: Path):
+    """B7 修复：percentile 数值叶必须带机器生成的刻度声明，杜绝 0-1/0-100 混用。"""
+    annotated = VNextOrchestrator._annotate_percentile_scales(
+        {
+            "relativity": {"percentile_5y": 0.74},
+            "historical": {"percentile_10y": 74.0},
+            "mixed": {"percentile_5y": 0.2, "percentile_10y": 20.0},
+        }
+    )
+    assert annotated["relativity"]["percentile_scale"] == "0-1"
+    assert annotated["historical"]["percentile_scale"] == "0-100"
+    assert annotated["mixed"]["percentile_scale"] == "mixed"
+
+
+def test_align_metric_names_to_canon_for_layer_prompt(tmp_path: Path):
+    """C12 修复：发给模型的 metric_name 必须与 IndicatorCanon 注册名逐字一致。"""
+    aligned = VNextOrchestrator._align_metric_names_to_canon(
+        "L1",
+        {
+            "get_10y_real_rate": {
+                "function_id": "get_10y_real_rate",
+                "metric_name": "某个和 canon 不一致的名字",
+            },
+        },
+    )
+    assert aligned["get_10y_real_rate"]["metric_name"] == "10Y Real Rate"
 
 
 def test_final_stage_retries_after_overlong_reasoned_verdict(tmp_path: Path):

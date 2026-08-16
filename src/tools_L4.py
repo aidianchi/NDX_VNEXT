@@ -4,6 +4,8 @@
 NDX Agent · 第4层数据获取函数
 """
 
+import json
+
 try:
     from .tools_common import *
 except ImportError:
@@ -204,6 +206,7 @@ M7_BUYBACK_XBRL_TAG_CANDIDATES = list(SEC_L4_METRIC_ALIASES["share_repurchase"])
 M7_BUYBACK_MIN_QUARTERS = 4
 M7_BUYBACK_MAX_QUARTERS_RETURNED = 12
 M7_BUYBACK_TOTAL_BUDGET_SECONDS = 45
+M7_BUYBACK_STALE_AFTER_DAYS = 365
 MIN_M7_BUYBACK_COMPANIES_FOR_AGGREGATE = 5
 YFINANCE_BUYBACK_ROW_CANDIDATES = [
     "Repurchase Of Capital Stock",
@@ -266,6 +269,23 @@ def _safe_float(value: Any) -> Optional[float]:
 
 def _round_or_none(value: Optional[float], digits: int = 2) -> Optional[float]:
     return round(value, digits) if value is not None and np.isfinite(value) else None
+
+
+def _dedupe_exact_dict_rows(rows: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], int]:
+    """C5 修复：回购序列按逐字节序列化去重，保留首行并报告删除数。
+
+    Yahoo 归一化季度表可能把同一季度拆成多行（行首/小计等），SEC 派生也可能
+    在同一 period_end 出现重复事实；重复行会骗过"每季度一个值"的读者。
+    """
+    seen: set = set()
+    deduped: List[Dict[str, Any]] = []
+    for row in rows:
+        key = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped, len(rows) - len(deduped)
 
 
 def _parse_valuation_date(value: Any) -> Optional[datetime]:
@@ -6195,6 +6215,7 @@ def get_m7_buyback_flow(end_date: str = None) -> Dict[str, Any]:
         per_company: Dict[str, Any] = {}
         raw_quarterly_series: Dict[str, List[Dict[str, Any]]] = {}
         series_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
+        dedupe_by_ticker: Dict[str, int] = {}
         started_at = time.monotonic()
 
         for ticker in M7_TICKERS:
@@ -6275,6 +6296,8 @@ def get_m7_buyback_flow(end_date: str = None) -> Dict[str, Any]:
                 continue
 
             series = sorted(series, key=lambda row: str(row.get("period_end") or ""))[-M7_BUYBACK_MAX_QUARTERS_RETURNED:]
+            # C5：逐字节重复行去重后再进序列与聚合。
+            series, _ = _dedupe_exact_dict_rows(series)
             series_by_ticker[ticker] = series
             raw_rows = []
             for row in series:
@@ -6289,17 +6312,35 @@ def get_m7_buyback_flow(end_date: str = None) -> Dict[str, Any]:
                         "pit_safe": row.get("pit_safe"),
                     }
                 )
+            raw_rows, duplicate_rows_removed = _dedupe_exact_dict_rows(raw_rows)
+            dedupe_by_ticker[ticker] = duplicate_rows_removed
             raw_quarterly_series[ticker] = raw_rows
-            latest = series[-1]
+            latest = series[-1] if series else None
+            if latest is None:
+                per_company[ticker] = {
+                    "availability": "unavailable",
+                    "primary_source": primary_source,
+                    "unavailable_reason": "all_rows_deduplicated_away",
+                }
+                raw_quarterly_series[ticker] = []
+                continue
+            latest_dt = _parse_valuation_date(latest.get("period_end"))
+            # C3：最新季早于有效日期 365 天以上的公司不得标 available（旧数据≠当前事实）。
+            stale = (
+                latest_dt is not None
+                and (effective_date.date() - latest_dt.date()).days > M7_BUYBACK_STALE_AFTER_DAYS
+            )
+            availability = "stale" if stale else "available"
             ttm_rows = _last_four_consecutive_quarters(series)
             ttm_value = sum(row["value"] for row in ttm_rows) if len(ttm_rows) == 4 else None
             company = {
-                "availability": "available",
+                "availability": availability,
                 "primary_source": primary_source,
                 "source_tier": SOURCE_TIER_OFFICIAL if primary_source == "sec_xbrl" else SOURCE_TIER_THIRD_PARTY,
                 "pit_safe": primary_source == "sec_xbrl",
                 "cik": cik,
                 "coverage_quarters": len(series),
+                "duplicate_rows_removed": duplicate_rows_removed,
                 "latest_period_end": latest.get("period_end"),
                 "latest_calendar_quarter": latest.get("calendar_quarter"),
                 "latest_quarter_buyback_usd_bn": _round_or_none(latest["value"] / 1e9, 3),
@@ -6307,6 +6348,11 @@ def get_m7_buyback_flow(end_date: str = None) -> Dict[str, Any]:
                 "ttm_quarters_used": [row.get("period_end") for row in ttm_rows],
                 "quarters": [_display_quarter(row) for row in series],
             }
+            if stale:
+                company["stale_reason"] = (
+                    f"latest_period_end={latest.get('period_end')} 早于有效日期 "
+                    f"{M7_BUYBACK_STALE_AFTER_DAYS} 天以上，按 C3 口径标 stale，不作当前回购事实。"
+                )
             if primary_source == "sec_xbrl":
                 company["xbrl_tag"] = selected_tag
             else:
@@ -6362,6 +6408,7 @@ def get_m7_buyback_flow(end_date: str = None) -> Dict[str, Any]:
             if len(aligned_ttm_companies) >= MIN_M7_BUYBACK_COMPANIES_FOR_AGGREGATE else None
         )
         available_companies = sorted(t for t, row in per_company.items() if row.get("availability") == "available")
+        stale_companies = sorted(t for t, row in per_company.items() if row.get("availability") == "stale")
         via_sec = sorted(t for t, row in per_company.items() if row.get("primary_source") == "sec_xbrl")
         via_yahoo = sorted(t for t, row in per_company.items() if row.get("primary_source") == "yfinance_fallback")
         all_filed_dates = [
@@ -6382,7 +6429,13 @@ def get_m7_buyback_flow(end_date: str = None) -> Dict[str, Any]:
         coverage = {
             "companies_available": len(available_companies),
             "companies_total": len(M7_TICKERS),
-            "companies_missing": sorted(set(M7_TICKERS) - set(available_companies)),
+            "companies_missing": sorted(set(M7_TICKERS) - set(available_companies) - set(stale_companies)),
+            "companies_stale": stale_companies,
+            "duplicate_rows_removed_by_ticker": {
+                ticker: dedupe_by_ticker.get(ticker, 0)
+                for ticker in M7_TICKERS
+                if dedupe_by_ticker.get(ticker, 0)
+            },
             "companies_via_sec_xbrl": via_sec,
             "companies_via_yfinance_fallback": via_yahoo,
             "latest_aggregate_calendar_quarter": latest_label,

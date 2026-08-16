@@ -1,4 +1,4 @@
-"""T47 常设检查 B 包（PC-11 ~ PC-20）。
+"""T47 常设检查 B 包（PC-11 ~ PC-26）。
 
 只读机器检查：输入 = 一次 run 的落盘产物目录（run_dir），输出 = 结构化结果列表。
 不调 LLM、不联网、不写 run_dir；模块 import 无副作用。
@@ -9,7 +9,8 @@
 
 原始发现依据：
     investigation_reports/20260806_t47_context_review/03_根本审查总报告.md §3
-    的 B4/B5/B7/B8/B11/B12/B13/C3/C5/C12 与 §8 第 20 项。
+    的 B4/B5/B7/B8/B11/B12/B13/C3/C5/C12 与 §8 第 20 项；
+    PC-21~26 为 08-16 补病（B3/B6/B11 另一半/C1/C2/C4），B14 无法机器化（见注释）。
 按"病出现 = failed"反写。
 """
 
@@ -443,6 +444,12 @@ def _indicator_dates_from_payload(pl: Dict[str, Any]) -> List[Tuple[str, str]]:
     return out
 
 
+# B8 修复（2026-08-16）：brief 必须声明"各指标实际数据日期以各自 data_quality 为准"。
+# 检查口径从"所有指标日期 == brief 日期"改为：不晚于运行时点即合法（月度指标滞后属正常），
+# 晚于运行时点 = 未来数据泄漏。
+_BRIEF_DATE_DISCLAIMER = "各指标实际数据日期以各自 data_quality"
+
+
 def _check_pc14(run_dir: Path) -> Dict[str, Any]:
     violations: List[str] = []
     checked_layers = 0
@@ -453,29 +460,31 @@ def _check_pc14(run_dir: Path) -> Dict[str, Any]:
             continue
         checked_layers += 1
         cb = pl.get("context_brief") or {}
-        brief_date = _parse_date(cb.get("data_summary", "")) if isinstance(cb, dict) else None
+        brief_text = cb.get("data_summary", "") if isinstance(cb, dict) else ""
+        brief_date = _parse_date(brief_text)
         if brief_date is None:
             violations.append(f"{layer}: context_brief.data_summary 不可解析")
             continue
+        if _BRIEF_DATE_DISCLAIMER not in brief_text:
+            violations.append(
+                f"{layer}: context_brief 未声明'各指标实际数据日期以各自 data_quality 为准'"
+            )
         bad: List[str] = []
         for path, raw in _indicator_dates_from_payload(pl):
             d = _parse_date(raw)
             if d is None:
                 continue
-            if d != brief_date:
-                bad.append(f"{path}={raw}")
+            if d > brief_date:
+                bad.append(f"{path}={raw}（晚于运行时点 {brief_date.isoformat()}）")
         if bad:
-            violations.append(
-                f"{layer}: brief 声称 {brief_date.isoformat()}，跨日不一致 "
-                f"{bad[:8]}{'...' if len(bad) > 8 else ''}"
-            )
+            violations.append(f"{layer}: 指标日期晚于运行时点（未来数据泄漏） {bad[:8]}{'...' if len(bad) > 8 else ''}")
 
     passed = not violations
     return _make_result(
         "PC-14",
         "context_brief 日期 vs 指标日期（B8）",
         passed,
-        "context_brief.data_summary 与各层指标日期一致" if passed else "；".join(violations),
+        "context_brief 声明运行时点+各指标自查口径，且无晚于运行时点的指标日期" if passed else "；".join(violations),
         f"prompt_audit/{{L1-L5}}/attempt_*.payload.json；检查层数 {checked_layers}",
     )
 
@@ -910,6 +919,255 @@ def _check_pc20(run_dir: Path, repo_root: Path = _REPO_ROOT) -> Dict[str, Any]:
 
 
 # --------------------------------------------------------------------------
+# PC-21+（08-16 补病检查：B3/B6/B11/C1/C2/C4）
+# --------------------------------------------------------------------------
+
+def _payload_body_from_path(path: Optional[Path]) -> Optional[Dict[str, Any]]:
+    if path is None:
+        return None
+    try:
+        d = _load_json(path)
+    except Exception:
+        return None
+    if isinstance(d, dict) and isinstance(d.get("payload"), dict):
+        return d["payload"]
+    return None
+
+
+def _check_pc21(run_dir: Path) -> Dict[str, Any]:
+    """B3：事件站输出契约去重——output_contract 已从 payload 移除，不得回潮。"""
+    audit = run_dir / "prompt_audit"
+    if not audit.is_dir():
+        return _make_result("PC-21", "事件站输出契约去重（B3）", False,
+                            "缺失 artifact: prompt_audit", "prompt_audit")
+    stations = sorted(
+        p for p in audit.iterdir()
+        if p.is_dir() and (p.name.startswith("event_card_interpreter.") or p.name == "event_section_summary")
+    )
+    if not stations:
+        return _make_result("PC-21", "事件站输出契约去重（B3）", False,
+                            "缺失 artifact: event_card_interpreter.* 与 event_section_summary",
+                            "prompt_audit/event_*")
+    violations: List[str] = []
+    checked = 0
+    for station in stations:
+        body = _payload_body_from_path(_latest_payload_path(run_dir, station.name))
+        if body is None:
+            violations.append(f"{station.name}: 缺失 payload")
+            continue
+        checked += 1
+        if "output_contract" in body:
+            violations.append(f"{station.name}: payload 仍携带 output_contract（B3 回潮）")
+    passed = not violations
+    return _make_result(
+        "PC-21",
+        "事件站输出契约去重（B3）",
+        passed,
+        f"{checked} 个事件站 payload 均无 output_contract" if passed else "；".join(violations),
+        f"prompt_audit/event_card_interpreter.* + event_section_summary；检查 {checked} 站",
+    )
+
+
+def _check_pc22(run_dir: Path) -> Dict[str, Any]:
+    """B6：指标清单不得重复供给 data_quality（完整块只在 Runtime Input 一份）。"""
+    violations: List[str] = []
+    checked = 0
+    for layer in _LAYERS:
+        prompt_path = _latest_prompt_path(run_dir, layer)
+        if prompt_path is None:
+            violations.append(f"{layer}: 缺失 prompt")
+            continue
+        checked += 1
+        text = _read_text(prompt_path)
+        try:
+            section = text.split("### 当前层指标清单\n", 1)[1].split("\n\n### 结构示例", 1)[0]
+        except IndexError:
+            violations.append(f"{layer}: 无法切出指标清单段")
+            continue
+        if '"data_quality"' in section:
+            violations.append(f"{layer}: 指标清单重复供给 data_quality（B6 回潮）")
+    passed = not violations
+    return _make_result(
+        "PC-22",
+        "指标清单与 Runtime Input 去重（B6）",
+        passed,
+        f"{checked} 层指标清单均无 data_quality 重复块" if passed else "；".join(violations),
+        f"prompt_audit/{{L1-L5}}/attempt_*.prompt.txt 指标清单段；检查 {checked} 层",
+    )
+
+
+def _check_pc23(run_dir: Path) -> Dict[str, Any]:
+    """B11 另一半：high_severity_conflicts 与 high_severity_typed_conflicts 条目集
+    必须相等，且 thesis.retained_conflicts 必须保留全部这些编号。"""
+    packet_path = run_dir / "synthesis_packet.json"
+    thesis_path = run_dir / "thesis_draft.json"
+    if not packet_path.is_file():
+        return _make_result("PC-23", "高严重度冲突容器条目集一致（B11）", False,
+                            "缺失 artifact: synthesis_packet.json", "synthesis_packet.json")
+    try:
+        packet = _load_json(packet_path)
+    except Exception as exc:
+        return _make_result("PC-23", "高严重度冲突容器条目集一致（B11）", False,
+                            f"check_error:{type(exc).__name__}:{exc}", "synthesis_packet.json")
+    hs = packet.get("high_severity_conflicts")
+    ht = packet.get("high_severity_typed_conflicts")
+    if not isinstance(hs, list) or not isinstance(ht, list):
+        return _make_result("PC-23", "高严重度冲突容器条目集一致（B11）", False,
+                            "high_severity_conflicts 或 high_severity_typed_conflicts 缺失/非列表",
+                            "synthesis_packet.json")
+
+    def ids(rows: List[Any]) -> set:
+        return {str(row.get("conflict_id")) for row in rows if isinstance(row, dict) and row.get("conflict_id")}
+
+    hs_ids = ids(hs)
+    ht_ids = ids(ht)
+    missing_typed = sorted(hs_ids - ht_ids)
+    missing_plain = sorted(ht_ids - hs_ids)
+    missing_thesis: List[str] = []
+    if thesis_path.is_file():
+        try:
+            thesis = _load_json(thesis_path)
+        except Exception:
+            thesis = {}
+        retained = thesis.get("retained_conflicts") if isinstance(thesis, dict) else None
+        retained_ids = ids(retained) if isinstance(retained, list) else set()
+        missing_thesis = sorted(hs_ids - retained_ids)
+
+    violations: List[str] = []
+    if missing_typed:
+        violations.append(f"typed_conflicts 缺 {missing_typed}")
+    if missing_plain:
+        violations.append(f"high_severity_conflicts 缺 {missing_plain}")
+    if missing_thesis:
+        violations.append(f"thesis.retained_conflicts 缺 {missing_thesis}")
+    passed = not violations
+    return _make_result(
+        "PC-23",
+        "高严重度冲突容器条目集一致（B11 补全）",
+        passed,
+        f"两容器各 {len(hs_ids)}/{len(ht_ids)} 条、thesis 保留 {len(hs_ids) - len(missing_thesis)}/{len(hs_ids)} 条，集合一致"
+        if passed else "；".join(violations),
+        "synthesis_packet.json:high_severity_conflicts/high_severity_typed_conflicts + thesis_draft.json:retained_conflicts",
+    )
+
+
+def _check_pc24(run_dir: Path) -> Dict[str, Any]:
+    """C1：L3 持仓锚必须分名分账（provider 总数 / 解析数 / as-of 与滞后天数），
+    两个裸数字并存或缺少时点声明即报警。"""
+    pl = _load_layer_payload(run_dir, "L3")
+    if pl is None:
+        return _make_result("PC-24", "L3 持仓锚计数与滞后声明（C1）", False,
+                            "缺失 artifact: prompt_audit/L3/attempt_*.payload.json", "prompt_audit/L3")
+    item = (pl.get("layer_raw_data") or {}).get("get_qqq_top10_concentration")
+    if not isinstance(item, dict):
+        return _make_result("PC-24", "L3 持仓锚计数与滞后声明（C1）", False,
+                            "缺失 artifact: L3 layer_raw_data.get_qqq_top10_concentration", "prompt_audit/L3")
+    value = item.get("value")
+    if not isinstance(value, dict):
+        return _make_result("PC-24", "L3 持仓锚计数与滞后声明（C1）", True,
+                            "持仓指标不可用（value 非 dict），无计数可对账", "prompt_audit/L3")
+    dq = item.get("data_quality")
+    coverage = dq.get("coverage") if isinstance(dq, dict) else None
+    violations: List[str] = []
+    for key in ("holdings_as_of", "holdings_lag_days", "holdings_parsed", "total_holdings", "holdings_lag_note"):
+        if value.get(key) in (None, ""):
+            violations.append(f"value 缺 {key}")
+    if isinstance(coverage, dict):
+        if coverage.get("holdings_reported") != value.get("holdings_parsed"):
+            violations.append(
+                f"holdings_reported={coverage.get('holdings_reported')} != holdings_parsed={value.get('holdings_parsed')}"
+            )
+        if coverage.get("holdings_lag_days") != value.get("holdings_lag_days"):
+            violations.append("coverage 与 value 的 holdings_lag_days 不一致")
+    else:
+        violations.append("data_quality.coverage 缺失")
+    if isinstance(value.get("holdings_lag_days"), (int, float)) and value["holdings_lag_days"] < 0:
+        violations.append("holdings_lag_days 为负（未来持仓日期）")
+    passed = not violations
+    return _make_result(
+        "PC-24",
+        "L3 持仓锚计数与滞后声明（C1）",
+        passed,
+        f"holdings_parsed={value.get('holdings_parsed')}, total_holdings={value.get('total_holdings')}, "
+        f"holdings_as_of={value.get('holdings_as_of')}, lag_days={value.get('holdings_lag_days')}"
+        if passed else "；".join(violations),
+        "prompt_audit/L3:layer_raw_data.get_qqq_top10_concentration",
+    )
+
+
+def _check_pc25(run_dir: Path) -> Dict[str, Any]:
+    """C2：supplier_lookback 处于 pending_validation 时仍作为 30d/90d 主斜率唯一材料
+    即报警（老板裁决前不许悄悄转绿）。"""
+    pl = _load_layer_payload(run_dir, "L4")
+    if pl is None:
+        return _make_result("PC-25", "supplier_lookback 待验证仍撑主斜率（C2）", False,
+                            "缺失 artifact: prompt_audit/L4", "prompt_audit/L4")
+    item = (pl.get("layer_raw_data") or {}).get("get_ndx_earnings_revision_metrics")
+    value = item.get("value") if isinstance(item, dict) else None
+    if not isinstance(value, dict):
+        return _make_result("PC-25", "supplier_lookback 待验证仍撑主斜率（C2）", True,
+                            "盈利修正指标不可用，无斜率可查", "prompt_audit/L4")
+    violations: List[str] = []
+    for field in ("slope_30d", "slope_90d"):
+        slope = value.get(field)
+        if not isinstance(slope, dict):
+            continue
+        if (
+            slope.get("material") == "supplier_lookback"
+            and slope.get("verification_status") == "pending_validation"
+        ):
+            violations.append(
+                f"{field}: supplier_lookback+pending_validation（待老板裁决数据源身份）"
+            )
+    passed = not violations
+    return _make_result(
+        "PC-25",
+        "supplier_lookback 待验证仍撑主斜率（C2）",
+        passed,
+        "30d/90d 主斜率无 supplier_lookback pending_validation 组合" if passed else "；".join(violations),
+        "prompt_audit/L4:layer_raw_data.get_ndx_earnings_revision_metrics.value.slope_30d/slope_90d",
+    )
+
+
+def _check_pc26(run_dir: Path) -> Dict[str, Any]:
+    """C4：yield gap 身份自相矛盾检测——core_allowed 标签与"诊断性/fallback"措辞
+    同时存在即报警（老板裁决前不许悄悄转绿）。"""
+    registry_path = run_dir / "evidence_registry.json"
+    if not registry_path.is_file():
+        return _make_result("PC-26", "yield gap 身份矛盾检测（C4）", False,
+                            "缺失 artifact: evidence_registry.json", "evidence_registry.json")
+    try:
+        registry = _load_json(registry_path)
+    except Exception as exc:
+        return _make_result("PC-26", "yield gap 身份矛盾检测（C4）", False,
+                            f"check_error:{type(exc).__name__}:{exc}", "evidence_registry.json")
+    passport = (registry.get("passports") or {}).get("L4.get_equity_risk_premium#level")
+    if not isinstance(passport, dict):
+        return _make_result("PC-26", "yield gap 身份矛盾检测（C4）", False,
+                            "缺失 passport: L4.get_equity_risk_premium#level", "evidence_registry.json")
+    model = passport.get("authority_model") if isinstance(passport.get("authority_model"), dict) else {}
+    field_authority = model.get("field_authority") if isinstance(model.get("field_authority"), dict) else {}
+    usage = str(field_authority.get("usage") or model.get("field_usage") or "").strip().lower()
+    reason = str(field_authority.get("reason") or "")
+    contradictions: List[str] = []
+    if usage == "core_allowed" and ("诊断" in reason or "fallback" in reason.lower() or "diagnostic" in reason.lower()):
+        contradictions.append(f"usage={usage} 与 reason 中的诊断/fallback 措辞并存（待老板裁决身份）")
+    passed = not contradictions
+    return _make_result(
+        "PC-26",
+        "yield gap 身份矛盾检测（C4）",
+        passed,
+        "yield gap 无 core_allowed/诊断性 矛盾对" if passed else "；".join(contradictions),
+        "evidence_registry.json:passports['L4.get_equity_risk_premium#level'].authority_model.field_authority",
+    )
+
+
+# B14（摘要层取舍标准无定义）不能机器化：必须先由人声明每层摘要取舍标准，之后才能
+# 机械化检查"被省掉的恰是关键指标"这类语义问题。标准归 C9/T38 设计文档一并定，不单
+# 独设检查；此注释即"为何不能"的留档。
+
+
+# --------------------------------------------------------------------------
 # 总入口
 # --------------------------------------------------------------------------
 
@@ -924,6 +1182,12 @@ _CHECKS: List[Tuple[str, str, Any]] = [
     ("PC-18", "L4 数据陈旧（C3）+ 回购逐字重复行（C5）", _check_pc18),
     ("PC-19", "canon 名 vs 输入 metric_name（C12）", _check_pc19),
     ("PC-20", "已落地三件复核（FIX-1/FIX-2/摊开器）", _check_pc20),
+    ("PC-21", "事件站输出契约去重（B3）", _check_pc21),
+    ("PC-22", "指标清单与 Runtime Input 去重（B6）", _check_pc22),
+    ("PC-23", "高严重度冲突容器条目集一致（B11 补全）", _check_pc23),
+    ("PC-24", "L3 持仓锚计数与滞后声明（C1）", _check_pc24),
+    ("PC-25", "supplier_lookback 待验证仍撑主斜率（C2）", _check_pc25),
+    ("PC-26", "yield gap 身份矛盾检测（C4）", _check_pc26),
 ]
 
 

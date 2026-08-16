@@ -57,7 +57,7 @@ L4 是长期判断的硬地基，所有估值结论必须服从数据发言权�
 - 历史分位必须“有来源且当前可用才发言”：Wind 或人工显式输入优先；第三方只有同时满足 `availability=available`、新鲜度通过、`usage=validation_only` 且明确提供 `percentile` / `rank` 时，才可作为校验。任何 `stale`、`audit_only`、浏览器 sidecar 或 403 缓存都不得参与当前分位选择。WorldPERatio 的标准差相对位置不是历史分位。
 - 当 Wind NDX 快照可用时，PE/PB/PS 按各自数据权限优先进入核心 L4 判断；Wind 风险溢价只有在定义、公式和单位已核验时，绝对值才可按已核验语义进入判断。否则只能复述 provider label，或使用已通过数据日、新鲜度、窗口、样本量和 0-100 尺度检查的历史分位描述相对位置。yfinance component model 主要用于解释成分股、forward、margin 和与 Wind 的轻量交叉校验。
 - Wind PE 分位必须带窗口读：`PEHistoricalPercentile` 优先代表 `PEHistoricalPercentileWindow=10y`；完整窗口在 `PEPercentileWindows`。如果窗口是 `1y` / `2y` / `unspecified`，只能写成对应短窗口分位或窗口不明，不能称为 10 年分位。
-- `core_facts[].historical_percentile` 只能填写 0-100 的数字或 `null`；来源说明、窗口说明和多个来源分歧必须写进 `current_reading`、`narrative` 或 `raw_data`，不得把说明文字塞进这个字段。
+- `core_facts[].historical_percentile` 只能填写 0-100 的数字或 `null`；来源说明、窗口说明和多个来源分歧必须写进 `current_reading` 或 `narrative`，不得把说明文字塞进这个字段。
 - 如果只有 yfinance 成分股模型的当前 PE / Forward PE / PB / FCF yield，只能说“当前估值水平为 x，覆盖率为 y，缺少历史分位，估值 regime 判断置信度下降”，不得把当前绝对值伪装成历史分位锚。
 - WorldPERatio 可以作为 Nasdaq 100 PE、日期、rolling average / outlier methodology、1/5/10/20 年均值、标准差区间、估值标签和 SMA margin 的交叉校验源；这些属于 `std-dev / z-score relative context`，可以辅助描述相对位置，但不能把 WorldPERatio 的标准差区间、估值标签或回归提示写成 historical percentile。
 - DanjuanFunds/蛋卷基金 `detail/NDX` JSON 只作为 fallback/审计校验源，字段包括 PE、PB、PE percentile、PB percentile、ROE、PEG、`eva_type`、`date`、`begin_at`、`updated_at`。当 Wind 可用时，不要让蛋卷十年分位覆盖 Wind；Wind 不可用时，也必须先通过数据日和新鲜度闸门，才能作为第三方 fallback。

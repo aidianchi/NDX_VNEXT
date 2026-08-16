@@ -265,8 +265,6 @@ PROMPT_AUDIT_BOOKKEEPING_FIELDS = {
     "recompute_inputs",
     "source_snapshot",
 }
-MANIFEST_DATA_QUALITY_LIST_LIMIT = 10
-MANIFEST_DATA_QUALITY_OBJECT_CHAR_LIMIT = 1200
 
 # Thesis / Counter-Thesis prompt 瘦身阈值（investigation_reports/20260725_thesis_
 # counter_thesis_slimming/PROPOSAL.md）：evidence_index 里超过这个条数、且序列化
@@ -987,7 +985,11 @@ class VNextOrchestrator:
             if str(card.layer) != layer and getattr(card.layer, "value", None) != layer:
                 raise ValueError(f"{layer} analyst returned mismatched layer: {card.layer}")
             cards.append(card)
-            self._save_json(self.layer_cards_dir / f"{layer}.json", card)
+            # B7：落盘层卡片同样补 percentile_scale 声明（PC-13 扫 payload 与卡片两处）。
+            self._save_json(
+                self.layer_cards_dir / f"{layer}.json",
+                self._annotate_percentile_scales(_model_dump(card)),
+            )
             self._record_stage_artifact(
                 self.layer_cards_dir / f"{layer}.json",
                 stage_key=f"{layer.lower()}_analyst",
@@ -1004,14 +1006,72 @@ class VNextOrchestrator:
     ) -> Dict[str, Any]:
         layer = layer.upper()
         layer_context_brief = self._build_layer_context_brief(packet, context_brief, layer)
+        raw_for_prompt = packet.raw_data.get(layer, {})
+        if isinstance(raw_for_prompt, dict):
+            raw_for_prompt = self._align_metric_names_to_canon(layer, raw_for_prompt)
         return {
             "context_brief": _model_dump(layer_context_brief),
             "layer": layer,
-            "layer_facts": self._purify_layer_facts_for_prompt(_model_dump(packet.facts_by_layer.get(layer))),
-            "layer_raw_data": packet.raw_data.get(layer, {}),
+            "layer_facts": self._annotate_percentile_scales(
+                self._purify_layer_facts_for_prompt(_model_dump(packet.facts_by_layer.get(layer)))
+            ),
+            "layer_raw_data": self._annotate_percentile_scales(raw_for_prompt) if isinstance(raw_for_prompt, dict) else raw_for_prompt,
             "manual_overrides": self._build_layer_manual_overrides(packet, layer),
             "runtime_boundary_policy_id": "layer_runtime_input_policy_v1",
         }
+
+    @staticmethod
+    def _align_metric_names_to_canon(layer: str, layer_raw_data: Dict[str, Any]) -> Dict[str, Any]:
+        """C12 修复：发给模型的 metric_name 与 IndicatorCanon 注册名强制一致。
+
+        以 canon 表为唯一名单，逐 function_id 对齐；canon 表没有的保持原样。
+        只改发给模型的副本，不回写 analysis_packet 原始材料。
+        """
+        aligned: Dict[str, Any] = {}
+        for key, item in layer_raw_data.items():
+            if not isinstance(item, dict):
+                aligned[key] = item
+                continue
+            function_id = str(item.get("function_id") or key)
+            try:
+                canon_name = str(get_indicator_canon(function_id).metric_name or "")
+            except KeyError:
+                canon_name = ""
+            if canon_name and str(item.get("metric_name") or "") != canon_name:
+                new_item = dict(item)
+                new_item["metric_name"] = canon_name
+                aligned[key] = new_item
+            else:
+                aligned[key] = item
+        return aligned
+
+    @staticmethod
+    def _annotate_percentile_scales(value: Any) -> Any:
+        """B7 修复：给 percentile 类数值叶补 `percentile_scale` 声明（0-1 / 0-100）。
+
+        同一 dict 内数值全部 ≤1 → 0-1；全部 >1 → 0-100；两者并存 → mixed。
+        只作用于发给模型的副本与落盘层卡片，不回写 analysis_packet 原始材料。
+        """
+        if isinstance(value, dict):
+            annotated = {
+                key: VNextOrchestrator._annotate_percentile_scales(item)
+                for key, item in value.items()
+            }
+            scales = set()
+            for key, item in annotated.items():
+                if (
+                    re.search(r"percentile", key, re.IGNORECASE)
+                    and isinstance(item, (int, float))
+                    and not isinstance(item, bool)
+                ):
+                    numeric = float(item)
+                    scales.add("0-1" if 0.0 <= numeric <= 1.0 else "0-100")
+            if scales:
+                annotated["percentile_scale"] = next(iter(scales)) if len(scales) == 1 else "mixed"
+            return annotated
+        if isinstance(value, list):
+            return [VNextOrchestrator._annotate_percentile_scales(item) for item in value]
+        return value
 
     def _purify_layer_facts_for_prompt(self, facts: Any) -> Any:
         """拍板⑤：发给 L1-L5 的 layer_facts 用净化副本，落盘 analysis_packet 不动。
@@ -1588,29 +1648,6 @@ class VNextOrchestrator:
                 },
                 "allowed_financial_links": EVENT_FINANCIAL_LINKS,
                 "competing_hypotheses": hypotheses,
-                "output_contract": {
-                    "event_id": "event:...",
-                    "fact_summary": "只写材料事实",
-                    "interpretation": "模型解读；弱来源以据报道或该媒体称开头",
-                    "entities": ["材料中的实体"],
-                    "event_type": "事件类型",
-                    "mechanism_hypothesis": {
-                        "financial_link": "从 allowed_financial_links 选择一项",
-                        "hypothesis": "该事件可能通过××渠道影响××",
-                    },
-                    "supports_hypotheses": ["只能引用 competing_hypotheses 中的 hypothesis_id"],
-                    "refutes_hypotheses": ["只能引用 competing_hypotheses 中的 hypothesis_id"],
-                    "limitations": ["限制"],
-                    "needs_data_confirmation": ["要哪条数据来确认"],
-                    "upgrade_candidate": False,
-                    "passport": {
-                        "source": "照抄 event_material.source",
-                        "tier": "照抄 event_material.tier",
-                        "published_at": "照抄 event_material.published_at",
-                        "event_date": "照抄 event_material.event_date",
-                        "effective_date": "照抄 event_material.effective_date",
-                    },
-                },
                 "boundary": {
                     "event_ref_only": True,
                     "must_not_become_l1_l5_evidence_ref": True,
@@ -1737,19 +1774,15 @@ class VNextOrchestrator:
             "event_cards": compact_cards,
             "card_count": len(compact_cards),
             "title_only_card_count": title_only_count,
-            "output_contract": {
-                "summary_text": (
-                    "100-1500 字总结正文（宽松上限，不必刻意压缩），含引用与结尾边界句。"
-                    "引用一律原样抄 event_cards[].citation 字段的值，不要自行拼接、"
-                    f"不要删改 id（本轮示例：{compact_cards[0]['citation'] if compact_cards else '[card:event:<id>]'}）。"
-                    "不需要另外列出引用清单——代码会从正文里的 [card:...] 标记自动提取。"
-                ),
-            },
             "boundary": {
                 "event_material_only": True,
                 "must_not_reference_l1_l5": True,
                 "must_not_exceed_effective_date": effective_date,
                 "must_end_with": "以上事件材料不构成主证据，判断以数据层为准。",
+                "citation_rule": (
+                    "引用一律原样抄 event_cards[].citation 字段的值，不要自行拼接、不要删改 id；"
+                    "代码会从正文里的 [card:...] 标记自动提取，不需要另外列出引用清单。"
+                ),
                 "note": (
                     f"本轮 {len(compact_cards)} 张卡中有 {title_only_count} 张 raw_text_available=false"
                     "（仅标题，未读全文），引用这些卡时必须带降级措辞（据报道/该媒体称/仅标题）。"
@@ -5462,8 +5495,10 @@ class VNextOrchestrator:
             special_attention.append(link.description)
         return ContextBrief(
             data_summary=(
-                f"数据日期 {packet.meta.get('data_date')}，"
+                f"运行时点 {packet.meta.get('data_date')}，"
                 f"共 {packet.meta.get('indicator_successful', 0)}/{packet.meta.get('indicator_total', 0)} 个指标成功。"
+                "各指标实际数据日期以各自 data_quality.data_date / effective_date 为准："
+                "早于运行时点属正常时点纪律，不要求与运行时点同一天。"
             ),
             layer_highlights=layer_highlights,
             apparent_cross_layer_signals=[link.description for link in packet.candidate_cross_layer_links[:4]],
@@ -5510,8 +5545,10 @@ class VNextOrchestrator:
                 if isinstance(item, dict) and not item.get("error")
             )
         return (
-            f"数据日期 {packet.meta.get('data_date')}，"
+            f"运行时点 {packet.meta.get('data_date')}，"
             f"{layer} 本层 {successful}/{total} 个指标成功。"
+            "各指标实际数据日期以各自 data_quality.data_date / effective_date 为准："
+            "早于运行时点属正常时点纪律（月度指标滞后发布等），不要求与运行时点同一天。"
         )
 
     def _build_layer_manual_overrides(self, packet: AnalysisPacket, layer: str) -> Dict[str, Any]:
@@ -7265,6 +7302,12 @@ class VNextOrchestrator:
         layer_raw_data = payload.get("layer_raw_data", {})
         layer_raw_data = self._filter_layer_raw_data_for_prompt(layer, layer_raw_data)
         expected_indicators = self._layer_indicator_manifest(layer_raw_data)
+        # B4 修复：结构示例必须用本层真实存在的指标，不得把 L1 的 get_10y_real_rate
+        # 当通用示例塞给所有层。用清单第一项动态渲染；本层无指标时示例留空。
+        first_indicator = expected_indicators[0] if expected_indicators else {}
+        example_function_id = str(first_indicator.get("function_id") or "").strip()
+        example_metric = str(first_indicator.get("metric_name") or example_function_id)
+        example_ref = f"{layer}.{example_function_id}" if example_function_id else ""
         canon_prompt = build_layer_canon_prompt(layer=layer, layer_raw_data=layer_raw_data)
         few_shot = build_layer_few_shot_prompt(layer=layer, layer_raw_data=layer_raw_data)
         v2_contract = (
@@ -7308,26 +7351,26 @@ class VNextOrchestrator:
             "{\n"
             '  "indicator_analyses": [\n'
             "    {\n"
-            '      "function_id": "get_10y_real_rate",\n'
-            '      "metric": "10Y Real Rate",\n'
-            '      "current_reading": "实际利率 1.95%，处于高位并上行",\n'
-            '      "normalized_state": "restrictive",\n'
-            '      "narrative": "作为成长股估值的地心引力，实际利率高位运行意味着远期现金流折现压力仍未解除。",\n'
-            '      "reasoning_process": "先看水平，再看趋势和分位；若实际利率高且上行，DCF 折现率提高，NDX 高久期盈利的估值弹性下降。",\n'
-            '      "first_principles_chain": ["实际利率上升", "无风险真实回报提高", "未来现金流现值下降", "成长股估值倍数承压"],\n'
-            '      "evidence_refs": ["L1.get_10y_real_rate"],\n'
-            '      "cross_layer_implications": ["需要 L4 验证估值是否已反映高实际利率"],\n'
-            '      "risk_flags": ["valuation_compression"],\n'
+            f'      "function_id": {json.dumps(example_function_id)},\n'
+            f'      "metric": {json.dumps(example_metric)},\n'
+            '      "current_reading": "该指标当前读数（引用 payload 实际数值）",\n'
+            '      "normalized_state": "neutral",\n'
+            '      "narrative": "把读数、趋势与分位压缩成一句本层判断。",\n'
+            '      "reasoning_process": "先看水平，再看趋势和分位，最后落到本层职责内的判断。",\n'
+            '      "first_principles_chain": ["读数事实", "本层机制", "本层判断"],\n'
+            f'      "evidence_refs": {json.dumps([example_ref] if example_ref else [])},\n'
+            '      "cross_layer_implications": ["只写待 Bridge 验证的问题，不写跨层结论"],\n'
+            '      "risk_flags": ["本层风险标签"],\n'
             '      "confidence": "medium"\n'
             "    }\n"
             "  ],\n"
             '  "quality_self_check": {\n'
             '    "coverage_complete": true,\n'
-            '    "covered_function_ids": ["get_10y_real_rate"],\n'
+            f'    "covered_function_ids": {json.dumps([example_function_id] if example_function_id else [])},\n'
             '    "missing_or_weak_indicators": [],\n'
             '    "weak_reasoning_points": [],\n'
             '    "unresolved_internal_tensions": [],\n'
-            '    "confidence_limitations": ["宏观变量到指数价格存在传导滞后"]\n'
+            '    "confidence_limitations": ["具体限制以本层指标清单与 payload 为准"]\n'
             "  }\n"
             "}\n"
         )
@@ -7535,42 +7578,11 @@ class VNextOrchestrator:
                     "source_tier": payload.get("source_tier") or (payload.get("data_quality") or {}).get("source_tier"),
                     "source_name": payload.get("source_name"),
                     "date": payload.get("date"),
-                    "data_quality": self._summarize_manifest_data_quality(payload.get("data_quality")),
                     "notes": payload.get("notes"),
                     "manual_override_used": payload.get("manual_override_used", False),
                 }
             )
         return manifest
-
-    @classmethod
-    def _summarize_manifest_data_quality(cls, value: Any, depth: int = 0) -> Any:
-        if isinstance(value, dict):
-            summarized = {
-                key: cls._summarize_manifest_data_quality(item, depth + 1)
-                for key, item in value.items()
-                if key not in PROMPT_AUDIT_BOOKKEEPING_FIELDS
-            }
-            if (
-                depth > 0
-                and len(json.dumps(summarized, ensure_ascii=False, default=str))
-                > MANIFEST_DATA_QUALITY_OBJECT_CHAR_LIMIT
-            ):
-                return {
-                    "keys": list(summarized.keys()),
-                    "summary": "large object omitted from indicator manifest; full detail remains in analysis_packet artifact",
-                }
-            return summarized
-        if isinstance(value, list):
-            if (
-                len(value) > MANIFEST_DATA_QUALITY_LIST_LIMIT
-                or len(json.dumps(value, ensure_ascii=False, default=str)) > MANIFEST_DATA_QUALITY_OBJECT_CHAR_LIMIT
-            ):
-                return {
-                    "count": len(value),
-                    "summary": "large list omitted from indicator manifest; full detail remains in analysis_packet artifact",
-                }
-            return [cls._summarize_manifest_data_quality(item, depth + 1) for item in value]
-        return value
 
     def _run_and_save(
         self,

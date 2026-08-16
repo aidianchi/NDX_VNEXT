@@ -423,16 +423,32 @@ class IntegratedSynthesisReportBuilder:
     ) -> Dict[str, Dict[str, Any]]:
         """T42①：权限描述之外，捎带 synthesis_packet.evidence_index 里的结构化数值
         （canonical_question / current_reading），让被许可引用的 ref 同时带着真实读数。
-        取不到就留空字符串，绝不编造或用占位符伪装成真实数值。"""
+        取不到就留空字符串，绝不编造或用占位符伪装成真实数值。
+
+        A5 修复（2026-08-16）：已注册但从未登记字段级权限的父引用，不得以 unknown
+        放行——保守默认 supporting_only（只能辅助佐证，不能独立支撑结论）；unknown
+        只留给证据注册表里查无此护照的引用，那才是真的标签缺口。"""
         passports = evidence_registry.get("passports") if isinstance(evidence_registry.get("passports"), dict) else {}
         index = evidence_index if isinstance(evidence_index, dict) else {}
         authority: Dict[str, Dict[str, Any]] = {}
         for ref in allowed_refs:
             passport = passports.get(ref)
             usage = ""
+            usage_source = "unregistered_ref"
+            field_usages: List[str] = []
             if isinstance(passport, dict):
                 model = passport.get("authority_model") if isinstance(passport.get("authority_model"), dict) else {}
                 usage = str(model.get("field_usage") or passport.get("field_usage") or "")
+                field_usages = [str(item) for item in _as_list(model.get("field_usages")) if str(item).strip()]
+                if usage:
+                    usage_source = "passport_field_usage"
+                elif field_usages:
+                    # 父引用是 mixed-field 容器：保守降为辅助佐证；强结论必须引用 #Field 子条目。
+                    usage = "supporting_only"
+                    usage_source = "mixed_field_parent_conservative_default"
+                else:
+                    usage = "supporting_only"
+                    usage_source = "registered_parent_conservative_default"
             entry = index.get(ref)
             canonical_question = ""
             current_reading = ""
@@ -441,6 +457,8 @@ class IntegratedSynthesisReportBuilder:
                 current_reading = str(entry.get("current_reading") or "")
             authority[ref] = {
                 "usage": usage or "unknown",
+                "usage_source": usage_source,
+                "field_usages": field_usages,
                 "canonical_question": canonical_question,
                 "current_reading": current_reading,
             }

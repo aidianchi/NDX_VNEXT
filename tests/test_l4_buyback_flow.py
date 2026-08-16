@@ -85,6 +85,27 @@ def test_buyback_full_contract_ttm_and_comparable_yoy(monkeypatch):
     assert value["raw_quarterly_series"]["AAPL"][-1]["value_usd"] == 5_000_000_000
 
 
+def test_buyback_stale_company_is_not_marked_available(monkeypatch):
+    # C3：最新季早于有效日期 365 天以上的公司必须标 stale，不得冒充当前事实。
+    _install_sec(monkeypatch, {"AMZN": [("2024-12-31", 4_000_000_000)]})
+
+    result = tools_L4.get_m7_buyback_flow("2026-07-10")
+
+    amzn = result["value"]["per_company"]["AMZN"]
+    assert amzn["availability"] == "stale"
+    assert "stale_reason" in amzn
+    assert result["data_quality"]["coverage"]["companies_stale"] == ["AMZN"]
+
+
+def test_buyback_exact_duplicate_rows_removed_and_counted(monkeypatch):
+    # C5：逐字重复行必须去重并留痕。
+    duplicate = {"period_end": "2025-12-31", "value": 4_000_000_000, "source": "sec_xbrl"}
+    rows = [duplicate, dict(duplicate), {"period_end": "2025-09-30", "value": 3_000_000_000, "source": "sec_xbrl"}]
+    deduped, removed = tools_L4._dedupe_exact_dict_rows(rows)
+    assert removed == 1
+    assert len(deduped) == 2
+
+
 def test_buyback_ttm_withheld_with_fewer_than_four_quarters(monkeypatch):
     _install_sec(monkeypatch, {"AAPL": [("2025-09-30", 2_000_000_000), ("2025-12-31", 3_000_000_000)]})
 

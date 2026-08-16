@@ -532,7 +532,10 @@ def get_qqq_top10_concentration(end_date: str = None) -> Dict[str, Any]:
     ]
     holdings.sort(key=lambda item: item["weight_pct"], reverse=True)
     top10 = holdings[:10]
-    total_holdings = int(payload.get("totalNumberOfHoldings") or len(holdings))
+    # C1 修复：官方总数与"实际解析到的持仓数"必须分名分账，不许两个裸数字并存。
+    holdings_parsed = len(holdings)
+    provider_total = payload.get("totalNumberOfHoldings")
+    total_holdings = int(provider_total) if provider_total is not None else holdings_parsed
     top10_weight = sum(item["weight_pct"] for item in top10)
     top5_weight = sum(item["weight_pct"] for item in holdings[:5])
     top3_weight = sum(item["weight_pct"] for item in holdings[:3])
@@ -544,6 +547,7 @@ def get_qqq_top10_concentration(end_date: str = None) -> Dict[str, Any]:
         concentration_date = datetime.strptime(effective, "%Y-%m-%d")
     except Exception:
         concentration_date = effective_date
+    holdings_lag_days = max((effective_date.date() - concentration_date.date()).days, 0)
 
     changes = [
         item
@@ -553,9 +557,17 @@ def get_qqq_top10_concentration(end_date: str = None) -> Dict[str, Any]:
         ]
         if item is not None
     ]
+    holdings_lag_note = (
+        f"持仓锚截至 {effective}，晚于运行时点 {holdings_lag_days} 天；"
+        "Invesco 官方持仓按发布节奏更新，这段时差内不得把它当成当日持仓。"
+    )
     value = {
         "effective_date": effective,
+        "holdings_as_of": effective,
+        "holdings_lag_days": holdings_lag_days,
+        "holdings_lag_note": holdings_lag_note,
         "total_holdings": total_holdings,
+        "holdings_parsed": holdings_parsed,
         "top10_weight_pct": round(top10_weight, 2),
         "top5_weight_pct": round(top5_weight, 2),
         "top3_weight_pct": round(top3_weight, 2),
@@ -583,10 +595,19 @@ def get_qqq_top10_concentration(end_date: str = None) -> Dict[str, Any]:
             "collected_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "update_frequency": "daily/monthly as published by Invesco endpoint",
             "formula": "Top-N concentration = sum of Invesco percentageOfTotalNetAssets; NDX vs NDXE spread from daily close total returns.",
-            "coverage": {"holdings_reported": len(holdings), "total_holdings": total_holdings},
+            "coverage": {
+                "holdings_reported": holdings_parsed,
+                "total_holdings": total_holdings,
+                "holdings_as_of": effective,
+                "holdings_lag_days": holdings_lag_days,
+            },
             "anomalies": (
                 (["invesco_live_unavailable_used_cached_snapshot"] if used_cached_snapshot else [])
                 + ([] if len(top10) == 10 else ["fewer_than_10_holdings_parsed"])
+                + (
+                    [f"provider_total_holdings({total_holdings}) != parsed_holdings({holdings_parsed})，以 provider 总数为分母、解析数只作覆盖率"]
+                    if total_holdings != holdings_parsed else []
+                )
             ),
             "fallback_chain": ["official_provider/Invesco", "local_official_snapshot", "proxy/yfinance", "unavailable"],
             "snapshot_cached_at_utc": (snapshot_meta or {}).get("cached_at_utc") if used_cached_snapshot else None,

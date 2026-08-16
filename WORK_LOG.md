@@ -8,6 +8,15 @@
 
 ## 2026-08-16
 
+### 【关闭 T52】离线段第2-3步收工：真红修复 + 补病检查 + 全量实测（08-16）
+
+- 第2步（真红10条）：8 条修真因——PC-04（ref_authority：已注册父引用保守默认 supporting_only，unknown 只留给查无护照）、PC-09（通用约束不再点名 raw_data/NO_DATA_AVAILABLE；analysis_required 是清单数据键，移出悬空键名单）、PC-11（结构示例动态使用本层第一个真实指标）、PC-12（未启用手工配置的占位日期不再进各层；本地配置占位日期清理）、PC-13（percentile_scale 机器标注 0-1/0-100/mixed）、PC-14（brief 改"运行时点 + 各指标自查声明"；检查改查未来日期泄漏）、PC-18（回购逐字行去重留痕 + AMZN 陈旧标 stale）、PC-19（发模型的 metric_name 按 canon 表对齐）。每条配红灯测试。
+- 第2步挂老板裁决：PC-08（A11：同名 OBV 两个值以谁为准 → O10）、PC-10（B2：事件站措辞二选一 → O11）；另立 PC-25（C2 → O12）、PC-26（C4 → O13）作裁决前报警。
+- 第3步（补检查）：常设检查 20→26 项——PC-21（B3 事件契约去重）、PC-22（B6 指标清单不重复 data_quality）、PC-23（B11 两容器条目集相等 + thesis 全保留）、PC-24（C1 持仓计数分名分账 + as-of/滞后声明）、PC-25（C2）、PC-26（C4）；B14 摘要取舍标准须先由人声明，留"为何不能"注释。
+- 修病同步：B3（output_contract 从事件 payload 移除，引用规则并入 boundary.citation_rule）；B6（指标清单去掉重复 data_quality 块）；C1（provider 总数与解析数分账 + holdings_as_of/holdings_lag_days/holdings_lag_note）；C3/C5 同 PC-18。
+- 验证：全量 pytest 实测 **1226 passed / 2 failed（仅 console_run_all 既知红）**；docs 闸门绿。
+- 【关闭 T52】编号退役；立 T53（一次新 run 全流程验收，等条件=老板批 O8/O9）。旧 run c6_baseline 上多数新检查仍红属旧产物形态，预期新 run 转绿；PC-08/10/25/26 在老板裁决前保持红。
+
 ### T52 立项 + 第1步终审口径简化收工（08-16）
 
 - 老板确认：补交接文档入口 + 本对话继续离线段（交接文档第1-3步）。交接文档已补 `20260814_total_reorg/01_总梳理报告.md` 与 `02_总待办建议稿.md` 路径（原文档没写这两处入口，新对话会找不到 31 类病的证据底账）。

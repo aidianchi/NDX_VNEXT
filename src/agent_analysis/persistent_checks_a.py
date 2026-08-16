@@ -42,8 +42,10 @@ MULTI_VALUE_METRIC_KEYS = {
     "obv",
 }
 
-# B1/B10 点名的指令引用键（PC-09）。
-INSTRUCTION_REF_KEYS = ("raw_data", "NO_DATA_AVAILABLE", "analysis_required")
+# B1/B10 点名的指令引用键（PC-09）。只保留"通用模板/约束指令"会点名、而各站
+# payload 未必有的键；analysis_required 不在其中——它是各层提示词里由代码生成的
+# 指标清单数据（prompt 内嵌 manifest），不是对 payload 的键引用。
+INSTRUCTION_REF_KEYS = ("raw_data", "NO_DATA_AVAILABLE")
 
 # A7 点名的立场/仓位字段（PC-06）。
 CI_FORBIDDEN_MATERIAL_TOKENS = ("dominant_side", "action_implication", "不宜重仓", "触发核心仓")

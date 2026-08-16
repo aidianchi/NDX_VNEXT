@@ -556,14 +556,22 @@ def test_pc09_fail_dangling_keys(tmp_path: Path):
     _write_prompt(
         l1,
         "所有 evidence_refs 必须来自本次输入的 raw_data。\n"
-        "若输入出现 NO_DATA_AVAILABLE，只能当数据边界。\n"
-        "对每一个 analysis_required=true 的指标输出一条分析。\n",
+        "若输入出现 NO_DATA_AVAILABLE，只能当数据边界。\n",
     )
     result = _result_by_id(run_checks_a(tmp_path), "PC-09")
     assert result["passed"] is False
     assert "raw_data" in result["detail"]
     assert "NO_DATA_AVAILABLE" in result["detail"]
-    assert "analysis_required" in result["detail"]
+
+
+def test_pc09_manifest_analysis_required_is_not_a_dangling_key(tmp_path: Path):
+    # analysis_required 是 prompt 内嵌"当前层指标清单"的数据键，不是对 payload 的
+    # 键引用；提示词点名它不构成悬空引用。
+    l1 = _stage(tmp_path, "L1")
+    _write_payload(l1, {"layer_raw_data": {}})
+    _write_prompt(l1, "对每一个 analysis_required=true 的指标输出一条分析。\n")
+    result = _result_by_id(run_checks_a(tmp_path), "PC-09")
+    assert result["passed"] is True
 
 
 # ──────────────────────────────────────────────────────────────────────────

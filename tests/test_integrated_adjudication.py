@@ -719,3 +719,41 @@ def test_ref_authority_carries_current_reading_from_evidence_index():
     assert "2.41%，99.4分位" in prompt, (
         "evidence_index 里的 current_reading 数值必须捎带进发给模型的 payload"
     )
+
+
+def test_ref_authority_registered_parent_refs_never_unknown():
+    """A5 修复：已注册但未登记字段级权限的父引用保守默认 supporting_only；
+    mixed-field 父引用同保守降级；只有查无护照的引用才标 unknown。"""
+    builder = IntegratedSynthesisReportBuilder()
+    authority = builder._ref_authority_map(
+        allowed_refs=[
+            "L1.get_10y_real_rate",
+            "L4.get_mixed#parent",
+            "L9.not_registered",
+        ],
+        evidence_registry={
+            "passports": {
+                "L1.get_10y_real_rate": {
+                    "permission_type": "fact",
+                    "authority_model": {"field_usage": "", "field_usages": []},
+                },
+                "L4.get_mixed#parent": {
+                    "permission_type": "composite",
+                    "authority_model": {
+                        "field_usage": "",
+                        "field_usages": ["core_allowed", "supporting_only"],
+                    },
+                },
+            }
+        },
+        evidence_index={
+            "L1.get_10y_real_rate": {"canonical_question": "Q1", "current_reading": "R1"},
+        },
+    )
+    assert authority["L1.get_10y_real_rate"]["usage"] == "supporting_only"
+    assert authority["L1.get_10y_real_rate"]["usage_source"] == "registered_parent_conservative_default"
+    assert authority["L4.get_mixed#parent"]["usage"] == "supporting_only"
+    assert authority["L4.get_mixed#parent"]["usage_source"] == "mixed_field_parent_conservative_default"
+    assert authority["L4.get_mixed#parent"]["field_usages"] == ["core_allowed", "supporting_only"]
+    assert authority["L9.not_registered"]["usage"] == "unknown"
+    assert authority["L9.not_registered"]["usage_source"] == "unregistered_ref"

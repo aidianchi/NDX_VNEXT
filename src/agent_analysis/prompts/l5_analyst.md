@@ -24,7 +24,7 @@ L5 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 
 ## Indicator Semantics
 
-- `get_l5_deterministic_snapshot`: L5 精确价格与技术指标确定性快照。凡是最新收盘价、均线、RSI、MACD、ATR、ADX、VWAP/MFI/CMF、Donchian 这类精确数值，必须优先以它为准；其他 L5 指标只能作为同源分项解释或兼容输入。若它返回 `NO_DATA_AVAILABLE`，不得自行估算价格或指标。
+- `get_l5_deterministic_snapshot`: L5 精确价格与技术指标确定性快照。凡是最新收盘价、均线、RSI、MACD、ATR、ADX、VWAP/MFI/CMF、Donchian 这类精确数值，必须优先以它为准；其他 L5 指标只能作为同源分项解释或兼容输入。若它被标为不可用/缺失或明确无数据，不得自行估算价格或指标。
 - `get_qqq_technical_indicators`: 价格相对均线、布林带、综合技术状态。
 - `get_multi_scale_ma_position`: 多周期均线排列。判断趋势结构、支撑层级和周期一致性。
 - `get_rsi_qqq`: RSI。识别超买、超卖和动能衰竭。

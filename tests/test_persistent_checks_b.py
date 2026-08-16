@@ -37,7 +37,11 @@ def _layer_payload(
     *,
     raw_data: Dict[str, Any] | None = None,
     manual_overrides: Dict[str, Any] | None = None,
-    data_summary: str = "数据日期 2026-07-30，L1 本层 1/1 个指标成功。",
+    data_summary: str = (
+        "运行时点 2026-07-30，L1 本层 1/1 个指标成功。"
+        "各指标实际数据日期以各自 data_quality.data_date / effective_date 为准："
+        "早于运行时点属正常时点纪律（月度指标滞后发布等），不要求与运行时点同一天。"
+    ),
     layer_facts: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
@@ -211,15 +215,39 @@ def test_pc14_same_day_different_timezone_pass(tmp_path: Path) -> None:
     assert result["passed"] is True
 
 
-def test_pc14_cross_day_fails(tmp_path: Path) -> None:
+def test_pc14_earlier_indicator_date_is_legitimate_lag(tmp_path: Path) -> None:
+    # B8 新口径：月度指标等早于运行时点属正常时点纪律，不再判"跨日不一致"。
     _add_all_layers_minimal(tmp_path)
     payload = _layer_payload(raw_data={
         "get_aaa": _metric("get_aaa", "AAA", data_quality={"data_date": "2026-07-29"}),
     })
     _add_layer(tmp_path, "L1", payload)
     result = _find(run_checks_b(tmp_path), "PC-14")
+    assert result["passed"] is True
+
+
+def test_pc14_future_indicator_date_fails(tmp_path: Path) -> None:
+    _add_all_layers_minimal(tmp_path)
+    payload = _layer_payload(raw_data={
+        "get_aaa": _metric("get_aaa", "AAA", data_quality={"data_date": "2026-07-31"}),
+    })
+    _add_layer(tmp_path, "L1", payload)
+    result = _find(run_checks_b(tmp_path), "PC-14")
     assert result["passed"] is False
-    assert "2026-07-29" in result["detail"]
+    assert "2026-07-31" in result["detail"]
+    assert "未来数据泄漏" in result["detail"]
+
+
+def test_pc14_missing_date_disclaimer_fails(tmp_path: Path) -> None:
+    _add_all_layers_minimal(tmp_path)
+    payload = _layer_payload(
+        data_summary="运行时点 2026-07-30，L1 本层 1/1 个指标成功。",
+        raw_data={"get_aaa": _metric("get_aaa", "AAA", data_quality={"data_date": "2026-07-30"})},
+    )
+    _add_layer(tmp_path, "L1", payload)
+    result = _find(run_checks_b(tmp_path), "PC-14")
+    assert result["passed"] is False
+    assert "未声明" in result["detail"]
 
 
 # --------------------------------------------------------------------------
@@ -497,6 +525,177 @@ def test_pc20_missing_field_bad_feedback_few_tests_fail(tmp_path: Path) -> None:
     assert "needs_data_confirmation" in result["detail"]
     assert "无行/列或 JSONDecodeError 定位" in result["detail"]
     assert "< 15" in result["detail"]
+
+
+# --------------------------------------------------------------------------
+# PC-21~26 补病检查（08-16）
+# --------------------------------------------------------------------------
+
+def _add_event_station_payload(run_dir: Path, station: str, body: Dict[str, Any]) -> None:
+    _write_json(
+        run_dir / "prompt_audit" / station / "attempt_1.payload.json",
+        {"stage_key": "event", "stage_name": station, "attempt": 1, "payload": body, "retry_feedback": ""},
+    )
+
+
+def test_pc21_event_output_contract_removed_pass(tmp_path: Path) -> None:
+    _add_event_station_payload(tmp_path, "event_card_interpreter.event_x", {"event_material": {}})
+    _add_event_station_payload(tmp_path, "event_section_summary", {"event_cards": []})
+    result = _find(run_checks_b(tmp_path), "PC-21")
+    assert result["passed"] is True
+
+
+def test_pc21_event_output_contract_leak_fails(tmp_path: Path) -> None:
+    _add_event_station_payload(
+        tmp_path, "event_card_interpreter.event_x",
+        {"event_material": {}, "output_contract": {"fact_summary": "只写材料事实"}},
+    )
+    _add_event_station_payload(tmp_path, "event_section_summary", {"event_cards": []})
+    result = _find(run_checks_b(tmp_path), "PC-21")
+    assert result["passed"] is False
+    assert "output_contract" in result["detail"]
+
+
+def _layer_prompt_with_manifest(run_dir: Path, layer: str, manifest_json: str) -> None:
+    _add_all_layers_minimal(run_dir)
+    for each in ["L1", "L2", "L3", "L4", "L5"]:
+        _add_prompt(
+            run_dir,
+            each,
+            "### 当前层指标清单\n[]\n\n### 结构示例\n{\n}\n",
+        )
+    _add_prompt(
+        run_dir,
+        layer,
+        f"### 当前层指标清单\n{manifest_json}\n\n### 结构示例\n{{\n}}\n",
+    )
+
+
+def test_pc22_manifest_without_data_quality_pass(tmp_path: Path) -> None:
+    _layer_prompt_with_manifest(tmp_path, "L1", '[{"function_id": "get_aaa", "analysis_required": true}]')
+    result = _find(run_checks_b(tmp_path), "PC-22")
+    assert result["passed"] is True
+
+
+def test_pc22_manifest_duplicate_data_quality_fails(tmp_path: Path) -> None:
+    _layer_prompt_with_manifest(
+        tmp_path,
+        "L1",
+        '[{"function_id": "get_aaa", "data_quality": {"provider": "synthetic"}}]',
+    )
+    result = _find(run_checks_b(tmp_path), "PC-22")
+    assert result["passed"] is False
+    assert "重复供给" in result["detail"]
+
+
+def _write_conflict_containers(tmp_path: Path, hs: list, ht: list, retained: list) -> None:
+    _write_json(tmp_path / "synthesis_packet.json", {
+        "high_severity_conflicts": hs,
+        "high_severity_typed_conflicts": ht,
+    })
+    _write_json(tmp_path / "thesis_draft.json", {"retained_conflicts": retained})
+
+
+def test_pc23_conflict_container_sets_match_and_thesis_keeps_all(tmp_path: Path) -> None:
+    _write_conflict_containers(
+        tmp_path,
+        [{"conflict_id": "c1"}, {"conflict_id": "c2"}],
+        [{"conflict_id": "c1"}, {"conflict_id": "c2"}],
+        [{"conflict_id": "c1"}, {"conflict_id": "c2"}],
+    )
+    result = _find(run_checks_b(tmp_path), "PC-23")
+    assert result["passed"] is True
+
+
+def test_pc23_conflict_container_set_mismatch_fails(tmp_path: Path) -> None:
+    _write_conflict_containers(
+        tmp_path,
+        [{"conflict_id": "c1"}, {"conflict_id": "c2"}],
+        [{"conflict_id": "c1"}],
+        [{"conflict_id": "c1"}],
+    )
+    result = _find(run_checks_b(tmp_path), "PC-23")
+    assert result["passed"] is False
+    assert "typed_conflicts 缺" in result["detail"]
+    assert "retained_conflicts 缺" in result["detail"]
+
+
+def _holdings_metric(value: Dict[str, Any], coverage: Dict[str, Any]) -> Dict[str, Any]:
+    return _metric(
+        "get_qqq_top10_concentration",
+        "QQQ Top10 Concentration",
+        value=value,
+        data_quality={"coverage": coverage, "source_tier": "official_provider"},
+    )
+
+
+def test_pc24_holdings_counts_and_lag_declared_pass(tmp_path: Path) -> None:
+    _add_all_layers_minimal(tmp_path)
+    payload = _layer_payload(raw_data={
+        "get_qqq_top10_concentration": _holdings_metric(
+            {
+                "holdings_as_of": "2026-07-15",
+                "holdings_lag_days": 15,
+                "holdings_parsed": 105,
+                "total_holdings": 108,
+                "holdings_lag_note": "持仓锚滞后 15 天。",
+            },
+            {"holdings_reported": 105, "total_holdings": 108, "holdings_lag_days": 15},
+        )
+    })
+    _add_layer(tmp_path, "L3", payload)
+    result = _find(run_checks_b(tmp_path), "PC-24")
+    assert result["passed"] is True
+
+
+def test_pc24_holdings_bare_duplicate_counts_fail(tmp_path: Path) -> None:
+    _add_all_layers_minimal(tmp_path)
+    payload = _layer_payload(raw_data={
+        "get_qqq_top10_concentration": _holdings_metric(
+            {"holdings_as_of": "2026-07-15", "holdings_parsed": 105, "total_holdings": 108},
+            {"holdings_reported": 105},
+        )
+    })
+    _add_layer(tmp_path, "L3", payload)
+    result = _find(run_checks_b(tmp_path), "PC-24")
+    assert result["passed"] is False
+    assert "holdings_lag_note" in result["detail"] or "holdings_lag_days" in result["detail"]
+
+
+def test_pc25_supplier_lookback_pending_validation_fails(tmp_path: Path) -> None:
+    _add_all_layers_minimal(tmp_path)
+    payload = _layer_payload(raw_data={
+        "get_ndx_earnings_revision_metrics": _metric(
+            "get_ndx_earnings_revision_metrics",
+            "NDX Earnings Revision Metrics",
+            value={
+                "slope_30d": {"material": "supplier_lookback", "verification_status": "pending_validation"},
+                "slope_90d": {"material": "self_archive", "verification_status": "verified"},
+            },
+        )
+    })
+    _add_layer(tmp_path, "L4", payload)
+    result = _find(run_checks_b(tmp_path), "PC-25")
+    assert result["passed"] is False
+    assert "slope_30d" in result["detail"]
+
+
+def test_pc26_yield_gap_core_allowed_diagnostic_contradiction_fails(tmp_path: Path) -> None:
+    _write_json(tmp_path / "evidence_registry.json", {
+        "passports": {
+            "L4.get_equity_risk_premium#level": {
+                "authority_model": {
+                    "field_authority": {
+                        "usage": "core_allowed",
+                        "reason": "可作为估值-利率张力的诊断性证据",
+                    }
+                }
+            }
+        }
+    })
+    result = _find(run_checks_b(tmp_path), "PC-26")
+    assert result["passed"] is False
+    assert "待老板裁决" in result["detail"]
 
 
 # --------------------------------------------------------------------------
