@@ -9,7 +9,7 @@
 每一条检查对应 03 根本审查总报告 §3 的 A 类发现：
     PC-01  A1（C3 版 critic/risk 分料身份）
     PC-02  A2（C3 版治理站引用全集对账）
-    PC-03  A3 + 拍板②（final 输入含修订内容 + 修订说明机器对账）
+    PC-03  A3 + 拍板②（final 只收修订稿+修订说明 + 机器对账；08-16 重裁）
     PC-04  A5（IA ref_authority unknown 占比告警）
     PC-05  A6（委托调查 vs 进 IA 报告数对账）
     PC-06  A7（CI 材料闭合性 + 立场字段检测）
@@ -449,15 +449,6 @@ def _check_pc03(run_dir: Path) -> Dict[str, Any]:
     if not isinstance(revised_thesis, dict):
         return _missing("缺失 artifact: analysis_revised.revised_thesis")
 
-    degraded_fallback = bool(analysis_revised.get("degraded_fallback"))
-    original_thesis: Optional[Dict[str, Any]] = None
-    if degraded_fallback:
-        original_path = run_dir / "thesis_draft.json"
-        if original_path.exists():
-            original_data = _read_json(original_path)
-            if isinstance(original_data, dict):
-                original_thesis = original_data
-
     _missing_sentinel = object()
     mismatches: List[str] = []
     for final_key, revised_key in _THESIS_FIELD_MAP.items():
@@ -469,17 +460,14 @@ def _check_pc03(run_dir: Path) -> Dict[str, Any]:
             revised_value is not _missing_sentinel
             and _canonical_json(final_value) == _canonical_json(revised_value)
         )
-        matches_original = (
-            original_thesis is not None
-            and revised_key in original_thesis
-            and _canonical_json(final_value) == _canonical_json(original_thesis[revised_key])
-        )
-        if not matches_revised and not (degraded_fallback and matches_original):
+        if not matches_revised:
             mismatches.append(final_key)
 
     revision_summary = final_gi.get("revision_summary")
     revision_ok = isinstance(revision_summary, str) and bool(revision_summary)
-    thesis_original_present = "thesis_original" in final_gi
+    # 2026-08-16 重裁：原稿不得再进终审输入——出现在 final governance_input 里就是
+    # 供给回潮，必须报警（旧 run 的旧 payload 会如实报红，等新 run 自然转绿）。
+    thesis_original_leaked = "thesis_original" in final_gi
 
     # ── 修订说明机器对账（08-16 新口径）：声称改过的字段必须逐项在修订稿实物
     #    里存在。老产物缺 revision_claimed_fields 时按"未声称"处理，不因缺字段判病。
@@ -506,23 +494,18 @@ def _check_pc03(run_dir: Path) -> Dict[str, Any]:
         claimed_detail = "revision_claimed_fields 未提供或为空（老产物按未声称处理）"
     claimed_ok = not claimed_shape_bad and not missing_claimed
 
-    if not thesis_original_present:
-        # 装配点②尚未上线：诚实报缺，不许当通过。
-        detail = f"thesis_original 未上线（待 C6 装配点②）；{claimed_detail}"
-        if mismatches:
-            detail += f"；且 thesis_* 与 revised_thesis 不一致: {mismatches}"
-        else:
-            detail += "；thesis_* 与 revised_thesis 逐字段一致"
-        return _result("PC-03", "final 输入含修订内容+修订说明机器对账（A3 + 拍板②）", False, detail,
-                       "prompt_audit/final_adjudicator:governance_input; analysis_revised.json")
+    if thesis_original_leaked:
+        leak_detail = "thesis_original 仍出现在 final governance_input（08-16 重裁后属供给回潮）"
+    else:
+        leak_detail = "thesis_original 已从 final governance_input 移除（08-16 重裁口径）"
 
-    passed = not mismatches and revision_ok and claimed_ok
+    passed = not mismatches and revision_ok and claimed_ok and not thesis_original_leaked
     detail = (
-        f"thesis_original 存在; revision_summary={'非空' if revision_ok else '空'}; "
+        f"{leak_detail}; revision_summary={'非空' if revision_ok else '空'}; "
         f"{claimed_detail}; "
         f"thesis_* 与 revised_thesis{'全部一致' if not mismatches else '不一致: ' + str(mismatches)}"
     )
-    return _result("PC-03", "final 输入含修订内容+修订说明机器对账（A3 + 拍板②）", passed, detail,
+    return _result("PC-03", "final 只收修订稿+修订说明+机器对账（A3 + 拍板②·08-16重裁）", passed, detail,
                    "prompt_audit/final_adjudicator:governance_input; analysis_revised.json")
 
 
@@ -859,7 +842,7 @@ def _check_pc10(run_dir: Path) -> Dict[str, Any]:
 _CHECKS = [
     ("PC-01", "critic/risk 分料身份检查（A1 的 C3 版）", _check_pc01),
     ("PC-02", "治理站引用全集对账（A2 的 C3 版）", _check_pc02),
-    ("PC-03", "final 输入含修订内容+修订说明机器对账（A3 + 拍板②）", _check_pc03),
+    ("PC-03", "final 只收修订稿+修订说明+机器对账（A3 + 拍板②·08-16重裁）", _check_pc03),
     ("PC-04", "IA ref_authority unknown 占比告警（A5）", _check_pc04),
     ("PC-05", "委托调查 vs 进 IA 报告数对账（A6）", _check_pc05),
     ("PC-06", "CI 材料闭合性 + 立场字段检测（A7）", _check_pc06),

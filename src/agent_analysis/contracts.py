@@ -2025,12 +2025,8 @@ class GovernanceInputPacket(BaseModel):
 
     # ── 修订摘要（final） ──
     revision_summary: Optional[str] = Field(None, description="Reviser 修订说明")
-
-    # ── 终审原稿对照（拍板②） ──
-    thesis_original: Optional[Dict[str, Any]] = Field(
-        None,
-        description="修订前 Thesis 原稿，仅 final 填充",
-    )
+    # （2026-08-16 重裁：thesis_original 已从治理包移除——终审只收修订稿+修订说明，
+    # 原稿只落盘供审计，不再进任何治理站输入。）
 
     # ── 反方原文与反证引用（拍板③ + T46） ──
     counter_thesis_hypotheses: List[Dict[str, Any]] = Field(

@@ -181,10 +181,10 @@ def test_pc02_fail_missing_counterevidence_and_risk_polluted(tmp_path: Path):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# PC-03 final 输入含修订内容
+# PC-03 final 只收修订稿+修订说明+机器对账（08-16 重裁）
 # ──────────────────────────────────────────────────────────────────────────
 
-def test_pc03_pass_c6_online(tmp_path: Path):
+def test_pc03_pass_without_thesis_original(tmp_path: Path):
     _write_json(
         tmp_path / "analysis_revised.json",
         {
@@ -198,7 +198,6 @@ def test_pc03_pass_c6_online(tmp_path: Path):
         _stage(tmp_path, "final_adjudicator"),
         {
             "governance_input": {
-                "thesis_original": {"main_thesis": "ORIGINAL"},
                 "thesis_main": "REVISED",
                 "thesis_environment": "E",
                 "revision_summary": "根据批评修订了主论点",
@@ -208,6 +207,7 @@ def test_pc03_pass_c6_online(tmp_path: Path):
     result = _result_by_id(run_checks_a(tmp_path), "PC-03")
     assert result["passed"] is True
     assert "全部命中修订稿实物" in result["detail"]
+    assert "已从 final governance_input 移除" in result["detail"]
 
 
 def test_pc03_pass_claimed_nested_field_present(tmp_path: Path):
@@ -228,7 +228,6 @@ def test_pc03_pass_claimed_nested_field_present(tmp_path: Path):
         _stage(tmp_path, "final_adjudicator"),
         {
             "governance_input": {
-                "thesis_original": {"main_thesis": "ORIGINAL"},
                 "thesis_main": "REVISED",
                 "revision_summary": "补了保留冲突的 why_retained 解释",
             }
@@ -254,7 +253,6 @@ def test_pc03_fail_claimed_field_missing_from_revised_thesis(tmp_path: Path):
         _stage(tmp_path, "final_adjudicator"),
         {
             "governance_input": {
-                "thesis_original": {"main_thesis": "ORIGINAL"},
                 "thesis_main": "REVISED",
                 "revision_summary": "添加了 why_retained 解释",
             }
@@ -280,7 +278,6 @@ def test_pc03_fail_claimed_fields_bad_shape(tmp_path: Path):
         _stage(tmp_path, "final_adjudicator"),
         {
             "governance_input": {
-                "thesis_original": {"main_thesis": "ORIGINAL"},
                 "thesis_main": "REVISED",
                 "revision_summary": "修订了",
             }
@@ -291,7 +288,8 @@ def test_pc03_fail_claimed_fields_bad_shape(tmp_path: Path):
     assert "形状非法" in result["detail"]
 
 
-def test_pc03_fail_thesis_original_not_online(tmp_path: Path):
+def test_pc03_fail_thesis_original_leaked_back_into_final(tmp_path: Path):
+    # 08-16 重裁后：thesis_original 再出现在 final governance_input 就是供给回潮。
     _write_json(
         tmp_path / "analysis_revised.json",
         {
@@ -302,11 +300,17 @@ def test_pc03_fail_thesis_original_not_online(tmp_path: Path):
     )
     _write_payload(
         _stage(tmp_path, "final_adjudicator"),
-        {"governance_input": {"thesis_main": "REVISED", "revision_summary": "修订了"}},
+        {
+            "governance_input": {
+                "thesis_original": {"main_thesis": "ORIGINAL"},
+                "thesis_main": "REVISED",
+                "revision_summary": "修订了",
+            }
+        },
     )
     result = _result_by_id(run_checks_a(tmp_path), "PC-03")
     assert result["passed"] is False
-    assert "thesis_original 未上线（待 C6 装配点②）" in result["detail"]
+    assert "供给回潮" in result["detail"]
 
 
 def test_pc03_fail_mismatch(tmp_path: Path):
@@ -322,7 +326,6 @@ def test_pc03_fail_mismatch(tmp_path: Path):
         _stage(tmp_path, "final_adjudicator"),
         {
             "governance_input": {
-                "thesis_original": {"main_thesis": "ORIGINAL"},
                 "thesis_main": "OLD",
                 "revision_summary": "修订了",
             }

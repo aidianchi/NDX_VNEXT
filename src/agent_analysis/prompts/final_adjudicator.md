@@ -80,7 +80,7 @@
 - `known_data_gaps`
 - `critique_overall / critique_cross_layer_issues`
 - `revision_summary`
-- **thesis_original**: 修订前原稿；修订稿与原稿必须都能对照，修订说明要写清改了什么。
+- **终审口径（2026-08-16）**：本输入只有修订稿与 `revision_summary`；修订前原稿只落盘供审计、不在本输入里——不要自行假设或补写原稿内容，改了什么以 `revision_summary` 为准。
 - **counter_thesis_hypotheses**: 反方假说原文（来源 counter_thesis），用于检查论点是否选择性回应反方证据。
 
 ## 输出格式

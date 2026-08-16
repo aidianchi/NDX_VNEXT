@@ -8,6 +8,14 @@
 
 ## 2026-08-16
 
+### T52 立项 + 第1步终审口径简化收工（08-16）
+
+- 老板确认：补交接文档入口 + 本对话继续离线段（交接文档第1-3步）。交接文档已补 `20260814_total_reorg/01_总梳理报告.md` 与 `02_总待办建议稿.md` 路径（原文档没写这两处入口，新对话会找不到 31 类病的证据底账）。
+- `现在.md` 立 T52（进行中，剩余17类病清账+补检查）；下一步指向 T52；T45 保持"可以做"。
+- 第1步完工（终审只收修订稿+修订说明）：`GovernanceInputPacket.thesis_original` 字段删除；`_build_governance_input_packet` 的 `thesis_original` 参数与 final 调用点删除；`final_adjudicator.md` 输入行改为"原稿只落盘审计、不在本输入里，不要自行假设"；PC-03 反转——`thesis_original` 再出现在 final 包 = 供给回潮报警，同时保留 thesis_*↔修订稿逐字段一致、revision_summary 非空、revision_claimed_fields 机器对账。
+- 红灯测试：PC-03 新增/改写 6 项（含"原稿回潮必红"）；治理包测试改为断言 final 包里没有 `thesis_original`。相关套件 290 passed。
+- 预期变化：旧 run（c6_baseline）的 PC-03 会因旧 payload 仍含 thesis_original 转红；新 run 自然转绿。
+
 ### 两条新口径落账（老板当面确认）+ PC-03 修订说明机器对账上线
 
 **① 终审只收"修订稿 + 修订说明"，原稿只落盘审计**（老板从第一性原理重裁，推翻 8.10 拍板②"原稿也进终审"部分）：

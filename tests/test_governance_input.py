@@ -792,9 +792,9 @@ def test_governance_input_counter_thesis_refs_enter_critic_but_not_risk(tmp_path
     assert "L1.conflict_ref" in gov_risk.key_evidence_refs
 
 
-# ── 拍板②：终审收原稿 + 修订稿 + 修订说明 ──
+# ── 拍板②（2026-08-16 重裁）：终审只收修订稿+修订说明，原稿只落盘 ──
 
-def test_governance_input_final_carries_thesis_original_critic_does_not(tmp_path: Path):
+def test_governance_input_final_drops_thesis_original_and_keeps_revision_summary(tmp_path: Path):
     orchestrator = _orchestrator(tmp_path)
     synthesis = SynthesisPacket(evidence_index={})
     thesis = ThesisDraft(
@@ -821,18 +821,13 @@ def test_governance_input_final_carries_thesis_original_critic_does_not(tmp_path
         thesis=revised_thesis,
         analysis_revised=analysis_revised,
         consumer="final",
-        thesis_original=thesis,
-    )
-    gov_critic = orchestrator._build_governance_input_packet(
-        synthesis_packet=synthesis,
-        thesis=thesis,
     )
 
     assert gov_final.thesis_main == "修订稿主论点。"
-    assert gov_final.thesis_original is not None
-    assert gov_final.thesis_original["main_thesis"] == "原稿主论点。"
+    # 新口径：thesis_original 从治理包整体移除，终审拿不到原稿；原稿只在磁盘审计。
+    assert not hasattr(gov_final, "thesis_original")
+    assert "thesis_original" not in gov_final.model_dump()
     assert gov_final.revision_summary == "修订说明：吸收批评并改写主论点。"
-    assert gov_critic.thesis_original is None
 
 
 # ── 08-15 已批：reviser/final 去噪音字段 + 证据索引瘦身 ──

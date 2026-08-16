@@ -705,7 +705,6 @@ class VNextOrchestrator:
             analysis_revised=analysis_revised,
             layer_cards=layer_cards,
             consumer="final",
-            thesis_original=thesis,
         )
         final_payload = {
             "governance_input": _model_dump(gov_input_final),
@@ -5053,7 +5052,6 @@ class VNextOrchestrator:
         analysis_revised: Optional[AnalysisRevised] = None,
         layer_cards: Optional[List[LayerCard]] = None,
         consumer: str = "critic",
-        thesis_original: Optional[ThesisDraft] = None,
     ) -> GovernanceInputPacket:
         """Build a compressed governance input packet for Critic / Risk / Reviser / Final.
 
@@ -5071,7 +5069,9 @@ class VNextOrchestrator:
         consumer="reviser"/"final" = 基础同 critic（含 counter 原文与反证引用），
         但去噪音：synthesis_guidance/pricing_expectation_ledger/
         evidence_registry_summary 清空，key_evidence_refs 的 field_value 超长明细
-        递归压成 _prompt_summary。consumer="final" 额外填 thesis_original 原稿。
+        递归压成 _prompt_summary。
+        终审口径（2026-08-16 老板重裁）：final 只收修订稿 + revision_summary；
+        原稿不进终审输入，只落盘供审计——thesis_original 已从本包移除。
         consumer="risk" = 论证盲分料版：清空全部 thesis_* 字段，改由
         layer_summaries + 冲突面 + Bridge 主要矛盾候选提供事实面，key_evidence_refs
         只从冲突 evidence_refs 与 layer_summaries.indicator_refs 重建，不从 thesis
@@ -5299,7 +5299,6 @@ class VNextOrchestrator:
                 critique_overall=critique_overall,
                 critique_cross_layer_issues=list(critique_cross_layer),
                 revision_summary=revision_summary,
-                thesis_original=None,
                 counter_thesis_hypotheses=[],
             )
 
@@ -5312,7 +5311,6 @@ class VNextOrchestrator:
         else:
             evidence_registry_summary_packet = dict(getattr(synthesis_packet, "evidence_registry_summary", {}) or {})
             synthesis_guidance_packet = list(synthesis_packet.synthesis_guidance) if synthesis_packet.synthesis_guidance else []
-        thesis_original_packet = _model_dump(thesis_original) if consumer == "final" and thesis_original is not None else None
 
         return GovernanceInputPacket(
             thesis_main=thesis.main_thesis or "",
@@ -5356,7 +5354,6 @@ class VNextOrchestrator:
             critique_overall=critique_overall,
             critique_cross_layer_issues=list(critique_cross_layer),
             revision_summary=revision_summary,
-            thesis_original=thesis_original_packet,
             counter_thesis_hypotheses=counter_thesis_hypotheses,
         )
 
