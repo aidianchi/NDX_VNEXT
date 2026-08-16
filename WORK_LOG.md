@@ -8,6 +8,16 @@
 
 ## 2026-08-16
 
+### T53 首轮被数据闸门拦下 + 两本账口径修复（08-16 深夜）
+
+- 首轮 run `t53_acceptance_20260816` 在数据诚信闸门被拦（未进 LLM 段、未花分析钱）：重算带判 `get_m7_buyback_flow.aggregate_context.excluded_for_fiscal_calendar_misalignment` critical deviation——主账 `[]` vs 第二本账 `['AMZN']`。
+- 根因：C3（08-16）把 AMZN 标 stale 后，主账排除清单只收 available 公司；第二本账从原始季度序列独立推导、不管 availability。两本账对"谁被日历错位排除"的定义不再一致。闸门行为本身正确——正是它抓住了口径漂移。
+- 修复（外科手术两处）：①`src/tools_L4.py` 排除清单改为 available+stale 都如实列名（stale 仍不进 available 计数与 TTM 聚合，C3 保护不动）；②`src/recompute_belt.py` 的 TTM 对齐名单按同一 C3 文档化规则本地重算 staleness 并排除 stale 公司（不 import 主账代码、不读主账 availability，守独立规则；堵"全员 stale"退化场景的同类错位）。
+- 红灯测试 3 条（先红后绿）：stale+错位公司必须列入排除清单（主账侧）；stale 错位案例两账一致、全员 stale 时对齐名单两账同空（第二本账侧）。
+- 附带事实核查：AMZN 的 SEC XBRL 回购标签真实止于 2024-12-31（官方 companyconcept 复核，近年值均为 0 且其后不再报送）——AMZN 回购已停止是事实，stale 标记是诚实表达，非取数故障。
+- 验证：全量 pytest **1231 passed / 2 failed（仅 console_run_all 既知红）**。
+- 否决/未做：未改 stale 判定阈值与 C3 口径本体；AMZN"零回购 vs 数据缺失"的语义细分留作数据侧观察，不立项。
+
 ### 【关闭 T45】老板审核通过 + 真实跑开跑（08-16 深夜，新对话）
 
 - 老板认账新对话汇报，确认 T45 人话重讲版达标，批准按交接文档 §五 第 4-7 步推进；真实跑（T53）批准开跑，并提示：真实跑较慢，开跑至少半小时后方可验收。

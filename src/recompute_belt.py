@@ -990,6 +990,9 @@ def check_m7_earnings_blackout_calendar(data_json: Dict[str, Any], handled: Set[
 
 M7_BUYBACK_SINGLE_QUARTER_MAX_USD_BN = 100.0
 M7_BUYBACK_AGGREGATE_TTM_MAX_USD_BN = 1000.0
+# C3 陈旧规则（最新季 period_end 早于 as_of_date 365 天以上 = stale，不得作当前事实）。
+# 阈值与主账文档化规则一致，按本模块独立规则本地重算——独立规则禁止 import 主账代码。
+M7_BUYBACK_STALE_AFTER_DAYS = 365
 
 
 def _belt_calendar_quarter_ordinal(label: Any) -> Optional[int]:
@@ -1113,9 +1116,28 @@ def check_m7_buyback_flow(data_json: Dict[str, Any], handled: Set[str]) -> List[
         prior_label = None
     prior_members = by_label.get(prior_label, {}) if prior_label else {}
     comparable = sorted(set(latest_members) & set(prior_members))
+    # C3 口径独立复核：stale（最新季 period_end 早于 as_of_date 365 天以上）公司
+    # 不得进 TTM 对齐名单。staleness 由本账从原始序列本地重算，不读主账 availability。
+    as_of_dt: Optional[datetime] = None
+    try:
+        as_of_dt = datetime.strptime(str(value.get("as_of_date"))[:10], "%Y-%m-%d")
+    except (TypeError, ValueError):
+        as_of_dt = None
+    belt_stale: Set[str] = set()
+    if as_of_dt is not None:
+        for ticker, rows in normalized.items():
+            if not rows:
+                continue
+            try:
+                latest_pe = datetime.strptime(str(rows[-1].get("period_end"))[:10], "%Y-%m-%d")
+            except (TypeError, ValueError):
+                continue
+            if (as_of_dt - latest_pe).days > M7_BUYBACK_STALE_AFTER_DAYS:
+                belt_stale.add(ticker)
     aligned = sorted(
         ticker for ticker, ttm in company_ttm_bn.items()
         if normalized.get(ticker) and normalized[ticker][-1].get("calendar_quarter") == latest_label
+        and ticker not in belt_stale
     )
     excluded = sorted(
         ticker for ticker, rows in normalized.items()

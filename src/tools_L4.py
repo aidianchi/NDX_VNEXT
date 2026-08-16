@@ -6396,9 +6396,12 @@ def get_m7_buyback_flow(end_date: str = None) -> Dict[str, Any]:
             and company.get("latest_calendar_quarter") == latest_label
             and isinstance(company.get("ttm_buyback_usd_bn"), (int, float))
         )
+        # C3 后口径：stale 公司同样因日历错位被排除在日历对齐聚合之外，必须如实列名——
+        # 第二本账（recompute_belt）从原始季度序列独立推导此清单，主账漏列 stale 公司
+        # 即两账不符（2026-08-16 t53_acceptance 首轮实发：AMZN stale 未列入，critical deviation）。
         excluded_for_fiscal_misalignment = sorted(
             ticker for ticker, company in per_company.items()
-            if company.get("availability") == "available" and company.get("latest_calendar_quarter") != latest_label
+            if company.get("availability") in ("available", "stale") and company.get("latest_calendar_quarter") != latest_label
         )
         m7_quarterly_total = (
             _round_or_none(sum(latest_members.values()) / 1e9, 3) if latest_members else None

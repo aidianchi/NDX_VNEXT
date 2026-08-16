@@ -97,6 +97,25 @@ def test_buyback_stale_company_is_not_marked_available(monkeypatch):
     assert result["data_quality"]["coverage"]["companies_stale"] == ["AMZN"]
 
 
+def test_buyback_stale_misaligned_company_is_listed_in_exclusions(monkeypatch):
+    # C3 后续口径：stale 公司同样因日历错位被排除在日历对齐聚合之外，排除清单必须如实列名——
+    # 第二本账（recompute_belt）从原始季度序列独立推导此清单，主账漏列 stale 公司即两账不符，
+    # 整条跑会被数据闸门拦下（2026-08-16 t53_acceptance 首轮实发：AMZN stale 未列入，critical deviation）。
+    aligned = ["AAPL", "MSFT", "GOOGL", "META", "NVDA"]
+    quarters = {ticker: _eight_quarters() for ticker in aligned}
+    quarters["AMZN"] = _eight_quarters()[:4]  # 止于 2024-12-31，距有效日期 >365 天 → stale
+    _install_sec(monkeypatch, quarters)
+
+    result = tools_L4.get_m7_buyback_flow("2026-07-10")
+    value = result["value"]
+    context = value["aggregate_context"]
+
+    assert value["per_company"]["AMZN"]["availability"] == "stale"
+    assert context["latest_calendar_quarter"] == "2025Q4"
+    assert "AMZN" in context["excluded_for_fiscal_calendar_misalignment"]
+    assert "AMZN" not in context["ttm_aligned_companies"]
+
+
 def test_buyback_exact_duplicate_rows_removed_and_counted(monkeypatch):
     # C5：逐字重复行必须去重并留痕。
     duplicate = {"period_end": "2025-12-31", "value": 4_000_000_000, "source": "sec_xbrl"}

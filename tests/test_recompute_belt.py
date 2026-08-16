@@ -356,6 +356,60 @@ def test_buyback_recompute_matches_ttm_total_yoy_and_sentinel():
     assert findings["get_m7_buyback_flow.magnitude_sentinel.m7_ttm_total"]["status"] == "match"
 
 
+def test_buyback_recompute_exclusion_list_includes_stale_misaligned():
+    # 2026-08-16 t53_acceptance 首轮实发案例：AMZN 数据止于 2024Q4（C3 标 stale），
+    # 主账排除清单必须如实列名（stale 也是因日历错位被排除），否则第二本账判 critical deviation。
+    indicator = _buyback_indicator()
+    value = indicator["raw_data"]["value"]
+    value["as_of_date"] = "2026-02-01"
+    value["raw_quarterly_series"]["AMZN"] = [
+        {"period_end": "2024-03-31", "calendar_quarter": "2024Q1", "value_usd": 1_000_000_000.0},
+        {"period_end": "2024-06-30", "calendar_quarter": "2024Q2", "value_usd": 2_000_000_000.0},
+        {"period_end": "2024-09-30", "calendar_quarter": "2024Q3", "value_usd": 3_000_000_000.0},
+        {"period_end": "2024-12-31", "calendar_quarter": "2024Q4", "value_usd": 4_000_000_000.0},
+    ]
+    value["per_company"]["AMZN"] = {"availability": "stale", "ttm_buyback_usd_bn": 10.0}
+    # 夹具宇宙只有 5 家；AMZN 断更后 2025 各季只剩 4 家、达不到聚合门槛 5 家——
+    # 补一家数据新鲜的 NVDA，让 2025Q4 维持 5 家可聚合（latest_label 才留在 2025Q4）。
+    value["raw_quarterly_series"]["NVDA"] = [
+        dict(row) for row in value["raw_quarterly_series"]["AAPL"]
+    ]
+    value["per_company"]["NVDA"] = {"availability": "available", "ttm_buyback_usd_bn": 14.0}
+    aligned_five = ["AAPL", "MSFT", "GOOGL", "META", "NVDA"]
+    context = value["aggregate_context"]
+    context["latest_quarter_companies"] = aligned_five
+    context["yoy_comparable_companies"] = aligned_five
+    context["ttm_aligned_companies"] = aligned_five
+    context["excluded_for_fiscal_calendar_misalignment"] = ["AMZN"]
+
+    report = rb.run({"indicators": [indicator]})
+    findings = {item["field"]: item for item in report["findings"]}
+
+    assert findings["get_m7_buyback_flow.aggregate_context.excluded_for_fiscal_calendar_misalignment"]["status"] == "match"
+    assert findings["get_m7_buyback_flow.aggregate_context.ttm_aligned_companies"]["status"] == "match"
+    assert findings["get_m7_buyback_flow.aggregate_context.latest_quarter_companies"]["status"] == "match"
+    assert findings["get_m7_buyback_flow.m7_ttm_total"]["status"] == "match"
+    assert findings["get_m7_buyback_flow.yoy_pct"]["status"] == "match"
+
+
+def test_buyback_recompute_aligned_excludes_independently_stale_companies():
+    # C3 口径同类退化场景：全部公司最新季都早于 as_of_date 365 天以上（全员 stale）时，
+    # 主账的 TTM 对齐名单正确地空着；第二本账按同一文档化规则独立重算 staleness，
+    # 不得把 stale 公司算进 aligned 再误判主账说谎。staleness 由 belt 本地从原始序列重算，
+    # 不读主账 availability（独立规则：永不 import 主账代码）。
+    indicator = _buyback_indicator(ttm_total=None)
+    value = indicator["raw_data"]["value"]
+    value["as_of_date"] = "2027-02-01"  # 所有公司最新季 2025-12-31 → 距 as_of 397 天，全员 stale
+    value["m7_ttm_total"] = None
+    value["aggregate_context"]["ttm_aligned_companies"] = []
+
+    report = rb.run({"indicators": [indicator]})
+    findings = {item["field"]: item for item in report["findings"]}
+
+    assert findings["get_m7_buyback_flow.aggregate_context.ttm_aligned_companies"]["status"] == "match"
+    assert findings["get_m7_buyback_flow.m7_ttm_total"]["status"] == "match"
+
+
 def test_buyback_recompute_catches_ttm_and_yoy_tampering():
     report = rb.run({"indicators": [_buyback_indicator(ttm_total=999.0, yoy_pct=-50.0)]})
     findings = {item["field"]: item for item in report["findings"]}
