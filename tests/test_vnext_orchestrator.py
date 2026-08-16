@@ -7992,3 +7992,79 @@ def test_controlled_investigation_material_strips_stance_fields_and_marks_trunca
     import re as _re
     body = _re.search(r"\[M1\][^\n]*\n(.*?)\[/M1\]", material, _re.S).group(1)
     assert json.loads(body)["_material_truncated"] is True
+
+
+
+# ---------------------------------------------------------------------------
+# PC-23 修复：bridge legacy conflicts 与 typed_conflicts 的 conflict_id 确定性对齐
+# ---------------------------------------------------------------------------
+
+def _bridge_conflicts_payload(conflicts, typed_conflicts):
+    return {
+        "bridge_type": "macro_valuation",
+        "layers_connected": ["L1", "L4"],
+        "conflicts": conflicts,
+        "typed_conflicts": typed_conflicts,
+        "implication_for_ndx": "保留张力。",
+    }
+
+
+def test_bridge_conflict_ids_aligned_to_typed_when_shape_matches(tmp_path: Path):
+    """两列表同长且按序 conflict_type 一致：legacy 描述性 id 改写为 typed 权威 id 并留痕。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    payload = _bridge_conflicts_payload(
+        conflicts=[
+            {"conflict_id": "实际利率与估值张力", "conflict_type": "rate_vs_valuation", "severity": "high", "description": "d1"},
+        ],
+        typed_conflicts=[
+            {"conflict_id": "TC_01", "conflict_type": "rate_vs_valuation", "severity": "high", "description": "d1"},
+        ],
+    )
+
+    normalized = orchestrator._normalize_payload("bridge", payload)
+
+    assert normalized["conflicts"][0]["conflict_id"] == "TC_01"
+    assert "conflict_ids_aligned_to_typed_conflicts" in normalized["normalization_notes"]
+
+
+def test_bridge_conflict_ids_not_aligned_when_lengths_differ(tmp_path: Path):
+    """条数不同是真病：不改写，保持原样交给 PC-23 报警。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    payload = _bridge_conflicts_payload(
+        conflicts=[
+            {"conflict_id": "描述性甲", "conflict_type": "rate_vs_valuation", "severity": "high", "description": "d1"},
+            {"conflict_id": "描述性乙", "conflict_type": "growth_vs_policy", "severity": "medium", "description": "d2"},
+        ],
+        typed_conflicts=[
+            {"conflict_id": "TC_01", "conflict_type": "rate_vs_valuation", "severity": "high", "description": "d1"},
+        ],
+    )
+
+    normalized = orchestrator._normalize_payload("bridge", payload)
+
+    assert [c["conflict_id"] for c in normalized["conflicts"]] == ["描述性甲", "描述性乙"]
+    assert "conflict_ids_aligned_to_typed_conflicts" not in normalized["normalization_notes"]
+
+
+def test_bridge_conflict_ids_not_aligned_when_types_mismatch(tmp_path: Path):
+    """同长但按序 conflict_type 对不上：不改写，保持原样交给 PC-23 报警。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    payload = _bridge_conflicts_payload(
+        conflicts=[
+            {"conflict_id": "描述性甲", "conflict_type": "growth_vs_policy", "severity": "high", "description": "d1"},
+        ],
+        typed_conflicts=[
+            {"conflict_id": "TC_01", "conflict_type": "rate_vs_valuation", "severity": "high", "description": "d1"},
+        ],
+    )
+
+    normalized = orchestrator._normalize_payload("bridge", payload)
+
+    assert normalized["conflicts"][0]["conflict_id"] == "描述性甲"
+    assert "conflict_ids_aligned_to_typed_conflicts" not in normalized["normalization_notes"]

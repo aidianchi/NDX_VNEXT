@@ -194,23 +194,19 @@ def _check_pc01(run_dir: Path) -> Dict[str, Any]:
         return _missing("缺失 artifact: risk governance_input")
 
     critic_thesis_main = critic_gi.get("thesis_main")
-    risk_thesis_main = risk_gi.get("thesis_main")
-    risk_chains = risk_gi.get("thesis_key_support_chains")
-    risk_responses = risk_gi.get("thesis_hypothesis_responses")
     critic_ok = isinstance(critic_thesis_main, str) and bool(critic_thesis_main)
-    risk_blind = (
-        risk_thesis_main == ""
-        and risk_chains == []
-        and risk_responses == []
+    # 论证盲形式收尾：risk 包里 thesis_* 键（含 thesis 派生的 retained_conflict_types）
+    # 必须整个不存在——以空值（""/[]）残留同样算分料泄漏。
+    risk_leaked_keys = sorted(
+        key for key in risk_gi if key.startswith("thesis_") or key == "retained_conflict_types"
     )
+    risk_blind = not risk_leaked_keys
     differ = _canonical_json(critic_gi) != _canonical_json(risk_gi)
 
     passed = critic_ok and risk_blind and differ
     detail = (
         f"critic.thesis_main={critic_thesis_main!r}; "
-        f"risk.thesis_main={risk_thesis_main!r}, "
-        f"risk.thesis_key_support_chains={risk_chains!r}, "
-        f"risk.thesis_hypothesis_responses={risk_responses!r}; "
+        f"risk 包 thesis 键={'无' if risk_blind else risk_leaked_keys}; "
         f"governance_input 序列化{'不同' if differ else '逐字节相同'}"
     )
     return _result("PC-01", "critic/risk 分料身份检查（A1 的 C3 版）", passed, detail,
@@ -770,6 +766,23 @@ def _check_pc08(run_dir: Path) -> Dict[str, Any]:
 # PC-09
 # ──────────────────────────────────────────────────────────────────────────
 
+def _pc09_instruction_scope(prompt_text: str) -> str:
+    """PC-09 只扫指令区。
+
+    `## Runtime Input` 头由 orchestrator 固定生成，其后是 payload 转储与输出契约
+    规格（数据区），出现的键名不是"约束点名"；`## Layer-Local 4C Few-Shot Examples`
+    段是教学示例，同理剔除。没有 Runtime Input 头的站点（bridge/counter_thesis/
+    risk 等）回退为扫全文，不得静默跳过。
+    """
+    scope = re.split(r"^## Runtime Input\b.*$", prompt_text, maxsplit=1, flags=re.MULTILINE)[0]
+    return re.sub(
+        r"^## Layer-Local 4C Few-Shot Examples\b.*?(?=^## |\Z)",
+        "",
+        scope,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+
+
 def _check_pc09(run_dir: Path) -> Dict[str, Any]:
     prompt_audit_dir = run_dir / "prompt_audit"
     if not prompt_audit_dir.is_dir():
@@ -782,7 +795,7 @@ def _check_pc09(run_dir: Path) -> Dict[str, Any]:
         prompt_file = _latest_attempt_file(station_dir, "attempt_*.prompt.txt")
         if prompt_file is None:
             continue
-        prompt_text = prompt_file.read_text(encoding="utf-8")
+        prompt_text = _pc09_instruction_scope(prompt_file.read_text(encoding="utf-8"))
         mentioned = [key for key in INSTRUCTION_REF_KEYS if key in prompt_text]
         if not mentioned:
             continue

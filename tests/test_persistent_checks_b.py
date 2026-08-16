@@ -523,8 +523,64 @@ def test_pc20_missing_field_bad_feedback_few_tests_fail(tmp_path: Path) -> None:
     result = _check_pc20(tmp_path, repo)
     assert result["passed"] is False
     assert "needs_data_confirmation" in result["detail"]
-    assert "无行/列或 JSONDecodeError 定位" in result["detail"]
+    assert "无行/列、JSONDecodeError、字段路径或 validation error 定位" in result["detail"]
     assert "< 15" in result["detail"]
+
+
+def test_pc20_field_path_localization_passes(tmp_path: Path) -> None:
+    # 契约/模式校验错误的真实定位是字段路径（形如 L1.get_vix.metric），
+    # JSON 行/列号只有解析错误才有——字段路径定位必须算数。
+    _write_json(tmp_path / "prompt_audit" / "event_section_summary" / "attempt_1.payload.json", _ess_payload(with_field=True))
+    _write_json(
+        tmp_path / "prompt_audit" / "L1" / "attempt_2.payload.json",
+        {
+            "stage_key": "l1_analyst",
+            "attempt": 2,
+            "payload": {"layer": "L1", "layer_raw_data": {}},
+            "retry_feedback": "L1.get_vix.metric must equal input metric_name 'VIX Index'.",
+        },
+    )
+    repo = tmp_path / "repo"
+    _repo_test_file(repo, 15)
+    result = _check_pc20(tmp_path, repo)
+    assert result["passed"] is True
+
+
+def test_pc20_pydantic_validation_error_localization_passes(tmp_path: Path) -> None:
+    # pydantic 模式错误反馈含 "validation error" 字样，同样是真实错误定位。
+    _write_json(tmp_path / "prompt_audit" / "event_section_summary" / "attempt_1.payload.json", _ess_payload(with_field=True))
+    _write_json(
+        tmp_path / "prompt_audit" / "L4" / "attempt_2.payload.json",
+        {
+            "stage_key": "l4_analyst",
+            "attempt": 2,
+            "payload": {"layer": "L4", "layer_raw_data": {}},
+            "retry_feedback": "1 validation error for LayerOutput\ncore_facts.0.metric\n  Field required",
+        },
+    )
+    repo = tmp_path / "repo"
+    _repo_test_file(repo, 15)
+    result = _check_pc20(tmp_path, repo)
+    assert result["passed"] is True
+
+
+def test_pc20_feedback_without_any_localization_still_fails(tmp_path: Path) -> None:
+    # 反例：完全没有定位信息的反馈仍必须判红。
+    _write_json(tmp_path / "prompt_audit" / "event_section_summary" / "attempt_1.payload.json", _ess_payload(with_field=True))
+    _write_json(
+        tmp_path / "prompt_audit" / "L2" / "attempt_2.payload.json",
+        {
+            "stage_key": "l2_analyst",
+            "attempt": 2,
+            "payload": {"layer": "L2", "layer_raw_data": {}},
+            "retry_feedback": "输出不符合契约要求，请重新生成。",
+        },
+    )
+    repo = tmp_path / "repo"
+    _repo_test_file(repo, 15)
+    result = _check_pc20(tmp_path, repo)
+    assert result["passed"] is False
+    assert "无行/列、JSONDecodeError、字段路径或 validation error 定位" in result["detail"]
 
 
 # --------------------------------------------------------------------------

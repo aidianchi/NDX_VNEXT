@@ -344,6 +344,21 @@ def _model_dump(value: Any) -> Any:
     return value
 
 
+def _dump_governance_input(packet: Any, consumer: str) -> Dict[str, Any]:
+    """序列化 GovernanceInputPacket 进治理站 payload。
+
+    consumer="risk" 时做论证盲形式收尾（配餐单/C3）：thesis_* 键（含 thesis 派生的
+    retained_conflict_types）从序列化结果里整个移除，而不是以空值残留——空键出现在
+    risk 包与提示词里同样构成分料泄漏。契约字段保持原样不动，排除只发生在序列化
+    这一步；critic/reviser/final 默认路径不受影响。
+    """
+    dumped = _model_dump(packet)
+    if consumer == "risk" and isinstance(dumped, dict):
+        for key in [k for k in dumped if k.startswith("thesis_") or k == "retained_conflict_types"]:
+            dumped.pop(key, None)
+    return dumped
+
+
 def _inject_evidence_fields(card_dict: Dict[str, Any], event: Dict[str, Any]) -> None:
     """T49 第二件：把源材料的正文摘录与可用标志逐字注入卡 dict（纯代码搬运，非模型输出）。
 
@@ -576,7 +591,7 @@ class VNextOrchestrator:
             stage_key="risk",
             stage_name="risk",
             model_cls=RiskBoundaryReport,
-            payload={"governance_input": _model_dump(gov_input_risk)},
+            payload={"governance_input": _dump_governance_input(gov_input_risk, "risk")},
             filename="risk_boundary_report.json",
         )
 
@@ -616,7 +631,7 @@ class VNextOrchestrator:
                 stage_key="risk",
                 stage_name="risk_retry",
                 model_cls=RiskBoundaryReport,
-                payload={"governance_input": _model_dump(gov_input_risk_retry)},
+                payload={"governance_input": _dump_governance_input(gov_input_risk_retry, "risk")},
                 filename="risk_boundary_report.json",
             )
             schema_report = self._run_schema_guard(
@@ -5108,8 +5123,9 @@ class VNextOrchestrator:
         递归压成 _prompt_summary。
         终审口径（2026-08-16 老板重裁）：final 只收修订稿 + revision_summary；
         原稿不进终审输入，只落盘供审计——thesis_original 已从本包移除。
-        consumer="risk" = 论证盲分料版：清空全部 thesis_* 字段，改由
-        layer_summaries + 冲突面 + Bridge 主要矛盾候选提供事实面，key_evidence_refs
+        consumer="risk" = 论证盲分料版：thesis_* 字段在构造时清空，并在序列化进
+        payload 时（_dump_governance_input）整个移除这些键——空键残留同样算分料泄漏；
+        事实面由 layer_summaries + 冲突面 + Bridge 主要矛盾候选提供，key_evidence_refs
         只从冲突 evidence_refs 与 layer_summaries.indicator_refs 重建，不从 thesis
         支撑链/假说回应/仓位/时间尺度/读者结论里收集；counter_thesis_hypotheses 恒空。
         """
@@ -5291,7 +5307,8 @@ class VNextOrchestrator:
         pricing_expectation_ledger: Dict[str, Any] = {}
 
         if consumer == "risk":
-            # ── risk = 论证盲：只给事实面与冲突面，thesis 的任何散文与结构一律清空 ──
+            # ── risk = 论证盲：只给事实面与冲突面。thesis 字段这里仍按契约填空值，
+            #    序列化进 payload 时由 _dump_governance_input 把这些键整个移除。 ──
             return GovernanceInputPacket(
                 thesis_main="",
                 thesis_environment="",
@@ -8008,6 +8025,30 @@ class VNextOrchestrator:
                     normalized["typed_conflicts"] = self._derive_typed_conflicts(normalized.get("conflicts", []))
                     if normalized["typed_conflicts"]:
                         normalization_notes.append("typed_conflicts_derived_from_legacy_conflicts")
+                # PC-23：模型常给 conflicts/typed_conflicts 各发明一套 id（描述性 vs
+                # TC_01 式），下游以 typed_conflicts 为权威容器。两列表条数相同且按序
+                # conflict_type 一致时，确定性地把 legacy id 对齐到 typed id；形状对不
+                # 上时保持原样，由 PC-23 报警（那才是真病）。
+                legacy_conflicts = normalized.get("conflicts")
+                typed_conflicts = normalized.get("typed_conflicts")
+                if (
+                    isinstance(legacy_conflicts, list)
+                    and isinstance(typed_conflicts, list)
+                    and legacy_conflicts
+                    and len(legacy_conflicts) == len(typed_conflicts)
+                    and all(
+                        str(legacy.get("conflict_type") or "") == str(typed.get("conflict_type") or "")
+                        for legacy, typed in zip(legacy_conflicts, typed_conflicts)
+                    )
+                ):
+                    aligned = False
+                    for legacy, typed in zip(legacy_conflicts, typed_conflicts):
+                        typed_id = str(typed.get("conflict_id") or "")
+                        if typed_id and legacy.get("conflict_id") != typed_id:
+                            legacy["conflict_id"] = typed_id
+                            aligned = True
+                    if aligned:
+                        normalization_notes.append("conflict_ids_aligned_to_typed_conflicts")
                 bridge_fallback_refs = self._bridge_fallback_evidence_refs(normalized)
                 if isinstance(normalized.get("cross_layer_claims"), list):
                     claims = []

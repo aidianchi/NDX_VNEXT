@@ -235,8 +235,8 @@ def _sanitize_manual_overrides(manual_overrides: Dict[str, Any]) -> Dict[str, An
     return {
         "active": False,
         # B5 修复：未启用的手工配置不参与本轮分析，模板里可能残留的占位日期
-        # （如 2022-01-04）不得当"当前数据日期"送进各层；审计以磁盘配置文件为准。
-        "date": "",
+        # （如 2022-01-04）不得当"当前数据日期"送进各层；审计以磁盘配置文件为准，
+        # 此处不再携带 date 键。
         "metrics": {},
         "inactive_metric_count": len(metrics),
         "inactive_metrics_hidden": bool(metrics),

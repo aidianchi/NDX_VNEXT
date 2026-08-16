@@ -75,6 +75,24 @@ def test_pc01_pass_c3_blind(tmp_path: Path):
         "thesis_key_support_chains": [{"chain_description": "c"}],
         "thesis_hypothesis_responses": [{"hypothesis_id": "h"}],
     }
+    # 论证盲形式收尾：risk 包里 thesis_* 键整个移除（不是清空值）。
+    risk_gi = {
+        "layer_summaries": [{"layer": "L1"}],
+    }
+    _write_payload(_stage(tmp_path, "critic"), {"governance_input": critic_gi})
+    _write_payload(_stage(tmp_path, "risk"), {"governance_input": risk_gi})
+
+    result = _result_by_id(run_checks_a(tmp_path), "PC-01")
+    assert result["passed"] is True
+
+
+def test_pc01_fail_risk_empty_thesis_keys_present(tmp_path: Path):
+    # 反例：thesis_* 键以空值形式残留（""/[]）也算分料泄漏——键必须整个不存在。
+    critic_gi = {
+        "thesis_main": "主论点：估值压缩正在运行",
+        "thesis_key_support_chains": [{"chain_description": "c"}],
+        "thesis_hypothesis_responses": [{"hypothesis_id": "h"}],
+    }
     risk_gi = {
         "thesis_main": "",
         "thesis_key_support_chains": [],
@@ -85,7 +103,8 @@ def test_pc01_pass_c3_blind(tmp_path: Path):
     _write_payload(_stage(tmp_path, "risk"), {"governance_input": risk_gi})
 
     result = _result_by_id(run_checks_a(tmp_path), "PC-01")
-    assert result["passed"] is True
+    assert result["passed"] is False
+    assert "thesis_main" in result["detail"]
 
 
 def test_pc01_fail_pre_c3_identical(tmp_path: Path):
@@ -572,6 +591,40 @@ def test_pc09_manifest_analysis_required_is_not_a_dangling_key(tmp_path: Path):
     _write_prompt(l1, "对每一个 analysis_required=true 的指标输出一条分析。\n")
     result = _result_by_id(run_checks_a(tmp_path), "PC-09")
     assert result["passed"] is True
+
+
+def test_pc09_runtime_input_and_few_shot_mentions_are_not_dangling(tmp_path: Path):
+    # Runtime Input 头之后是 payload 转储与输出契约规格（数据区），4C few-shot 段是
+    # 教学示例——两处出现的 raw_data / NO_DATA_AVAILABLE 都不是"约束点名"。
+    l1 = _stage(tmp_path, "L1")
+    _write_payload(l1, {"layer_raw_data": {}})
+    _write_prompt(
+        l1,
+        "# L1 Analyst\n"
+        "本提示词没有点名任何 payload 键。\n"
+        "## Layer-Local 4C Few-Shot Examples\n"
+        '{"core_facts": [{"metric": "m", "raw_data": {"x": 1}}]}\n'
+        "## Runtime Input\n"
+        '{"layer_raw_data": {"get_vix": {"status": "NO_DATA_AVAILABLE"}}}\n',
+    )
+    result = _result_by_id(run_checks_a(tmp_path), "PC-09")
+    assert result["passed"] is True
+
+
+def test_pc09_instruction_area_dangling_key_still_fails(tmp_path: Path):
+    # 反例：Runtime Input 头之前的指令区真的点名悬空键，仍必须判红。
+    l1 = _stage(tmp_path, "L1")
+    _write_payload(l1, {"layer_raw_data": {}})
+    _write_prompt(
+        l1,
+        "# L1 Analyst\n"
+        "所有 evidence_refs 必须来自本次输入的 raw_data。\n"
+        "## Runtime Input\n"
+        '{"layer_raw_data": {}}\n',
+    )
+    result = _result_by_id(run_checks_a(tmp_path), "PC-09")
+    assert result["passed"] is False
+    assert "raw_data" in result["detail"]
 
 
 # ──────────────────────────────────────────────────────────────────────────

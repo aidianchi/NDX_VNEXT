@@ -41,6 +41,7 @@ from agent_analysis.orchestrator import (
     PROMPT_FILES,
     STAGE_CONTRACT_PROMPT_REQUIREMENTS,
     VNextOrchestrator,
+    _dump_governance_input,
 )
 
 
@@ -585,6 +586,65 @@ def test_governance_input_risk_version_carries_no_thesis_content(tmp_path: Path)
     assert gov_input.thesis_principal_contradiction is None
     assert gov_input.thesis_secondary_contradictions == []
     assert gov_input.thesis_price_reflection_map == []
+
+
+def _minimal_blind_fixture():
+    synthesis = SynthesisPacket(
+        evidence_index={"L1.get_10y_real_rate": {"layer": "L1"}},
+        layer_summaries=[
+            {
+                "layer": "L1",
+                "local_conclusion": "流动性偏紧。",
+                "indicator_refs": ["L1.get_10y_real_rate"],
+            }
+        ],
+    )
+    thesis = ThesisDraft(
+        main_thesis="谨慎观望：高利率压制估值。",
+        environment_assessment="宏观偏紧。",
+        valuation_assessment="估值偏高。",
+        timing_assessment="趋势脆弱。",
+        overall_confidence=Confidence.MEDIUM,
+    )
+    return synthesis, thesis
+
+
+def test_governance_input_risk_serialization_omits_thesis_keys(tmp_path: Path):
+    # 论证盲形式收尾（配餐单/C3）：risk 包序列化结果里 thesis_* 键整个移除，
+    # 不是以空值残留——空键出现在包和提示词里同样构成形式泄漏。
+    orchestrator = _orchestrator(tmp_path)
+    synthesis, thesis = _minimal_blind_fixture()
+
+    gov_input = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+        consumer="risk",
+    )
+    dumped = _dump_governance_input(gov_input, "risk")
+
+    leaked = sorted(
+        key for key in dumped if key.startswith("thesis_") or key == "retained_conflict_types"
+    )
+    assert leaked == []
+    # 事实面不受牵连：layer_summaries 与冲突容器仍在包里。
+    assert dumped["layer_summaries"]
+    assert "high_severity_typed_conflicts" in dumped
+
+
+def test_governance_input_critic_serialization_keeps_thesis_content(tmp_path: Path):
+    # 回归：critic 默认路径不受影响——thesis_* 键与内容完整保留。
+    orchestrator = _orchestrator(tmp_path)
+    synthesis, thesis = _minimal_blind_fixture()
+
+    gov_input = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+    )
+    dumped = _dump_governance_input(gov_input, "critic")
+
+    assert dumped["thesis_main"] == "谨慎观望：高利率压制估值。"
+    assert dumped["thesis_environment"] == "宏观偏紧。"
+    assert "thesis_key_support_chains" in dumped
 
 
 def test_governance_input_risk_layer_summaries_critic_empty(tmp_path: Path):

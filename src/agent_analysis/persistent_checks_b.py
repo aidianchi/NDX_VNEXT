@@ -53,8 +53,14 @@ _STALE_DAYS = 365
 
 # PC-20②：真实错误定位的指纹。FIX-1 的输出形如：
 #   "JSON 语法错误定位: ...（提取出的 JSON 块内第 3 行第 5 列）。"
+# 契约/模式校验错误的真实定位是字段路径（形如 L1.get_vix.metric）或 pydantic
+# 的 "validation error" 反馈——JSON 行/列号只有解析错误才有，两类都算数。
 _LOCALIZATION_RE = re.compile(
-    r"JSONDecodeError|第\s*\d+\s*行第\s*\d+\s*列|line\s+\d+\s*,\s*column\s+\d+|line\s+\d+\s+column\s+\d+",
+    r"JSONDecodeError"
+    r"|第\s*\d+\s*行第\s*\d+\s*列"
+    r"|line\s+\d+\s*,\s*column\s+\d+|line\s+\d+\s+column\s+\d+"
+    r"|\bL[1-5]\.[A-Za-z_][\w.]*"
+    r"|validation error",
     re.IGNORECASE,
 )
 
@@ -893,7 +899,7 @@ def _check_pc20(run_dir: Path, repo_root: Path = _REPO_ROOT) -> Dict[str, Any]:
         bad = [(station, fb) for station, fb in feedbacks if not _LOCALIZATION_RE.search(fb)]
         if bad:
             previews = "；".join(f"{st}: {fb[:60]!r}" for st, fb in bad[:4])
-            failures.append(f"②{len(bad)}/{len(feedbacks)} 条非空 retry_feedback 无行/列或 JSONDecodeError 定位：{previews}")
+            failures.append(f"②{len(bad)}/{len(feedbacks)} 条非空 retry_feedback 无行/列、JSONDecodeError、字段路径或 validation error 定位：{previews}")
     # 无 feedbacks：不 fail，明细里说明。
 
     # ③ tests/test_context_spread.py 存在且收集数 ≥ 15。

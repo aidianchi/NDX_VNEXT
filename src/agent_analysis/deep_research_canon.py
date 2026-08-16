@@ -534,7 +534,7 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
         ],
         [
             "它只说明价格和技术状态，不能证明估值便宜、宏观转松或盈利改善。",
-            "若快照标记 NO_DATA_AVAILABLE 或 unavailable，必须写成数据边界，不能围绕空数据讲故事。",
+            "若快照被标为不可用/缺失或明确无数据，必须写成数据边界，不能围绕空数据讲故事。",
         ],
         ["get_qqq_technical_indicators", "get_volume_analysis_qqq", "get_advance_decline_line", "get_ndx_pe_and_earnings_yield"],
         [

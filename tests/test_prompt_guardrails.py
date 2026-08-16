@@ -200,3 +200,41 @@ def test_prompts_do_not_call_ndx_simple_yield_gap_low_erp():
                 offenders.append(f"{name}: {fragment}")
 
     assert not offenders
+
+
+
+# ── 配餐单 v0 余站条目（event 支线）：图纸已录、代码未落的提示词补齐 ──
+
+def test_event_card_interpreter_prompt_declares_source_tier_vocabulary():
+    """配餐单（余站条目 §6②）：来源等级要有词表与弱来源分档——tier 不能只作为值出现。"""
+    text = (PROMPT_DIR / "event_card_interpreter.md").read_text(encoding="utf-8")
+    for tier in [
+        "official_macro",
+        "official_filing",
+        "company_disclosure",
+        "official",
+        "aggregator_report",
+        "third_party_calendar",
+        "reliable_mainstream_report",
+        "market_narrative",
+        "unverified_signal",
+    ]:
+        assert tier in text, f"event_card_interpreter.md 缺 tier 词表项: {tier}"
+    assert "弱来源" in text
+
+
+def test_event_card_interpreter_prompt_declares_collection_labels_are_not_facts():
+    """配餐单（余站条目 §6③）：event_type/trigger_reasons 是采集标签不是事实。"""
+    text = (PROMPT_DIR / "event_card_interpreter.md").read_text(encoding="utf-8")
+    assert "event_type" in text and "trigger_reasons" in text
+    assert "采集标签" in text
+    assert "不是事实" in text
+
+
+def test_event_section_summary_prompt_documents_insufficient_cards_skip():
+    """配餐单（余站条目 §6）："有效卡 <2 直接跳过 LLM"代码已做，提示词必须补写同一句——
+    且要写成口径说明（代码侧回退），不是对模型的指令。"""
+    text = (PROMPT_DIR / "event_section_summary.md").read_text(encoding="utf-8")
+    assert "口径说明" in text
+    assert "有效事件卡少于 2 张" in text
+    assert "insufficient_cards" in text and "no_cards" in text

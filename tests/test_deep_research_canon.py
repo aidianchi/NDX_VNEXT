@@ -137,6 +137,16 @@ def test_indicator_analysis_accepts_soft_canon_fields():
     assert "估值便宜" in analysis.misread_guards[0]
 
 
+def test_l5_snapshot_misread_guard_avoids_no_data_available_literal():
+    # 与 prompts/l5_analyst.md（08-16 改写）同款措辞：快照不可用写成数据边界，
+    # 不再出现 NO_DATA_AVAILABLE 字样（该字面值在 PC-09 属于悬空键名）。
+    canon = get_indicator_canon("get_l5_deterministic_snapshot")
+
+    guards = " ".join(canon.misread_guards)
+    assert "NO_DATA_AVAILABLE" not in guards
+    assert "数据边界" in guards
+
+
 def test_orchestrator_backfills_missing_soft_canon_fields(tmp_path):
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
