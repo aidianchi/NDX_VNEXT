@@ -578,22 +578,28 @@ def test_pc09_manifest_analysis_required_is_not_a_dangling_key(tmp_path: Path):
 # PC-10 事件站措辞矛盾共存
 # ──────────────────────────────────────────────────────────────────────────
 
-def test_pc10_pass_no_contradiction(tmp_path: Path):
+def test_pc10_pass_unified_semantic_wording(tmp_path: Path):
+    station = _stage(tmp_path, "event_card_interpreter.event_test")
+    _write_prompt(station, '弱来源或仅标题材料，用"据报道"或"该媒体称"这类限定语说清分寸。')
+    result = _result_by_id(run_checks_a(tmp_path), "PC-10")
+    assert result["passed"] is True
+    assert "口径已统一" in result["detail"]
+
+
+def test_pc10_fail_old_mandatory_wording(tmp_path: Path):
+    station = _stage(tmp_path, "event_card_interpreter.event_test")
+    _write_prompt(station, "弱来源必须以据报道或该媒体称开头。")
+    result = _result_by_id(run_checks_a(tmp_path), "PC-10")
+    assert result["passed"] is False
+    assert "硬规定" in result["detail"]
+
+
+def test_pc10_fail_old_no_rules_meta(tmp_path: Path):
     station = _stage(tmp_path, "event_card_interpreter.event_test")
     _write_prompt(station, "措辞完全由你决定，没有固定说法要套。")
     result = _result_by_id(run_checks_a(tmp_path), "PC-10")
-    assert result["passed"] is True
-
-
-def test_pc10_fail_contradiction_pair(tmp_path: Path):
-    station = _stage(tmp_path, "event_card_interpreter.event_test")
-    _write_prompt(
-        station,
-        "弱来源以据报道或该媒体称开头。\n措辞完全由你决定，没有固定说法要套。\n",
-    )
-    result = _result_by_id(run_checks_a(tmp_path), "PC-10")
     assert result["passed"] is False
-    assert "矛盾对共存" in result["detail"]
+    assert "元话语" in result["detail"]
 
 
 # ──────────────────────────────────────────────────────────────────────────

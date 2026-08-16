@@ -1785,7 +1785,7 @@ class VNextOrchestrator:
                 ),
                 "note": (
                     f"本轮 {len(compact_cards)} 张卡中有 {title_only_count} 张 raw_text_available=false"
-                    "（仅标题，未读全文），引用这些卡时必须带降级措辞（据报道/该媒体称/仅标题）。"
+                    "（仅标题，未读全文），引用这些卡时用'据报道/该媒体称/仅标题'等限定语说清分寸。"
                 ),
             },
         }

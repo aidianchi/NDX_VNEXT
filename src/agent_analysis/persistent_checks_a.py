@@ -817,23 +817,32 @@ def _check_pc10(run_dir: Path) -> Dict[str, Any]:
     if not station_dirs:
         return _missing("缺失 artifact: prompt_audit/event_card_interpreter.* 与 event_section_summary")
 
-    # B2 的成对矛盾措辞。A 侧："据报道/该媒体称"与强制措辞要求（开头/必须/弱来源）共存；
-    # B 侧："措辞完全由你决定"或"没有固定说法"。
-    side_a = re.compile(r"(?:据报道|该媒体称)[^\n]*(?:开头|必须|弱来源)|(?:开头|必须|弱来源)[^\n]*(?:据报道|该媒体称)")
-    side_b = re.compile(r"措辞完全由你决定|没有固定说法")
+    # B2（老板 08-16 裁决）：两种旧说法都作废，统一为语义要求——
+    # "弱来源/仅标题材料判断更保守，用'据报道/该媒体称/仅标题'这类限定语说清分寸"。
+    # 旧 A（规定句首用词）与旧 B（"措辞完全由你决定/不设检查"元话语）都不得再进 prompt。
+    mandatory_wording = re.compile(
+        r"(?:以|必须)[^\n]{0,12}(?:据报道|该媒体称)"
+        r"|(?:据报道|该媒体称)[^\n]{0,12}(?:开头|必须)"
+    )
+    no_rules_meta = re.compile(r"措辞完全由你决定|没有固定说法|不设措辞检查|不会有措辞检查")
+    unified_wording = re.compile(
+        r"用[^\n]{0,6}(?:据报道|该媒体称)[^\n]{0,6}(?:据报道|该媒体称)[^\n]{0,10}这类限定语"
+    )
 
     conflicts: List[str] = []
     for station_dir in station_dirs:
         prompt_file = _latest_prompt(station_dir)
         text = prompt_file.read_text(encoding="utf-8")
-        has_a = bool(side_a.search(text))
-        has_b = bool(side_b.search(text))
-        if has_a and has_b:
-            conflicts.append(f"{station_dir.name}: 强制措辞与'措辞完全由你决定'矛盾对共存")
+        if mandatory_wording.search(text):
+            conflicts.append(f"{station_dir.name}: 仍含句首/必须用词的硬规定（旧 A 说法）")
+        if no_rules_meta.search(text):
+            conflicts.append(f"{station_dir.name}: 仍含'措辞完全由你决定/不设检查'元话语（旧 B 说法）")
+        if not unified_wording.search(text):
+            conflicts.append(f"{station_dir.name}: 未含统一的来源限定语义（弱来源用据报道/该媒体称/仅标题说清分寸）")
 
     passed = not conflicts
-    detail = "；".join(conflicts) if conflicts else "未发现 B2 矛盾措辞对"
-    return _result("PC-10", "事件站措辞矛盾共存检测（B2）", passed, detail,
+    detail = "；".join(conflicts) if conflicts else "事件站措辞口径已统一（B2）"
+    return _result("PC-10", "事件站措辞口径统一检测（B2）", passed, detail,
                    "prompt_audit/event_card_interpreter.* + event_section_summary")
 
 
@@ -851,7 +860,7 @@ _CHECKS = [
     ("PC-07", "事件字段恒空（A9 反向断言）", _check_pc07),
     ("PC-08", "同名指标多值检测（A11）", _check_pc08),
     ("PC-09", "约束/指令引用键存在性（B1/B10）", _check_pc09),
-    ("PC-10", "事件站措辞矛盾共存检测（B2）", _check_pc10),
+    ("PC-10", "事件站措辞口径统一检测（B2）", _check_pc10),
 ]
 
 

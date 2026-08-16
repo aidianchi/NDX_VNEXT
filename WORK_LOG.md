@@ -15,7 +15,7 @@
 - O10（A11：同名 OBV 两个值）：老板列待审核项目，倾向新对话专审"数据获取为何出现两个数"；PC-08 在审核结论出来前保持红。
 - O12（C2：supplier_lookback pending_validation 撑主斜率）：老板倾向新对话审核"哪一批数据、怎么进入主斜率"；PC-25 在审核结论出来前保持红。
 - O13（C4：yield gap 身份）：老板裁"只能当诊断用=辅助指标"——`MetricAuthority.level` 改 supporting_only + authority=derived_simple_yield_gap_diagnostic_auxiliary，canon 改"诊断性辅助指标"，PC-26 按新口径锁身份。相关测试 70 passed。
-- O11（B2 事件站措辞）：已向老板提交第一性原理分析与推荐措辞，等老板点头后改，未动代码。
+- O11（B2 事件站措辞）：老板批准统一口径——只给语义要求，不把"不规定句首/不设检查"这类元话语写进 prompt。event_card_interpreter / event_section_summary / ESS payload note 已统一为"弱来源或仅标题材料，用'据报道/该媒体称/仅标题'这类限定语说清分寸"；PC-10 改为新口径检查（旧 A 硬规定、旧 B 元话语都报警，缺统一语义也报警）。
 - 验证：路由/权限/检查相关套件与全量 pytest **1227 passed / 2 failed（仅 console_run_all 既知红）**；docs 闸门绿。
 
 ### 【关闭 T52】离线段第2-3步收工：真红修复 + 补病检查 + 全量实测（08-16）
