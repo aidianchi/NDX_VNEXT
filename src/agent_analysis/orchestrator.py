@@ -43,6 +43,7 @@ try:
         LayerCard,
         ObjectiveFirewallSummary,
         OutcomeReviewReport,
+        PermissionType,
         QualityGate,
         SynthesisPacket,
         LayerSynthesisItem,
@@ -98,6 +99,7 @@ except ImportError:
         LayerCard,
         ObjectiveFirewallSummary,
         OutcomeReviewReport,
+        PermissionType,
         QualityGate,
         SynthesisPacket,
         LayerSynthesisItem,
@@ -375,6 +377,7 @@ def _as_list(value: Any) -> List[Any]:
 
 
 _SEVERITY_HIGH_MEDIUM = frozenset({"high", "medium"})
+_PERMISSION_TYPE_VALUES = frozenset(e.value for e in PermissionType)
 _EVIDENCE_REF_PATTERN = re.compile(r"L[1-5]\.[A-Za-z_][A-Za-z0-9_]*(?:#[A-Za-z_][A-Za-z0-9_]*)?")
 _AUTHORITY_OVERREACH_RULES: Dict[str, List[tuple[str, str]]] = {
     "technical": [
@@ -8249,6 +8252,18 @@ class VNextOrchestrator:
             return
 
         if not normalized.get("permission_type"):
+            normalized["permission_type"] = _enum_value(canon.permission_type)
+        elif str(_enum_value(normalized["permission_type"])).strip().lower() not in _PERMISSION_TYPE_VALUES:
+            # 模型把权限级别词（supporting_only 等）或自由散文填进了发言权类型枚举字段：
+            # 法典对该指标的发言权类型是唯一权威，确定性回正并留痕（模型原文保留在
+            # prompt_audit 的 raw response，可逐字审计）。2026-08-16 t53 r2 实战：
+            # L4 两次因此类值 schema 连败、整跑中止。
+            logger.warning(
+                "permission_type 非枚举值 %r，按法典回正为 %r（function_id=%s）",
+                normalized["permission_type"],
+                _enum_value(canon.permission_type),
+                normalized.get("function_id"),
+            )
             normalized["permission_type"] = _enum_value(canon.permission_type)
         if not normalized.get("canonical_question"):
             normalized["canonical_question"] = canon.canonical_question

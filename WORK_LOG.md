@@ -8,6 +8,15 @@
 
 ## 2026-08-16
 
+### T53 第二轮 L4 枚举连败 + 法典回正修复（08-16 深夜）
+
+- r2 run 数据闸门顺利通过（前批两本账修复生效），L1-L3 完成；L4 两次失败整跑中止：模型把权限级别词/自由散文（`supporting_only`、`fact (official)`、`official proxy`、`third_party_estimate (validation_only)` 等 8 条）填进 `permission_type` 枚举字段（合法值仅 fact/proxy/composite/technical/structural），schema 两连败。c6 run 的 `mixed` 前科同类。
+- 根因判断（代码该修，不是纯模型脾气）：模型把"权限级别"词汇与"发言权类型"枚举两个正交维度混淆；而法典（`deep_research_canon`）对每个指标的发言权类型早有唯一声明——按"代码能导出的别让模型填"原则，非枚举值应由法典确定性回正，不该让模型自由发明。
+- 修复（`orchestrator._backfill_indicator_canon_fields`）：模型缺填→法典回填（旧行为不变）；**填了非枚举值且法典认识该指标→按法典回正 + logger 留痕**（模型原文留在 prompt_audit raw response 可逐字审计）；合法枚举值即使与法典不同也不动（判断分歧不在归一化层裁决）；法典不认识的指标原样放行由 schema 拦（旧行为不变）。
+- 验证：3 条先红后绿测试（回正/合法不动/无法典不动）；用 r2 失败的 L4 真实 payload 重放——8 条全部回正、LayerCard 校验通过；全量 pytest **1234 passed / 2 failed（仅 console_run_all 既知红）**。
+- 如实记账：本轮各站模型行为——L1/L2 flash 首试指标名不合契约、兜底 pro 一次通过；L4 pro 两连败（见上）。resume 续跑只补 L4 及以后各站。
+- 否决/未做：未加全局重试次数（法典回正是根因修复，重试是创可贴）；未对"合法但与法典冲突"的值做强制对齐（超出最小修复）。
+
 ### T53 首轮被数据闸门拦下 + 两本账口径修复（08-16 深夜）
 
 - 首轮 run `t53_acceptance_20260816` 在数据诚信闸门被拦（未进 LLM 段、未花分析钱）：重算带判 `get_m7_buyback_flow.aggregate_context.excluded_for_fiscal_calendar_misalignment` critical deviation——主账 `[]` vs 第二本账 `['AMZN']`。

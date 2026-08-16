@@ -161,6 +161,71 @@ def test_orchestrator_backfills_missing_soft_canon_fields(tmp_path):
     assert normalized["core_vs_tactical_boundary"]
 
 
+def test_orchestrator_corrects_invalid_permission_type_from_canon(tmp_path):
+    # 2026-08-16 t53 r2 实战：L4 两次把权限级别词（supporting_only / fact (official) 等）
+    # 填进 permission_type 枚举字段，schema 两连败、整跑中止。法典对每个指标的发言权类型
+    # 是唯一权威——非枚举值按法典确定性回正（模型原文留在 raw response，可审计）。
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+
+    normalized = orchestrator._normalize_indicator_analysis(
+        {
+            "function_id": "get_ndx_pe_and_earnings_yield",
+            "metric": "NDX P/E and Earnings Yield",
+            "narrative": "估值偏贵。",
+            "reasoning_process": "盈利收益率低于实际利率。",
+            "permission_type": "supporting_only",
+        }
+    )
+
+    assert normalized["permission_type"] == "composite"
+
+
+def test_orchestrator_keeps_valid_permission_type_even_when_canon_differs(tmp_path):
+    # 最小干预：模型给了合法枚举值时不回正，即使与法典不同——判断分歧不在这里裁决。
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+
+    normalized = orchestrator._normalize_indicator_analysis(
+        {
+            "function_id": "get_ndx_pe_and_earnings_yield",
+            "metric": "NDX P/E and Earnings Yield",
+            "narrative": "估值偏贵。",
+            "reasoning_process": "盈利收益率低于实际利率。",
+            "permission_type": "fact",
+        }
+    )
+
+    assert normalized["permission_type"] == "fact"
+
+
+def test_orchestrator_leaves_invalid_permission_type_without_canon(tmp_path):
+    # 法典不认识的指标没有权威来源可回正——原样放行，由 schema 校验拦住（维持旧行为）。
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+
+    normalized = orchestrator._normalize_indicator_analysis(
+        {
+            "function_id": "no_such_indicator",
+            "metric": "No Such Indicator",
+            "narrative": "占位。",
+            "reasoning_process": "占位。",
+            "permission_type": "supporting_only",
+        }
+    )
+
+    assert normalized["permission_type"] == "supporting_only"
+
+
 def test_orchestrator_layer_prompt_injects_only_current_layer_canon(tmp_path):
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
