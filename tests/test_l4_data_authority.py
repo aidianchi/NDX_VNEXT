@@ -199,10 +199,12 @@ def test_simple_yield_gap_registers_metric_authority_for_level(monkeypatch):
 
     metric_authority = result["value"]["MetricAuthority"]
     level_authority = metric_authority["level"]
-    assert level_authority["usage"] == "core_allowed"
-    assert level_authority["authority"] == "derived_simple_yield_gap_official_inputs"
+    # O13（老板 08-16 裁）：简式收益差距只能当诊断用，supporting_only 辅助指标。
+    assert level_authority["usage"] == "supporting_only"
+    assert level_authority["authority"] == "derived_simple_yield_gap_diagnostic_auxiliary"
     assert "Damodaran" in level_authority["reason"]
     assert "不得冒充" in level_authority["reason"]
+    assert "诊断" in level_authority["reason"]
 
     assert "yield_type" in metric_authority
     assert metric_authority["yield_type"]["usage"] == "supporting_only"

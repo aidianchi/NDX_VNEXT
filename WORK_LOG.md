@@ -8,6 +8,16 @@
 
 ## 2026-08-16
 
+### 老板六问裁决（08-16 晚）：全 flash / flash 不限预算 / OBV 与 supplier 交新对话审核 / yield gap 降诊断辅助
+
+- O8 模型路由：下次起全流程 deepseek-v4-flash（`config/stage_model_routing.json` mode=all_flash，pro 仅失败兜底）。老板判断：flash 能力已大幅提升，失败本就不该发生，出现失败先查根因。
+- O9 预算：只要走 flash 就不限预算；若某步失败兜底切 pro，结算单如实记。
+- O10（A11：同名 OBV 两个值）：老板列待审核项目，倾向新对话专审"数据获取为何出现两个数"；PC-08 在审核结论出来前保持红。
+- O12（C2：supplier_lookback pending_validation 撑主斜率）：老板倾向新对话审核"哪一批数据、怎么进入主斜率"；PC-25 在审核结论出来前保持红。
+- O13（C4：yield gap 身份）：老板裁"只能当诊断用=辅助指标"——`MetricAuthority.level` 改 supporting_only + authority=derived_simple_yield_gap_diagnostic_auxiliary，canon 改"诊断性辅助指标"，PC-26 按新口径锁身份。相关测试 70 passed。
+- O11（B2 事件站措辞）：已向老板提交第一性原理分析与推荐措辞，等老板点头后改，未动代码。
+- 验证：路由/权限/检查相关套件与全量 pytest **1227 passed / 2 failed（仅 console_run_all 既知红）**；docs 闸门绿。
+
 ### 【关闭 T52】离线段第2-3步收工：真红修复 + 补病检查 + 全量实测（08-16）
 
 - 第2步（真红10条）：8 条修真因——PC-04（ref_authority：已注册父引用保守默认 supporting_only，unknown 只留给查无护照）、PC-09（通用约束不再点名 raw_data/NO_DATA_AVAILABLE；analysis_required 是清单数据键，移出悬空键名单）、PC-11（结构示例动态使用本层第一个真实指标）、PC-12（未启用手工配置的占位日期不再进各层；本地配置占位日期清理）、PC-13（percentile_scale 机器标注 0-1/0-100/mixed）、PC-14（brief 改"运行时点 + 各指标自查声明"；检查改查未来日期泄漏）、PC-18（回购逐字行去重留痕 + AMZN 陈旧标 stale）、PC-19（发模型的 metric_name 按 canon 表对齐）。每条配红灯测试。

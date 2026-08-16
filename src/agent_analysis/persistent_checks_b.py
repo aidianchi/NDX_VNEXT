@@ -1097,7 +1097,8 @@ def _check_pc24(run_dir: Path) -> Dict[str, Any]:
 
 def _check_pc25(run_dir: Path) -> Dict[str, Any]:
     """C2：supplier_lookback 处于 pending_validation 时仍作为 30d/90d 主斜率唯一材料
-    即报警（老板裁决前不许悄悄转绿）。"""
+    即报警。老板 08-16 意见：列待审核项目，由新对话专审这批数据怎么来的、能不能撑主斜率；
+    审核结论出来前不许悄悄转绿。"""
     pl = _load_layer_payload(run_dir, "L4")
     if pl is None:
         return _make_result("PC-25", "supplier_lookback 待验证仍撑主斜率（C2）", False,
@@ -1117,7 +1118,7 @@ def _check_pc25(run_dir: Path) -> Dict[str, Any]:
             and slope.get("verification_status") == "pending_validation"
         ):
             violations.append(
-                f"{field}: supplier_lookback+pending_validation（待老板裁决数据源身份）"
+                f"{field}: supplier_lookback+pending_validation（待新对话审核数据源身份）"
             )
     passed = not violations
     return _make_result(
@@ -1130,8 +1131,8 @@ def _check_pc25(run_dir: Path) -> Dict[str, Any]:
 
 
 def _check_pc26(run_dir: Path) -> Dict[str, Any]:
-    """C4：yield gap 身份自相矛盾检测——core_allowed 标签与"诊断性/fallback"措辞
-    同时存在即报警（老板裁决前不许悄悄转绿）。"""
+    """C4：yield gap 身份按老板 08-16 裁决（O13）锁定为诊断性辅助指标——
+    usage 必须 supporting_only，reason 必须写明诊断/辅助身份；偏离即报警。"""
     registry_path = run_dir / "evidence_registry.json"
     if not registry_path.is_file():
         return _make_result("PC-26", "yield gap 身份矛盾检测（C4）", False,
@@ -1150,14 +1151,18 @@ def _check_pc26(run_dir: Path) -> Dict[str, Any]:
     usage = str(field_authority.get("usage") or model.get("field_usage") or "").strip().lower()
     reason = str(field_authority.get("reason") or "")
     contradictions: List[str] = []
-    if usage == "core_allowed" and ("诊断" in reason or "fallback" in reason.lower() or "diagnostic" in reason.lower()):
-        contradictions.append(f"usage={usage} 与 reason 中的诊断/fallback 措辞并存（待老板裁决身份）")
+    if usage == "core_allowed":
+        contradictions.append("usage 仍为 core_allowed（老板已裁：只能当诊断用，supporting_only）")
+    elif usage != "supporting_only":
+        contradictions.append(f"usage={usage or '空'} 不是 supporting_only（老板已裁）")
+    if "诊断" not in reason and "辅助" not in reason:
+        contradictions.append("reason 未写明诊断/辅助身份")
     passed = not contradictions
     return _make_result(
         "PC-26",
         "yield gap 身份矛盾检测（C4）",
         passed,
-        "yield gap 无 core_allowed/诊断性 矛盾对" if passed else "；".join(contradictions),
+        "yield gap = supporting_only 诊断性辅助指标，无身份矛盾" if passed else "；".join(contradictions),
         "evidence_registry.json:passports['L4.get_equity_risk_premium#level'].authority_model.field_authority",
     )
 

@@ -3077,6 +3077,7 @@ def test_run_stage_uses_stage_model_routing_for_cognitive_stages(tmp_path: Path)
         available_models=["deepseek-v4-flash", "deepseek-v4-pro"],
         output_dir=str(tmp_path),
         llm_engine=engine,
+        model_mode="default",  # 显式走 legacy 模式，单独验证 pro-first 路由表
     )
 
     result = orchestrator._run_stage(
@@ -3143,9 +3144,9 @@ def test_run_stage_all_flash_mode_for_cognitive_stages(tmp_path: Path):
     assert diagnostics["stages"]["thesis"]["model"] == "deepseek-v4-flash"
 
 
-def test_run_stage_default_mode_records_active_mode(tmp_path: Path):
-    """默认模式（不传 model_mode）保持 legacy 行为：认知阶段 pro 优先，
-    且诊断里 active_mode 标记为 default。"""
+def test_run_stage_default_mode_is_all_flash_per_owner_ruling(tmp_path: Path):
+    """老板 08-16 裁（O8）：config 默认模式已切 all_flash——认知阶段 flash 优先，
+    诊断里 active_mode 标记 all_flash，pro 只作失败兜底。"""
     engine = RoutingFakeLLMEngine({"thesis": '{"value": "ok"}'})
     orchestrator = VNextOrchestrator(
         available_models=["deepseek-v4-flash", "deepseek-v4-pro"],
@@ -3161,9 +3162,9 @@ def test_run_stage_default_mode_records_active_mode(tmp_path: Path):
     )
     diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
 
-    assert engine.preferred_models_by_call[0][0] == "deepseek-v4-pro"
-    assert diagnostics["stages"]["thesis"]["model_routing"]["active_mode"] == "default"
-    assert diagnostics["stages"]["thesis"]["model_routing"]["preferred_models"][0] == "deepseek-v4-pro"
+    assert engine.preferred_models_by_call[0][0] == "deepseek-v4-flash"
+    assert diagnostics["stages"]["thesis"]["model_routing"]["active_mode"] == "all_flash"
+    assert diagnostics["stages"]["thesis"]["model_routing"]["preferred_models"][0] == "deepseek-v4-flash"
 
 
 def test_run_stage_all_flash_mode_via_env_var(tmp_path: Path, monkeypatch):

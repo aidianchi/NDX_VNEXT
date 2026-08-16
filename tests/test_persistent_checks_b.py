@@ -680,7 +680,7 @@ def test_pc25_supplier_lookback_pending_validation_fails(tmp_path: Path) -> None
     assert "slope_30d" in result["detail"]
 
 
-def test_pc26_yield_gap_core_allowed_diagnostic_contradiction_fails(tmp_path: Path) -> None:
+def test_pc26_yield_gap_core_allowed_still_fails(tmp_path: Path) -> None:
     _write_json(tmp_path / "evidence_registry.json", {
         "passports": {
             "L4.get_equity_risk_premium#level": {
@@ -695,7 +695,24 @@ def test_pc26_yield_gap_core_allowed_diagnostic_contradiction_fails(tmp_path: Pa
     })
     result = _find(run_checks_b(tmp_path), "PC-26")
     assert result["passed"] is False
-    assert "待老板裁决" in result["detail"]
+    assert "core_allowed" in result["detail"]
+
+
+def test_pc26_yield_gap_diagnostic_supporting_only_passes(tmp_path: Path) -> None:
+    _write_json(tmp_path / "evidence_registry.json", {
+        "passports": {
+            "L4.get_equity_risk_premium#level": {
+                "authority_model": {
+                    "field_authority": {
+                        "usage": "supporting_only",
+                        "reason": "诊断性辅助证据，不得独立支撑强结论。",
+                    }
+                }
+            }
+        }
+    })
+    result = _find(run_checks_b(tmp_path), "PC-26")
+    assert result["passed"] is True
 
 
 # --------------------------------------------------------------------------

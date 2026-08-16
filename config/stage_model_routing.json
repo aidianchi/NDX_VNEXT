@@ -6,37 +6,92 @@
     "Mechanical/formatting stages (event card interpretation, event section summary) prefer flash-grade models first for cost efficiency; pro-grade remains as the failure-fallback safety net, not removed.",
     "modes.default = legacy behavior (cognitive stages pro-first).",
     "modes.all_flash = every stage flash-first; pro-grade only remains as failure-fallback safety net.",
-    "Select the mode via CLI --model-mode (default|all_flash), env NDX_MODEL_MODE, or leave unset for legacy behavior."
+    "Select the mode via CLI --model-mode (default|all_flash), env NDX_MODEL_MODE, or leave unset for legacy behavior.",
+    "2026-08-16 老板裁决 O8：下次起全流程 flash-first（deepseek-v4-flash），pro 仅作失败兜底；O9：只要走 flash，预算不限。"
   ],
-  "mode": "default",
+  "mode": "all_flash",
   "modes": {
     "default": {
       "stage_preferences": {
-        "counter_thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
-        "thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
-        "reviser": ["deepseek-v4-pro", "deepseek-v4-flash"],
-        "final": ["deepseek-v4-pro", "deepseek-v4-flash"],
-        "event_card_interpreter": ["deepseek-v4-flash", "deepseek-v4-pro"],
-        "event_section_summary": ["deepseek-v4-flash", "deepseek-v4-pro"]
+        "counter_thesis": [
+          "deepseek-v4-pro",
+          "deepseek-v4-flash"
+        ],
+        "thesis": [
+          "deepseek-v4-pro",
+          "deepseek-v4-flash"
+        ],
+        "reviser": [
+          "deepseek-v4-pro",
+          "deepseek-v4-flash"
+        ],
+        "final": [
+          "deepseek-v4-pro",
+          "deepseek-v4-flash"
+        ],
+        "event_card_interpreter": [
+          "deepseek-v4-flash",
+          "deepseek-v4-pro"
+        ],
+        "event_section_summary": [
+          "deepseek-v4-flash",
+          "deepseek-v4-pro"
+        ]
       }
     },
     "all_flash": {
       "stage_preferences": {
-        "counter_thesis": ["deepseek-v4-flash", "deepseek-v4-pro"],
-        "thesis": ["deepseek-v4-flash", "deepseek-v4-pro"],
-        "reviser": ["deepseek-v4-flash", "deepseek-v4-pro"],
-        "final": ["deepseek-v4-flash", "deepseek-v4-pro"],
-        "event_card_interpreter": ["deepseek-v4-flash", "deepseek-v4-pro"],
-        "event_section_summary": ["deepseek-v4-flash", "deepseek-v4-pro"]
+        "counter_thesis": [
+          "deepseek-v4-flash",
+          "deepseek-v4-pro"
+        ],
+        "thesis": [
+          "deepseek-v4-flash",
+          "deepseek-v4-pro"
+        ],
+        "reviser": [
+          "deepseek-v4-flash",
+          "deepseek-v4-pro"
+        ],
+        "final": [
+          "deepseek-v4-flash",
+          "deepseek-v4-pro"
+        ],
+        "event_card_interpreter": [
+          "deepseek-v4-flash",
+          "deepseek-v4-pro"
+        ],
+        "event_section_summary": [
+          "deepseek-v4-flash",
+          "deepseek-v4-pro"
+        ]
       }
     }
   },
   "stage_preferences": {
-    "counter_thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
-    "thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
-    "reviser": ["deepseek-v4-pro", "deepseek-v4-flash"],
-    "final": ["deepseek-v4-pro", "deepseek-v4-flash"],
-    "event_card_interpreter": ["deepseek-v4-flash", "deepseek-v4-pro"],
-    "event_section_summary": ["deepseek-v4-flash", "deepseek-v4-pro"]
+    "counter_thesis": [
+      "deepseek-v4-pro",
+      "deepseek-v4-flash"
+    ],
+    "thesis": [
+      "deepseek-v4-pro",
+      "deepseek-v4-flash"
+    ],
+    "reviser": [
+      "deepseek-v4-pro",
+      "deepseek-v4-flash"
+    ],
+    "final": [
+      "deepseek-v4-pro",
+      "deepseek-v4-flash"
+    ],
+    "event_card_interpreter": [
+      "deepseek-v4-flash",
+      "deepseek-v4-pro"
+    ],
+    "event_section_summary": [
+      "deepseek-v4-flash",
+      "deepseek-v4-pro"
+    ]
   }
 }

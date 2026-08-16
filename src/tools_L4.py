@@ -6736,12 +6736,12 @@ def get_equity_risk_premium(end_date: str = None) -> Dict[str, Any]:
             },
             "MetricAuthority": {
                 "level": _component_metric_authority(
-                    usage="core_allowed",
-                    authority="derived_simple_yield_gap_official_inputs",
+                    usage="supporting_only",
+                    authority="derived_simple_yield_gap_diagnostic_auxiliary",
                     reason=(
-                        "这是简式收益差（earnings yield − 10Y 名义），不是 Damodaran 隐含 ERP，不得冒充后者。"
-                        "由已核验的 NDX 收益率与 10Y 美债名义收益率相减得到，可作为估值-利率张力的诊断性证据，"
-                        "但不建模未来增长、回购或现金流路径。"
+                        "老板 2026-08-16 裁决（O13）：简式收益差距只能当诊断用，是辅助指标，"
+                        "不得独立支撑强结论。这是简式收益差（earnings yield − 10Y 名义），不是 "
+                        "Damodaran 隐含 ERP，不得冒充后者；可作为估值-利率张力的诊断性辅助证据。"
                     ),
                     source=source_tier,
                 ),

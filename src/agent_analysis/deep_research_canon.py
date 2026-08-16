@@ -405,7 +405,7 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
             "get_ndx_earnings_revision_metrics",
         ],
         ["盈利收益率改善、FCF收益率改善或长端利率回落。"],
-        "核心估值-利率桥梁指标，但只回答当前收益率差距，不建模长期现金流路径。",
+        "诊断性辅助指标（老板 08-16 裁：只能当诊断用，supporting_only，不得独立支撑强结论）；只回答当前收益率差距，不建模长期现金流路径。",
         "简式收益差距薄=安全垫薄；不要伪装成 implied ERP。",
     ),
     "get_m7_capex_cycle": _indicator(
