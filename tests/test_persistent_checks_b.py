@@ -523,7 +523,7 @@ def test_pc20_missing_field_bad_feedback_few_tests_fail(tmp_path: Path) -> None:
     result = _check_pc20(tmp_path, repo)
     assert result["passed"] is False
     assert "needs_data_confirmation" in result["detail"]
-    assert "无行/列、JSONDecodeError、字段路径或 validation error 定位" in result["detail"]
+    assert "无行/列、JSONDecodeError、字段路径、validation error 或规则路径定位" in result["detail"]
     assert "< 15" in result["detail"]
 
 
@@ -564,6 +564,26 @@ def test_pc20_pydantic_validation_error_localization_passes(tmp_path: Path) -> N
     assert result["passed"] is True
 
 
+def test_pc20_rule_path_localization_passes(tmp_path: Path) -> None:
+    # 内容规则违例（禁句/数字锚定等）的真实定位是规则身份——统一发放的
+    # "dotted.rule.path: 消息" 前缀必须算数（2026-08-17 确认跑实测：事件卡禁句、
+    # ESS 事后归因、final 数字锚定四条反馈全是这种形态，缺它就误红）。
+    _write_json(tmp_path / "prompt_audit" / "event_section_summary" / "attempt_1.payload.json", _ess_payload(with_field=True))
+    _write_json(
+        tmp_path / "prompt_audit" / "event_card_interpreter.event_x" / "attempt_2.payload.json",
+        {
+            "stage_key": "event_card_interpreter",
+            "attempt": 2,
+            "payload": {},
+            "retry_feedback": "event_card.direction_overreach: must not claim mandatory market direction",
+        },
+    )
+    repo = tmp_path / "repo"
+    _repo_test_file(repo, 15)
+    result = _check_pc20(tmp_path, repo)
+    assert result["passed"] is True
+
+
 def test_pc20_feedback_without_any_localization_still_fails(tmp_path: Path) -> None:
     # 反例：完全没有定位信息的反馈仍必须判红。
     _write_json(tmp_path / "prompt_audit" / "event_section_summary" / "attempt_1.payload.json", _ess_payload(with_field=True))
@@ -580,7 +600,7 @@ def test_pc20_feedback_without_any_localization_still_fails(tmp_path: Path) -> N
     _repo_test_file(repo, 15)
     result = _check_pc20(tmp_path, repo)
     assert result["passed"] is False
-    assert "无行/列、JSONDecodeError、字段路径或 validation error 定位" in result["detail"]
+    assert "无行/列、JSONDecodeError、字段路径、validation error 或规则路径定位" in result["detail"]
 
 
 # --------------------------------------------------------------------------

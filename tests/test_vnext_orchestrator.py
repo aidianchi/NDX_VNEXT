@@ -1906,6 +1906,22 @@ def test_layer_manual_overrides_are_layer_local(tmp_path: Path):
     assert l4_overrides["metrics"] == {}
 
 
+def test_layer_manual_overrides_inactive_carries_no_date_key(tmp_path: Path):
+    """PC-12/B5：未启用的手工配置连 date 键都不进各层 payload（空串占位同样是
+    占位痕迹）；2026-08-17 确认跑实测五层全红于 date=''。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    packet = _mock_packet()
+
+    for layer in ("L1", "L2", "L3", "L4", "L5"):
+        overrides = orchestrator._build_layer_manual_overrides(packet, layer)
+        assert overrides["active"] is False
+        assert "date" not in overrides
+
+
 def test_layer_manual_overrides_are_layer_local_when_active(tmp_path: Path):
     orchestrator = VNextOrchestrator(
         available_models=["fake"],

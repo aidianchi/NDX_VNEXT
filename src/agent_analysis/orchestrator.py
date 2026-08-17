@@ -1613,13 +1613,13 @@ class VNextOrchestrator:
         # "这句话有没有断言必涨必跌"），且在那 28 条里一次都没触发过，成本为零。
         directional_overreach = ("必然上涨", "必然下跌", "必须上涨", "必须下跌", "一定上涨", "一定下跌")
         if any(token in f"{card.interpretation} {hypothesis_text}" for token in directional_overreach):
-            errors.append("event card must not claim mandatory market direction")
+            errors.append("event_card.direction_overreach: must not claim mandatory market direction")
 
         material_text = f"{event.get('title') or ''} {event.get('raw_text_excerpt') or ''}"
         material_declares_alternative = bool(re.search(r"(?:\bor\b|或)", material_text, flags=re.IGNORECASE))
         fact_adds_alternative = bool(re.search(r"[（(]\s*或", card.fact_summary))
         if fact_adds_alternative and not material_declares_alternative:
-            errors.append("fact_summary contains alternative classification absent from material")
+            errors.append("event_card.alternative_classification: fact_summary contains alternative classification absent from material")
 
         def signed_numbers(text: str) -> Dict[str, str]:
             values: Dict[str, str] = {}
@@ -2044,7 +2044,7 @@ class VNextOrchestrator:
         semantic_text = re.sub(r"\s+", " ", text)
         for pattern in VNextOrchestrator._HINDSIGHT_OR_CAUSAL_PATTERNS:
             if re.search(pattern, semantic_text):
-                errors.append("summary_text contains hindsight or deterministic causal language")
+                errors.append("event_section_summary.hindsight_causal: summary_text contains hindsight or deterministic causal language")
                 break
         # codex P1：禁止把 effective_date 之后的日期写进历史总结（防止事后信息回流）。
         if effective_date:
@@ -5620,9 +5620,10 @@ class VNextOrchestrator:
         """Filter manual overrides so layer analysts only see metrics in their own layer."""
         overrides = packet.manual_overrides if isinstance(packet.manual_overrides, dict) else {}
         if not overrides.get("active"):
+            # PC-12/B5：未启用的手工配置连 date 键都不带（占位痕迹不进各层），
+            # 审计以磁盘配置为准。
             return {
                 "active": False,
-                "date": overrides.get("date", ""),
                 "metrics": {},
             }
         layer_data = packet.raw_data.get(layer, {})
@@ -6450,7 +6451,8 @@ class VNextOrchestrator:
             ]
             if missing_numbers:
                 return [
-                    "reasoned_verdict contains numbers that are not present in the stage "
+                    "final_adjudication.numbers_grounding: reasoned_verdict contains numbers "
+                    "that are not present in the stage "
                     "payload (identity check, not semantic): "
                     f"{missing_numbers[:5]}. Only use numbers that appear verbatim in the input."
                 ]
