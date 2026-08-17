@@ -808,13 +808,14 @@ def _check_pc08(run_dir: Path) -> Dict[str, Any]:
 # PC-09
 # ──────────────────────────────────────────────────────────────────────────
 
-def _pc09_instruction_scope(prompt_text: str) -> str:
-    """PC-09 只扫指令区。
+def _prompt_instruction_scope(prompt_text: str) -> str:
+    """只扫提示词的指令区（PC-09/PC-10 共用）。
 
     `## Runtime Input` 头由 orchestrator 固定生成，其后是 payload 转储与输出契约
-    规格（数据区），出现的键名不是"约束点名"；`## Layer-Local 4C Few-Shot Examples`
-    段是教学示例，同理剔除。没有 Runtime Input 头的站点（bridge/counter_thesis/
-    risk 等）回退为扫全文，不得静默跳过。
+    规格（数据区）——数据区出现的键名、模型产物里自带的措辞（如事件卡 limitations
+    里模型写的限定语句）都不是"约束点名/提示词措辞"，归数据，检查不得误伤；
+    `## Layer-Local 4C Few-Shot Examples` 段是教学示例，同理剔除。没有 Runtime
+    Input 头的站点（bridge/counter_thesis/risk 等）回退为扫全文，不得静默跳过。
     """
     scope = re.split(r"^## Runtime Input\b.*$", prompt_text, maxsplit=1, flags=re.MULTILINE)[0]
     return re.sub(
@@ -837,7 +838,7 @@ def _check_pc09(run_dir: Path) -> Dict[str, Any]:
         prompt_file = _latest_attempt_file(station_dir, "attempt_*.prompt.txt")
         if prompt_file is None:
             continue
-        prompt_text = _pc09_instruction_scope(prompt_file.read_text(encoding="utf-8"))
+        prompt_text = _prompt_instruction_scope(prompt_file.read_text(encoding="utf-8"))
         mentioned = [key for key in INSTRUCTION_REF_KEYS if key in prompt_text]
         if not mentioned:
             continue
@@ -887,7 +888,9 @@ def _check_pc10(run_dir: Path) -> Dict[str, Any]:
     conflicts: List[str] = []
     for station_dir in station_dirs:
         prompt_file = _latest_prompt(station_dir)
-        text = prompt_file.read_text(encoding="utf-8")
+        # 只扫指令区：模型产物自带的措辞（如事件卡 limitations 里模型写的限定语句）
+        # 会随 payload 进提示词数据区，那是数据不是我们的措辞规定（08-17 确认跑 r3 误伤实证）。
+        text = _prompt_instruction_scope(prompt_file.read_text(encoding="utf-8"))
         if mandatory_wording.search(text):
             conflicts.append(f"{station_dir.name}: 仍含句首/必须用词的硬规定（旧 A 说法）")
         if no_rules_meta.search(text):

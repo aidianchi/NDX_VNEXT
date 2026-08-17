@@ -772,6 +772,21 @@ def test_pc10_fail_old_mandatory_wording(tmp_path: Path):
     assert "硬规定" in result["detail"]
 
 
+def test_pc10_model_wording_in_data_area_is_not_our_wording(tmp_path: Path):
+    # 2026-08-17 确认跑 r3 误伤实证：模型写在事件卡 limitations 里的旧 A 式措辞会随
+    # payload 进入下游提示词的数据区——那是数据（模型产物），不是我们的措辞规定。
+    # PC-10 只查指令区；指令区含统一语义、数据区有旧 A 措辞时必须判绿。
+    station = _stage(tmp_path, "event_section_summary")
+    _write_prompt(
+        station,
+        '弱来源或仅标题材料，用"据报道"或"该媒体称"这类限定语说清分寸。\n'
+        "## Runtime Input\n"
+        '{"cards": [{"limitations": ["不是官方披露，解读必须以“据报道”“该媒体称”限定。"]}]}\n',
+    )
+    result = _result_by_id(run_checks_a(tmp_path), "PC-10")
+    assert result["passed"] is True
+
+
 def test_pc10_fail_old_no_rules_meta(tmp_path: Path):
     station = _stage(tmp_path, "event_card_interpreter.event_test")
     _write_prompt(station, "措辞完全由你决定，没有固定说法要套。")

@@ -1639,7 +1639,7 @@ class VNextOrchestrator:
         )
         if reversed_magnitudes:
             errors.append(
-                "fact_summary reverses signed number direction: " + ", ".join(reversed_magnitudes)
+                "event_card.sign_reversal: fact_summary reverses signed number direction: " + ", ".join(reversed_magnitudes)
             )
 
         return errors
@@ -2000,7 +2000,7 @@ class VNextOrchestrator:
         example_id = sorted(allowed_ids)[0] if allowed_ids else "event:<id>"
         if cited_in_text != declared:
             errors.append(
-                "cited_event_ids must exactly match the [card:...] citations in summary_text"
+                "event_section_summary.citation_set_match: cited_event_ids must exactly match the [card:...] citations in summary_text"
                 f"；正文有而清单无: {sorted(cited_in_text - declared)[:5]}"
                 f"；清单有而正文无: {sorted(declared - cited_in_text)[:5]}"
                 f"；两边都必须写完整 id（含 event: 前缀），正文里写作 [card:{example_id}]"
@@ -2008,17 +2008,17 @@ class VNextOrchestrator:
         unknown = sorted(declared - allowed_ids)
         if unknown:
             errors.append(
-                f"cited_event_ids contain ids outside this run's cards: {unknown[:5]}"
+                f"event_section_summary.citation_ids: cited_event_ids contain ids outside this run's cards: {unknown[:5]}"
                 f"；本轮合法 id 形如 {example_id}，不得删去 event: 前缀"
             )
         if len(declared) < 2:
-            errors.append("summary must cite at least 2 event cards")
+            errors.append("event_section_summary.citation_count: summary must cite at least 2 event cards")
         if len(declared) > 5:
-            errors.append("summary must cite at most 5 event cards")
+            errors.append("event_section_summary.citation_count: summary must cite at most 5 event cards")
         if not text.rstrip().endswith("以上事件材料不构成主证据，判断以数据层为准。"):
-            errors.append("summary_text must end with the fixed boundary sentence")
+            errors.append("event_section_summary.boundary_sentence: summary_text must end with the fixed boundary sentence")
         if re.search(r"L[1-5]\.get_", text):
-            errors.append("summary_text must not reference L1-L5 data refs")
+            errors.append("event_section_summary.data_layer_isolation: summary_text must not reference L1-L5 data refs")
         # 下限 100 予以保留：短于此难以对多张事件卡（含各自降级措辞）给出实质总结，
         # 是在强制内容而非任意数字。上限从 600 放宽到 1500（2026-07-26 数字规则
         # 重构）：渲染进 `<div class="prose event-summary"><p>` 普通段落，不是固定
@@ -2026,7 +2026,7 @@ class VNextOrchestrator:
         # 来源卡都要求带各自的降级措辞时，600 字经常装不下诚实的表达。
         plain = re.sub(r"\[card:[^\[\]]+\]", "", text)
         if not 100 <= len(plain) <= 1500:
-            errors.append(f"summary_text length {len(plain)} outside tolerant band 100-1500")
+            errors.append(f"event_section_summary.length_band: summary_text length {len(plain)} outside tolerant band 100-1500")
         # 2026-07-30 用户裁决：删除"被引弱来源卡必须在同句带降级措辞"这条闸门。
         #
         # 它先后有过两个实现，都在真实 run 上误伤了合格产出：扫写死的词表（0729 误伤
@@ -6441,7 +6441,7 @@ class VNextOrchestrator:
         ]
         if unresolved:
             return [
-                f"reasoned_verdict cites refs outside evidence_index: {unresolved[:5]}"
+                f"final_adjudication.ref_grounding: reasoned_verdict cites refs outside evidence_index: {unresolved[:5]}"
             ]
         if source_text is not None:
             missing_numbers = [

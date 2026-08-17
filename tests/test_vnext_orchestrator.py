@@ -2185,7 +2185,7 @@ def test_event_section_summary_errors_carry_prefixed_citation_example(tmp_path: 
         title_only_majority=False,
     )
 
-    mismatch = next((e for e in errors if e.startswith("cited_event_ids must exactly match")), "")
+    mismatch = next((e for e in errors if "cited_event_ids must exactly match" in e), "")
     assert mismatch, "正文与清单不一致时必须报错"
     assert "[card:event:3a4f8fe4369bd167]" in mismatch, (
         "报错必须给出带前缀的合法写法，否则模型只会把两边都改成错的那一边"
