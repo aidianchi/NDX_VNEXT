@@ -432,6 +432,21 @@ def _leaf_key_names(value: Any, acc: Optional[set] = None) -> set:
     return acc
 
 
+def _diff_thesis_top_level_fields(original: Dict[str, Any], revised: Dict[str, Any]) -> List[str]:
+    """thesis 原稿 vs 修订稿的顶层字段 diff（canonical JSON 比对；generated_at 是
+    时间戳，不参与）。PC-03 与 orchestrator._inject_revision_claimed_fields 同口径。"""
+    changed = []
+    for key in set(original) | set(revised):
+        if key == "generated_at":
+            continue
+        if key not in original or key not in revised:
+            changed.append(key)
+            continue
+        if _canonical_json(original[key]) != _canonical_json(revised[key]):
+            changed.append(key)
+    return sorted(changed)
+
+
 def _check_pc03(run_dir: Path) -> Dict[str, Any]:
     analysis_revised_path = run_dir / "analysis_revised.json"
     final_dir = run_dir / "prompt_audit" / "final_adjudicator"
@@ -471,8 +486,10 @@ def _check_pc03(run_dir: Path) -> Dict[str, Any]:
     # 供给回潮，必须报警（旧 run 的旧 payload 会如实报红，等新 run 自然转绿）。
     thesis_original_leaked = "thesis_original" in final_gi
 
-    # ── 修订说明机器对账（08-16 新口径）：声称改过的字段必须逐项在修订稿实物
-    #    里存在。老产物缺 revision_claimed_fields 时按"未声称"处理，不因缺字段判病。
+    # ── 修订说明机器对账（T54 批 2 新口径）：revision_claimed_fields 由代码 diff
+    #    （thesis_draft.json vs analysis_revised.revised_thesis 顶层字段）装配。
+    #    thesis_draft.json 在场时按代码重算做身份比对；缺席（老 fixture/旧 run）
+    #    回退 08-16 旧口径——声称字段逐项必须在修订稿实物里出现。
     claimed_raw = analysis_revised.get("revision_claimed_fields")
     claimed_fields: List[str] = []
     claimed_shape_bad = False
@@ -483,18 +500,39 @@ def _check_pc03(run_dir: Path) -> Dict[str, Any]:
             claimed_shape_bad = True
         else:
             claimed_fields = [str(item) for item in claimed_raw]
-    actual_leaf_names = _leaf_key_names(revised_thesis)
-    missing_claimed = sorted({name for name in claimed_fields if name not in actual_leaf_names})
+
+    thesis_draft_path = run_dir / "thesis_draft.json"
     if claimed_shape_bad:
+        claimed_ok = False
         claimed_detail = "revision_claimed_fields 形状非法（须为非空字符串列表）"
-    elif claimed_fields:
-        claimed_detail = (
-            f"revision_claimed_fields {len(claimed_fields)} 项"
-            f"{'全部命中修订稿实物' if not missing_claimed else f'，{len(missing_claimed)} 项不在实物中: {missing_claimed}'}"
+    elif thesis_draft_path.exists():
+        thesis_draft = _read_json(thesis_draft_path)
+        recomputed = _diff_thesis_top_level_fields(
+            thesis_draft if isinstance(thesis_draft, dict) else {},
+            revised_thesis,
         )
+        if claimed_raw is None:
+            claimed_ok = False
+            claimed_detail = "revision_claimed_fields 缺失（thesis_draft.json 在场，新口径要求代码装配值必在）"
+        else:
+            claimed_ok = sorted(claimed_fields) == recomputed
+            claimed_detail = (
+                f"revision_claimed_fields 与代码重算 diff 一致（{len(recomputed)} 项）"
+                if claimed_ok
+                else f"revision_claimed_fields 与代码重算 diff 不一致: 记录 {sorted(claimed_fields)} vs 重算 {recomputed}"
+            )
     else:
-        claimed_detail = "revision_claimed_fields 未提供或为空（老产物按未声称处理）"
-    claimed_ok = not claimed_shape_bad and not missing_claimed
+        actual_leaf_names = _leaf_key_names(revised_thesis)
+        missing_claimed = sorted({name for name in claimed_fields if name not in actual_leaf_names})
+        if claimed_fields:
+            claimed_detail = (
+                f"revision_claimed_fields {len(claimed_fields)} 项"
+                f"{'全部命中修订稿实物' if not missing_claimed else f'，{len(missing_claimed)} 项不在实物中: {missing_claimed}'}"
+                "（旧口径：thesis_draft.json 缺席）"
+            )
+        else:
+            claimed_detail = "revision_claimed_fields 未提供或为空（老产物按未声称处理）"
+        claimed_ok = not missing_claimed
 
     if thesis_original_leaked:
         leak_detail = "thesis_original 仍出现在 final governance_input（08-16 重裁后属供给回潮）"

@@ -355,6 +355,99 @@ def test_pc03_fail_mismatch(tmp_path: Path):
     assert "thesis_main" in result["detail"]
 
 
+def test_pc03_pass_claimed_fields_match_code_recomputed_diff(tmp_path: Path):
+    # T54 批 2 新口径：thesis_draft.json 在场时，revision_claimed_fields 必须与代码
+    # 重算的顶层字段 diff 一致（身份比对，不读散文）。
+    _write_json(
+        tmp_path / "thesis_draft.json",
+        {"main_thesis": "OLD", "environment_assessment": "E", "generated_at": "2026-08-16T00:00:00Z"},
+    )
+    _write_json(
+        tmp_path / "analysis_revised.json",
+        {
+            "revision_summary": "改了主论点",
+            "revision_claimed_fields": ["main_thesis"],
+            "revised_thesis": {"main_thesis": "NEW", "environment_assessment": "E"},
+            "degraded_fallback": None,
+        },
+    )
+    _write_payload(
+        _stage(tmp_path, "final_adjudicator"),
+        {
+            "governance_input": {
+                "thesis_main": "NEW",
+                "thesis_environment": "E",
+                "revision_summary": "改了主论点",
+            }
+        },
+    )
+    result = _result_by_id(run_checks_a(tmp_path), "PC-03")
+    assert result["passed"] is True
+    assert "代码重算 diff 一致" in result["detail"]
+
+
+def test_pc03_fail_claimed_fields_diverge_from_code_diff(tmp_path: Path):
+    # 反例：记录声称只改了 main_thesis，代码重算发现 environment_assessment 也变了
+    # （少报/谎报）——必须判红。
+    _write_json(
+        tmp_path / "thesis_draft.json",
+        {"main_thesis": "OLD", "environment_assessment": "E"},
+    )
+    _write_json(
+        tmp_path / "analysis_revised.json",
+        {
+            "revision_summary": "改了主论点",
+            "revision_claimed_fields": ["main_thesis"],
+            "revised_thesis": {"main_thesis": "NEW", "environment_assessment": "E2"},
+            "degraded_fallback": None,
+        },
+    )
+    _write_payload(
+        _stage(tmp_path, "final_adjudicator"),
+        {
+            "governance_input": {
+                "thesis_main": "NEW",
+                "thesis_environment": "E2",
+                "revision_summary": "改了主论点",
+            }
+        },
+    )
+    result = _result_by_id(run_checks_a(tmp_path), "PC-03")
+    assert result["passed"] is False
+    assert "代码重算" in result["detail"]
+    assert "environment_assessment" in result["detail"]
+
+
+def test_pc03_fail_claimed_fields_missing_when_thesis_draft_present(tmp_path: Path):
+    # 新口径下 claimed 由代码装配、必然在场；thesis_draft.json 在场而 claimed 缺失即病
+    # （老产物宽容只适用于 thesis_draft.json 缺席的旧 fixture/旧 run 场景）。
+    _write_json(
+        tmp_path / "thesis_draft.json",
+        {"main_thesis": "OLD", "environment_assessment": "E"},
+    )
+    _write_json(
+        tmp_path / "analysis_revised.json",
+        {
+            "revision_summary": "改了主论点",
+            "revised_thesis": {"main_thesis": "NEW", "environment_assessment": "E"},
+            "degraded_fallback": None,
+        },
+    )
+    _write_payload(
+        _stage(tmp_path, "final_adjudicator"),
+        {
+            "governance_input": {
+                "thesis_main": "NEW",
+                "thesis_environment": "E",
+                "revision_summary": "改了主论点",
+            }
+        },
+    )
+    result = _result_by_id(run_checks_a(tmp_path), "PC-03")
+    assert result["passed"] is False
+    assert "缺失" in result["detail"]
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # PC-04 IA ref_authority unknown 占比
 # ──────────────────────────────────────────────────────────────────────────

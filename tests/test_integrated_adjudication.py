@@ -757,3 +757,14 @@ def test_ref_authority_registered_parent_refs_never_unknown():
     assert authority["L4.get_mixed#parent"]["field_usages"] == ["core_allowed", "supporting_only"]
     assert authority["L9.not_registered"]["usage"] == "unknown"
     assert authority["L9.not_registered"]["usage_source"] == "unregistered_ref"
+
+
+def test_mechanical_literals_are_code_assembled():
+    # T54 批 1：schema_version / judgment_object 是固定字面量——模型填错也由代码装配覆盖。
+    payload, _ = _build(
+        _valid_response(schema_version="ia_v99_llm_invented", judgment_object="QQQ")
+    )
+    ia = payload["integrated_adjudication"]
+    assert ia is not None
+    assert ia["schema_version"] == "integrated_adjudication_v1"
+    assert ia["judgment_object"] == "NDX"

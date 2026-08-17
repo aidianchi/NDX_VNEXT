@@ -8,4 +8,4 @@
 - 来源等级词表（`event_material.tier` 的取值与分寸）：`official_macro`、`official_filing`、`company_disclosure`、`official` 属官方披露档，可按官方材料分寸解读；`aggregator_report`、`third_party_calendar`、`reliable_mainstream_report` 属第三方与主流媒体转述档，不是官方披露，按上一条的弱来源规则限定分寸；`market_narrative`、`unverified_signal` 属弱来源档（市场叙事与未证实信号），只能当待确认线索，解读最保守。
 - `event_type` 与 `trigger_reasons` 是采集标签不是事实：它们只说明这条材料为什么被采进来，不代表事件本身的性质；解读以标题+正文为准，标签与正文对不上时允许并优先走"关联不足"退出。竞争假说块只作 supports/refutes 的引用背景，其中的表述与数字不得当事实引用。
 - 与纳指 100 没有可说明关联的事件，诚实输出 `interpretation: 与判断对象关联不足`，不要硬找联系。
-- 其余字段按输出规格填：`entities` 只写材料里真实出现的实体符号；`event_type` 照抄 `event_material.event_type`（没有就给最贴近的类别）；`upgrade_candidate` 按"是否值得升级为独立深挖"写 true/false。`event_id` 与 `passport` 会由代码回填，不用你编。
+- 其余字段按输出规格填：`upgrade_candidate` 按"是否值得升级为独立深挖"写 true/false。`entities`、`event_type`（采集标签）、`event_id` 与 `passport` 由代码按采集底账装配回填，不用你填——填了也会被底账值覆盖。

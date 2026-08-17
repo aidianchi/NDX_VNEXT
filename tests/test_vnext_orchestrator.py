@@ -5059,14 +5059,23 @@ def test_final_conflict_responses_requires_retained_high_conflict_ids(tmp_path: 
     assert errors and "TC1_restrictive_macro_vs_moderate_valuation" in errors[0]
 
 
-def test_final_adjudication_tolerates_bare_claim_ledger_entry_list():
-    """红灯：真实事故 run 20260728_110702——`claim_ledger` 在 final_adjudicator.md 里
-    出现 0 次，模型只能猜形状、猜成裸列表，终审第一次尝试即被 pydantic 拒。
+def test_final_claim_ledger_is_code_built_and_stripped_from_model_answer(tmp_path: Path):
+    """T54 批 6：claim_ledger 整本由代码重建（`_build_final_claim_ledger`），模型答卷里的
+    claim_ledger（任何形状，含 20260728 事故那种裸列表）在归一化阶段直接摘除——
+    不进契约校验，'猜错形状烧重试'的事故面从结构上消除。契约侧的裸列表宽容校验
+    同步下线：直接 model_validate 裸列表现在必须报错（不再有形状迁就）。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    parsed = {
+        "approval_status": "approved_with_reservations",
+        "claim_ledger": [{"claim_id": "x", "claim_text": "模型编的台账"}],
+    }
 
-    说明书那侧已补写并登记进 STAGE_CONTRACT_PROMPT_REQUIREMENTS["final"]；契约这侧
-    只做形状纠正——裸列表补回 {"entries": [...]} 外壳，但每个条目仍要逐字通过
-    ClaimLedgerEntry 校验，缺必填字段照样拒。
-    """
+    normalized = orchestrator._normalize_payload("final", parsed)
+
+    assert "claim_ledger" not in normalized
+
     base = {
         "approval_status": "approved_with_reservations",
         "final_stance": "中性偏谨慎",
@@ -5081,21 +5090,23 @@ def test_final_adjudication_tolerates_bare_claim_ledger_entry_list():
         "claim_text": "实际利率处于极端高位，压制估值。",
         "claim_type": "market_state",
     }
-
-    # 事故形态：裸列表 —— 修复后必须被吸收成合法对象，且条目一条不少。
-    final = FinalAdjudication.model_validate({**base, "claim_ledger": [entry]})
-    assert final.claim_ledger is not None
-    assert [item.claim_id for item in final.claim_ledger.entries] == ["FINAL_CLAIM_1"]
-
-    # 形状容忍不等于内容放水：条目缺必填字段仍须被拒。
+    # 裸列表宽容校验已随批 6 下线：直接对契约喂裸列表必须报错。
     with pytest.raises(ValidationError):
-        FinalAdjudication.model_validate(
-            {**base, "claim_ledger": [{"source_stage": "final", "claim_type": "market_state"}]}
-        )
-
-    # 正常对象形态不受影响。
+        FinalAdjudication.model_validate({**base, "claim_ledger": [entry]})
+    # 代码重建的合法对象形态不受影响（checkpoint 复用路径）。
     normal = FinalAdjudication.model_validate({**base, "claim_ledger": {"entries": [entry]}})
     assert [item.claim_id for item in normal.claim_ledger.entries] == ["FINAL_CLAIM_1"]
+
+
+def test_final_prompt_no_longer_asks_model_to_fill_claim_ledger():
+    """T54 批 6 提示词同步：模型侧填写要求已撤——不再教形状，明示代码装配。"""
+    text = (
+        Path(__file__).resolve().parents[1]
+        / "src" / "agent_analysis" / "prompts" / "final_adjudicator.md"
+    ).read_text(encoding="utf-8")
+
+    assert "形状是硬约束" not in text
+    assert "不用你输出" in text
 
 
 def test_final_stage_retries_when_reasoned_verdict_cites_illegal_ref(tmp_path: Path):
@@ -7996,41 +8007,36 @@ def test_controlled_investigation_material_strips_stance_fields_and_marks_trunca
 
 
 # ---------------------------------------------------------------------------
-# PC-23 修复：bridge legacy conflicts 与 typed_conflicts 的 conflict_id 确定性对齐
+# T54 批 4：编号体系——typed_conflicts 权威、id 代码重发、legacy 反向重建
+# （规范：investigation_reports/20260817_T54_文书字段代码装配/02_编号规范.md）
 # ---------------------------------------------------------------------------
 
-def _bridge_conflicts_payload(conflicts, typed_conflicts):
-    return {
+def _bridge_conflicts_payload(conflicts, typed_conflicts, **extra):
+    payload = {
         "bridge_type": "macro_valuation",
         "layers_connected": ["L1", "L4"],
         "conflicts": conflicts,
         "typed_conflicts": typed_conflicts,
         "implication_for_ndx": "保留张力。",
     }
+    payload.update(extra)
+    return payload
 
 
-def test_bridge_conflict_ids_aligned_to_typed_when_shape_matches(tmp_path: Path):
-    """两列表同长且按序 conflict_type 一致：legacy 描述性 id 改写为 typed 权威 id 并留痕。"""
-    orchestrator = VNextOrchestrator(
-        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
-    )
-    payload = _bridge_conflicts_payload(
-        conflicts=[
-            {"conflict_id": "实际利率与估值张力", "conflict_type": "rate_vs_valuation", "severity": "high", "description": "d1"},
-        ],
-        typed_conflicts=[
-            {"conflict_id": "TC_01", "conflict_type": "rate_vs_valuation", "severity": "high", "description": "d1"},
-        ],
-    )
-
-    normalized = orchestrator._normalize_payload("bridge", payload)
-
-    assert normalized["conflicts"][0]["conflict_id"] == "TC_01"
-    assert "conflict_ids_aligned_to_typed_conflicts" in normalized["normalization_notes"]
+def _typed(conflict_id, conflict_type="rate_vs_valuation", severity="high", refs=None):
+    return {
+        "conflict_id": conflict_id,
+        "conflict_type": conflict_type,
+        "severity": severity,
+        "description": f"{conflict_type} 描述",
+        "implication": f"{conflict_type} 影响",
+        "evidence_refs": refs if refs is not None else ["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
+    }
 
 
-def test_bridge_conflict_ids_not_aligned_when_lengths_differ(tmp_path: Path):
-    """条数不同是真病：不改写，保持原样交给 PC-23 报警。"""
+def test_bridge_typed_conflicts_authoritative_ids_reissued_legacy_rebuilt(tmp_path: Path):
+    """typed 是权威容器：id 一律重发 TC_01…；legacy conflicts 由 typed 反向重建
+    （08-17 的"同长同 type 对齐"止血被本规范取代）；模型原 id 进 normalization_notes。"""
     orchestrator = VNextOrchestrator(
         available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
     )
@@ -8039,32 +8045,480 @@ def test_bridge_conflict_ids_not_aligned_when_lengths_differ(tmp_path: Path):
             {"conflict_id": "描述性甲", "conflict_type": "rate_vs_valuation", "severity": "high", "description": "d1"},
             {"conflict_id": "描述性乙", "conflict_type": "growth_vs_policy", "severity": "medium", "description": "d2"},
         ],
-        typed_conflicts=[
-            {"conflict_id": "TC_01", "conflict_type": "rate_vs_valuation", "severity": "high", "description": "d1"},
-        ],
+        typed_conflicts=[_typed("模型编的id")],
     )
 
     normalized = orchestrator._normalize_payload("bridge", payload)
 
-    assert [c["conflict_id"] for c in normalized["conflicts"]] == ["描述性甲", "描述性乙"]
-    assert "conflict_ids_aligned_to_typed_conflicts" not in normalized["normalization_notes"]
+    assert [c["conflict_id"] for c in normalized["typed_conflicts"]] == ["TC_01"]
+    # legacy 反向重建：以 typed 为准（模型自填的两条 legacy 被权威容器取代），id 同源。
+    assert len(normalized["conflicts"]) == 1
+    legacy = normalized["conflicts"][0]
+    assert legacy["conflict_id"] == "TC_01"
+    assert legacy["conflict_type"] == "rate_vs_valuation"
+    assert legacy["severity"] == "high"
+    assert legacy["description"] == "rate_vs_valuation 描述"
+    # involved_layers 从 evidence_refs 前缀派生。
+    assert legacy["involved_layers"] == ["L1", "L4"]
+    assert normalized["typed_conflicts"][0]["involved_layers"] == ["L1", "L4"]
+    notes = normalized["normalization_notes"]
+    assert "legacy_conflicts_rebuilt_from_typed_conflicts" in notes
+    assert any(note.startswith("conflict_ids_reassigned_by_code:") and "模型编的id" in note for note in notes)
 
 
-def test_bridge_conflict_ids_not_aligned_when_types_mismatch(tmp_path: Path):
-    """同长但按序 conflict_type 对不上：不改写，保持原样交给 PC-23 报警。"""
+def test_bridge_id_reissue_remaps_contradiction_references(tmp_path: Path):
+    """重发 id 后，同一 payload 内对旧 id 的精确匹配引用必须重接：
+    principal/secondary contradiction 的 id 与 conflict_refs、price_reflection_map.target。"""
     orchestrator = VNextOrchestrator(
         available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
     )
     payload = _bridge_conflicts_payload(
-        conflicts=[
-            {"conflict_id": "描述性甲", "conflict_type": "growth_vs_policy", "severity": "high", "description": "d1"},
+        conflicts=[],
+        typed_conflicts=[_typed("旧id甲"), _typed("旧id乙", conflict_type="growth_vs_policy", severity="medium")],
+        principal_contradiction={
+            "contradiction_id": "旧id甲",
+            "conflict_refs": ["旧id甲"],
+            "summary": "主要矛盾",
+            "evidence_refs": ["L1.get_fed_funds_rate"],
+        },
+        secondary_contradictions=[{"contradiction_id": "旧id乙", "summary": "次要矛盾"}],
+        price_reflection_map=[{"target": "旧id甲", "reflected_state": "partially_reflected", "category": "rates"}],
+    )
+
+    normalized = orchestrator._normalize_payload("bridge", payload)
+
+    assert normalized["principal_contradiction"]["contradiction_id"] == "TC_01"
+    assert normalized["principal_contradiction"]["conflict_refs"] == ["TC_01"]
+    assert normalized["secondary_contradictions"][0]["contradiction_id"] == "TC_02"
+    rate_entries = [e for e in normalized["price_reflection_map"] if e.get("target") == "TC_01"]
+    assert rate_entries and rate_entries[0]["category"] == "rates"
+
+
+def test_bridge_resonance_and_transmission_ids_reissued(tmp_path: Path):
+    """chain_id/path_id 由代码按序重发（RC_01…/TP_01…），模型自填 id 不保留。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    payload = _bridge_conflicts_payload(
+        conflicts=[],
+        typed_conflicts=[_typed("TC_01")],
+        resonance_chains=[
+            {
+                "chain_id": "模型链id",
+                "description": "共振",
+                "involved_layers": ["L1", "L4"],
+                "evidence_refs": ["L1.get_fed_funds_rate"],
+                "confirming_indicators": ["期限利差"],
+                "mechanism": "m",
+                "implication": "i",
+                "falsifiers": ["f"],
+            }
         ],
-        typed_conflicts=[
-            {"conflict_id": "TC_01", "conflict_type": "rate_vs_valuation", "severity": "high", "description": "d1"},
+        transmission_paths=[
+            {"path_id": "p1", "source_layer": "L1", "target_layer": "L4", "mechanism": "m1", "evidence_refs": ["L1.get_fed_funds_rate"], "implication": "i1"},
+            {"path_id": "p2", "source_layer": "L4", "target_layer": "L5", "mechanism": "m2", "evidence_refs": ["L1.get_fed_funds_rate"], "implication": "i2"},
         ],
     )
 
     normalized = orchestrator._normalize_payload("bridge", payload)
 
-    assert normalized["conflicts"][0]["conflict_id"] == "描述性甲"
-    assert "conflict_ids_aligned_to_typed_conflicts" not in normalized["normalization_notes"]
+    assert [c["chain_id"] for c in normalized["resonance_chains"]] == ["RC_01"]
+    assert [p["path_id"] for p in normalized["transmission_paths"]] == ["TP_01", "TP_02"]
+
+
+def test_counter_thesis_hypothesis_ids_and_source_are_code_assembled(tmp_path: Path):
+    """counter 假说的 hypothesis_id 由代码发放（`_stable_hypothesis_id` 内容哈希，
+    同文同 id、幂等），source 恒为 counter_thesis；模型自填 id 不保留。"""
+    response = {
+        "hypotheses": [
+            {
+                "hypothesis_id": "hyp_custom_模型编的",
+                "hypothesis_text": "反方解释：趋势证据说明市场可能已部分消化利率压力。",
+                "source": "bridge_v2",
+                "support_evidence_refs": ["L5.get_qqq_technical_indicators"],
+                "counter_evidence_refs": ["L1.get_fed_funds_rate"],
+                "diagnostic_evidence_refs": ["L5.get_qqq_technical_indicators"],
+                "cannot_explain": ["不能证明估值便宜。"],
+                "falsification_conditions": ["趋势跌破关键均线。"],
+            }
+        ],
+        "principal_counterargument": "趋势证据可能说明部分压力已被消化。",
+        "cannot_establish": [],
+    }
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({"counter_thesis": json.dumps(response, ensure_ascii=False)}),
+    )
+    synthesis_packet = SynthesisPacket(
+        evidence_index={
+            "L1.get_fed_funds_rate": {"layer": "L1"},
+            "L5.get_qqq_technical_indicators": {"layer": "L5"},
+        },
+        bridge_summaries=[],
+    )
+    bridge_v2 = BridgeMemo(
+        bridge_type="feedback_bridge_v2", layers_connected=["L1", "L5"], implication_for_ndx="保留张力。"
+    )
+
+    draft = orchestrator._build_counter_thesis(
+        synthesis_packet=synthesis_packet,
+        bridge_v2=bridge_v2,
+        investigation_reports=[],
+    )
+
+    expected_id = orchestrator._stable_hypothesis_id(
+        "counter", "反方解释：趋势证据说明市场可能已部分消化利率压力。"
+    )
+    assert [h.hypothesis_id for h in draft.hypotheses] == [expected_id]
+    assert draft.hypotheses[0].hypothesis_id != "hyp_custom_模型编的"
+    assert all(h.source == "counter_thesis" for h in draft.hypotheses)
+
+
+def test_horizon_and_bucket_enums_snap_to_canonical(tmp_path: Path):
+    """horizon/bucket 是固定三档：合法值原样保留；拼写出界按位置兜底值回正（不发明别名）。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+
+    kept = orchestrator._normalize_time_horizon_view({"horizon": "one_to_three_months", "view": "v"}, index=0)
+    assert kept["horizon"] == "one_to_three_months"
+    snapped = orchestrator._normalize_time_horizon_view({"horizon": "短期内", "view": "v"}, index=0)
+    assert snapped["horizon"] == "same_day_or_days"
+
+    kept_bucket = orchestrator._normalize_portfolio_action({"bucket": "waiting_cash", "action": "a"}, index=0)
+    assert kept_bucket["bucket"] == "waiting_cash"
+    snapped_bucket = orchestrator._normalize_portfolio_action({"bucket": "核心仓", "action": "a"}, index=1)
+    assert snapped_bucket["bucket"] == "tactical_position"
+
+
+
+# ---------------------------------------------------------------------------
+# T54 批 1：固定字面量/时间戳类机械字段由代码装配（机械字段不出答卷）
+# ---------------------------------------------------------------------------
+
+def test_counter_thesis_mechanical_literals_are_code_assembled(tmp_path: Path):
+    """schema_version / independence_boundary 是固定字面量——模型填错也由代码装配覆盖。"""
+    response = {
+        "schema_version": "counter_thesis_v99_llm_invented",
+        "independence_boundary": "模型编造的边界声明",
+        "hypotheses": [
+            {
+                "hypothesis_id": "hyp_counter_llm",
+                "hypothesis_text": "反方解释：趋势证据说明市场可能已部分消化利率压力。",
+                "source": "counter_thesis",
+                "support_evidence_refs": ["L5.get_qqq_technical_indicators"],
+                "counter_evidence_refs": ["L1.get_fed_funds_rate"],
+                "diagnostic_evidence_refs": ["L5.get_qqq_technical_indicators"],
+                "cannot_explain": ["不能证明估值便宜。"],
+                "falsification_conditions": ["趋势跌破关键均线。"],
+            }
+        ],
+        "principal_counterargument": "趋势证据可能说明部分压力已被消化。",
+        "cannot_establish": [],
+    }
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({"counter_thesis": json.dumps(response, ensure_ascii=False)}),
+    )
+    synthesis_packet = SynthesisPacket(
+        evidence_index={
+            "L1.get_fed_funds_rate": {"layer": "L1"},
+            "L5.get_qqq_technical_indicators": {"layer": "L5"},
+        },
+        bridge_summaries=[],
+    )
+    bridge_v2 = BridgeMemo(
+        bridge_type="feedback_bridge_v2", layers_connected=["L1", "L5"], implication_for_ndx="保留张力。"
+    )
+
+    draft = orchestrator._build_counter_thesis(
+        synthesis_packet=synthesis_packet,
+        bridge_v2=bridge_v2,
+        investigation_reports=[],
+    )
+
+    assert draft.schema_version == "counter_thesis_v1"
+    assert draft.independence_boundary == CounterThesisDraft.model_fields["independence_boundary"].default
+
+
+def test_controlled_investigation_mechanical_fields_are_code_assembled(tmp_path: Path, monkeypatch):
+    """钉测试（确认既有装配不回流）：investigation_id / originating_agent_id /
+    is_deterministic_stub / effective_date 由代码装配——模型塞了值也一律被覆盖。"""
+    monkeypatch.setenv("CONTROLLED_INVESTIGATION_LLM_ENABLED", "1")
+    response = json.dumps(
+        {
+            "investigation_id": "inv_llm_invented",
+            "originating_agent_id": "agent_llm_invented",
+            "is_deterministic_stub": True,
+            "effective_date": "1999-01-01",
+            "finding": "材料确认实际利率仍构成约束 [M1]。",
+            "claims_supported": ["实际利率约束仍在 [M1]"],
+            "claims_challenged": [],
+            "counter_evidence_refs": ["[M1]"],
+            "cannot_establish": ["缺少估值材料 [M1]"],
+            "confidence": "medium",
+            "limits": ["只读取 [M1]"],
+        },
+        ensure_ascii=False,
+    )
+    engine = SequencedFakeLLMEngine({"controlled_investigation": response})
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine
+    )
+    spec, message = _controlled_investigation_inputs(tmp_path)
+
+    report = orchestrator._build_investigation_report(spec, message)
+
+    assert report.investigation_id != "inv_llm_invented"
+    assert report.originating_agent_id == spec.agent_id
+    assert report.is_deterministic_stub is False
+    assert report.effective_date == message.effective_date
+
+
+
+# ---------------------------------------------------------------------------
+# T54 批 2：payload 单值直装（机械字段不出答卷）
+# ---------------------------------------------------------------------------
+
+def test_layer_card_identity_and_coverage_fields_are_code_assembled(tmp_path: Path):
+    """layer 由 stage_key 派生；covered_function_ids / coverage_complete 由
+    indicator_analyses ∩ 输入 analysis_required 指标集派生——模型填错一律覆盖；
+    自检的判断类字段（weak_reasoning_points 等）不动；quality_self_check 整个缺失
+    时不代造（那是校验器该拦的形状病，闸门不放松）。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    input_payload = {
+        "layer_raw_data": {
+            "get_fed_funds_rate": {"function_id": "get_fed_funds_rate", "metric_name": "Fed Funds Rate"},
+            "get_10y_breakeven": {"function_id": "get_10y_breakeven", "error": "source unavailable"},
+        }
+    }
+    parsed = {
+        "layer": "L4",  # 模型填错层号
+        "indicator_analyses": [
+            {
+                "function_id": "get_fed_funds_rate",
+                "metric": "Fed Funds Rate",
+                "narrative": "n",
+                "reasoning_process": "r",
+            }
+        ],
+        "quality_self_check": {
+            "covered_function_ids": ["模型瞎填的_id"],
+            "coverage_complete": False,
+            "weak_reasoning_points": ["模型自己的判断，必须保留"],
+        },
+    }
+
+    out = orchestrator._assemble_stage_mechanical_fields("l1_analyst", parsed, input_payload)
+
+    assert out["layer"] == "L1"
+    # get_10y_breakeven 标了 error → analysis_required=False，不要求覆盖。
+    assert out["quality_self_check"]["covered_function_ids"] == ["get_fed_funds_rate"]
+    assert out["quality_self_check"]["coverage_complete"] is True
+    assert out["quality_self_check"]["weak_reasoning_points"] == ["模型自己的判断，必须保留"]
+
+    # 反例：该分析的指标没分析 → coverage_complete 必须被代码判 False（模型自报 True 不算数）。
+    parsed_missing = {
+        "indicator_analyses": [],
+        "quality_self_check": {"coverage_complete": True},
+    }
+    out2 = orchestrator._assemble_stage_mechanical_fields("l1_analyst", parsed_missing, input_payload)
+    assert out2["quality_self_check"]["coverage_complete"] is False
+    assert out2["quality_self_check"]["covered_function_ids"] == []
+
+    # quality_self_check 整个缺失：不代造，留给校验器拦。
+    out3 = orchestrator._assemble_stage_mechanical_fields("l1_analyst", {"indicator_analyses": []}, input_payload)
+    assert "quality_self_check" not in out3
+
+    # 非层站（如 bridge）：不碰。
+    bridge_parsed = {"layer": "L9"}
+    out4 = orchestrator._assemble_stage_mechanical_fields("bridge", bridge_parsed, {})
+    assert out4["layer"] == "L9"
+
+
+def test_event_card_type_and_entities_are_code_assembled(tmp_path: Path):
+    """event_type / entities 是采集底账字段（采集标签），由代码按 event 装配——
+    模型填错或编造的一律覆盖。"""
+    event = {
+        "event_id": "event:abc",
+        "title": "Company update",
+        "source_name": "Mainstream Media",
+        "source_tier": "reliable_mainstream_report",
+        "event_type": "policy_news",
+        "published_at": "2026-07-18T09:00:00Z",
+        "event_date": "2026-07-18",
+        "symbols": ["AAPL"],
+        "raw_text_available": True,
+        "raw_text_excerpt": "材料称公司发布了更新。",
+    }
+    _write_event_card_inputs(tmp_path, [event], ["news:abc"])
+    (tmp_path / "analysis_packet.json").write_text('{"event_refs": {}}', encoding="utf-8")
+    response = json.loads(_event_card_response(event_id="event:abc", tier="reliable_mainstream_report"))
+    response["event_type"] = "company_news"  # 模型填错采集标签
+    response["entities"] = ["NVDA", "TSLA"]  # 模型编造实体
+    engine = UniformEventCardFakeLLMEngine(json.dumps(response, ensure_ascii=False))
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine
+    )
+    competition = HypothesisCompetition(
+        hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_rates",
+                hypothesis_text="利率约束仍是主线。",
+                support_evidence_refs=["L1.rate"],
+                diagnostic_evidence_refs=["L1.rate"],
+                falsification_conditions=["利率回落"],
+            )
+        ]
+    )
+
+    artifact = orchestrator._build_event_interpretation_cards(
+        effective_date="2026-07-18",
+        feedback_messages=[],
+        hypothesis_competition=competition,
+    )
+
+    card = artifact["cards"][0]
+    assert card["event_type"] == "policy_news"
+    assert card["entities"] == ["AAPL"]
+
+
+def test_revision_claimed_fields_are_computed_by_code_diff(tmp_path: Path):
+    """revision_claimed_fields 由代码 diff（thesis 原稿 vs revised_thesis 顶层字段）
+    装配——模型自报一律覆盖；generated_at 是时间戳，不参与 diff。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    thesis = ThesisDraft(
+        main_thesis="旧主论点。",
+        environment_assessment="宏观偏紧。",
+        valuation_assessment="估值偏高。",
+        timing_assessment="趋势脆弱。",
+        overall_confidence=Confidence.MEDIUM,
+    )
+    revised = json.loads(thesis.model_dump_json())
+    revised["main_thesis"] = "新主论点。"
+
+    parsed = {"revised_thesis": revised, "revision_claimed_fields": ["模型自报的假话"]}
+    out = orchestrator._inject_revision_claimed_fields(parsed, thesis)
+    assert out["revision_claimed_fields"] == ["main_thesis"]
+
+    # 未修订（含 degraded 兜底路径）：diff 为空，claimed 必须也是空——不许模型自报"改了"。
+    parsed_unchanged = {
+        "revised_thesis": json.loads(thesis.model_dump_json()),
+        "revision_claimed_fields": ["main_thesis"],
+    }
+    out2 = orchestrator._inject_revision_claimed_fields(parsed_unchanged, thesis)
+    assert out2["revision_claimed_fields"] == []
+
+
+
+# ---------------------------------------------------------------------------
+# T54 批 5：function_id/metric 抄回配对——模型自报 + 代码校验回正，绝不硬配
+# ---------------------------------------------------------------------------
+
+def test_indicator_function_id_typo_is_corrected_against_input_keys(tmp_path: Path):
+    """function_id 拼写错误有唯一高相似近邻时代码回正；metric 同步强制为输入
+    metric_name；evidence_refs 里的自引用同步改写。绝不是按位置硬配。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    input_payload = {
+        "layer_raw_data": {
+            "get_10y2y_spread_bp": {"function_id": "get_10y2y_spread_bp", "metric_name": "10Y-2Y Spread"},
+            "get_fed_funds_rate": {"function_id": "get_fed_funds_rate", "metric_name": "Fed Funds Rate"},
+        }
+    }
+    parsed = {
+        "indicator_analyses": [
+            {
+                "function_id": "get_10y2y_spread",  # 模型抄错（少 _bp 后缀）
+                "metric": "模型瞎写的名字",
+                "narrative": "n",
+                "reasoning_process": "r",
+                "evidence_refs": ["L1.get_10y2y_spread"],
+            }
+        ],
+        "quality_self_check": {},
+    }
+
+    out = orchestrator._assemble_stage_mechanical_fields("l1_analyst", parsed, input_payload)
+
+    analysis = out["indicator_analyses"][0]
+    assert analysis["function_id"] == "get_10y2y_spread_bp"
+    assert analysis["metric"] == "10Y-2Y Spread"
+    assert analysis["evidence_refs"] == ["L1.get_10y2y_spread_bp"]
+    assert out["quality_self_check"]["covered_function_ids"] == ["get_10y2y_spread_bp"]
+
+
+def test_indicator_function_id_unmatchable_is_left_for_validator_rejection(tmp_path: Path):
+    """配不上唯一高相似近邻的 function_id 不动——交给校验器拒收重试（绝不硬配）。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    input_payload = {
+        "layer_raw_data": {
+            "get_fed_funds_rate": {"function_id": "get_fed_funds_rate", "metric_name": "Fed Funds Rate"},
+        }
+    }
+    parsed = {
+        "indicator_analyses": [
+            {
+                "function_id": "get_totally_invented_metric",
+                "metric": "Invented",
+                "narrative": "n",
+                "reasoning_process": "r",
+                "evidence_refs": ["L1.get_totally_invented_metric"],
+            }
+        ],
+        "quality_self_check": {},
+    }
+
+    out = orchestrator._assemble_stage_mechanical_fields("l1_analyst", parsed, input_payload)
+
+    assert out["indicator_analyses"][0]["function_id"] == "get_totally_invented_metric"
+    assert out["quality_self_check"]["covered_function_ids"] == []
+    assert out["quality_self_check"]["coverage_complete"] is False
+
+
+def test_layer_card_validator_rejects_unknown_function_ids(tmp_path: Path):
+    """校验器新增硬拦：indicator_analyses 的 function_id 不在输入键集里 → 拒收重试
+    （收紧：此前只对"漏分析"报错，"多出来的幻觉 id"静默通过）。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    card = LayerCard.model_validate(
+        {
+            "layer": "L1",
+            "core_facts": [{"metric": "m", "value": 1}],
+            "local_conclusion": "结论。",
+            "confidence": "medium",
+            "layer_synthesis": "综合。",
+            "internal_conflict_analysis": "冲突分析。",
+            "quality_self_check": {"covered_function_ids": ["get_fed_funds_rate"], "coverage_complete": True},
+            "indicator_analyses": [
+                {
+                    "function_id": "get_fed_funds_rate",
+                    "metric": "Fed Funds Rate",
+                    "narrative": "n",
+                    "reasoning_process": "r",
+                    "evidence_refs": ["L1.get_fed_funds_rate"],
+                },
+                {
+                    "function_id": "get_invented_indicator",
+                    "metric": "Invented",
+                    "narrative": "n",
+                    "reasoning_process": "r",
+                    "evidence_refs": ["L1.get_invented_indicator"],
+                },
+            ],
+        }
+    )
+
+    errors = orchestrator._validate_layer_card_v2(card, "L1", {"get_fed_funds_rate": "Fed Funds Rate"})
+
+    assert any("get_invented_indicator" in error and "not an input function_id" in error for error in errors)

@@ -412,8 +412,8 @@ class EventInterpretationCard(BaseModel):
     event_id: str = Field(..., min_length=1, description="对应新闻事件底账的 event_id")
     fact_summary: str = Field(..., min_length=1, description="只包含原材料事实的摘要")
     interpretation: str = Field(..., min_length=1, description="与事实分开的模型解读")
-    entities: List[str] = Field(default_factory=list, description="材料中涉及的实体")
-    event_type: str = Field(..., min_length=1, description="事件类型")
+    entities: List[str] = Field(default_factory=list, description="材料中涉及的实体（由代码按采集底账 symbols 装配）")
+    event_type: str = Field("uncollected", description="事件类型（采集标签，由代码按采集底账装配，模型填了也会被覆盖）")
     mechanism_hypothesis: EventMechanismHypothesis = Field(..., description="金融链路与一句机制假设")
     supports_hypotheses: List[str] = Field(default_factory=list, description="可提供解释线索的 hypothesis_id")
     refutes_hypotheses: List[str] = Field(default_factory=list, description="可提出待验证挑战的 hypothesis_id")
@@ -789,6 +789,10 @@ class IndicatorAnalysis(BaseModel):
         None,
         description="该指标主要服务长期框架、短线执行还是风险提醒"
     )
+    canon_dispute: List[str] = Field(
+        default_factory=list,
+        description="T54 批 3 异议通道：模型对法典装配值的异议原文（进审计区，不改装配值）",
+    )
     confidence: Confidence = Field(Confidence.MEDIUM, description="该单指标解读的置信度")
 
 
@@ -801,8 +805,8 @@ class QualitySelfCheck(BaseModel):
     """
     model_config = {"extra": "allow"}
 
-    coverage_complete: bool = Field(False, description="是否覆盖了所有有效输入指标")
-    covered_function_ids: List[str] = Field(default_factory=list, description="已覆盖的 function_id")
+    coverage_complete: bool = Field(False, description="是否覆盖了所有有效输入指标（由代码派生装配）")
+    covered_function_ids: List[str] = Field(default_factory=list, description="已覆盖的 function_id（由代码派生装配）")
     missing_or_weak_indicators: List[str] = Field(
         default_factory=list,
         description="缺失、数据异常或推理较弱的指标"
@@ -831,7 +835,7 @@ class LayerCard(BaseModel):
     """
     model_config = {"extra": "allow"}
 
-    layer: Layer = Field(..., description="所属层级")
+    layer: Layer = Field(..., description="所属层级（由代码按 stage 装配，模型填了也会被覆盖）")
     generated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="生成时间戳"
@@ -2058,7 +2062,7 @@ class AnalysisRevised(BaseModel):
     # 实物无此字段）。PC-03 逐项核对；老产物缺此字段时按未提供处理，不因缺字段判病。
     revision_claimed_fields: List[str] = Field(
         default_factory=list,
-        description="本次修订真正改动过的 revised_thesis 叶子字段名清单（机器对账用）",
+        description="本次修订真正改动过的 revised_thesis 叶子字段名清单（由代码 diff 装配，模型自报会被覆盖）",
     )
 
     # 采纳的批评
@@ -2206,25 +2210,6 @@ class FinalAdjudication(BaseModel):
         default=None,
         description="阶段 4：最终自然语言结论的 claim-level 台账；完整产物另存 final_claim_ledger.json",
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _tolerate_bare_claim_ledger_entry_list(cls, data: Any) -> Any:
-        """模型把 `claim_ledger` 直接写成条目列表时，补回 `{"entries": [...]}` 外壳。
-
-        真实事故 run 20260728_110702：`final_adjudicator.md` 从未提过 `claim_ledger`
-        （grep 命中 0 次），模型只能猜形状，猜成了裸列表，整跑在终审站硬崩。说明书那一侧
-        已经补写（见 `final_adjudicator.md` 的 claim_ledger 一节 + `STAGE_CONTRACT_
-        PROMPT_REQUIREMENTS["final"]` 登记）；这里只做形状纠正，不生成任何内容——
-        每个条目仍要逐字通过 `ClaimLedgerEntry` 校验，字段缺失照样被拒。
-        """
-        if not isinstance(data, dict):
-            return data
-        ledger = data.get("claim_ledger")
-        if isinstance(ledger, list):
-            data = dict(data)
-            data["claim_ledger"] = {"entries": ledger}
-        return data
 
     @field_validator("reasoned_verdict")
     @classmethod

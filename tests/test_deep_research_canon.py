@@ -194,8 +194,11 @@ def test_orchestrator_corrects_invalid_permission_type_from_canon(tmp_path):
     assert normalized["permission_type"] == "composite"
 
 
-def test_orchestrator_keeps_valid_permission_type_even_when_canon_differs(tmp_path):
-    # 最小干预：模型给了合法枚举值时不回正，即使与法典不同——判断分歧不在这里裁决。
+def test_orchestrator_overrides_valid_permission_type_when_canon_differs(tmp_path):
+    # T54 批 3（机械字段不出答卷）：permission_type 以法典为唯一权威、无条件装配——
+    # 模型填的合法枚举值只要与法典不同也覆盖；模型原文进 canon_dispute 异议通道
+    # （进审计区，不静默丢弃，"形式不得拒收内容"）。08-16 的"仅非枚举回正"是过渡
+    # 安全带，本测试钉的是根治后语义。
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
         output_dir=str(tmp_path),
@@ -212,7 +215,79 @@ def test_orchestrator_keeps_valid_permission_type_even_when_canon_differs(tmp_pa
         }
     )
 
+    assert normalized["permission_type"] == "composite"
+    assert any(
+        "permission_type" in dispute and "fact" in dispute
+        for dispute in normalized["canon_dispute"]
+    )
+
+
+def test_orchestrator_canon_fields_unconditionally_assembled_with_dispute_channel(tmp_path):
+    # T54 批 3：六个 canon 软字段全部无条件按法典装配；模型的分歧表达逐项进
+    # canon_dispute，法典列表保持纯净（模型补充项不混进装配值）。
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=object(),
+    )
+    canon = get_indicator_canon("get_10y_real_rate")
+
+    normalized = orchestrator._normalize_indicator_analysis(
+        {
+            "function_id": "get_10y_real_rate",
+            "metric": "10Y Real Rate",
+            "narrative": "真实利率偏高。",
+            "reasoning_process": "真实利率偏高会压制成长股估值。",
+            "permission_type": "technical",
+            "canonical_question": "模型自己编的问题",
+            "misread_guards": ["模型补充的误读提醒"],
+            "cross_validation_targets": ["get_some_made_up_indicator"],
+            "falsifiers": ["模型补充的反证条件"],
+            "core_vs_tactical_boundary": "模型自己编的边界",
+        }
+    )
+
     assert normalized["permission_type"] == "fact"
+    assert normalized["canonical_question"] == canon.canonical_question
+    assert normalized["misread_guards"] == list(canon.misread_guards)
+    assert normalized["cross_validation_targets"] == list(canon.cross_validation_targets)
+    assert normalized["falsifiers"] == list(canon.falsifiers)
+    assert normalized["core_vs_tactical_boundary"] == canon.core_vs_tactical_boundary
+    disputes = normalized["canon_dispute"]
+    assert any("permission_type" in d and "technical" in d for d in disputes)
+    assert any("canonical_question" in d and "模型自己编的问题" in d for d in disputes)
+    assert any("misread_guards" in d and "模型补充的误读提醒" in d for d in disputes)
+    assert any("cross_validation_targets" in d and "get_some_made_up_indicator" in d for d in disputes)
+    assert any("falsifiers" in d and "模型补充的反证条件" in d for d in disputes)
+    assert any("core_vs_tactical_boundary" in d for d in disputes)
+
+    # 模型填的值与法典一致（或留空）→ 无 dispute，字段干净。
+    normalized2 = orchestrator._normalize_indicator_analysis(
+        {
+            "function_id": "get_10y_real_rate",
+            "metric": "10Y Real Rate",
+            "narrative": "n",
+            "reasoning_process": "r",
+            "permission_type": "fact",
+            "misread_guards": list(canon.misread_guards),
+        }
+    )
+    assert "canon_dispute" not in normalized2
+
+
+def test_canon_prompt_hints_declare_code_assembly_and_dispute_channel():
+    # T54 批 3 提示词同步：Canon Output Hints 不再要求模型填六个法典字段，
+    # 并声明 canon_dispute 异议通道与批 2 的 layer/覆盖字段装配。
+    layer_raw_data = {
+        "get_10y_real_rate": {"metric_name": "10Y Real Rate", "value": {"level": 1.9}},
+    }
+
+    prompt = build_layer_canon_prompt("L1", layer_raw_data)
+
+    assert "尽量填写" not in prompt
+    assert "由代码按" in prompt
+    assert "canon_dispute" in prompt
+    assert "covered_function_ids" in prompt
 
 
 def test_orchestrator_leaves_invalid_permission_type_without_canon(tmp_path):

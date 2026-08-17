@@ -154,11 +154,13 @@ def test_orchestrator_derives_typed_conflicts_from_legacy_bridge_payload(tmp_pat
         },
     )
 
-    assert normalized["typed_conflicts"][0]["conflict_id"] == "L1_restrictive_vs_L4_expensive"
+    # T54 批 4：typed 为权威容器，id 由代码按序重发（TC_01…）；principal/price_reflection
+    # 由代码从 typed 派生，引用重发后的 id。
+    assert normalized["typed_conflicts"][0]["conflict_id"] == "TC_01"
     assert normalized["typed_conflicts"][0]["evidence_refs"] == []
-    assert normalized["principal_contradiction"]["contradiction_id"] == "L1_restrictive_vs_L4_expensive"
+    assert normalized["principal_contradiction"]["contradiction_id"] == "TC_01"
     assert normalized["principal_contradiction"]["price_reflection"] == "unclear"
-    assert normalized["price_reflection_map"][0]["target"] == "L1_restrictive_vs_L4_expensive"
+    assert normalized["price_reflection_map"][0]["target"] == "TC_01"
 
 
 def test_synthesis_packet_carries_bridge_v2_typed_map(tmp_path: Path):
@@ -481,7 +483,8 @@ def test_bridge_normalize_dedupes_transmission_path_ids_and_fills_implication(tm
     normalized = orchestrator._normalize_payload("bridge", payload)
 
     paths = normalized["transmission_paths"]
-    assert [item["path_id"] for item in paths] == ["l1_to_l4_1", "l2_to_l5_2"]
+    # T54 批 4：path_id 由代码按序重发（TP_01…），去重只决定留哪条、不再拼名字。
+    assert [item["path_id"] for item in paths] == ["TP_01", "TP_02"]
     assert paths[0]["implication"] == "实际利率上升传导到估值压缩。"
     assert paths[1]["implication"] == "信用压力传导到价格趋势。"
     memo = BridgeMemo.model_validate(normalized)

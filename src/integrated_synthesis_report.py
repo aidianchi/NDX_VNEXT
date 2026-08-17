@@ -666,6 +666,10 @@ class IntegratedSynthesisReportBuilder:
         result = model.model_copy(update={
             "notes": verdict_notes,
             "llm_adjudicated": True,
+            # T54 批 1（机械字段不出答卷）：schema_version / judgment_object 是固定字面量，
+            # 由代码装配——模型填错一律覆盖，模型原文留在 prompt_audit。
+            "schema_version": "integrated_adjudication_v1",
+            "judgment_object": "NDX",
         })
         return result.model_dump(mode="json")
 

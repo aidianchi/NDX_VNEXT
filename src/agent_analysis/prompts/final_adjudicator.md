@@ -248,26 +248,8 @@
 - 语言像一位克制的研究员向同事口头汇报：完整句子、因果连贯；不用列表、不用小标题、不堆术语；专业术语第一次出现时用半句话解释它是什么。
 - 不确定的就写不确定。
 
-## claim_ledger（可选字段，但形状是硬约束）
-`claim_ledger` 是**对象**，不是数组。要填就填成 `{"entries": [ ... ]}`，条目放在 `entries` 里；直接写成一个裸数组会被结构校验拒掉、整个终审作废（真实事故 run 20260728_110702）。
-
-```json
-"claim_ledger": {
-  "effective_date": "<YYYY-MM-DD>",
-  "entries": [
-    {
-      "claim_id": "<稳定 ID>",
-      "source_stage": "final",
-      "claim_text": "<自然语言结论原文>",
-      "claim_type": "<market_state / price_reflection / ...>",
-      "evidence_refs": ["<ref>"],
-      "counterevidence_refs": ["<ref>"]
-    }
-  ]
-}
-```
-
-不确定要不要填时，整个字段留空（不写这个键）比写错形状安全——完整台账另有 `final_claim_ledger.json` 产物由代码生成。
+## claim_ledger（不用你输出）
+`claim_ledger` 由代码整本装配（完整台账见 `final_claim_ledger.json` 产物）：你输出的任何 claim_ledger 内容都会在归一化阶段被摘除、不参与校验。把判断写进其余字段即可。
 
 ## 裁决流程
 

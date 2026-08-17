@@ -180,12 +180,11 @@ STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
     # reviser 同时受上述两条合约约束，是合约面最宽的治理 stage
     "reviser": ("hypothesis_responses", "evidence_index", "kept_unresolved", "downgraded", "conflict_id"),
     # _validate_stage_evidence_refs + _validate_reasoned_verdict_refs（三条理由各带引用）
-    # 2026-07-28 追加 claim_ledger：它是 FinalAdjudication 的可选字段，但形状是硬约束
-    # （必须是对象不是数组）。真实事故 run 20260728_110702——说明书里 grep 命中 0 次，
-    # 模型只能猜形状、猜成裸列表，终审第一次尝试即被 pydantic 拒，整跑硬崩。
+    # 2026-08-17 T54 批 6：claim_ledger 从模型答卷撤下——台账整本由代码装配
+    # （_build_final_claim_ledger），模型输出在归一化阶段摘除、不进校验，登记词同步摘下。
     # 2026-08-16 T42②/③追加两个关键词：数字存在性比对（判决正文里的百分数/小数
     # 必须逐字来自输入）与 conflict_refs（终审必须用编号覆盖保留的高严重度冲突）。
-    "final": ("evidence_index", "三条主要理由", "claim_ledger", "数字", "conflict_refs"),
+    "final": ("evidence_index", "三条主要理由", "数字", "conflict_refs"),
     # _validate_counter_thesis_draft + CompetingHypothesis 必填字段（真实事故 run
     # 20260724_223804：counter_thesis.md 从未逐字写过 hypothesis_text /
     # falsification_conditions，模型两次尝试各猜错一个字段名，约 28 万 prompt token
@@ -392,7 +391,8 @@ def _as_list(value: Any) -> List[Any]:
 
 
 _SEVERITY_HIGH_MEDIUM = frozenset({"high", "medium"})
-_PERMISSION_TYPE_VALUES = frozenset(e.value for e in PermissionType)
+# T54 批 3：原 _PERMISSION_TYPE_VALUES（08-16 过渡安全带"非枚举才回正"的配套表）
+# 已随无条件法典装配下线——不再有"枚举内合法值保留"的判定需求。
 _EVIDENCE_REF_PATTERN = re.compile(r"L[1-5]\.[A-Za-z_][A-Za-z0-9_]*(?:#[A-Za-z_][A-Za-z0-9_]*)?")
 _AUTHORITY_OVERREACH_RULES: Dict[str, List[tuple[str, str]]] = {
     "technical": [
@@ -681,9 +681,14 @@ class VNextOrchestrator:
                     # 2) 引用净化——幻觉出的非法 parent#field 可退回的退回、混合权威父级或
                     #    无法解析的丢弃。继承先行，使搬回的原稿引用也过同一张净化网。
                     # 两者都不放松下方 validator 的合法性判定：残留问题仍会被拦下并重试。
-                    pre_validate_transform=lambda parsed: self._sanitize_reviser_evidence_refs(
-                        self._carry_forward_reviser_thesis_fields(parsed, thesis),
-                        synthesis_packet.evidence_index,
+                    # 3) T54 批 2 追加最外层：revision_claimed_fields 由代码 diff 装配
+                    #    （必须在继承与净化之后计算，才与最终落盘实物一致）。
+                    pre_validate_transform=lambda parsed: self._inject_revision_claimed_fields(
+                        self._sanitize_reviser_evidence_refs(
+                            self._carry_forward_reviser_thesis_fields(parsed, thesis),
+                            synthesis_packet.evidence_index,
+                        ),
+                        thesis,
                     ),
                     validator=lambda candidate: (
                         self._validate_stage_evidence_refs(
@@ -1702,7 +1707,11 @@ class VNextOrchestrator:
             finalized_card = card.model_copy(
                 update={
                     "event_id": event_id,
-                    "event_type": str(event.get("event_type") or card.event_type),
+                    # T54 批 2（机械字段不出答卷）：event_type / entities 是采集底账字段
+                    # （采集标签，配餐单 08-17 口径），由代码按底账装配——模型填错或编造
+                    # 一律覆盖，模型原文留在 prompt_audit raw response 可逐字审计。
+                    "event_type": str(event.get("event_type") or "uncollected"),
+                    "entities": [str(symbol) for symbol in _as_list(event.get("symbols"))],
                     "passport": passport,
                 }
             )
@@ -2902,6 +2911,26 @@ class VNextOrchestrator:
         self._last_counter_thesis_fallback = bool(fallback_reason)
         return draft.model_copy(
             update={
+                # T54 批 1（机械字段不出答卷）：schema_version / independence_boundary 是
+                # 固定字面量，与 input_refs/forbidden_context_refs/prompt_input_audit 一样
+                # 由代码装配——模型填错一律覆盖，模型原文留在 prompt_audit raw response。
+                "schema_version": CounterThesisDraft.model_fields["schema_version"].default,
+                "independence_boundary": CounterThesisDraft.model_fields["independence_boundary"].default,
+                # T54 批 4（编号规范 02）：hypothesis_id 由代码发放——沿用既有
+                # `_stable_hypothesis_id` 内容哈希机制（LLM 稿与确定性兜底稿同构、幂等，
+                # 同文同 id，跨 run 可审计），source 恒为 counter_thesis；模型自填 id 不保留，
+                # 原文留在 prompt_audit raw response。
+                "hypotheses": [
+                    hypothesis.model_copy(
+                        update={
+                            "hypothesis_id": self._stable_hypothesis_id(
+                                "counter", str(hypothesis.hypothesis_text or "")
+                            ),
+                            "source": "counter_thesis",
+                        }
+                    )
+                    for hypothesis in draft.hypotheses
+                ],
                 "input_refs": ["synthesis_packet.json", "bridge_memos/bridge_0.json", "investigation_reports/*.json"],
                 "forbidden_context_refs": ["thesis_draft.json", "analysis_revised.json", "final_adjudication.json"],
                 "prompt_input_audit": audit,
@@ -5746,6 +5775,8 @@ class VNextOrchestrator:
                 self._save_stage_diagnostics()
                 continue
             parsed = self._normalize_payload(stage_key, parsed)
+            # T54 批 2（机械字段不出答卷）：代码能确定性定的字段在契约校验前装配。
+            parsed = self._assemble_stage_mechanical_fields(stage_key, parsed, payload)
             if pre_validate_transform is not None:
                 try:
                     parsed = pre_validate_transform(parsed)
@@ -6541,6 +6572,13 @@ class VNextOrchestrator:
         missing_analyses = sorted(expected_function_ids - set(analyses_by_function))
         for function_id in missing_analyses:
             errors.append(f"{layer_label}.indicator_analyses[{function_id}] is required.")
+
+        # T54 批 5（收紧）：幻觉出来的 function_id（不在输入键集里）此前静默通过、
+        # 只靠"漏分析"间接报错——现在显式拒收重试。批 5 装配层已把唯一高相似近邻的
+        # 拼写错误回正，走到这里的都是配不上的，必须打回而不是放行。
+        unknown_analyses = sorted(set(analyses_by_function) - expected_function_ids)
+        for function_id in unknown_analyses:
+            errors.append(f"{layer_label}.indicator_analyses[{function_id}] is not an input function_id.")
 
         for function_id, metric_name in expected_indicators.items():
             analysis = analyses_by_function.get(function_id)
@@ -7953,6 +7991,132 @@ class VNextOrchestrator:
         self._save_stage_diagnostics()
         return validated
 
+    @staticmethod
+    def _match_input_function_id(fid: str, input_ids: Dict[str, str]) -> Optional[str]:
+        """T54 批 5（抄回配对）：仅当模型自报的 function_id 有唯一高相似输入近邻时
+        返回回正目标；两个候选相似度拉不开或都不够像时返回 None——交给校验器拒收
+        重试。绝不按列表位置硬配（那会把模型的张冠李戴变成系统的张冠李戴）。"""
+        import difflib
+
+        scored = sorted(
+            (
+                (difflib.SequenceMatcher(None, fid, candidate).ratio(), candidate)
+                for candidate in input_ids
+            ),
+            reverse=True,
+        )
+        if not scored or scored[0][0] < 0.9:
+            return None
+        if len(scored) > 1 and scored[0][0] - scored[1][0] < 0.05:
+            return None
+        return scored[0][1]
+
+    def _assemble_stage_mechanical_fields(
+        self, stage_key: str, parsed: Dict[str, Any], input_payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """T54 批 2/批 5（机械字段不出答卷）：代码能确定性定的字段在归一化后、契约校验前装配。
+
+        l*_analyst 三族：
+        - ``layer`` 由 stage_key 派生（l1_analyst -> L1），模型填错一律覆盖；
+        - ``indicator_analyses[].function_id``/``metric`` 抄回配对（批 5）：function_id
+          模型自报、代码对输入键集校验——拼写错误有唯一高相似近邻时回正（evidence_refs
+          自引用同步改写），配不上则原样留给 `_validate_layer_card_v2` 拒收重试；
+          metric 在 function_id 落定后强制为输入 metric_name；
+        - ``quality_self_check.covered_function_ids`` / ``coverage_complete`` 由
+          indicator_analyses ∩ 输入 analysis_required 指标集派生。
+
+        自检的判断类字段（weak_reasoning_points 等）不碰；quality_self_check 整个缺失时
+        不代造——那是校验器 `_validate_layer_card_v2` 该拦的形状病，闸门不因此放松。
+        """
+        if not isinstance(parsed, dict):
+            return parsed
+        if not (stage_key.startswith("l") and stage_key.endswith("_analyst")):
+            return parsed
+        parsed["layer"] = stage_key[:2].upper()
+        raw_data = input_payload.get("layer_raw_data") if isinstance(input_payload, dict) else None
+        if not isinstance(raw_data, dict):
+            return parsed
+        input_metric_names: Dict[str, str] = {}
+        for function_id, indicator in raw_data.items():
+            if isinstance(indicator, dict):
+                canonical = str(indicator.get("function_id") or function_id)
+                input_metric_names[canonical] = str(
+                    indicator.get("metric_name") or indicator.get("name") or canonical
+                )
+        analyses = parsed.get("indicator_analyses")
+        if isinstance(analyses, list):
+            layer_label = parsed["layer"]
+            for item in analyses:
+                if not isinstance(item, dict):
+                    continue
+                fid = str(item.get("function_id") or "")
+                if fid and fid != "unknown" and fid not in input_metric_names:
+                    corrected = self._match_input_function_id(fid, input_metric_names)
+                    if corrected:
+                        self_ref = f"{layer_label}.{fid}"
+                        refs = item.get("evidence_refs")
+                        if isinstance(refs, list):
+                            item["evidence_refs"] = [
+                                f"{layer_label}.{corrected}" if str(ref) == self_ref else ref
+                                for ref in refs
+                            ]
+                        logger.warning(
+                            "indicator function_id 拼写回正：%r -> %r（唯一高相似近邻，%s）",
+                            fid,
+                            corrected,
+                            stage_key,
+                        )
+                        item["function_id"] = corrected
+                settled = str(item.get("function_id") or "")
+                if settled in input_metric_names:
+                    # metric 是输入里就有的机械事实（metric_name），代码强制装配；
+                    # 校验器里的 metric 一致性检查保留作兜底。
+                    item["metric"] = input_metric_names[settled]
+        expected = {
+            str(indicator.get("function_id") or function_id)
+            for function_id, indicator in raw_data.items()
+            if isinstance(indicator, dict) and not self._indicator_unavailable_for_analysis(indicator)
+        }
+        covered = sorted(
+            expected & {
+                str(item.get("function_id"))
+                for item in parsed.get("indicator_analyses") or []
+                if isinstance(item, dict) and item.get("function_id")
+            }
+        )
+        self_check = parsed.get("quality_self_check")
+        if isinstance(self_check, dict):
+            self_check["covered_function_ids"] = covered
+            self_check["coverage_complete"] = expected <= set(covered)
+        return parsed
+
+    def _inject_revision_claimed_fields(self, parsed: Dict[str, Any], thesis: ThesisDraft) -> Dict[str, Any]:
+        """T54 批 2：revision_claimed_fields 由代码 diff 装配（thesis 原稿 vs 修订稿
+        顶层字段，canonical JSON 比对），模型自报一律覆盖——"修订说明声称改了什么"
+        是机器事实，不是模型表达。generated_at 是时间戳，不参与 diff。
+        PC-03 按同一口径重算比对（thesis_draft.json vs analysis_revised.json）。"""
+        if not isinstance(parsed, dict):
+            return parsed
+        revised = parsed.get("revised_thesis")
+        if not isinstance(revised, dict):
+            return parsed
+        original = _model_dump(thesis)
+        if not isinstance(original, dict):
+            return parsed
+        changed = []
+        for key in set(original) | set(revised):
+            if key == "generated_at":
+                continue
+            if key not in original or key not in revised:
+                changed.append(key)
+                continue
+            left = json.dumps(original[key], ensure_ascii=False, sort_keys=True, default=str)
+            right = json.dumps(revised[key], ensure_ascii=False, sort_keys=True, default=str)
+            if left != right:
+                changed.append(key)
+        parsed["revision_claimed_fields"] = sorted(changed)
+        return parsed
+
     def _normalize_payload(self, stage_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         normalized = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
         if stage_key.startswith("l") and stage_key.endswith("_analyst"):
@@ -8025,30 +8189,66 @@ class VNextOrchestrator:
                     normalized["typed_conflicts"] = self._derive_typed_conflicts(normalized.get("conflicts", []))
                     if normalized["typed_conflicts"]:
                         normalization_notes.append("typed_conflicts_derived_from_legacy_conflicts")
-                # PC-23：模型常给 conflicts/typed_conflicts 各发明一套 id（描述性 vs
-                # TC_01 式），下游以 typed_conflicts 为权威容器。两列表条数相同且按序
-                # conflict_type 一致时，确定性地把 legacy id 对齐到 typed id；形状对不
-                # 上时保持原样，由 PC-23 报警（那才是真病）。
-                legacy_conflicts = normalized.get("conflicts")
+                # T54 批 4（编号规范 02）：typed_conflicts 是权威容器。id 由代码按序
+                # 重发（TC_01…），legacy conflicts 由 typed 反向重建——双容器同源，
+                # PC-23 恒一致。模型原 id 记入 normalization_notes，不静默丢弃；
+                # 同一 payload 内对旧 id 的精确匹配引用按 old→new 重接，对不上的
+                # 原样保留交给既有闸门。本规范取代 08-17 的逐对对齐止血逻辑。
                 typed_conflicts = normalized.get("typed_conflicts")
-                if (
-                    isinstance(legacy_conflicts, list)
-                    and isinstance(typed_conflicts, list)
-                    and legacy_conflicts
-                    and len(legacy_conflicts) == len(typed_conflicts)
-                    and all(
-                        str(legacy.get("conflict_type") or "") == str(typed.get("conflict_type") or "")
-                        for legacy, typed in zip(legacy_conflicts, typed_conflicts)
-                    )
-                ):
-                    aligned = False
-                    for legacy, typed in zip(legacy_conflicts, typed_conflicts):
-                        typed_id = str(typed.get("conflict_id") or "")
-                        if typed_id and legacy.get("conflict_id") != typed_id:
-                            legacy["conflict_id"] = typed_id
-                            aligned = True
-                    if aligned:
-                        normalization_notes.append("conflict_ids_aligned_to_typed_conflicts")
+                if isinstance(typed_conflicts, list) and typed_conflicts:
+                    id_map: Dict[str, str] = {}
+                    for index, typed in enumerate(typed_conflicts):
+                        if not isinstance(typed, dict):
+                            continue
+                        new_id = f"TC_{index + 1:02d}"
+                        old_id = str(typed.get("conflict_id") or "")
+                        if old_id and old_id != new_id:
+                            id_map[old_id] = new_id
+                        typed["conflict_id"] = new_id
+                        derived_layers = sorted(
+                            {
+                                str(ref).split(".", 1)[0]
+                                for ref in typed.get("evidence_refs") or []
+                                if re.fullmatch(r"L[1-5]\..+", str(ref))
+                            }
+                        )
+                        if derived_layers:
+                            typed["involved_layers"] = derived_layers
+                    typed_conflicts = [c for c in typed_conflicts if isinstance(c, dict)]
+                    normalized["typed_conflicts"] = typed_conflicts
+                    normalized["conflicts"] = [
+                        {
+                            "conflict_id": typed["conflict_id"],
+                            "conflict_type": typed.get("conflict_type", ""),
+                            "severity": typed.get("severity", "medium"),
+                            "description": typed.get("description", ""),
+                            "implication": typed.get("implication", ""),
+                            "involved_layers": list(typed.get("involved_layers") or []),
+                        }
+                        for typed in typed_conflicts
+                    ]
+                    normalization_notes.append("legacy_conflicts_rebuilt_from_typed_conflicts")
+                    if id_map:
+                        normalization_notes.append(
+                            "conflict_ids_reassigned_by_code:"
+                            + ",".join(f"{new}<={old}" for old, new in sorted(id_map.items()))
+                        )
+
+                        def _rewire(value: Any) -> Any:
+                            return id_map.get(value, value) if isinstance(value, str) else value
+
+                        principal = normalized.get("principal_contradiction")
+                        if isinstance(principal, dict):
+                            if principal.get("contradiction_id"):
+                                principal["contradiction_id"] = _rewire(principal["contradiction_id"])
+                            if isinstance(principal.get("conflict_refs"), list):
+                                principal["conflict_refs"] = [_rewire(ref) for ref in principal["conflict_refs"]]
+                        for secondary in normalized.get("secondary_contradictions") or []:
+                            if isinstance(secondary, dict) and secondary.get("contradiction_id"):
+                                secondary["contradiction_id"] = _rewire(secondary["contradiction_id"])
+                        for assessment in normalized.get("price_reflection_map") or []:
+                            if isinstance(assessment, dict) and assessment.get("target"):
+                                assessment["target"] = _rewire(assessment["target"])
                 bridge_fallback_refs = self._bridge_fallback_evidence_refs(normalized)
                 if isinstance(normalized.get("cross_layer_claims"), list):
                     claims = []
@@ -8065,11 +8265,15 @@ class VNextOrchestrator:
                     if claim_refs_normalized:
                         normalization_notes.append("cross_layer_claim_supporting_facts_normalized_to_evidence_refs")
                 if isinstance(normalized.get("resonance_chains"), list):
-                    normalized["resonance_chains"] = [
+                    resonance_chains = [
                         self._normalize_resonance_chain(item)
                         for item in normalized["resonance_chains"]
                         if isinstance(item, dict)
                     ]
+                    # T54 批 4：chain_id 由代码按序重发（RC_01…）。
+                    for index, chain in enumerate(resonance_chains):
+                        chain["chain_id"] = f"RC_{index + 1:02d}"
+                    normalized["resonance_chains"] = resonance_chains
                 if isinstance(normalized.get("transmission_paths"), list):
                     transmission_paths = [
                         self._normalize_transmission_path(item)
@@ -8077,6 +8281,9 @@ class VNextOrchestrator:
                         if isinstance(item, dict)
                     ]
                     normalized["transmission_paths"] = self._dedupe_bridge_transmission_paths(transmission_paths)
+                    # T54 批 4：path_id 由代码按序重发（TP_01…），重复 id 由构造消除。
+                    for index, path in enumerate(normalized["transmission_paths"]):
+                        path["path_id"] = f"TP_{index + 1:02d}"
                 if isinstance(normalized.get("principal_contradiction"), dict):
                     normalized["principal_contradiction"] = self._normalize_principal_contradiction(
                         normalized["principal_contradiction"],
@@ -8199,6 +8406,13 @@ class VNextOrchestrator:
                         if conflict
                     ]
         if stage_key == "final":
+            # T54 批 6（机械字段不出答卷）：claim_ledger 整本由代码在终审后重建
+            # （_build_final_claim_ledger），模型答卷里的任何 claim_ledger 一律在
+            # 归一化阶段摘除——不进契约校验，20260728 那类"模型猜错形状烧重试"的
+            # 事故面从结构上消除；契约侧的裸列表宽容校验同步下线。
+            if "claim_ledger" in normalized:
+                normalized.pop("claim_ledger", None)
+                logger.warning("final 答卷中的 claim_ledger 已摘除（台账由代码整本装配）")
             if not isinstance(normalized.get("token_usage"), dict):
                 normalized["token_usage"] = None
             if isinstance(normalized.get("principal_contradiction"), dict):
@@ -8286,33 +8500,52 @@ class VNextOrchestrator:
         return normalized
 
     def _backfill_indicator_canon_fields(self, normalized: Dict[str, Any]) -> None:
-        """Populate soft canon fields when the model omits them."""
+        """T54 批 3（机械字段不出答卷）：canon 六字段无条件按法典装配——08-16 的
+        "缺省回填 + 非枚举回正"只是过渡安全带，法典对每个指标的这些字段是唯一权威。
+
+        模型填了不同值不静默丢弃（"形式不得拒收内容"）：原文逐项改写进 canon_dispute
+        异议通道，进审计区、可逐字审计；装配值不变。装配值错了改 canon，不改提示词。
+        法典不认识的指标（KeyError）原样放行，由 schema 校验拦。"""
         try:
             canon = get_indicator_canon(str(normalized.get("function_id") or ""))
         except KeyError:
             return
 
-        if not normalized.get("permission_type"):
-            normalized["permission_type"] = _enum_value(canon.permission_type)
-        elif str(_enum_value(normalized["permission_type"])).strip().lower() not in _PERMISSION_TYPE_VALUES:
-            # 模型把权限级别词（supporting_only 等）或自由散文填进了发言权类型枚举字段：
-            # 法典对该指标的发言权类型是唯一权威，确定性回正并留痕（模型原文保留在
-            # prompt_audit 的 raw response，可逐字审计）。2026-08-16 t53 r2 实战：
-            # L4 两次因此类值 schema 连败、整跑中止。
-            logger.warning(
-                "permission_type 非枚举值 %r，按法典回正为 %r（function_id=%s）",
-                normalized["permission_type"],
-                _enum_value(canon.permission_type),
-                normalized.get("function_id"),
-            )
-            normalized["permission_type"] = _enum_value(canon.permission_type)
-        if not normalized.get("canonical_question"):
-            normalized["canonical_question"] = canon.canonical_question
-        if not normalized.get("core_vs_tactical_boundary"):
-            normalized["core_vs_tactical_boundary"] = canon.core_vs_tactical_boundary
+        disputes: List[str] = []
+
+        def _assemble_scalar(field_name: str, canon_value: Any) -> None:
+            canon_text = str(_enum_value(canon_value) or "").strip()
+            model_text = str(_enum_value(normalized.get(field_name)) or "").strip()
+            if model_text and model_text != canon_text:
+                disputes.append(
+                    f"{field_name}: 模型填 {model_text[:80]!r}，法典装配 {canon_text[:80]!r}"
+                )
+            normalized[field_name] = canon_text
+
+        def _assemble_list(field_name: str, canon_items: List[str]) -> None:
+            canon_list = [str(item) for item in canon_items]
+            model_items = [
+                str(item) for item in _as_list(normalized.get(field_name)) if str(item).strip()
+            ]
+            extras = [item for item in model_items if item not in canon_list]
+            if extras:
+                disputes.append(
+                    f"{field_name}: 模型补充未进装配值：{'；'.join(item[:80] for item in extras[:3])}"
+                )
+            normalized[field_name] = canon_list
+
+        _assemble_scalar("permission_type", canon.permission_type)
+        _assemble_scalar("canonical_question", canon.canonical_question)
+        _assemble_scalar("core_vs_tactical_boundary", canon.core_vs_tactical_boundary)
         for field_name in ("misread_guards", "cross_validation_targets", "falsifiers"):
-            if not normalized.get(field_name):
-                normalized[field_name] = list(getattr(canon, field_name))
+            _assemble_list(field_name, list(getattr(canon, field_name)))
+        if disputes:
+            normalized["canon_dispute"] = disputes
+            logger.warning(
+                "canon 六字段按法典装配，模型分歧已进 canon_dispute（function_id=%s）：%s",
+                normalized.get("function_id"),
+                "；".join(disputes)[:300],
+            )
 
     def _normalize_cross_layer_hook(self, item: Any) -> Dict[str, Any]:
         if not isinstance(item, dict):
@@ -8674,7 +8907,12 @@ class VNextOrchestrator:
             }
         normalized = dict(item)
         default_horizon = horizons[index] if index < len(horizons) else f"horizon_{index + 1}"
-        normalized["horizon"] = str(normalized.get("horizon") or default_horizon)
+        horizon_value = str(normalized.get("horizon") or default_horizon)
+        if horizon_value not in horizons:
+            # T54 批 4：horizon 是固定三档的机械拼写——出界按位置兜底值回正，不发明别名。
+            logger.warning("time_horizon_view.horizon 非枚举值 %r，按位置回正为 %r", horizon_value, default_horizon)
+            horizon_value = default_horizon
+        normalized["horizon"] = horizon_value
         normalized["view"] = str(normalized.get("view") or normalized.get("summary") or normalized.get("thesis") or "")
         normalized["action_implication"] = str(normalized.get("action_implication") or normalized.get("action") or "")
         normalized["evidence_refs"] = self._coerce_string_list(normalized.get("evidence_refs"))
@@ -8694,7 +8932,12 @@ class VNextOrchestrator:
             }
         normalized = dict(item)
         default_bucket = buckets[index] if index < len(buckets) else f"bucket_{index + 1}"
-        normalized["bucket"] = str(normalized.get("bucket") or normalized.get("position_bucket") or default_bucket)
+        bucket_value = str(normalized.get("bucket") or normalized.get("position_bucket") or default_bucket)
+        if bucket_value not in buckets:
+            # T54 批 4：bucket 是固定三档的机械拼写——出界按位置兜底值回正，不发明别名。
+            logger.warning("portfolio_action.bucket 非枚举值 %r，按位置回正为 %r", bucket_value, default_bucket)
+            bucket_value = default_bucket
+        normalized["bucket"] = bucket_value
         normalized["action"] = str(normalized.get("action") or normalized.get("recommendation") or normalized.get("view") or "")
         normalized["rationale"] = str(normalized.get("rationale") or normalized.get("reasoning") or "")
         normalized["conditions"] = self._coerce_string_list(normalized.get("conditions"))
