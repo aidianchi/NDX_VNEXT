@@ -557,6 +557,38 @@ def test_pc08_fail_pe_multi_value(tmp_path: Path):
     assert "30.31" in result["detail"]
 
 
+def test_pc08_fail_obv_level_multi_value(tmp_path: Path):
+    """O10：同源同窗供给里 OBV 绝对水位不一致仍是矛盾供给（窗口再次分叉的看门狗）。"""
+    _write_pc08_layers(
+        tmp_path,
+        {
+            "layer_raw_data": {
+                "get_l5_deterministic_snapshot": {"value": {"exact_technical_values": {"obv": 901260500}}},
+                "get_qqq_technical_indicators": {"value": {"obv": 493790400}},
+            }
+        },
+    )
+    result = _result_by_id(run_checks_a(tmp_path), "PC-08")
+    assert result["passed"] is False
+    assert "obv" in result["detail"]
+
+
+def test_pc08_fail_obv_20d_net_shares_multi_value(tmp_path: Path):
+    """O10：20 日净增减股数是 OBV 的窗口无关语义出口，同名单值同样受 PC-08 对账。"""
+    _write_pc08_layers(
+        tmp_path,
+        {
+            "layer_raw_data": {
+                "get_l5_deterministic_snapshot": {"value": {"exact_technical_values": {"obv_20d_net_shares": -60262100}}},
+                "get_qqq_technical_indicators": {"value": {"obv_20d_net_shares": -60262101}},
+            }
+        },
+    )
+    result = _result_by_id(run_checks_a(tmp_path), "PC-08")
+    assert result["passed"] is False
+    assert "obv_20d_net_shares" in result["detail"]
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # PC-09 约束/指令引用键存在性
 # ──────────────────────────────────────────────────────────────────────────

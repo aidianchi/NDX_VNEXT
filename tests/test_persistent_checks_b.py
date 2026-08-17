@@ -734,6 +734,9 @@ def test_pc25_supplier_lookback_pending_validation_fails(tmp_path: Path) -> None
     result = _find(run_checks_b(tmp_path), "PC-25")
     assert result["passed"] is False
     assert "slope_30d" in result["detail"]
+    assert "slope_90d" not in result["detail"]
+    # 08-17 30d 补验未通过 E3 同口径闸门，红灯文案须如实指向该事实
+    assert "30d 补验 08-17 未通过" in result["detail"]
 
 
 def test_pc26_yield_gap_core_allowed_still_fails(tmp_path: Path) -> None:

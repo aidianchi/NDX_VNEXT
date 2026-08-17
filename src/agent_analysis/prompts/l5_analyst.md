@@ -31,7 +31,7 @@ L5 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 - `get_macd_qqq`: MACD。识别中短期动量方向、交叉风险和背离。
 - `get_adx_qqq`: ADX/+DI/-DI。判断趋势强度和方向确认。
 - `get_atr_qqq`: ATR。衡量波动扩张或压缩，决定风险边界和止损空间。
-- `get_obv_qqq`: OBV。价格趋势是否获得成交量累积确认。
+- `get_obv_qqq`: OBV。价格趋势是否获得成交量累积确认。绝对水位（level）随累加窗口起点平移、没有跨窗口语义，仅供审计对账，不得引用其数值；判读只用 20 日净增减股数（net_shares_20d）与趋势词（trend）。
 - `get_volume_analysis_qqq`: 成交量结构。判断放量突破、缩量上涨或分歧。
 - `get_price_volume_quality_qqq`: VWAP / MFI / CMF。只用于判断价格相对成交量加权成本、带成交量的动能拥挤和资金流压力，不能单独给买卖结论。
 - `get_donchian_channels_qqq`: 唐奇安通道。识别突破、回撤、通道边界和假突破。

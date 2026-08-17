@@ -1104,7 +1104,10 @@ def _check_pc24(run_dir: Path) -> Dict[str, Any]:
 def _check_pc25(run_dir: Path) -> Dict[str, Any]:
     """C2：supplier_lookback 处于 pending_validation 时仍作为 30d/90d 主斜率唯一材料
     即报警。老板 08-16 意见：列待审核项目，由新对话专审这批数据怎么来的、能不能撑主斜率；
-    审核结论出来前不许悄悄转绿。"""
+    审核结论出来前不许悄悄转绿。审核与补验结论（08-17）：O12 专审维持 90d 不可撑主结论；
+    30d 补验按 E3 同口径实测未通过（416 有效对子仅 57.69% 在 1% 容差内），
+    30/90d 标签维持 pending_validation，本检查继续红。证据：
+    investigation_reports/20260816_O12_supplier_lookback_专审/E3_lookback_validation_30d.md"""
     pl = _load_layer_payload(run_dir, "L4")
     if pl is None:
         return _make_result("PC-25", "supplier_lookback 待验证仍撑主斜率（C2）", False,
@@ -1124,7 +1127,7 @@ def _check_pc25(run_dir: Path) -> Dict[str, Any]:
             and slope.get("verification_status") == "pending_validation"
         ):
             violations.append(
-                f"{field}: supplier_lookback+pending_validation（待新对话审核数据源身份）"
+                f"{field}: supplier_lookback+pending_validation（30d 补验 08-17 未通过、90d 未到可验期，标签维持 pending）"
             )
     passed = not violations
     return _make_result(

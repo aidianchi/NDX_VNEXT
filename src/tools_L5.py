@@ -188,6 +188,7 @@ def _build_l5_snapshot_from_frame(
         "pdi_14": indicators.get("pdi_14"),
         "mdi_14": indicators.get("mdi_14"),
         "obv": indicators.get("obv"),
+        "obv_20d_net_shares": indicators.get("obv_20d_net_shares"),
         "volume_ma_ratio": indicators.get("volume_ma_ratio"),
         "vwap_20": indicators.get("vwap_20"),
         "mfi_14": indicators.get("mfi_14"),
@@ -489,11 +490,14 @@ def calculate_technical_indicators_yf(df: pd.DataFrame) -> dict:
                 obv = OnBalanceVolumeIndicator(df["close"], df["volume"]).on_balance_volume()
             else:
                 obv = (np.sign(df['close'].diff()) * df['volume']).fillna(0).cumsum()
+            # O10：绝对水位随累加窗口起点平移，仅供审计对账，不作判读依据
             indicators["obv"] = int(obv.iloc[-1])
             
             # OBV 20日变化率（衡量资金流向趋势）
             if len(df) >= 20:
                 obv_20d_ago = obv.iloc[-20]
+                # O10：20 日净增减股数 = cumsum 的差分，与累加起点无关，是窗口无关的语义出口
+                indicators["obv_20d_net_shares"] = int(obv.iloc[-1] - obv_20d_ago)
                 if abs(obv_20d_ago) > 0:
                     indicators["obv_20d_change_pct"] = round((obv.iloc[-1] - obv_20d_ago) / abs(obv_20d_ago) * 100, 2)
                 else:
@@ -631,9 +635,11 @@ def get_qqq_technical_indicators(end_date: str = None) -> Dict[str, Any]:
     else:
         effective_date = datetime.now()
 
-    start_date = effective_date - timedelta(days=365)
+    # O10（A11 修复）：窗口与 get_l5_deterministic_snapshot 对齐为 420 天。
+    # OBV 是 cumsum，绝对水位随累加起点平移；两函数窗口不同曾导致同名 OBV 两个值。
+    start_date = effective_date - timedelta(days=420)
 
-    # 优先使用yfinance（1年日频数据）
+    # 优先使用yfinance（420 天日频数据，与确定性快照同窗）
     if YF_AVAILABLE or get_twelve_data_api_key():
         try:
             # 使用yfinance获取数据
@@ -658,7 +664,7 @@ def get_qqq_technical_indicators(end_date: str = None) -> Dict[str, Any]:
                 "unit": "mixed (price/ratio)",
                 "date": df.index[-1].strftime("%Y-%m-%d") if hasattr(df.index[-1], 'strftime') else effective_date.strftime("%Y-%m-%d"),
                 "source_name": source_name,
-                "notes": "V7.1：优先使用ta公式引擎；含SMA、RSI、布林带、ATR、MACD、OBV、成交量、Donchian、VWAP、MFI、CMF。"
+                "notes": "V7.1：优先使用ta公式引擎；含SMA、RSI、布林带、ATR、MACD、OBV、成交量、Donchian、VWAP、MFI、CMF。O10：OBV 绝对水位为审计对账字段（窗口已与确定性快照对齐 420 天），判读以 obv_20d_net_shares（窗口无关）与 obv_trend 为准。"
             }
         except Exception as e:
             print(f"yfinance获取QQQ技术指标失败：{str(e)[:100]}")
@@ -912,13 +918,14 @@ def get_obv_qqq(end_date: str = None) -> Dict[str, Any]:
             "name": "QQQ OBV (On-Balance Volume)",
             "value": {
                 "level": tech_data["value"]["obv"],
+                "net_shares_20d": tech_data["value"].get("obv_20d_net_shares"),
                 "change_20d_pct": tech_data["value"].get("obv_20d_change_pct"),
                 "trend": tech_data["value"].get("obv_trend", "neutral"),
                 "date": tech_data.get("date")
             },
             "unit": "cumulative volume",
             "source_name": tech_data.get("source_name"),
-            "notes": "OBV：能量潮指标。上升趋势表示资金流入(accumulation)，下降表示流出(distribution)。"
+            "notes": "OBV：能量潮指标。level（绝对水位）随累加窗口起点平移，仅供审计对账、不作判读依据；语义出口是 net_shares_20d（20 日净增减股数，窗口无关）与 trend：净流入表示资金流入(accumulation)，净流出表示流出(distribution)。"
         }
     return {
         "name": "QQQ OBV (On-Balance Volume)",

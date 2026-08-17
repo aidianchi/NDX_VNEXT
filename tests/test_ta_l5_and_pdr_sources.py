@@ -173,6 +173,68 @@ def test_l5_multi_scale_ma_requests_include_effective_date(monkeypatch):
     assert result["source_name"] == "Twelve Data"
 
 
+def _trending_ohlcv_frame(end="2026-03-31", periods=310):
+    """单调上涨 + 递增成交量：OBV 水位随窗口起点平移，便于暴露窗口分叉。"""
+    dates = pd.bdate_range(end=end, periods=periods)
+    close = pd.Series([500.0 + 0.7 * i for i in range(periods)], index=dates)
+    volume = pd.Series([1_000_000.0 + 1000.0 * i for i in range(periods)], index=dates)
+    return pd.DataFrame(
+        {
+            "open": close - 0.3,
+            "high": close + 0.8,
+            "low": close - 0.8,
+            "close": close,
+            "volume": volume,
+        },
+        index=dates,
+    )
+
+
+def test_l5_obv_single_value_across_snapshot_and_sub_indicators(monkeypatch):
+    """O10（A11 修复）：同一 run 内三处 OBV 必须同值，且两采集函数请求同一窗口起点。
+
+    fake_download 尊重 start 参数（与真实 cached_yf_download 行为一致）；
+    窗口未对齐时快照与分项的水位必然不同，本测试即红。
+    """
+    frame = _trending_ohlcv_frame()
+    requested_starts = []
+
+    def fake_download(ticker, **kwargs):
+        requested_starts.append(pd.Timestamp(kwargs.get("start")))
+        begin = pd.Timestamp(kwargs.get("start"))
+        return frame[frame.index >= begin].copy()
+
+    monkeypatch.setattr(tools_L5, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_L5, "cached_yf_download", fake_download)
+
+    snapshot = tools_L5.get_l5_deterministic_snapshot("2026-03-31")
+    technical = tools_L5.get_qqq_technical_indicators("2026-03-31")
+    obv_view = tools_L5.get_obv_qqq("2026-03-31")
+
+    snap_obv = snapshot["value"]["exact_technical_values"]["obv"]
+    assert technical["value"]["obv"] == snap_obv
+    assert obv_view["value"]["level"] == snap_obv
+    # 窗口无关语义出口也必须同名单值
+    snap_net = snapshot["value"]["exact_technical_values"]["obv_20d_net_shares"]
+    assert technical["value"]["obv_20d_net_shares"] == snap_net
+    assert obv_view["value"]["net_shares_20d"] == snap_net
+    # 窗口对齐：两个采集函数请求同一 start（effective_date - 420 天）
+    assert len(set(requested_starts)) == 1
+    assert requested_starts[0] == pd.Timestamp("2026-03-31") - pd.Timedelta(days=420)
+
+
+def test_l5_obv_20d_net_shares_is_window_independent():
+    """O10：绝对水位随累加起点平移；20 日净增减股数是窗口无关量。"""
+    full = _trending_ohlcv_frame(periods=310)
+    tail = full.tail(260)
+
+    full_indicators = tools_L5.calculate_technical_indicators_yf(full)
+    tail_indicators = tools_L5.calculate_technical_indicators_yf(tail)
+
+    assert full_indicators["obv"] != tail_indicators["obv"]
+    assert full_indicators["obv_20d_net_shares"] == tail_indicators["obv_20d_net_shares"]
+
+
 def test_pandas_datareader_fred_fallback_normalizes_to_date_value(monkeypatch):
     dates = pd.to_datetime(["2025-01-01", "2025-01-02"])
 

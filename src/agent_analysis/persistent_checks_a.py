@@ -32,6 +32,9 @@ IA_REF_AUTHORITY_UNKNOWN_WARN_RATIO = 0.50
 
 # A11 点名的同名指标键（大小写归一后比较）。这些键在不同 metric 条目下出现且数值
 # 不一致时，即构成"一处错处处错"的数值矛盾供给。
+# O10 补记：obv（绝对水位）虽已降级为审计字段，仍保留在清单内——同源同窗供给里
+# 同名水位不一致意味着采集链路再次出现矛盾（如窗口分叉），PC-08 继续当看门狗；
+# obv_20d_net_shares 是窗口无关的语义出口，同样要求同名单值。
 MULTI_VALUE_METRIC_KEYS = {
     "pe",
     "trailingpe",
@@ -40,6 +43,7 @@ MULTI_VALUE_METRIC_KEYS = {
     "forwardearningsyield",
     "expected_return",
     "obv",
+    "obv_20d_net_shares",
 }
 
 # B1/B10 点名的指令引用键（PC-09）。只保留"通用模板/约束指令"会点名、而各站
