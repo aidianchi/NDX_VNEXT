@@ -7,7 +7,8 @@
     "modes.default = legacy behavior (cognitive stages pro-first).",
     "modes.all_flash = every stage flash-first; pro-grade only remains as failure-fallback safety net.",
     "Select the mode via CLI --model-mode (default|all_flash), env NDX_MODEL_MODE, or leave unset for legacy behavior.",
-    "2026-08-16 老板裁决 O8：下次起全流程 flash-first（deepseek-v4-flash），pro 仅作失败兜底；O9：只要走 flash，预算不限。"
+    "2026-08-16 老板裁决 O8：下次起全流程 flash-first（deepseek-v4-flash），pro 仅作失败兜底；O9：只要走 flash，预算不限。",
+    "2026-08-17 老板裁决（替代 O8 的'pro 兜底'口径）：日常真实跑启动名单只挂 deepseek-v4-flash；同一处 flash 错两次则当次 run 中止、留精确诊断、先修结构再断点续跑（续跑只补失败点之后）。pro 保留在代码与配置里，仅在老板明确批准的例外场合启用。配套原则：模型失败先怀疑结构与上下文冗余，不怀疑模型能力；flash 一次跑通全链 = 架构合格的实测标准。记账教训：t53 轮 pro 占 19/47 次，主因是'优先使用上次成功模型'的惯性滚雪球，超出原批'仅失败兜底'口径——只挂 flash 后该惯性自动失效。"
   ],
   "mode": "all_flash",
   "modes": {
