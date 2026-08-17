@@ -1044,6 +1044,22 @@ class VNextOrchestrator:
         }
 
     @staticmethod
+    def _canonical_metric_name(function_id: str, indicator: Dict[str, Any]) -> str:
+        """指标名的唯一权威解（T54）：canon 注册名优先，其后才是材料自带名字段。
+
+        提示词副本（_align_metric_names_to_canon）、装配层、校验器必须走同一个解——
+        2026-08-17 确认跑实战：提示词按 canon 短名、校验器按采集长名，模型被两套名字
+        来回抽鞭，批 5 装配按短名强制后变成每次必挂。此后三家共用本函数，单源。
+        """
+        try:
+            canon_name = str(get_indicator_canon(str(function_id)).metric_name or "")
+            if canon_name:
+                return canon_name
+        except KeyError:
+            pass
+        return str(indicator.get("metric_name") or indicator.get("name") or function_id)
+
+    @staticmethod
     def _align_metric_names_to_canon(layer: str, layer_raw_data: Dict[str, Any]) -> Dict[str, Any]:
         """C12 修复：发给模型的 metric_name 与 IndicatorCanon 注册名强制一致。
 
@@ -6996,11 +7012,7 @@ class VNextOrchestrator:
             if self._indicator_unavailable_for_analysis(payload):
                 continue
             resolved_function_id = str(payload.get("function_id") or function_id)
-            required[resolved_function_id] = str(
-                payload.get("metric_name")
-                or payload.get("name")
-                or resolved_function_id
-            )
+            required[resolved_function_id] = self._canonical_metric_name(resolved_function_id, payload)
         return required
 
     def _indicator_unavailable_for_analysis(self, payload: Dict[str, Any]) -> bool:
@@ -8040,9 +8052,8 @@ class VNextOrchestrator:
         for function_id, indicator in raw_data.items():
             if isinstance(indicator, dict):
                 canonical = str(indicator.get("function_id") or function_id)
-                input_metric_names[canonical] = str(
-                    indicator.get("metric_name") or indicator.get("name") or canonical
-                )
+                # 与校验器同一个权威解（canon 优先），不得另立名字来源。
+                input_metric_names[canonical] = self._canonical_metric_name(canonical, indicator)
         analyses = parsed.get("indicator_analyses")
         if isinstance(analyses, list):
             layer_label = parsed["layer"]

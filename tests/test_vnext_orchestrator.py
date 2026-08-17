@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
 import pytest
@@ -4756,6 +4757,58 @@ def test_align_metric_names_to_canon_for_layer_prompt(tmp_path: Path):
         },
     )
     assert aligned["get_10y_real_rate"]["metric_name"] == "10Y Real Rate"
+
+
+def test_metric_name_single_authority_across_prompt_assembly_validator(tmp_path: Path):
+    """T54 确认跑实战（2026-08-17 t54_confirm L1 两连败）：采集长名与 canon 注册名
+    不一致时（get_10y2y_spread_bp：材料带 '10Y-2Y Treasury Spread'，canon 注册
+    '10Y-2Y Spread'），提示词副本、批 5 装配层、契约校验器必须解出同一个名字——
+    各立来源时模型被两套名字来回抽鞭，装配强制其一后变成每跑必挂。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=object()
+    )
+    raw = {
+        "get_10y2y_spread_bp": {
+            "function_id": "get_10y2y_spread_bp",
+            "metric_name": "10Y-2Y Treasury Spread",
+            "name": "10Y-2Y Treasury Spread",
+        }
+    }
+
+    # 校验器侧（packet.raw_data 路径）
+    packet = SimpleNamespace(raw_data={"L1": raw})
+    expected = orchestrator._analysis_required_indicator_map(packet, "L1")
+    assert expected == {"get_10y2y_spread_bp": "10Y-2Y Spread"}
+
+    # 装配侧（stage payload 路径）：模型填长名也必须被回正为同一个 canon 名
+    parsed = {
+        "indicator_analyses": [
+            {
+                "function_id": "get_10y2y_spread_bp",
+                "metric": "10Y-2Y Treasury Spread",
+                "narrative": "利差倒挂。",
+                "reasoning_process": "曲线形态。",
+                "evidence_refs": ["L1.get_10y2y_spread_bp"],
+            }
+        ]
+    }
+    assembled = orchestrator._assemble_stage_mechanical_fields(
+        "l1_analyst", parsed, {"layer_raw_data": raw}
+    )
+    assert assembled["indicator_analyses"][0]["metric"] == "10Y-2Y Spread"
+
+    # 提示词侧（C12 对齐）
+    aligned = VNextOrchestrator._align_metric_names_to_canon("L1", raw)
+    assert aligned["get_10y2y_spread_bp"]["metric_name"] == "10Y-2Y Spread"
+
+
+def test_canonical_metric_name_falls_back_when_canon_unknown(tmp_path: Path):
+    """canon 不认识的指标：退回材料自带 metric_name / name（旧行为不变）。"""
+    indicator = {"function_id": "no_such_indicator", "metric_name": "材料名", "name": "别名"}
+    assert (
+        VNextOrchestrator._canonical_metric_name("no_such_indicator", indicator) == "材料名"
+    )
+    assert VNextOrchestrator._canonical_metric_name("no_such_indicator", {"name": "别名"}) == "别名"
 
 
 def test_final_stage_retries_after_overlong_reasoned_verdict(tmp_path: Path):
