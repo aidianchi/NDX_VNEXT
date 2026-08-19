@@ -430,7 +430,7 @@ def check_vix_term_structure_percentile(data_json: Dict[str, Any], handled: Set[
     """VIX3M/VIX term-structure ratio's own 5y/10y percentile, recomputed from
     the embedded `percentile_context.raw_series` -- added for
     investigation_reports/20260711_first_principles/WORK_ORDERS.md item 4,
-    task A (see get_vix_term_structure in tools_L1.py). Shares the same
+    task A (see get_vix_term_structure in tools_L2.py). Shares the same
     windows-over-one-raw-series shape as check_damodaran_erp_percentiles
     above, just with a daily instead of monthly primary field."""
     findings: List[Dict[str, Any]] = []

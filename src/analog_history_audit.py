@@ -292,9 +292,9 @@ def _load_fred(series_id: str, as_of: str) -> Dict[str, Any]:
 def _load_vix(as_of: str) -> Dict[str, Any]:
     try:
         try:
-            from .tools_L1 import _fetch_vix_history
+            from .tools_L2 import _fetch_vix_history
         except ImportError:
-            from tools_L1 import _fetch_vix_history
+            from tools_L2 import _fetch_vix_history
         frame = _fetch_vix_history(start_date="1990-01-01", end_date=as_of)
         return {"rows": _frame_rows(frame, "YFINANCE_VIX"), "note": "project yfinance relay/cache"}
     except Exception as exc:

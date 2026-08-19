@@ -37,6 +37,14 @@
 - **衍生留档（不在本批擅动）**：critic/risk 产出引用无机器校验；机器字数带宽 300-3000 与提示词 600-1200 不一致——详见 AUDIT_FINDINGS.md 第七节，处置另定。
 - **红线测试**：`tests/test_docs_consistency.py`（文档纪律）+ 全量 pytest。
 
+### 【关闭 T59】顺手清账：console 老测试修复 + tools 按层重排 + 孤儿标注
+
+- **console_run_all 两条老红转绿**：根因如留档——两条 resume 测试的伪造参数缺 `model_mode` 属性（`console_run_all.py:185` 取用），各补一行 `model_mode=""`，全量测试自此 1286 全过、零既知红。
+- **4 个真孤儿函数标废弃（不删）**：`tools_L1.py` 的 `get_dxy_index`/`get_sofr_rate`/`get_wti_oil`/`get_gold_wti_ratio` docstring 首行加"已废弃（deprecated）：从未接入运行时，保留仅供考古"。
+- **14 个住错房间的函数物理搬家**（P3 附录 B 清单，搬家不装修、逐字迁移）：L1→L2 八个（vix/vxn/利差/动量族）、L2→L3 五个（广度族+ndx_ndxe_ratio，含 deprecated 别名 get_qqq_qqew_ratio 随迁）、L4→L2 一个（crowdedness）。import 点同步：src 侧 3 处、测试侧 8 个文件；不留重导出 shim。唯一非逐字改动：`get_hy_quality_spread_bp` 一行调用点改显式别名（两种口径同名 `_attach_recompute_value_series` 必须区分）。
+- **意外留档（均未动，非本批新病）**：`get_sofr_rate` 有一条测试源码断言引用（不影响标注）；`tools_common` 星号导入吞 `_latest_completed_us_daily_date` NameError 的预存在坑（建议另立项）；`get_qqq_net_liquidity_ratio` 注册但未接入运行时（不在本批清单）。
+- **验证**：全量 1286 passed / 0 failed（比 T58 关单多 1 是 PC-27 收窄时新增的一条测试）；文档闸门 11 绿；P3 附录 B 复跑命令核验 misplaced: NONE。
+
 ### 【关闭 T58】O15/O16/O17 三件套施工：编号报序号、抄写岗撤除、异议亮灯
 
 - **O15 落地（冲突编号改报序号）**：`Conflict` 新增 `conflict_ordinal`（1-based，null=本站新发现）；thesis/reviser 两站模型面向 schema 里 `conflict_id` 物理摘除、strict 路径给序号注入 `[1..N]∪null` 选单（零候选时连序号字段一并摘除）；提示词末尾渲染"冲突清单（按序号引用）"，展示的清单 ≡ 映射的清单由构造保证。解析后 validator 阶段序号→编号映射（`_map_conflict_ordinals_to_ids`，orchestrator.py:4830）：越界/非整数 → 带合法范围的校验错误走既有反馈重试；ordinal 留空即清空 conflict_id——模型自填编号一律不采信，"抄错编号"最后一条物理路径关闭。下游（schema guard 认亲、final 校验、PC-23、IA 输入）零改动，编号仍是内部身份。

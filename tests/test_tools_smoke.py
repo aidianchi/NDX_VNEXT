@@ -42,42 +42,53 @@ def test_tools_registry_entries_are_callable():
 # ---------------------------------------------------------------------------
 
 def test_l1_file_functions_importable():
-    """tools_L1.py contains L1 macro + L2 sentiment functions."""
+    """tools_L1.py contains the L1 macro functions (fed funds, rates, liquidity)."""
     from tools_L1 import (
         get_fed_funds_rate,
         get_10y_real_rate,
         get_10y_treasury,
-        get_vix,
-        get_hy_oas_bp,
         get_copper_gold_ratio,
     )
     assert callable(get_fed_funds_rate)
-    assert callable(get_vix)
+    assert callable(get_10y_treasury)
 
 
 def test_l2_file_functions_importable():
-    """tools_L2.py contains L3 breadth / internals functions."""
+    """tools_L2.py contains the L2 risk-appetite functions (vol, credit, positioning)."""
     from tools_L2 import (
+        get_vix,
+        get_vxn,
+        get_vxn_vix_ratio,
+        get_vix_term_structure,
+        get_hy_oas_bp,
+        get_ig_oas_bp,
+        get_hy_quality_spread_bp,
+        get_hyg_momentum,
+        get_xly_xlp_ratio,
+        get_crowdedness_dashboard,
+        get_cnn_fear_greed_index,
+    )
+    assert callable(get_vix)
+    assert callable(get_hy_oas_bp)
+    assert callable(get_crowdedness_dashboard)
+
+
+def test_l3_file_functions_importable():
+    """tools_L3.py contains L3 internals: breadth, concentration, top10."""
+    from tools_L3 import (
         get_advance_decline_line,
         get_percent_above_ma,
         get_ndx_ndxe_ratio,
         get_qqq_qqew_ratio,
         get_new_highs_lows,
-        get_cnn_fear_greed_index,
+        get_mcclellan_oscillator_nasdaq_or_nyse,
+        get_qqq_top10_concentration,
+        get_m7_fundamentals,
     )
     assert callable(get_advance_decline_line)
     assert callable(get_percent_above_ma)
     assert callable(get_ndx_ndxe_ratio)
-
-
-def test_l3_file_functions_importable():
-    """tools_L3.py contains concentration / top10 functions."""
-    from tools_L3 import (
-        get_qqq_top10_concentration,
-        get_m7_fundamentals,
-    )
     assert callable(get_qqq_top10_concentration)
-    assert callable(get_m7_fundamentals)
 
 
 def test_l4_file_functions_importable():

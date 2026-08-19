@@ -10,6 +10,7 @@ from agent_analysis.contracts import LayerCard
 from agent_analysis.llm_engine import LLMEngine
 from agent_analysis.orchestrator import VNextOrchestrator
 import tools_L1
+import tools_L2
 
 
 class _NoopEngine:
@@ -72,36 +73,36 @@ def test_layer_validation_derives_quality_coverage_from_indicator_analyses(tmp_p
 
 
 def test_vxn_vix_ratio_returns_missing_data_instead_of_raising(monkeypatch):
-    monkeypatch.setattr(tools_L1, "get_vxn", lambda end_date=None: {"name": "VXN", "value": None})
+    monkeypatch.setattr(tools_L2, "get_vxn", lambda end_date=None: {"name": "VXN", "value": None})
     monkeypatch.setattr(
-        tools_L1,
+        tools_L2,
         "get_vix",
         lambda end_date=None: {"name": "VIX", "value": {"level": 17.19, "date": "2026-05-08"}},
     )
 
-    result = tools_L1.get_vxn_vix_ratio(end_date="2026-05-09")
+    result = tools_L2.get_vxn_vix_ratio(end_date="2026-05-09")
 
     assert result["value"] is None
     assert "VXN=None" in result["notes"]
 
 
 def test_live_vxn_reuses_in_process_cache(monkeypatch):
-    tools_L1._VOL_LEVEL_CACHE.clear()
+    tools_L2._VOL_LEVEL_CACHE.clear()
     calls = {"count": 0}
 
     def fake_yf_series(ticker, name, end_date=None, use_ma20_trend=False):
         calls["count"] += 1
         return {"name": name, "value": {"level": 25.0, "date": "2026-06-16"}}
 
-    monkeypatch.setattr(tools_L1, "_get_yf_series_with_analysis", fake_yf_series)
+    monkeypatch.setattr(tools_L2, "_get_yf_series_with_analysis", fake_yf_series)
 
-    first = tools_L1.get_vxn()
+    first = tools_L2.get_vxn()
     first["value"]["level"] = 99.0
-    second = tools_L1.get_vxn()
+    second = tools_L2.get_vxn()
 
     assert calls["count"] == 1
     assert second["value"]["level"] == 25.0
-    tools_L1._VOL_LEVEL_CACHE.clear()
+    tools_L2._VOL_LEVEL_CACHE.clear()
 
 
 def test_get_vix_backtest_reads_historical_cache_without_current_refresh(tmp_path, monkeypatch):
@@ -113,19 +114,19 @@ def test_get_vix_backtest_reads_historical_cache_without_current_refresh(tmp_pat
         }
     ).to_csv(cache_path, index=False)
 
-    monkeypatch.setattr(tools_L1.ts_manager, "cache_dir", str(tmp_path))
+    monkeypatch.setattr(tools_L2.ts_manager, "cache_dir", str(tmp_path))
     monkeypatch.setattr(
-        tools_L1.ts_manager,
+        tools_L2.ts_manager,
         "get_or_update_series",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("backtest VIX should not refresh live cache")),
     )
     monkeypatch.setattr(
-        tools_L1,
+        tools_L2,
         "_fetch_yf_history",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cached backtest VIX should not call yfinance")),
     )
 
-    result = tools_L1.get_vix(end_date="2025-04-09")
+    result = tools_L2.get_vix(end_date="2025-04-09")
 
     assert result["value"]["date"] == "2025-04-09"
     assert result["source_name"] == "yfinance (cached historical)"

@@ -19,7 +19,6 @@ except ImportError:
 # 第1层函数
 # =====================================================
 
-_VOL_LEVEL_CACHE = {}
 
 AMOUNT_UNIT_BILLION_USD = "billion_usd"
 
@@ -121,96 +120,6 @@ def _fred_unavailable_payload(
     }
 
 
-def _get_yf_series_with_analysis(
-    ticker: str,
-    name: str,
-    end_date: Optional[str] = None,
-    use_ma20_trend: bool = False,
-    *,
-    auto_adjust: bool = False,
-) -> Dict[str, Any]:
-    """
-    (内部函数) 使用yfinance获取时间序列数据。use_ma20_trend=True 时（如 VIX/VXN）
-    输出 spot_over_ma20_ratio 替代日度动量，用于分层降噪。
-    """
-    if not YF_AVAILABLE:
-        return {"name": name, "value": None, "notes": "yfinance library not available."}
-
-    try:
-        if end_date:
-            effective_date = datetime.strptime(end_date, "%Y-%m-%d")
-        else:
-            effective_date = datetime.now()
-
-        request_end_date = effective_date + timedelta(days=1)
-        # 获取至少10年的历史数据，用于计算10年百分位
-        request_start_date = effective_date - timedelta(days=365 * 11)
-
-        df = cached_yf_download(
-            ticker,
-            start=request_start_date.strftime("%Y-%m-%d"),
-            end=request_end_date.strftime("%Y-%m-%d"),
-            progress=False,
-            auto_adjust=auto_adjust
-        )
-        
-        if df.empty:
-             raise ValueError(f"yfinance returned an empty DataFrame for {ticker}.")
-        
-        df = clean_yfinance_dataframe(df)
-        df.index = pd.to_datetime(df.index)
-        df = df[df.index.date <= effective_date.date()]
-        
-        if df.empty:
-            raise ValueError(f"No data available on or before {effective_date.date()}")
-
-        # 移除 tail(365) 限制，保留全部历史数据用于百分位计算 
-        if len(df) < 3:
-             raise ValueError(f"Insufficient data points ({len(df)}) for analysis.")
-        
-        series_for_analysis = df.rename(columns={'close': 'value'})
-
-        if use_ma20_trend and len(df) >= 20:
-            level = float(df["close"].iloc[-1])
-            ma20 = float(df["close"].rolling(20, min_periods=20).mean().iloc[-1])
-            
-            # 【修复】：正确处理 reset_index() 后的列名
-            stats_df = series_for_analysis.reset_index()
-            if "index" in stats_df.columns:
-                stats_df = stats_df.rename(columns={"index": "date"})
-            elif "Date" in stats_df.columns:
-                stats_df = stats_df.rename(columns={"Date": "date"})
-            # 确保有 date 列
-            if "date" not in stats_df.columns:
-                stats_df["date"] = stats_df.index
-            
-            stats = calculate_long_term_stats(stats_df[["date", "value"]], level)
-            analysis = {
-                "level": round(level, 4),
-                "date": df.index[-1].strftime("%Y-%m-%d"),
-                "spot_over_ma20_ratio": round(level / ma20, 4) if ma20 > 0 else None,
-                "ma20": round(ma20, 4),
-                "historical_stats": stats,
-            }
-        else:
-            analysis = analyze_series_momentum_relativity(series_for_analysis)
-        if not analysis or analysis.get("level") is None:
-            raise ValueError("Analysis function returned empty results.")
-
-        return _attach_recompute_value_series({
-            "name": name, "series_id": ticker, "value": analysis,
-            "unit": "level", "source_name": "yfinance",
-            "notes": f"Successfully fetched data as of {analysis['date']}." + (" 分层降噪：Spot/MA20。" if use_ma20_trend else "")
-        }, stats_df[["date", "value"]] if use_ma20_trend and len(df) >= 20 else series_for_analysis)
-    except Exception as e:
-        error_note = f"Failed to get {ticker} data: {str(e)}"
-        logging.warning(f"  - {name}: {error_note}")
-        return {
-            "name": name, "series_id": ticker, "value": None,
-            "notes": error_note
-        }
-
-
 def _read_cached_series_until(series_id: str, end_date: str) -> pd.DataFrame:
     """Read local TimeSeriesManager cache for historical mode without current-day refresh."""
     try:
@@ -243,533 +152,6 @@ def _get_series_for_effective_date(series_id: str, update_func, end_date: Option
             logging.warning("%s historical fetch does not support end_date safely: %s", series_id, exc)
             return pd.DataFrame(columns=["date", "value"])
     return ts_manager.get_or_update_series(series_id, update_func)
-
-
-def _vix_payload_from_frame(vix_df: pd.DataFrame, *, source_name: str) -> Optional[Dict[str, Any]]:
-    if vix_df is None or vix_df.empty or len(vix_df) < 3:
-        return None
-    latest_row = vix_df.iloc[-1]
-    latest_level = float(latest_row["value"])
-    latest_date_str = latest_row["date"].strftime("%Y-%m-%d")
-    historical_stats = calculate_long_term_stats(vix_df[["date", "value"]], latest_level)
-    value_out = {"level": round(latest_level, 4), "historical_stats": historical_stats, "date": latest_date_str}
-    if len(vix_df) >= 20:
-        vix_s = vix_df.set_index("date")["value"].sort_index()
-        ma20 = float(vix_s.rolling(20, min_periods=20).mean().iloc[-1])
-        value_out["spot_over_ma20_ratio"] = round(latest_level / ma20, 4) if ma20 > 0 else None
-        value_out["ma20"] = round(ma20, 4)
-    return _attach_recompute_value_series({
-        "name": "VIX Index",
-        "series_id": "^VIX",
-        "value": value_out,
-        "unit": "index level",
-        "source_name": source_name,
-        "notes": "VIX 恐慌指数；分层降噪：现值 + 趋势比(Spot/MA20)。",
-    }, vix_df[["date", "value"]])
-
-
-def get_vix(end_date: str = None) -> Dict[str, Any]:
-    """获取VIX恐慌指数，使用持久化缓存并返回历史统计。V5.8修复版：增强错误处理和Alpha Vantage备用。"""
-    if not end_date and "VIX" in _VOL_LEVEL_CACHE:
-        return deepcopy(_VOL_LEVEL_CACHE["VIX"])
-    if not YF_AVAILABLE:
-        logging.warning("yfinance 不可用，尝试 Alpha Vantage 备用方案")
-        return _get_vix_from_alphavantage(end_date=end_date)
-
-    # 尝试使用 TimeSeriesManager 获取数据
-    try:
-        vix_df = _get_series_for_effective_date("VIX", _fetch_vix_history, end_date)
-        if not vix_df.empty:
-            if end_date:
-                effective_date = datetime.strptime(end_date, "%Y-%m-%d")
-                vix_df = vix_df[vix_df["date"] <= effective_date]
-            payload = _vix_payload_from_frame(
-                vix_df,
-                source_name="yfinance (cached historical)" if end_date else "yfinance (cached)",
-            )
-            if payload:
-                logging.info(f"成功从缓存获取 VIX 数据: {payload['value']['level']} (日期: {payload['value']['date']})")
-                if not end_date:
-                    _VOL_LEVEL_CACHE["VIX"] = deepcopy(payload)
-                return payload
-    except Exception as e:
-        logging.warning(f"TimeSeriesManager 获取 VIX 数据失败: {e}，尝试直接获取")
-
-    # 回退到直接使用 yfinance 获取数据（分层降噪：Spot/MA20）
-    result = _get_yf_series_with_analysis(ticker="^VIX", name="VIX Index", end_date=end_date, use_ma20_trend=True)
-    
-    # 如果yfinance也失败，尝试Alpha Vantage
-    if result.get("value") is None:
-        logging.warning("yfinance 直接获取 VIX 失败，尝试 Alpha Vantage 备用方案")
-        result = _get_vix_from_alphavantage(end_date=end_date)
-        if not end_date and result.get("value") is not None:
-            _VOL_LEVEL_CACHE["VIX"] = deepcopy(result)
-        return result
-    
-    if not end_date:
-        _VOL_LEVEL_CACHE["VIX"] = deepcopy(result)
-    return result
-
-
-def _get_vix_from_alphavantage(end_date: str = None) -> Dict[str, Any]:
-    """Alpha Vantage备用方案获取VIX数据"""
-    alphavantage_api_key = get_alphavantage_api_key()
-    if not alphavantage_api_key:
-        return {
-            "name": "VIX Index",
-            "value": None,
-            "notes": "yfinance 和 Alpha Vantage 均不可用"
-        }
-    
-    try:
-        effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
-        params = {
-            "function": "TIME_SERIES_DAILY",
-            "symbol": "VIX",
-            "apikey": alphavantage_api_key,
-            "outputsize": "full"
-        }
-        data = safe_request(get_alphavantage_base_url(), params)
-        if not data or "Time Series (Daily)" not in data:
-            raise Exception("Alpha Vantage 无有效 VIX 数据")
-        
-        df = pd.DataFrame.from_dict(data["Time Series (Daily)"], orient="index")
-        df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
-        df = df[df.index <= effective_date]
-        df = df.rename(columns={"4. close": "value"})
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        df = df.dropna(subset=["value"])
-        
-        if len(df) < 3:
-            raise Exception("Alpha Vantage VIX 数据不足")
-        
-        latest_level = float(df["value"].iloc[-1])
-        latest_date_str = df.index[-1].strftime("%Y-%m-%d")
-        df_for_stats = df.reset_index().rename(columns={"index": "date"})[["date", "value"]]
-        historical_stats = calculate_long_term_stats(df_for_stats, latest_level)
-        
-        value_out = {"level": round(latest_level, 4), "historical_stats": historical_stats, "date": latest_date_str}
-        if len(df) >= 20:
-            ma20 = float(df["value"].rolling(20, min_periods=20).mean().iloc[-1])
-            value_out["spot_over_ma20_ratio"] = round(latest_level / ma20, 4) if ma20 > 0 else None
-            value_out["ma20"] = round(ma20, 4)
-        
-        logging.info(f"成功从 Alpha Vantage 获取 VIX 数据: {latest_level}")
-        return _attach_recompute_value_series({
-            "name": "VIX Index",
-            "series_id": "VIX",
-            "value": value_out,
-            "unit": "index level",
-            "source_name": "Alpha Vantage (fallback)",
-            "notes": "VIX 恐慌指数（Alpha Vantage备用）；分层降噪：现值 + 趋势比(Spot/MA20)。"
-        }, df_for_stats)
-    except Exception as e:
-        logging.error(f"Alpha Vantage 获取 VIX 失败: {str(e)}")
-        return {
-            "name": "VIX Index",
-            "value": None,
-            "notes": f"所有数据源均失败: {str(e)[:100]}"
-        }
-
-
-
-def get_vxn(end_date: str = None) -> Dict[str, Any]:
-    """获取VXN纳指恐慌指数。分层降噪：现值 + 趋势比(Spot/MA20)。V5.8修复版：增强错误处理。"""
-    if not end_date and "VXN" in _VOL_LEVEL_CACHE:
-        return deepcopy(_VOL_LEVEL_CACHE["VXN"])
-    result = _get_yf_series_with_analysis(ticker="^VXN", name="VXN Index", end_date=end_date, use_ma20_trend=True)
-    
-    # 如果yfinance失败，记录详细错误
-    if result.get("value") is None:
-        logging.error(f"VXN 获取失败: {result.get('notes', 'Unknown error')}")
-    elif not end_date:
-        _VOL_LEVEL_CACHE["VXN"] = deepcopy(result)
-    
-    return result
-
-
-
-def get_vxn_vix_ratio(end_date: str = None) -> Dict[str, Any]:
-    """计算VXN/VIX比率 (仅水平)"""
-    vxn_data = get_vxn(end_date=end_date)
-    vix_data = get_vix(end_date=end_date)
-    ratio, date = None, None
-    vxn_value = vxn_data.get("value") if isinstance(vxn_data, dict) else None
-    vix_value = vix_data.get("value") if isinstance(vix_data, dict) else None
-    vxn_level = vxn_value.get("level") if isinstance(vxn_value, dict) else None
-    vix_level = vix_value.get("level") if isinstance(vix_value, dict) else None
-
-    if vxn_level and vix_level:
-        ratio = round(vxn_level / vix_level, 4)
-        date = max(vxn_value.get("date"), vix_value.get("date"))
-
-    if ratio is None:
-        return {
-            "name": "VXN/VIX Ratio",
-            "value": None,
-            "unit": "ratio",
-            "notes": f"Calculated from latest levels unavailable: VXN={vxn_level}, VIX={vix_level}",
-        }
-
-    return {
-        "name": "VXN/VIX Ratio", "value": {"level": ratio, "date": date}, "unit": "ratio",
-        "notes": f"Calculated from latest levels: VXN={vxn_level}, VIX={vix_level}"
-    }
-
-
-# ---------------------------------------------------------------------------
-# VIX term structure (added for investigation_reports/20260711_first_principles/
-# WORK_ORDERS.md item 4, task A: RESEARCH_CANON already carried a judgment card
-# for "VIX 期限结构与 VRP" -- this implements it. Same L2 risk-appetite/vol
-# family as get_vix/get_vxn/get_vxn_vix_ratio above, so it lives next to them.
-# ---------------------------------------------------------------------------
-
-VIX_TERM_STRUCTURE_FLAT_BAND = 0.005
-"""Half-width of the ratio band around 1.0 treated as neither contango nor
-backwardation. A bare ratio==1.0 threshold would flip state on sub-percent
-daily noise; 0.5% keeps the state label stable while still being far tighter
-than a real term-structure inversion (historically several percent)."""
-
-VIX_TERM_STRUCTURE_PERCENTILE_WINDOWS = {
-    # ^VIX3M inception is 2006-07-17, so both windows have full coverage for
-    # any effective_date from the mid-2010s onward; requirements are set
-    # loose enough to still emit an honest "insufficient_history" status for
-    # backtests anchored earlier than that, mirroring
-    # HISTORY_OF_MARKET_PERCENTILE_REQUIREMENTS's min_observations/min_span_days
-    # pattern in tools_L4.py rather than inventing a new convention.
-    "5y": {"years": 5, "min_observations": 750, "min_span_days": 365 * 4},
-    "10y": {"years": 10, "min_observations": 1500, "min_span_days": 365 * 8},
-}
-
-
-def _fetch_vix3m_history(start_date: Optional[Any] = None, end_date: Optional[Any] = None) -> pd.DataFrame:
-    """原子化获取 VIX3M（3个月隐含波动率）日频历史。"""
-    return _fetch_yf_history("^VIX3M", start_date=start_date, end_date=end_date)
-
-
-def _fetch_vix6m_history(start_date: Optional[Any] = None, end_date: Optional[Any] = None) -> pd.DataFrame:
-    """原子化获取 VIX6M（6个月隐含波动率）日频历史，仅作补充观察腿。"""
-    return _fetch_yf_history("^VIX6M", start_date=start_date, end_date=end_date)
-
-
-def _vix_term_structure_state(ratio: Optional[float]) -> str:
-    """contango/backwardation/flat classification with a documented flat band."""
-    if ratio is None:
-        return "unavailable"
-    if ratio >= 1.0 + VIX_TERM_STRUCTURE_FLAT_BAND:
-        return "contango"
-    if ratio <= 1.0 - VIX_TERM_STRUCTURE_FLAT_BAND:
-        return "backwardation"
-    return "flat"
-
-
-def _rank_percentile_0_100(values: List[Any], current: float) -> Optional[float]:
-    """count(v<=current)/n*100, rounded to 1dp -- same convention already used
-    by the Damodaran ERP and Wind PE percentile payloads elsewhere in this
-    codebase, so the independent recompute belt can check this one the same
-    way (see recompute_belt.check_vix_term_structure_percentile)."""
-    clean = [
-        float(v) for v in values
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and not (isinstance(v, float) and np.isnan(v))
-    ]
-    if not clean:
-        return None
-    count = sum(1 for v in clean if v <= current)
-    return round(count / len(clean) * 100.0, 1)
-
-
-def _vix_term_structure_percentile_window(
-    merged: pd.DataFrame,
-    *,
-    anchor: Any,
-    years: int,
-    current_value: float,
-    min_observations: int,
-    min_span_days: int,
-) -> Dict[str, Any]:
-    window_start_ts = anchor - pd.DateOffset(years=years)
-    windowed = merged[(merged["date"] >= window_start_ts) & (merged["date"] <= anchor)]
-    sample_count = int(len(windowed))
-    window_start = windowed["date"].min().strftime("%Y-%m-%d") if sample_count else None
-    window_end = windowed["date"].max().strftime("%Y-%m-%d") if sample_count else None
-    span_days = int((windowed["date"].max() - windowed["date"].min()).days) if sample_count >= 2 else 0
-    base = {
-        "current_value": round(float(current_value), 4),
-        "sample_count": sample_count,
-        "required_min_observations": min_observations,
-        "span_days": span_days,
-        "required_min_span_days": min_span_days,
-        "window_start": window_start,
-        "window_end": window_end,
-    }
-    if sample_count < min_observations or span_days < min_span_days:
-        base["percentile"] = None
-        base["status"] = "insufficient_history"
-        base["reason"] = (
-            f"requires >= {min_observations} observations and >= {min_span_days} calendar days; "
-            f"got {sample_count} observations over {span_days} days"
-        )
-        return base
-    base["percentile"] = _rank_percentile_0_100(windowed["ratio_vix3m_over_vix"].tolist(), current_value)
-    base["status"] = "available"
-    base["reason"] = ""
-    return base
-
-
-def get_vix_term_structure(end_date: str = None) -> Dict[str, Any]:
-    """VIX term structure: VIX3M/VIX ratio, contango/backwardation state, and
-    the ratio's own historical percentile (5y/10y). VIX6M/VIX is carried as a
-    secondary, non-percentiled informational leg when available.
-
-    Implements RESEARCH_CANON.md's existing "VIX 期限结构与 VRP" judgment card
-    (投资 investigation_reports/20260711_first_principles/WORK_ORDERS.md item 4,
-    task A). Same L2 risk-appetite/volatility family as get_vix/get_vxn -- see
-    core.collector.DataCollector.LAYER_FUNCTIONS[2].
-
-    Judgment boundary (per RESEARCH_CANON, enforced via
-    value["state_usage_boundary"] and data_quality["metric_authority"]):
-    backwardation (VIX3M < VIX) is a panic/risk confirmation-or-alert signal;
-    contango is the normal default shape and must NOT be cited as bullish
-    evidence -- it only means no extra near-term panic premium is priced in.
-
-    Point-in-time: both legs are fetched through the same
-    _get_series_for_effective_date/_fetch_yf_history path get_vix already
-    uses, so a backtest end_date only ever sees data on or before that date.
-    The raw aligned ratio series (up to 10y, bounded by ^VIX3M's 2006-07-17
-    inception) is embedded under value.percentile_context.raw_series so
-    src/recompute_belt.py can independently recompute the published
-    percentile rather than trusting the stored conclusion number.
-    """
-    effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
-    date_str = effective_date.strftime("%Y-%m-%d")
-    source_name = "yfinance (^VIX / ^VIX3M / ^VIX6M)"
-    source_url = "https://finance.yahoo.com/quote/%5EVIX3M/"
-
-    def _unavailable(reason: str) -> Dict[str, Any]:
-        return {
-            "name": "VIX Term Structure (VIX3M/VIX)",
-            "series_id": "VIX_TERM_STRUCTURE",
-            "value": None,
-            "unit": "ratio",
-            "date": date_str,
-            "source_tier": "unavailable",
-            "source_name": source_name,
-            "availability": "unavailable",
-            "unavailable_reason": reason,
-            "notes": f"VIX term structure unavailable: {reason}",
-        }
-
-    try:
-        vix_df = _get_series_for_effective_date("VIX", _fetch_vix_history, end_date)
-        vix3m_df = _get_series_for_effective_date("VIX3M", _fetch_vix3m_history, end_date)
-        vix6m_df = _get_series_for_effective_date("VIX6M", _fetch_vix6m_history, end_date)
-
-        if vix_df is None or vix_df.empty or vix3m_df is None or vix3m_df.empty:
-            return _unavailable("missing_vix_or_vix3m_history")
-
-        if end_date:
-            anchor_ts = pd.to_datetime(end_date)
-            vix_df = vix_df[vix_df["date"] <= anchor_ts]
-            vix3m_df = vix3m_df[vix3m_df["date"] <= anchor_ts]
-            if vix6m_df is not None and not vix6m_df.empty:
-                vix6m_df = vix6m_df[vix6m_df["date"] <= anchor_ts]
-
-        merged = pd.merge(
-            vix_df[["date", "value"]].rename(columns={"value": "vix"}),
-            vix3m_df[["date", "value"]].rename(columns={"value": "vix3m"}),
-            on="date",
-            how="inner",
-        ).dropna(subset=["vix", "vix3m"])
-        merged = merged[merged["vix"] > 0]
-        if merged.empty:
-            return _unavailable("no_overlapping_vix_vix3m_trading_dates")
-        merged["ratio_vix3m_over_vix"] = merged["vix3m"] / merged["vix"]
-        merged = merged.sort_values("date").reset_index(drop=True)
-
-        latest = merged.iloc[-1]
-        anchor = latest["date"]
-        current_ratio = float(latest["ratio_vix3m_over_vix"])
-        current_vix = float(latest["vix"])
-        current_vix3m = float(latest["vix3m"])
-        current_date_str = anchor.strftime("%Y-%m-%d")
-
-        windows = {
-            window_key: _vix_term_structure_percentile_window(
-                merged,
-                anchor=anchor,
-                years=spec["years"],
-                current_value=current_ratio,
-                min_observations=spec["min_observations"],
-                min_span_days=spec["min_span_days"],
-            )
-            for window_key, spec in VIX_TERM_STRUCTURE_PERCENTILE_WINDOWS.items()
-        }
-
-        raw_series_cutoff = anchor - pd.DateOffset(years=10)
-        raw_series = [
-            {
-                "data_date": row["date"].strftime("%Y-%m-%d"),
-                "vix": round(float(row["vix"]), 4),
-                "vix3m": round(float(row["vix3m"]), 4),
-                "ratio_vix3m_over_vix": round(float(row["ratio_vix3m_over_vix"]), 4),
-            }
-            for _, row in merged[merged["date"] >= raw_series_cutoff].iterrows()
-        ]
-
-        vix6m_block: Dict[str, Any] = {
-            "availability": "unavailable",
-            "reason": "no_vix6m_data_available",
-        }
-        if vix6m_df is not None and not vix6m_df.empty:
-            vix6m_on_date = vix6m_df[vix6m_df["date"] == anchor]
-            if not vix6m_on_date.empty:
-                vix6m_level = float(vix6m_on_date["value"].iloc[0])
-                ratio6 = round(vix6m_level / current_vix, 4) if current_vix else None
-                vix6m_block = {
-                    "availability": "available",
-                    "level": round(vix6m_level, 4),
-                    "date": current_date_str,
-                    "ratio_vix6m_over_vix": ratio6,
-                    "term_structure_state_vix6m_over_vix": _vix_term_structure_state(ratio6),
-                    "usage": "supplementary_only",
-                    "note": (
-                        "VIX6M/VIX 只作长端期限结构补充观察；主判读以 VIX3M/VIX 为准，"
-                        "未对该腿做独立历史分位。"
-                    ),
-                }
-            else:
-                vix6m_block["reason"] = "no_vix6m_observation_on_latest_common_vix_vix3m_date"
-
-        state = _vix_term_structure_state(current_ratio)
-        percentile_5y = windows.get("5y", {}).get("percentile")
-        percentile_10y = windows.get("10y", {}).get("percentile")
-
-        value = {
-            "date": current_date_str,
-            "level": round(current_ratio, 4),
-            "vix": {"level": round(current_vix, 4), "date": current_date_str},
-            "vix3m": {"level": round(current_vix3m, 4), "date": current_date_str},
-            "vix6m": vix6m_block,
-            "ratio_vix3m_over_vix": round(current_ratio, 4),
-            "term_structure_state": state,
-            "state_thresholds": {
-                "contango_at_or_above": round(1.0 + VIX_TERM_STRUCTURE_FLAT_BAND, 4),
-                "backwardation_at_or_below": round(1.0 - VIX_TERM_STRUCTURE_FLAT_BAND, 4),
-                "flat_band_half_width": VIX_TERM_STRUCTURE_FLAT_BAND,
-                "note": "±0.5% 缓冲带内视为 flat，避免比值贴近 1.0 时的噪音导致状态频繁跳变。",
-            },
-            "percentile_5y": percentile_5y,
-            "percentile_10y": percentile_10y,
-            "percentile_context": {
-                "primary_field": "ratio_vix3m_over_vix",
-                "method": "count(v<=current)/n*100；与 Damodaran ERP / Wind PE 历史分位算法口径一致",
-                "windows": windows,
-                "raw_series": raw_series,
-                "raw_series_window_note": (
-                    "raw_series 覆盖至多10年（受 ^VIX3M 2006-07-17 上市日与 effective_date 双重约束），"
-                    "足以独立重算 windows.5y / windows.10y 两个分位。"
-                ),
-            },
-            "state_usage_boundary": {
-                "backwardation": {
-                    "usage": "supporting_only",
-                    "role": "risk_confirmation_or_alert",
-                    "reason": (
-                        "期限结构倒挂（VIX3M<VIX）是恐慌/风险信号，可作为 L2 风险确认或预警证据之一，"
-                        "仍须与 HY OAS/A-D/ATR 等交叉验证，不能单独触发结论。"
-                        "按法典 core_vs_tactical_boundary，倒挂可作为战术仓逢恐慌分批布局的确认条件之一"
-                        "（仍为 supporting_only，核心仓不因期限结构单独变动仓位）。"
-                    ),
-                },
-                "contango": {
-                    "usage": "not_bullish_evidence",
-                    "role": "normal_state_baseline",
-                    "reason": "正挂是期限结构的常态默认形状，不构成看多证据；只说明近端没有额外恐慌溢价。",
-                },
-                "flat": {
-                    "usage": "not_bullish_evidence",
-                    "role": "transition_state",
-                    "reason": "比值贴近 1.0 时不携带方向性证据权重。",
-                },
-            },
-            "source_boundary": (
-                "VIX term structure 只回答近端相对远端的波动保险费定价关系，不能单独证明估值便宜或市场健康；"
-                "期限结构倒挂是恐慌/风险信号，正挂常态不构成看多证据。"
-            ),
-        }
-
-        data_quality = build_data_quality(
-            provider="yfinance",
-            source_name=source_name,
-            source_url=source_url,
-            source_tier="third_party_estimate",
-            data_date=current_date_str,
-            as_of_date=current_date_str,
-            effective_date=date_str,
-            vintage_date=current_date_str,
-            availability="available",
-            fallback_reason="none",
-            fallback_chain=["third_party_estimate", "unavailable"],
-            license_note="public_endpoint_review_required",
-            coverage={
-                "primary_window_5y": windows.get("5y", {}),
-                "primary_window_10y": windows.get("10y", {}),
-                "vix6m_availability": vix6m_block.get("availability"),
-                "raw_series_observations": len(raw_series),
-            },
-            methodology=(
-                "ratio_vix3m_over_vix = ^VIX3M close / ^VIX close on the same trading date (inner-joined "
-                "by date to avoid holiday/gap misalignment); percentile = count(ratio<=current)/n*100 over "
-                "the stated window; state = contango/backwardation/flat via the documented ±0.5% flat band."
-            ),
-            formula="level = ^VIX3M.close / ^VIX.close",
-            anomalies=(["vix6m_unavailable"] if vix6m_block.get("availability") != "available" else []),
-        )
-        data_quality["metric_authority"] = {
-            "term_structure_state": {
-                "source": "third_party_estimate",
-                "usage": "supporting_only",
-                "authority": "asymmetric_risk_signal_only",
-                "reason": (
-                    "backwardation 可支持风险/恐慌确认或预警（仍需交叉验证）；contango/flat 不得被引用为看多证据，"
-                    "只说明近端没有额外恐慌溢价——与 RESEARCH_CANON 的 VIX 期限结构判读边界一致。"
-                ),
-                "reference_sources": [],
-            },
-            "percentile_context": {
-                "source": "third_party_estimate",
-                "usage": "supporting_only",
-                "authority": "derived_from_yfinance_daily_closes",
-                "reason": "历史分位基于 yfinance ^VIX/^VIX3M 每日收盘计算，不是 Cboe 官方期限结构分位；仅作确认/预警强度参考。",
-                "reference_sources": [],
-            },
-            # T36：真实顶层键是 "vix6m"（曾登记为分组名 vix6m_leg，对不上 value 里
-            # 的真实字段名）。
-            "vix6m": {
-                "source": "third_party_estimate",
-                "usage": "supplementary_only",
-                "authority": "secondary_confirmation_leg_no_percentile",
-                "reason": "VIX6M/VIX 只作长端期限结构补充观察，未做独立历史分位，不得单独驱动结论。",
-                "reference_sources": [],
-            },
-        }
-
-        return {
-            "name": "VIX Term Structure (VIX3M/VIX)",
-            "series_id": "VIX_TERM_STRUCTURE",
-            "value": value,
-            "unit": "ratio",
-            "date": current_date_str,
-            "source_tier": "third_party_estimate",
-            "source_name": source_name,
-            "source_url": source_url,
-            "availability": "available",
-            "data_quality": data_quality,
-            "notes": "VIX 期限结构：VIX3M/VIX 比值 + contango/backwardation 状态 + 历史分位；VIX6M 作补充观察腿。",
-        }
-    except Exception as exc:
-        return _unavailable(f"vix_term_structure_exception: {str(exc)[:150]}")
 
 
 FED_FUNDS_FUTURES_MONTH_CODES = {
@@ -1185,56 +567,6 @@ def get_10y2y_spread_bp(end_date: str = None) -> Dict[str, Any]:
     }, series[["date", "value"]])
 
 
-def get_hy_oas_bp(end_date: str = None) -> Dict[str, Any]:
-    """获取高收益企业债OAS。分层降噪：用 MA5 vs MA20 趋势替代日度动量。"""
-    series = get_fred_series("BAMLH0A0HYM2", end_date=end_date)
-    if series is None or len(series) < 20:
-        return _fred_unavailable_payload(
-            name="High Yield OAS",
-            series_id="BAMLH0A0HYM2",
-            unit="percent",
-            minimum_points=20,
-            series=series,
-            calculation="ma5_ma20_trend",
-        )
-    analysis = analyze_series_ma_trend(series, short_period=5, long_period=20)
-    stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
-    analysis["relativity"] = stats
-    return _attach_recompute_value_series({
-        "name": "High Yield OAS", "series_id": "BAMLH0A0HYM2", "value": analysis,
-        "unit": "percent", "source_name": "FRED",
-        "notes": (
-            "ICE BofA US High Yield OAS；分层降噪：MA5 vs MA20 趋势方向。"
-            "注：函数名含 _bp 系历史命名，数值与 unit 字段以 percent 为准（如 2.71 即 2.71%≈271bp）。"
-        )
-    }, series[["date", "value"]])
-
-
-def get_ig_oas_bp(end_date: str = None) -> Dict[str, Any]:
-    """获取投资级企业债OAS。分层降噪：用 MA5 vs MA20 趋势替代日度动量。"""
-    series = get_fred_series("BAMLC0A0CM", end_date=end_date)
-    if series is None or len(series) < 20:
-        return _fred_unavailable_payload(
-            name="Investment Grade OAS",
-            series_id="BAMLC0A0CM",
-            unit="percent",
-            minimum_points=20,
-            series=series,
-            calculation="ma5_ma20_trend",
-        )
-    analysis = analyze_series_ma_trend(series, short_period=5, long_period=20)
-    stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
-    analysis["relativity"] = stats
-    return _attach_recompute_value_series({
-        "name": "Investment Grade OAS", "series_id": "BAMLC0A0CM", "value": analysis,
-        "unit": "percent", "source_name": "FRED",
-        "notes": (
-            "ICE BofA US Corporate OAS；分层降噪：MA5 vs MA20 趋势方向。"
-            "注：函数名含 _bp 系历史命名，数值与 unit 字段以 percent 为准（如 1.20 即 1.20%≈120bp）。"
-        )
-    }, series[["date", "value"]])
-
-
 def get_10y_real_rate(end_date: str = None) -> Dict[str, Any]:
     """获取10年期实际利率。分层降噪：L1宏观层使用MA20乖离率替代日度动量。"""
     series = get_fred_series("DFII10", end_date=end_date)
@@ -1371,7 +703,6 @@ def _fetch_walcl_history(start_date: Optional[Any] = None) -> pd.DataFrame:
     return df
 
 
-
 def _fetch_tga_history(start_date: Optional[Any] = None) -> pd.DataFrame:
     """
     原子化获取财政部现金账户 WTREGEN，单位十亿美元。
@@ -1382,7 +713,6 @@ def _fetch_tga_history(start_date: Optional[Any] = None) -> pd.DataFrame:
         return df
     df["value"] = pd.to_numeric(df["value"], errors="coerce") / 1000.0
     return df
-
 
 
 def _fetch_rrp_history(start_date: Optional[Any] = None) -> pd.DataFrame:
@@ -1398,29 +728,9 @@ def _fetch_rrp_history(start_date: Optional[Any] = None) -> pd.DataFrame:
     return df
 
 
-
 def _fetch_qqq_history(start_date: Optional[Any] = None) -> pd.DataFrame:
     """原子化获取 QQQ 历史收盘价，返回 ['date', 'value']。"""
     return _fetch_yf_history("QQQ", start_date=start_date)
-
-
-
-def _fetch_vix_history(start_date: Optional[Any] = None, end_date: Optional[Any] = None) -> pd.DataFrame:
-    """原子化获取 VIX 日频历史。"""
-    return _fetch_yf_history("^VIX", start_date=start_date, end_date=end_date)
-
-
-
-def _fetch_xly_history(start_date: Optional[Any] = None, end_date: Optional[Any] = None) -> pd.DataFrame:
-    """原子化获取 XLY 日频历史。"""
-    return _fetch_yf_history("XLY", start_date=start_date, end_date=end_date)
-
-
-
-def _fetch_xlp_history(start_date: Optional[Any] = None, end_date: Optional[Any] = None) -> pd.DataFrame:
-    """原子化获取 XLP 日频历史。"""
-    return _fetch_yf_history("XLP", start_date=start_date, end_date=end_date)
-
 
 
 def _fetch_copper_history(start_date: Optional[Any] = None, end_date: Optional[Any] = None) -> pd.DataFrame:
@@ -1428,11 +738,9 @@ def _fetch_copper_history(start_date: Optional[Any] = None, end_date: Optional[A
     return _fetch_yf_history("HG=F", start_date=start_date, end_date=end_date)
 
 
-
 def _fetch_gold_history(start_date: Optional[Any] = None, end_date: Optional[Any] = None) -> pd.DataFrame:
     """原子化获取黄金期货 GC=F 日频历史。"""
     return _fetch_yf_history("GC=F", start_date=start_date, end_date=end_date)
-
 
 
 def _build_net_liquidity_series() -> Tuple[pd.DataFrame, pd.Series, pd.Series, pd.Series]:
@@ -1557,7 +865,6 @@ def _build_net_liquidity_series() -> Tuple[pd.DataFrame, pd.Series, pd.Series, p
     return net_liq_df, walcl_s, tga_s, rrp_s
 
 
-
 def get_net_liquidity_momentum(end_date: str = None) -> Dict[str, Any]:
     """
     计算“美元净流动性”及历史统计：
@@ -1638,7 +945,6 @@ def get_net_liquidity_momentum(end_date: str = None) -> Dict[str, Any]:
     }, net_liq_df[["date", "value"]])
 
 
-
 def get_qqq_net_liquidity_ratio(end_date: str = None) -> Dict[str, Any]:
     """
     新指标：QQQ / Net Liquidity 比率（防前视偏差）。
@@ -1698,137 +1004,6 @@ def get_qqq_net_liquidity_ratio(end_date: str = None) -> Dict[str, Any]:
         "source_name": "yfinance + FRED (cached)",
         "notes": "分母采用向后对齐（backward）避免前视偏差。"
     }
-
-
-def get_hyg_momentum(end_date: str = None) -> Dict[str, Any]:
-    """获取高收益公司债ETF(HYG)的价格动量，作为信用利差的实时代理"""
-    result = _get_yf_series_with_analysis(
-        ticker="HYG",
-        name="High Yield Corp Bond (HYG) Adjusted-Price Momentum",
-        end_date=end_date,
-        auto_adjust=True,
-    )
-    result["source_tier"] = "proxy"
-    result["notes"] = (
-        str(result.get("notes") or "")
-        + " Uses dividend-adjusted prices so bond ETF distributions do not masquerade as credit deterioration. "
-        "This remains a tradable-price proxy; HY OAS is the primary credit-spread measure."
-    ).strip()
-    return result
-
-# =====================================================
-# 第二层：市场内部结构
-# =====================================================
-
-
-def get_xly_xlp_ratio(end_date: str = None) -> Dict[str, Any]:
-    """获取非必需消费品ETF(XLY)与必需消费品ETF(XLP)的比率及其动量与相对性。"""
-    if not YF_AVAILABLE:
-        return {
-            "name": "XLY/XLP Ratio",
-            "value": None,
-            "notes": "yfinance library is not available."
-        }
-
-    effective_date = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
-
-    # 尝试使用 TimeSeriesManager 获取数据
-    try:
-        xly_df = _get_series_for_effective_date("XLY", _fetch_xly_history, end_date)
-        xlp_df = _get_series_for_effective_date("XLP", _fetch_xlp_history, end_date)
-
-        if not xly_df.empty and not xlp_df.empty:
-            xly_df = xly_df[xly_df["date"] <= effective_date]
-            xlp_df = xlp_df[xlp_df["date"] <= effective_date]
-
-            if not xly_df.empty and not xlp_df.empty:
-                ratio_df = align_and_calculate_ratio(
-                    numerator_series=xly_df[["date", "value"]],
-                    denominator_series=xlp_df[["date", "value"]],
-                    date_col="date",
-                    value_col="value",
-                )
-
-                if not ratio_df.empty:
-                    ratio_for_ma = ratio_df[["date", "ratio"]].rename(columns={"ratio": "value"})
-                    latest_ratio = float(ratio_df.iloc[-1]["ratio"])
-                    latest_date_str = ratio_df.iloc[-1]["date"].strftime("%Y-%m-%d")
-                    historical_stats = calculate_long_term_stats(ratio_for_ma, latest_ratio)
-                    ma_analysis = analyze_series_ratio_vs_ma(ratio_for_ma, ma_period=20) if len(ratio_df) >= 20 else {}
-                    value_out = {
-                        "level": round(latest_ratio, 4),
-                        "historical_stats": historical_stats,
-                        "date": latest_date_str,
-                    }
-                    if ma_analysis:
-                        value_out["position_vs_ma20"] = ma_analysis.get("position_vs_ma")
-                        value_out["ma20"] = ma_analysis.get("ma")
-                    return _attach_recompute_value_series({
-                        "name": "XLY/XLP Ratio",
-                        "value": value_out,
-                        "unit": "ratio",
-                        "source_name": "yfinance (cached)",
-                        "notes": "XLY/XLP 风险偏好；分层降噪：比值相对 MA20 位置。"
-                    }, ratio_for_ma)
-    except Exception as e:
-        logging.warning(f"TimeSeriesManager 获取 XLY/XLP 数据失败: {e}")
-
-    # 回退到直接使用 yfinance 获取数据
-    # 使用分单标的下载避免 MultiIndex 结构问题及 clean_yfinance_dataframe 破坏 ticker 信息
-    try:
-        start_date = effective_date - timedelta(days=365 * 11)
-        start_str = start_date.strftime("%Y-%m-%d")
-        end_str = (effective_date + timedelta(days=1)).strftime("%Y-%m-%d")
-        xly_df = cached_yf_download("XLY", start=start_str, end=end_str, progress=False, auto_adjust=False)
-        xlp_df = cached_yf_download("XLP", start=start_str, end=end_str, progress=False, auto_adjust=False)
-        xly_df = clean_yfinance_dataframe(xly_df)
-        xlp_df = clean_yfinance_dataframe(xlp_df)
-        if xly_df.empty or "close" not in xly_df.columns:
-            raise ValueError("No data returned from yfinance for XLY.")
-        if xlp_df.empty or "close" not in xlp_df.columns:
-            raise ValueError("No data returned from yfinance for XLP.")
-        xly_close = xly_df["close"].rename("xly")
-        xlp_close = xlp_df["close"].rename("xlp")
-        aligned_df = pd.concat([xly_close, xlp_close], axis=1).dropna()
-        aligned_df.columns = ['xly', 'xlp']
-        aligned_df['ratio'] = aligned_df['xly'] / aligned_df['xlp']
-        
-        if len(aligned_df) < 3:
-            raise ValueError("Not enough valid data points for XLY/XLP ratio calculation.")
-        
-        # 转换为标准格式用于分析
-        ratio_series = aligned_df[['ratio']].rename(columns={'ratio': 'value'})
-        ratio_series.index = pd.to_datetime(ratio_series.index)
-        ratio_series = ratio_series[ratio_series.index.date <= effective_date.date()]
-        
-        if ratio_series.empty:
-            raise ValueError("No data available on or before the specified date.")
-        
-        # 分层降噪：比值相对 MA20 位置，替代日度动量
-        ratio_for_analysis = ratio_series.reset_index()
-        ratio_for_analysis.columns = ['date', 'value']
-        analysis = analyze_series_ratio_vs_ma(ratio_for_analysis, ma_period=20) if len(ratio_for_analysis) >= 20 else {}
-        latest_ratio = float(ratio_series.iloc[-1]['value'])
-        latest_date_val = ratio_series.index[-1].strftime("%Y-%m-%d")
-        stats = calculate_long_term_stats(ratio_for_analysis, latest_ratio)
-        value_out = {"level": round(latest_ratio, 4), "date": latest_date_val, "historical_stats": stats}
-        if analysis:
-            value_out["position_vs_ma20"] = analysis.get("position_vs_ma")
-            value_out["ma20"] = analysis.get("ma")
-
-        return _attach_recompute_value_series({
-            "name": "XLY/XLP Ratio",
-            "value": value_out,
-            "unit": "ratio",
-            "source_name": "yfinance",
-            "notes": f"XLY/XLP 风险偏好；分层降噪：比值相对 MA20 位置。Raw: XLY={aligned_df['xly'].iloc[-1]:.2f}, XLP={aligned_df['xlp'].iloc[-1]:.2f}"
-        }, ratio_for_analysis)
-    except Exception as e:
-        return {
-            "name": "XLY/XLP Ratio",
-            "value": None,
-            "notes": f"Failed to calculate: {str(e)}"
-        }
 
 
 def get_copper_gold_ratio(end_date: str = None) -> Dict[str, Any]:
@@ -1942,11 +1117,14 @@ def get_copper_gold_ratio(end_date: str = None) -> Dict[str, Any]:
 
 
 # =====================================================
-# 新增指标 (任务2.2): DXY, SOFR, WTI, Gold/WTI Ratio
+# 已废弃孤儿指标 (原任务2.2): DXY, SOFR, WTI, Gold/WTI Ratio
+# 四个函数从未接入运行时（不在 LAYER_FUNCTIONS / TOOLS_REGISTRY），仅供考古。
 # =====================================================
 
 def get_dxy_index(end_date: str = None) -> Dict[str, Any]:
     """
+    **已废弃（deprecated）**：从未接入运行时，保留仅供考古，新代码勿用。
+
     获取美元指数 (DXY) - V6.0新增
 
     第一性原理:
@@ -1990,6 +1168,8 @@ def get_dxy_index(end_date: str = None) -> Dict[str, Any]:
 
 def get_sofr_rate(end_date: str = None) -> Dict[str, Any]:
     """
+    **已废弃（deprecated）**：从未接入运行时，保留仅供考古，新代码勿用。
+
     获取SOFR担保隔夜融资利率 - V6.0新增
 
     第一性原理:
@@ -2034,6 +1214,8 @@ def get_sofr_rate(end_date: str = None) -> Dict[str, Any]:
 
 def get_wti_oil(end_date: str = None) -> Dict[str, Any]:
     """
+    **已废弃（deprecated）**：从未接入运行时，保留仅供考古，新代码勿用。
+
     获取WTI原油价格 - V6.0新增
 
     第一性原理:
@@ -2128,6 +1310,8 @@ def get_wti_oil(end_date: str = None) -> Dict[str, Any]:
 
 def get_gold_wti_ratio(end_date: str = None) -> Dict[str, Any]:
     """
+    **已废弃（deprecated）**：从未接入运行时，保留仅供考古，新代码勿用。
+
     获取黄金/WTI原油比率 - V6.0新增
 
     第一性原理:
@@ -2231,3 +1415,4 @@ def get_gold_wti_ratio(end_date: str = None) -> Dict[str, Any]:
 # =====================================================
 # 工具注册表（整合所有层级函数）
 # =====================================================
+

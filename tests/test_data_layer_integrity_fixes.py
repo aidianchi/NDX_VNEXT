@@ -8,7 +8,6 @@ import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import tools_L1
-import tools_L2
 import tools_L3
 from agent_analysis.packet_builder import AnalysisPacketBuilder
 from data_manager import calculate_long_term_stats
@@ -211,14 +210,14 @@ def test_ndx100_components_live_mode_reports_nasdaq_api_provenance(monkeypatch):
 
 
 def test_advance_decline_line_reports_honest_unavailable_when_historical_universe_fails(monkeypatch):
-    monkeypatch.setattr(tools_L2, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_L3, "YF_AVAILABLE", True)
 
     def raise_unavailable(effective_date, historical_date=None, **kwargs):
         raise HistoricalUniverseUnavailable("synthetic_failure", historical_date)
 
-    monkeypatch.setattr(tools_L2, "_get_ndx100_common_price_data", raise_unavailable)
+    monkeypatch.setattr(tools_L3, "_get_ndx100_common_price_data", raise_unavailable)
 
-    result = tools_L2.get_advance_decline_line("2025-04-09")
+    result = tools_L3.get_advance_decline_line("2025-04-09")
 
     assert result["availability"] == "unavailable"
     assert result["unavailable_reason"] == "historical_universe_unavailable"
@@ -227,7 +226,7 @@ def test_advance_decline_line_reports_honest_unavailable_when_historical_univers
 
 
 def test_advance_decline_line_surfaces_universe_provenance_in_data_quality(monkeypatch):
-    monkeypatch.setattr(tools_L2, "YF_AVAILABLE", True)
+    monkeypatch.setattr(tools_L3, "YF_AVAILABLE", True)
 
     dates = pd.date_range("2025-01-01", periods=260, freq="B")
     close = pd.DataFrame(
@@ -248,12 +247,12 @@ def test_advance_decline_line_surfaces_universe_provenance_in_data_quality(monke
     }
 
     monkeypatch.setattr(
-        tools_L2,
+        tools_L3,
         "_get_ndx100_common_price_data",
         lambda effective_date, **kwargs: (["AAA", "BBB", "CCC"], panel),
     )
 
-    result = tools_L2.get_advance_decline_line("2025-12-31")
+    result = tools_L3.get_advance_decline_line("2025-12-31")
 
     assert result["availability"] == "available"
     assert result["data_quality"]["universe_provenance"]["universe_source"] == "nasdaq_api"

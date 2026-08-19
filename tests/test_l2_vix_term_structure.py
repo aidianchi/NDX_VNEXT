@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pandas as pd
 
-import tools_L1
+import tools_L2
 from data_evidence import data_evidence_issues
 
 
@@ -43,14 +43,14 @@ SMALL_WINDOWS = {
 # ---------------------------------------------------------------------------
 
 def test_term_structure_state_classification_bands():
-    assert tools_L1._vix_term_structure_state(1.10) == "contango"
-    assert tools_L1._vix_term_structure_state(1.005) == "contango"
-    assert tools_L1._vix_term_structure_state(1.004) == "flat"
-    assert tools_L1._vix_term_structure_state(1.0) == "flat"
-    assert tools_L1._vix_term_structure_state(0.996) == "flat"
-    assert tools_L1._vix_term_structure_state(0.995) == "backwardation"
-    assert tools_L1._vix_term_structure_state(0.80) == "backwardation"
-    assert tools_L1._vix_term_structure_state(None) == "unavailable"
+    assert tools_L2._vix_term_structure_state(1.10) == "contango"
+    assert tools_L2._vix_term_structure_state(1.005) == "contango"
+    assert tools_L2._vix_term_structure_state(1.004) == "flat"
+    assert tools_L2._vix_term_structure_state(1.0) == "flat"
+    assert tools_L2._vix_term_structure_state(0.996) == "flat"
+    assert tools_L2._vix_term_structure_state(0.995) == "backwardation"
+    assert tools_L2._vix_term_structure_state(0.80) == "backwardation"
+    assert tools_L2._vix_term_structure_state(None) == "unavailable"
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ def test_percentile_window_available_matches_hand_computed_rank():
     merged = pd.DataFrame({"date": [pd.to_datetime(d) for d in dates], "ratio_vix3m_over_vix": ratios})
     anchor = merged["date"].iloc[-1]
 
-    result_max = tools_L1._vix_term_structure_percentile_window(
+    result_max = tools_L2._vix_term_structure_percentile_window(
         merged, anchor=anchor, years=5, current_value=ratios[-1], min_observations=50, min_span_days=30,
     )
     assert result_max["status"] == "available"
@@ -72,7 +72,7 @@ def test_percentile_window_available_matches_hand_computed_rank():
     assert result_max["sample_count"] == 100
 
     median_value = ratios[49]  # 0.50 -> exactly 50 of 100 values are <= 0.50
-    result_median = tools_L1._vix_term_structure_percentile_window(
+    result_median = tools_L2._vix_term_structure_percentile_window(
         merged, anchor=anchor, years=5, current_value=median_value, min_observations=50, min_span_days=30,
     )
     assert result_median["percentile"] == 50.0
@@ -83,7 +83,7 @@ def test_percentile_window_insufficient_history_is_honest_not_extrapolated():
     merged = pd.DataFrame({"date": [pd.to_datetime(d) for d in dates], "ratio_vix3m_over_vix": [1.0] * 10})
     anchor = merged["date"].iloc[-1]
 
-    result = tools_L1._vix_term_structure_percentile_window(
+    result = tools_L2._vix_term_structure_percentile_window(
         merged, anchor=anchor, years=5, current_value=1.0, min_observations=750, min_span_days=1460,
     )
     assert result["status"] == "insufficient_history"
@@ -105,12 +105,12 @@ def test_get_vix_term_structure_full_contract_and_contango_state(monkeypatch):
     vix6m_df = _series(dates, [22.0 + i * 0.05 for i in range(n)])
 
     monkeypatch.setattr(
-        tools_L1, "_get_series_for_effective_date",
+        tools_L2, "_get_series_for_effective_date",
         _fake_get_series_for_effective_date(vix_df, vix3m_df, vix6m_df),
     )
-    monkeypatch.setattr(tools_L1, "VIX_TERM_STRUCTURE_PERCENTILE_WINDOWS", SMALL_WINDOWS)
+    monkeypatch.setattr(tools_L2, "VIX_TERM_STRUCTURE_PERCENTILE_WINDOWS", SMALL_WINDOWS)
 
-    result = tools_L1.get_vix_term_structure(end_date=None)
+    result = tools_L2.get_vix_term_structure(end_date=None)
 
     assert result["availability"] == "available"
     v = result["value"]
@@ -145,12 +145,12 @@ def test_get_vix_term_structure_detects_backwardation_and_handles_missing_vix6m(
     empty_vix6m = pd.DataFrame(columns=["date", "value"])
 
     monkeypatch.setattr(
-        tools_L1, "_get_series_for_effective_date",
+        tools_L2, "_get_series_for_effective_date",
         _fake_get_series_for_effective_date(vix_df, vix3m_df, empty_vix6m),
     )
-    monkeypatch.setattr(tools_L1, "VIX_TERM_STRUCTURE_PERCENTILE_WINDOWS", SMALL_WINDOWS)
+    monkeypatch.setattr(tools_L2, "VIX_TERM_STRUCTURE_PERCENTILE_WINDOWS", SMALL_WINDOWS)
 
-    result = tools_L1.get_vix_term_structure(end_date=None)
+    result = tools_L2.get_vix_term_structure(end_date=None)
 
     v = result["value"]
     last_ratio = vix3m_values[-1] / vix_values[-1]
@@ -179,16 +179,16 @@ def test_get_vix_term_structure_respects_point_in_time_effective_date(monkeypatc
     vix6m_df = pd.DataFrame(columns=["date", "value"])
 
     monkeypatch.setattr(
-        tools_L1, "_get_series_for_effective_date",
+        tools_L2, "_get_series_for_effective_date",
         _fake_get_series_for_effective_date(vix_df, vix3m_df, vix6m_df),
     )
-    monkeypatch.setattr(tools_L1, "VIX_TERM_STRUCTURE_PERCENTILE_WINDOWS", {
+    monkeypatch.setattr(tools_L2, "VIX_TERM_STRUCTURE_PERCENTILE_WINDOWS", {
         "5y": {"years": 5, "min_observations": 5, "min_span_days": 5},
         "10y": {"years": 10, "min_observations": 5, "min_span_days": 5},
     })
 
     cutoff = "2024-01-15"
-    result = tools_L1.get_vix_term_structure(end_date=cutoff)
+    result = tools_L2.get_vix_term_structure(end_date=cutoff)
 
     v = result["value"]
     assert v["date"] <= cutoff
@@ -210,11 +210,11 @@ def test_get_vix_term_structure_unavailable_when_no_overlapping_dates(monkeypatc
     vix6m_df = pd.DataFrame(columns=["date", "value"])
 
     monkeypatch.setattr(
-        tools_L1, "_get_series_for_effective_date",
+        tools_L2, "_get_series_for_effective_date",
         _fake_get_series_for_effective_date(vix_df, vix3m_df, vix6m_df),
     )
 
-    result = tools_L1.get_vix_term_structure(end_date=None)
+    result = tools_L2.get_vix_term_structure(end_date=None)
     assert result["availability"] == "unavailable"
     assert result["value"] is None
     assert "unavailable_reason" in result

@@ -49,6 +49,7 @@ import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import tools_L1 as l1
+import tools_L2 as l2
 import tools_L4
 from agent_analysis.contracts import (
     AnalysisPacket,
@@ -140,7 +141,7 @@ def test_fed_funds_rate_path_metric_authority_keys_match_real_value_fields(monke
 
 
 # ---------------------------------------------------------------------------
-# L2.get_vix_term_structure (defined in tools_L1.py; L2 is the evidence-ref
+# L2.get_vix_term_structure (defined in tools_L2.py; L2 is the evidence-ref
 # layer label per core.collector.DataCollector.LAYER_FUNCTIONS[2])
 # ---------------------------------------------------------------------------
 
@@ -165,9 +166,9 @@ def test_vix_term_structure_metric_authority_keys_match_real_value_fields(monkey
     def fake_get_series(series_id, update_func, end_date):
         return {"VIX": vix_df, "VIX3M": vix3m_df, "VIX6M": vix6m_df}[series_id].copy()
 
-    monkeypatch.setattr(l1, "_get_series_for_effective_date", fake_get_series)
+    monkeypatch.setattr(l2, "_get_series_for_effective_date", fake_get_series)
     monkeypatch.setattr(
-        l1,
+        l2,
         "VIX_TERM_STRUCTURE_PERCENTILE_WINDOWS",
         {
             "5y": {"years": 5, "min_observations": 20, "min_span_days": 10},
@@ -175,7 +176,7 @@ def test_vix_term_structure_metric_authority_keys_match_real_value_fields(monkey
         },
     )
 
-    result = l1.get_vix_term_structure(end_date=None)
+    result = l2.get_vix_term_structure(end_date=None)
 
     assert result["availability"] == "available"
     value = result["value"]
