@@ -37,6 +37,15 @@
 - **衍生留档（不在本批擅动）**：critic/risk 产出引用无机器校验；机器字数带宽 300-3000 与提示词 600-1200 不一致——详见 AUDIT_FINDINGS.md 第七节，处置另定。
 - **红线测试**：`tests/test_docs_consistency.py`（文档纪律）+ 全量 pytest。
 
+### 【关闭 T58】O15/O16/O17 三件套施工：编号报序号、抄写岗撤除、异议亮灯
+
+- **O15 落地（冲突编号改报序号）**：`Conflict` 新增 `conflict_ordinal`（1-based，null=本站新发现）；thesis/reviser 两站模型面向 schema 里 `conflict_id` 物理摘除、strict 路径给序号注入 `[1..N]∪null` 选单（零候选时连序号字段一并摘除）；提示词末尾渲染"冲突清单（按序号引用）"，展示的清单 ≡ 映射的清单由构造保证。解析后 validator 阶段序号→编号映射（`_map_conflict_ordinals_to_ids`，orchestrator.py:4830）：越界/非整数 → 带合法范围的校验错误走既有反馈重试；ordinal 留空即清空 conflict_id——模型自填编号一律不采信，"抄错编号"最后一条物理路径关闭。下游（schema guard 认亲、final 校验、PC-23、IA 输入）零改动，编号仍是内部身份。
+- **O16 落地（stance_echo 代码装配）**：模型答卷里的 stance_echo 解析后一律摘除、不参与校验；"不等即整包打回"闸门撤除（该信号历史零触发）；产物里用输入 `final_stance` 回填（与 schema_version/judgment_object 同一装配模式）。IA 提示词删抄写要求，异议通道措辞强化并点名 PC-27 看守。
+- **O17 落地（PC-27 异议亮灯）**：`persistent_checks_b.py` 新增 `_check_pc27`——IA 产物缺失/降级拼装跳过；初版按"非空即不通过"实现。**实测发现亮灯口径问题**：最近四次真实跑 conflict_matrix 常态 9-10 行、unexplained 常态 3-4 条（多为 not_yet_testable 例行档），按字面口径 PC-27 会每次跑都红——狼来了风险。**老板 08-19 当日裁收窄**：只有 `challenged_by_data` 行（事件材料挑战数据判决，合约里必须带具体 data_side_refs）才亮灯——该行近四次真实跑零出现，平时安静、出事才叫。message 写明"不是系统故障，需人工阅读"。
+- **文档同批**：系统说明书 §一 27 项、§五 PC-11~PC-27、§2.11 stance_echo 段改已装配+PC-27 看守；T54 案卷两份追加后续裁决注记；`persistent_checks_b` docstring 同步。
+- **未做及理由**：final 站 `contradiction_id` 不动——它是"优先引用"性质的软引用，硬检查（T42③）是"编号出现在终审文本"的存在性检查，不属于"选择哪条冲突"的抄号场景；老 run checkpoint 续跑不受新校验影响（checkpoint 不过 validator）。
+- **验证**：全量 1283 passed / 2 failed（恰为 console_run_all 两条既知老红，T59 排队）；文档闸门 11 绿。新增测试：ordinal 映射与越界重试端到端、序号菜单渲染、stance_echo 装配、PC-27 四分支；改写 T34①/T42④ 四个 enum 测试为序号语义。
+
 ---
 
 ## 2026-08-18

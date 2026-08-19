@@ -50,8 +50,8 @@ def _questions() -> dict:
 
 
 def _valid_response(**overrides) -> str:
+    # T58/O16：stance_echo 已改代码装配，模型答卷不再包含该字段（填了也会被摘除覆盖）。
     body = {
-        "stance_echo": FINAL_STANCE,
         "integrated_verdict": ("综合判决正文。" * 80)[:520] + "[L1.get_10y_real_rate][card:event_abc12345]",
         "current_phenomena": ["实际利率 99 分位 [L1.get_10y_real_rate]"],
         "possible_mechanisms": ["资本开支可能通过盈利路径缓解估值压力"],
@@ -239,11 +239,17 @@ def test_successful_adjudication_and_unanswered_question_note():
     assert len(calls) == 1
 
 
-def test_stance_deviation_is_rejected():
+def test_stance_echo_assembled_by_code_not_model():
+    """T58/O16：stance_echo 改代码装配——模型即使自报偏离的姿态（旧机制的"改判
+    意图信号"，实测从未真实触发），也不再触发整包打回；产物里的 stance_echo
+    恒等于输入 payload 的 final_stance。异议意图由 conflict_matrix/unexplained
+    通道表达，PC-27 常设检查看守。"""
     payload, calls = _build(_valid_response(stance_echo="其实应该看多"))
-    assert payload["integrated_adjudication"] is None
-    assert "llm_adjudication_failed" in payload["policy"]["llm_note"]
-    assert len(calls) == 2  # 重试一次后放弃
+    adj = payload["integrated_adjudication"]
+    assert adj is not None
+    assert adj["stance_echo"] == FINAL_STANCE
+    assert payload["policy"]["llm_note"] == "adjudicated"
+    assert len(calls) == 1  # 不再因姿态抄写偏差重试
 
 
 def test_empty_response_falls_back_without_blocking():

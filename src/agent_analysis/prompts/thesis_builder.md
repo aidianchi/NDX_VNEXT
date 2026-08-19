@@ -249,7 +249,7 @@
   ],
   "retained_conflicts": [
     {
-      "conflict_id": "<原样抄 synthesis_packet 里该冲突的 conflict_id；本站新发现的才留 null>",
+      "conflict_ordinal": "<沿用上游冲突时填它在「冲突清单（按序号引用）」里的序号：第 1 条填 1、第 2 条填 2；本站新发现的冲突留 null。不要自己填 conflict_id，编号由系统按序号回填>",
       "conflict_type": "<冲突类型>",
       "severity": "high | medium | low",
       "description": "<冲突描述>",
@@ -348,6 +348,6 @@
 - `principal_contradiction` 是否来自 Bridge 矛盾地图，并解释主要矛盾、价格反映和行动含义？
 - `secondary_contradictions` 是否保留会约束行动的次要矛盾？
 - `key_support_chains` 是否使用有效 evidence refs？
-- `retained_conflicts` 是否保留所有高严重度冲突？沿用上游冲突时，`conflict_id` 是否**从 synthesis_packet 已经给出的编号里选**了一个（不是你自己重新命名、也不是改写前缀后缀）？编号对不上时，下游审计会误判成"冲突被抹平"。
+- `retained_conflicts` 是否保留所有高严重度冲突？沿用上游冲突时，`conflict_ordinal` 是否填了它在提示词末尾「冲突清单（按序号引用）」里的**序号**（第 1 条填 1，不是编号字符串本身）？编号由系统按序号回填——你只管报第几条，报错了系统会带合法范围打回。序号对不上时，下游审计会误判成"冲突被抹平"。
 - 失效条件是否覆盖了立场的反方向（谨慎立场有上行失效、进攻立场有下行失效）？
 - `overall_confidence` 是否与证据一致性和数据完备度匹配？一边倒且数据齐全时骑墙给 medium，与冲突剧烈时给 high，同样是失真。

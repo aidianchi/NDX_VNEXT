@@ -176,9 +176,11 @@ STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
     # 2026-07-29 追加 conflict_id：审计闸门按编号认亲，而正方会把上游冲突的类型名
     # 改写成自己的措辞（run 20260728_222759：bridge `rate_vs_valuation` → thesis
     # `real_rate_vs_valuation`），于是闸门谎报"高严重度冲突被抹平"——冲突其实一条没丢。
-    "thesis": ("hypothesis_responses", "evidence_index", "kept_unresolved", "downgraded", "conflict_id"),
+    # 2026-08-19 T58/O15：模型从"抄 conflict_id"改为"报 conflict_ordinal 序号、代码
+    # 展开成编号"（抄写笔误物理不可能），登记词同步换成模型真正要填的字段名。
+    "thesis": ("hypothesis_responses", "evidence_index", "kept_unresolved", "downgraded", "conflict_ordinal"),
     # reviser 同时受上述两条合约约束，是合约面最宽的治理 stage
-    "reviser": ("hypothesis_responses", "evidence_index", "kept_unresolved", "downgraded", "conflict_id"),
+    "reviser": ("hypothesis_responses", "evidence_index", "kept_unresolved", "downgraded", "conflict_ordinal"),
     # _validate_stage_evidence_refs + _validate_reasoned_verdict_refs（三条理由各带引用）
     # 2026-08-17 T54 批 6：claim_ledger 从模型答卷撤下——台账整本由代码装配
     # （_build_final_claim_ledger），模型输出在归一化阶段摘除、不进校验，登记词同步摘下。
@@ -665,16 +667,17 @@ class VNextOrchestrator:
                     stage_name="reviser",
                     model_cls=AnalysisRevised,
                     payload=reviser_payload,
-                    # T42④：reviser 重新产出同结构的 retained_conflicts[].conflict_id，
-                    # 必须与 thesis 站同款 enum 选单，防止模型抄写时自行改写编号前缀。
+                    # T58/O15（接替 T42④ 的 conflict_id enum）：reviser 与 thesis 同款
+                    # 序号机制——模型报 conflict_ordinal，代码映射回编号，抄写笔误物理关闭。
                     strict_tool_schema=self._strict_tool_schema_for_stage(
                         "reviser",
                         AnalysisRevised,
-                        schema_postprocess=lambda schema: self._constrain_reviser_conflict_id_enum(
+                        schema_postprocess=lambda schema: self._enforce_reviser_conflict_ordinal(
                             schema, conflict_id_candidates
                         ),
                     ),
                     strict_tool_name="emit_analysis_revised",
+                    prompt_appendix=self._render_conflict_ordinal_menu(conflict_id_candidates),
                     # 两道 pre-validate 降级，顺序不可颠倒：
                     # 1) 遗漏继承——reviser 整个漏掉的 revised_thesis 字段从 thesis 原稿原样
                     #    搬回并留痕（键存在则一律不碰，见 _carry_forward_reviser_thesis_fields）；
@@ -691,7 +694,15 @@ class VNextOrchestrator:
                         thesis,
                     ),
                     validator=lambda candidate: (
-                        self._validate_stage_evidence_refs(
+                        self._map_conflict_ordinals_to_ids(
+                            [
+                                *candidate.revised_thesis.retained_conflicts,
+                                *candidate.remaining_conflicts,
+                            ],
+                            conflict_id_candidates,
+                            "reviser",
+                        )
+                        + self._validate_stage_evidence_refs(
                             candidate,
                             set(synthesis_packet.evidence_index.keys()),
                             "reviser",
@@ -4480,6 +4491,9 @@ class VNextOrchestrator:
     # `revised_thesis.retained_conflicts[].conflict_id` 注入与 thesis 同款的 enum 选单；
     # final / critic 纳入白名单——T44 核实 FinalAdjudication 的 3 处自由形态 object
     # 全部是代码事后填、模型从不需要填，Critique 则 0 处自由形态 object。
+    # 2026-08-19 T58/O15：thesis/reviser 的 enum 选单从 conflict_id 撤下，改为给
+    # `conflict_ordinal` 注入 [1..N] ∪ null 并从模型面向 schema 摘除 conflict_id
+    # （模型报序号、代码展开编号，见 `_enforce_conflict_ordinal_for_paths`）。
     _STRICT_TOOL_CALLING_ELIGIBLE_STAGES = {
         "bridge", "thesis", "event_card_interpreter", "event_section_summary",
         "reviser", "final", "critic",
@@ -4499,8 +4513,9 @@ class VNextOrchestrator:
         方便用户在一次真实 run 前后随时打开/关闭做对比，不需要改代码。
 
         `schema_postprocess`（T34①新增）：可选的按本轮 run 动态改写 schema 的钩子，
-        例如 thesis 站把 `retained_conflicts[].conflict_id` 收紧成本轮 bridge 实际
-        给出的编号 enum（见 `_constrain_thesis_retained_conflict_id_enum`）。只有在
+        例如 thesis 站把 `retained_conflicts[].conflict_ordinal` 收紧成本轮 bridge 实际
+        给出的冲突清单序号 enum（见 `_enforce_thesis_conflict_ordinal`，T58/O15 起从
+        conflict_id enum 改为序号 enum）。只有在
         真正启用严格模式（上面两道判断都通过）时才会被调用一次；未启用时钩子完全
         不执行，不影响"未启用=逐字节相同"这条保证。"""
         if stage_key not in self._STRICT_TOOL_CALLING_ELIGIBLE_STAGES:
@@ -4580,14 +4595,24 @@ class VNextOrchestrator:
             strict_tool_schema=self._strict_tool_schema_for_stage(
                 "thesis",
                 ThesisDraft,
-                schema_postprocess=lambda schema: self._constrain_thesis_retained_conflict_id_enum(
+                schema_postprocess=lambda schema: self._enforce_thesis_conflict_ordinal(
                     schema, conflict_id_candidates
                 ),
             ),
             strict_tool_name="emit_thesis_draft",
-            validator=lambda candidate: self._validate_thesis_hypothesis_responses(
-                candidate,
-                synthesis_packet,
+            # T58/O15：提示词附「冲突清单（按序号引用）」，模型报 conflict_ordinal 序号、
+            # 代码在合约校验阶段映射回 conflict_id；清单与映射共用同一份候选、同一顺序。
+            prompt_appendix=self._render_conflict_ordinal_menu(conflict_id_candidates),
+            validator=lambda candidate: (
+                self._map_conflict_ordinals_to_ids(
+                    candidate.retained_conflicts,
+                    conflict_id_candidates,
+                    "thesis.retained_conflicts",
+                )
+                + self._validate_thesis_hypothesis_responses(
+                    candidate,
+                    synthesis_packet,
+                )
             ),
         )
         self._save_json("thesis_draft.json", thesis)
@@ -4602,7 +4627,9 @@ class VNextOrchestrator:
     @staticmethod
     def _collect_thesis_conflict_id_candidates(synthesis_packet: SynthesisPacket) -> List[str]:
         """收集本轮 thesis 输入（`synthesis_packet`）里模型实际看得见的全部
-        conflict_id，作为严格 schema enum 的候选集合（T34①）。只取模型这一轮
+        conflict_id，作为冲突清单的唯一有序候选集合（T34① 起用于 strict enum；
+        T58/O15 起同时作为提示词「冲突清单（按序号引用）」与序号→编号映射的
+        同一份清单——三处共用本函数的输出，顺序即序号）。只取模型这一轮
         真的看得见的编号——它看不见的编号不该允许它填：
 
         - `high_severity_typed_conflicts[].conflict_id`（TypedConflict，Bridge v2）
@@ -4611,8 +4638,8 @@ class VNextOrchestrator:
           覆盖面比 high_severity_* 更全——后者只是"必须保留"的子集）
 
         按上述顺序去重保序返回；不在这里追加 `None`，"允许留空表示本站新发现的
-        冲突"这条语义由调用方（`_constrain_thesis_retained_conflict_id_enum`）负责。
-        """
+        冲突"这条语义由调用方（`_enforce_thesis_conflict_ordinal` /
+        `_map_conflict_ordinals_to_ids`）负责。"""
         candidates: List[str] = []
         seen: set = set()
 
@@ -4678,32 +4705,35 @@ class VNextOrchestrator:
             return node
         return None
 
-    def _constrain_conflict_id_enum_for_paths(
+    def _enforce_conflict_ordinal_for_paths(
         self,
         schema: Dict[str, Any],
         candidate_conflict_ids: List[str],
         paths: tuple,
     ) -> Dict[str, Any]:
-        """按给定路径给 `Conflict.conflict_id` 注入 enum 选单的通用实现。
+        """T58/O15：把模型面向的 strict schema 里 `Conflict.conflict_id` 摘除，改用
+        `conflict_ordinal`（1-based 序号）承接引用意图——模型报"第几条"，解析后由
+        代码映射回编号（`_map_conflict_ordinals_to_ids`），抄写笔误物理不可能。
 
         `paths` 是 schema 内指向 `List[Conflict]` 数组字段的属性路径元组，例如
         `(("retained_conflicts",),)` 或 `(("revised_thesis", "retained_conflicts"),
         ("remaining_conflicts",))`。路径上的 `$ref` 节点会先解析成真正的 object
         schema，再继续向下走；兼容 sanitize 后两种数组形态（直接 items / anyOf
-        包裹）。所有路径最终都指向同一个 `$defs.Conflict` 时，enum 只会在同一处
-        节点上设置一次，重复设置无副作用。
+        包裹）。所有路径最终都指向同一个 `$defs.Conflict` 时，改写只会在同一处
+        节点上生效，重复改写无副作用。
+
+        候选清单非空时给 `conflict_ordinal` 注入 `[1..N] ∪ null` 的 enum；候选为空
+        （本轮上游零冲突，序号无处可指，按设计必须为 null）时连 `conflict_ordinal`
+        一并从 properties/required 摘除——模型物理上无法输出它，等效于恒为 null，
+        同时避开部分 provider 对单值/空 enum 直接拒请求的风险。
         """
-        if not candidate_conflict_ids:
-            return schema
         dedup: List[str] = []
         seen: set = set()
         for conflict_id in candidate_conflict_ids:
             if conflict_id and conflict_id not in seen:
                 seen.add(conflict_id)
                 dedup.append(conflict_id)
-        if not dedup:
-            return schema
-        enum_values: List[Optional[str]] = [*dedup, None]
+        ordinal_enum: List[Optional[int]] = [*range(1, len(dedup) + 1), None]
 
         for path in paths:
             node: Any = schema
@@ -4719,49 +4749,52 @@ class VNextOrchestrator:
             conflict_object_schema = self._resolve_strict_schema_object_node(items_node, schema)
             if conflict_object_schema is None:
                 continue
-            conflict_id_node = conflict_object_schema.get("properties", {}).get("conflict_id")
-            if isinstance(conflict_id_node, dict):
-                conflict_id_node["enum"] = enum_values
+            properties = conflict_object_schema.get("properties")
+            if not isinstance(properties, dict):
+                continue
+            required = conflict_object_schema.get("required")
+            removed = ["conflict_id"]
+            properties.pop("conflict_id", None)
+            if dedup:
+                ordinal_node = properties.get("conflict_ordinal")
+                if isinstance(ordinal_node, dict):
+                    ordinal_node["enum"] = ordinal_enum
+            else:
+                properties.pop("conflict_ordinal", None)
+                removed.append("conflict_ordinal")
+            if isinstance(required, list):
+                conflict_object_schema["required"] = [
+                    name for name in required if name not in removed
+                ]
         return schema
 
-    def _constrain_thesis_retained_conflict_id_enum(
+    def _enforce_thesis_conflict_ordinal(
         self,
         schema: Dict[str, Any],
         candidate_conflict_ids: List[str],
     ) -> Dict[str, Any]:
-        """T34①：把 `ThesisDraft.retained_conflicts[].conflict_id` 的取值域收紧为
-        「本轮 bridge 实际给出的 conflict_id」∪ null 的 enum。
+        """T58/O15（接替 T34① 的 conflict_id enum）：thesis 站 `retained_conflicts`
+        改报 `conflict_ordinal` 序号。
 
-        真实事故（run 20260730_114704，本改动接替的 T31 假设的证伪证据）：旧判据
-        是"要求模型把 bridge 的 conflict_id 原样抄进这个字段"，结果模型把
-        `TC1_restrictive_macro_vs_moderate_valuation` 写成了
-        `C1_restrictive_macro_vs_moderate_valuation`——后缀一字不差，前缀自行
-        改写。这不是模型能力差，是机制选错了：靠"抄"字符串没有物理约束。改成
-        enum 后模型只能从清单里选，物理上打不出清单外的值。
-
-        `candidate_conflict_ids` 为空（本轮 bridge 一条 conflict_id 都没给）时，
-        原样返回 schema，不注入任何 enum——`Conflict.conflict_id` 留空是"本站新
-        发现的冲突"的合法表达（见 contracts.py 字段描述），注入空 enum 或
-        `enum: [null]` 等于物理上禁止模型填任何编号，语义上说不通；部分 provider
-        对空 enum 还会直接拒绝请求。
+        历史事故链：run 20260730_114704 模型把 `TC1_restrictive_macro_vs_moderate_
+        valuation` 抄成 `C1_…`（前缀自行改写）——T34① 用 enum 选单让模型"选而不抄"，
+        但选单仍要求模型读写编号字符串；O15 裁决再退一步：模型只报序号，编号由代码
+        展开，连"选编号"这一步的字符串都不再经过模型的手。
         """
-        return self._constrain_conflict_id_enum_for_paths(
+        return self._enforce_conflict_ordinal_for_paths(
             schema,
             candidate_conflict_ids,
             (("retained_conflicts",),),
         )
 
-    def _constrain_reviser_conflict_id_enum(
+    def _enforce_reviser_conflict_ordinal(
         self,
         schema: Dict[str, Any],
         candidate_conflict_ids: List[str],
     ) -> Dict[str, Any]:
-        """T42④：reviser 输出的 `AnalysisRevised.revised_thesis` 与 `remaining_conflicts`
-        都是 `Conflict` 结构，要重新产出同结构的 `conflict_id`。把 thesis 站已验证的
-        enum 选单机制原样接到 reviser 站：模型只能从本轮 bridge 实际给出的编号里选，
-        不能在抄写时自行改写前缀（T34 事故 `TC1_…` → `C1_…` 的重演路径就此物理关闭）。
-        """
-        return self._constrain_conflict_id_enum_for_paths(
+        """T58/O15（接替 T42④）：reviser 输出的 `AnalysisRevised.revised_thesis` 与
+        `remaining_conflicts` 都是 `Conflict` 结构，两条路径同样改报序号。"""
+        return self._enforce_conflict_ordinal_for_paths(
             schema,
             candidate_conflict_ids,
             (
@@ -4769,6 +4802,67 @@ class VNextOrchestrator:
                 ("remaining_conflicts",),
             ),
         )
+
+    @staticmethod
+    def _render_conflict_ordinal_menu(candidate_conflict_ids: List[str]) -> str:
+        """T58/O15：thesis/reviser 提示词末尾附的「冲突清单（按序号引用）」。
+
+        模型沿用上游冲突时报本清单的序号（`conflict_ordinal`），代码按同一份清单、
+        同一顺序映射回 `conflict_id`——本函数的输入必须就是
+        `_collect_thesis_conflict_id_candidates` 的输出，两处不得各自重建。
+        """
+        lines = [
+            "## 冲突清单（按序号引用）",
+            "沿用上游冲突时，只在 `conflict_ordinal` 填它在下面清单里的序号（第 1 条填 1）；"
+            "`conflict_id` 由系统按序号回填，不要自己填写或改写。"
+            "本站新发现的冲突（清单里不存在的）把 `conflict_ordinal` 留 null。",
+        ]
+        if candidate_conflict_ids:
+            lines.extend(
+                f"第 {index} 条：{conflict_id}"
+                for index, conflict_id in enumerate(candidate_conflict_ids, start=1)
+            )
+        else:
+            lines.append("（本轮上游没有已编号冲突——`conflict_ordinal` 一律留 null。）")
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _map_conflict_ordinals_to_ids(
+        conflicts: List[Any],
+        candidate_conflict_ids: List[str],
+        label: str,
+    ) -> List[str]:
+        """T58/O15：把模型报的 `conflict_ordinal`（1-based）展开成清单对应条目的
+        `conflict_id` 写回产物，供下游（schema guard 认亲、final 校验、PC-23、IA
+        输入）不变地使用。在 `_run_stage` 的 validator 阶段执行：序号越界/非整数
+        返回校验错误，走既有"带错误反馈重试"通道，反馈里写明合法范围。
+
+        序号留空（null）= 本站新发现的冲突，`conflict_id` 由代码清空——编号通道
+        完全由代码持有，模型自填的任何 conflict_id 一律不采信（这是"抄错编号"的
+        最后一条物理残留路径，一并关闭）。"""
+        errors: List[str] = []
+        total = len(candidate_conflict_ids)
+        for index, conflict in enumerate(conflicts or []):
+            ordinal = getattr(conflict, "conflict_ordinal", None)
+            if ordinal is None:
+                conflict.conflict_id = None
+                continue
+            if isinstance(ordinal, bool) or not isinstance(ordinal, int) or not 1 <= ordinal <= total:
+                if total:
+                    errors.append(
+                        f"{label}[{index}].conflict_ordinal={ordinal!r} 越界：本轮冲突清单共 "
+                        f"{total} 条，合法取值是 1..{total} 的整数或 null（本站新发现的冲突留空）。"
+                        "清单见提示词「冲突清单（按序号引用）」。"
+                    )
+                else:
+                    errors.append(
+                        f"{label}[{index}].conflict_ordinal={ordinal!r} 非法：本轮上游零冲突，"
+                        "清单为空，conflict_ordinal 必须留空 null（本站新发现的冲突留空）。"
+                    )
+                continue
+            conflict.conflict_id = candidate_conflict_ids[ordinal - 1]
+        return errors
+
 
     def _validate_thesis_hypothesis_responses(
         self,
@@ -5666,6 +5760,7 @@ class VNextOrchestrator:
         strict_tool_schema: Optional[Dict[str, Any]] = None,
         strict_tool_name: Optional[str] = None,
         raw_text_fallback: Optional[Callable[[str, str], Optional[Any]]] = None,
+        prompt_appendix: Optional[str] = None,
     ) -> Any:
         """`raw_text_fallback`（T36 新增，默认 None，其余调用点不传，行为逐字节不变）：
         全部尝试耗尽、即将抛 RuntimeError 前的最后一道兜底，只对"结构本身就没能
@@ -5675,8 +5770,12 @@ class VNextOrchestrator:
         不再抛异常）；返回 None 就维持原样抛出 RuntimeError。调用方必须自己判断
         `last_error_kind`（如只接受 "parse_error"），不能替它兜底——`_run_stage`
         本身不改变判定 parse_error / schema_validation_error / contract_validation_error
-        的既有逻辑，只是把"耗尽后怎么办"这一步交还给调用方。"""
-        prompt = self._compose_prompt(stage_key, model_cls, payload)
+        的既有逻辑，只是把"耗尽后怎么办"这一步交还给调用方。
+
+        `prompt_appendix`（T58/O15 新增，默认 None）：追加在提示词「输出字段规格」
+        之后、「Response Rules」之前的额外章节（如 thesis/reviser 的冲突序号清单），
+        由调用方按本轮 run 动态生成；不传时提示词与此前逐字节相同。"""
+        prompt = self._compose_prompt(stage_key, model_cls, payload, prompt_appendix=prompt_appendix)
         preferred_models = self._preferred_models_for_stage(stage_key)
         last_error = ""
         last_raw_response = ""
@@ -6952,8 +7051,10 @@ class VNextOrchestrator:
             ):
                 message += (
                     "；注意：retained_conflicts 共 "
-                    f"{len(thesis.retained_conflicts)} 条但无一条填写 conflict_id，"
-                    "本条告警可能是编号未沿用而非冲突真被抹平，请先核对描述内容再下结论"
+                    f"{len(thesis.retained_conflicts)} 条但无一条带 conflict_id"
+                    "（T58/O15 起编号由代码按 conflict_ordinal 回填，无编号意味着"
+                    " conflict_ordinal 全部留空），"
+                    "本条告警可能是序号未沿用而非冲突真被抹平，请先核对描述内容再下结论"
                 )
             consistency_issues.append(message)
 
@@ -7020,7 +7121,13 @@ class VNextOrchestrator:
     def _indicator_unavailable_for_analysis(self, payload: Dict[str, Any]) -> bool:
         return indicator_payload_unavailable_reason(payload) is not None
 
-    def _compose_prompt(self, stage_key: str, model_cls: Type[Any], payload: Dict[str, Any]) -> str:
+    def _compose_prompt(
+        self,
+        stage_key: str,
+        model_cls: Type[Any],
+        payload: Dict[str, Any],
+        prompt_appendix: Optional[str] = None,
+    ) -> str:
         prompt_payload = self._sanitize_prompt_payload(stage_key, payload)
         prompt_body = self._load_prompt(stage_key)
         if stage_key.startswith("l") and stage_key.endswith("_analyst"):
@@ -7031,12 +7138,17 @@ class VNextOrchestrator:
             prompt_body = self._compose_thesis_prompt(prompt_body, prompt_payload)
         fields = list(getattr(model_cls, "model_fields", {}).keys())
         schema_hint = ", ".join(fields) if fields else model_cls.__name__
-        field_spec = self._render_contract_field_spec(model_cls)
+        # T58/O15：thesis/reviser 的 Conflict.conflict_id 是代码装配字段，不得出现在
+        # 模型面向的字段规格里（模型报 conflict_ordinal 序号，编号由代码展开）。
+        hidden_subfields = {"conflict_id"} if stage_key in {"thesis", "reviser"} else frozenset()
+        field_spec = self._render_contract_field_spec(model_cls, hidden_subfields=hidden_subfields)
+        appendix = f"{prompt_appendix}\n" if prompt_appendix else ""
         return (
             f"{prompt_body}\n\n"
             "## Runtime Input\n"
             f"{json.dumps(prompt_payload, ensure_ascii=False, indent=2, default=str)}\n\n"
             f"{field_spec}"
+            f"{appendix}"
             "## Response Rules\n"
             "- 只返回一个 JSON 对象。\n"
             "- 不要使用 markdown code fence。\n"
@@ -7111,8 +7223,17 @@ class VNextOrchestrator:
         return ""
 
     @classmethod
-    def _render_contract_type(cls, annotation: Any, *, depth: int = 0) -> str:
-        """把 pydantic 字段注解渲染成一句人能读、模型也能照做的形状说明。"""
+    def _render_contract_type(
+        cls,
+        annotation: Any,
+        *,
+        depth: int = 0,
+        hidden_subfields: Any = frozenset(),
+    ) -> str:
+        """把 pydantic 字段注解渲染成一句人能读、模型也能照做的形状说明。
+
+        `hidden_subfields`（T58/O15）：渲染子模型字段清单时要跳过的字段名集合
+        （如 thesis/reviser 站的 `conflict_id`——代码装配字段不进模型面向的规格）。"""
         import enum
         import typing
 
@@ -7122,12 +7243,18 @@ class VNextOrchestrator:
             origin is not None and getattr(origin, "__name__", "") == "UnionType"
         ):
             non_none = [arg for arg in args if arg is not type(None)]  # noqa: E721
-            rendered = " 或 ".join(cls._render_contract_type(arg, depth=depth) for arg in non_none)
+            rendered = " 或 ".join(
+                cls._render_contract_type(arg, depth=depth, hidden_subfields=hidden_subfields)
+                for arg in non_none
+            )
             return f"{rendered} 或 null" if len(non_none) < len(args) else rendered
         if origin is typing.Literal or str(origin) == "typing.Literal":
             return "取值之一：" + " / ".join(json.dumps(arg, ensure_ascii=False) for arg in args)
         if origin in (list, set, tuple):
-            inner = cls._render_contract_type(args[0], depth=depth) if args else "任意值"
+            inner = (
+                cls._render_contract_type(args[0], depth=depth, hidden_subfields=hidden_subfields)
+                if args else "任意值"
+            )
             return f"数组，元素为 {inner}"
         if origin is dict:
             return "对象（键自由）"
@@ -7151,7 +7278,11 @@ class VNextOrchestrator:
                     return f"对象 {annotation.__name__}"
                 shown: List[str] = []
                 budget = cls._CONTRACT_SPEC_NESTED_FIELD_LIMIT
+                hidden_count = 0
                 for sub_name, sub_field in sub_fields.items():
+                    if sub_name in hidden_subfields:
+                        hidden_count += 1
+                        continue
                     hint = cls._render_contract_nested_hint(
                         getattr(sub_field, "annotation", None)
                     )
@@ -7161,11 +7292,16 @@ class VNextOrchestrator:
                     elif budget > 0:
                         shown.append(sub_name)
                         budget -= 1
-                suffix = ", …" if len(shown) < len(sub_fields) else ""
+                suffix = ", …" if len(shown) < len(sub_fields) - hidden_count else ""
                 return f"对象 {annotation.__name__}{{{', '.join(shown)}{suffix}}}"
         return "任意值"
 
-    def _render_contract_field_spec(self, model_cls: Type[Any]) -> str:
+    def _render_contract_field_spec(
+        self,
+        model_cls: Type[Any],
+        *,
+        hidden_subfields: Any = frozenset(),
+    ) -> str:
         """由契约本身生成输出字段规格，取代"靠人记得把字段写进说明书"。
 
         2026-07-28 用户裁决：合约写在代码里、说明书写在 prompt 里、再拿一张关键词
@@ -7184,7 +7320,9 @@ class VNextOrchestrator:
             return ""
         lines: List[str] = []
         for name, field in model_fields.items():
-            shape = self._render_contract_type(getattr(field, "annotation", None))
+            shape = self._render_contract_type(
+                getattr(field, "annotation", None), hidden_subfields=hidden_subfields
+            )
             necessity = "必填" if field.is_required() else "可选"
             description = str(getattr(field, "description", "") or "").strip()
             if len(description) > self._CONTRACT_SPEC_DESCRIPTION_LIMIT:

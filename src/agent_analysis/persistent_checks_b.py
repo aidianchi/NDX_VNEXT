@@ -1,4 +1,4 @@
-"""T47 常设检查 B 包（PC-11 ~ PC-26）。
+"""T47 常设检查 B 包（PC-11 ~ PC-27）。
 
 只读机器检查：输入 = 一次 run 的落盘产物目录（run_dir），输出 = 结构化结果列表。
 不调 LLM、不联网、不写 run_dir；模块 import 无副作用。
@@ -10,7 +10,8 @@
 原始发现依据：
     investigation_reports/20260806_t47_context_review/03_根本审查总报告.md §3
     的 B4/B5/B7/B8/B11/B12/B13/C3/C5/C12 与 §8 第 20 项；
-    PC-21~26 为 08-16 补病（B3/B6/B11 另一半/C1/C2/C4），B14 无法机器化（见注释）。
+    PC-21~26 为 08-16 补病（B3/B6/B11 另一半/C1/C2/C4），B14 无法机器化（见注释）；
+    PC-27 为 08-19 O17（IA 挑战数据判决亮灯：只有 challenged_by_data 行才亮，当日收窄）。
 按"病出现 = failed"反写。
 """
 
@@ -1179,6 +1180,60 @@ def _check_pc26(run_dir: Path) -> Dict[str, Any]:
     )
 
 
+def _check_pc27(run_dir: Path) -> Dict[str, Any]:
+    """O17（2026-08-19 老板裁决，当日收窄）：IA 挑战数据判决即亮灯。
+
+    stance_echo 改代码装配（O16）后，`conflict_matrix` / `unexplained` 是"IA 认为
+    数据判决与外部世界存在未解决张力"的看守通道。初版按"非空即亮灯"实现，实测最近
+    四次真实跑 conflict_matrix 常态 9-10 行、unexplained 常态 3-4 条（多为
+    not_yet_testable 例行登记）——天天亮等于没有灯。老板当日裁收窄：**只有
+    `challenged_by_data` 行（事件材料挑战了数据判决）才亮灯**——该行在合约里必须
+    带具体 data_side_refs（contracts.py IntegratedConflictRow），平时安静、出事才叫。
+    亮灯**不是系统故障**——是 IA 按合约记录了挑战，需要人工阅读，不许静默流过。"""
+    check_name = "IA 挑战数据判决亮灯（O17）"
+    evidence = "integrated_synthesis_report.json:integrated_adjudication.conflict_matrix/unexplained"
+    report_path = run_dir / "integrated_synthesis_report.json"
+    if not report_path.is_file():
+        return _make_result(
+            "PC-27", check_name, True,
+            "跳过：缺失 artifact integrated_synthesis_report.json（IA 未跑）",
+            "integrated_synthesis_report.json",
+        )
+    try:
+        report = _load_json(report_path)
+    except Exception as exc:
+        return _make_result(
+            "PC-27", check_name, False,
+            f"check_error:{type(exc).__name__}:{exc}",
+            "integrated_synthesis_report.json",
+        )
+    adjudication = report.get("integrated_adjudication") if isinstance(report, dict) else None
+    if not isinstance(adjudication, dict):
+        return _make_result(
+            "PC-27", check_name, True,
+            "跳过：integrated_adjudication 为空（IA 未跑或降级未裁决）",
+            evidence,
+        )
+    if not adjudication.get("llm_adjudicated"):
+        return _make_result(
+            "PC-27", check_name, True,
+            "跳过：llm_adjudicated=false（降级拼装），异议通道不适用",
+            evidence,
+        )
+    challenged = [
+        row for row in adjudication.get("conflict_matrix") or []
+        if isinstance(row, dict) and str(row.get("relation") or "") == "challenged_by_data"
+    ]
+    if challenged:
+        return _make_result(
+            "PC-27", check_name, False,
+            "这不是系统故障，是 IA 记录了事件材料对数据判决的挑战，需要人工阅读："
+            f"challenged_by_data {len(challenged)} 行",
+            evidence,
+        )
+    return _make_result("PC-27", check_name, True, "IA 未记录对数据判决的挑战", evidence)
+
+
 # B14（摘要层取舍标准无定义）不能机器化：必须先由人声明每层摘要取舍标准，之后才能
 # 机械化检查"被省掉的恰是关键指标"这类语义问题。标准归 C9/T38 设计文档一并定，不单
 # 独设检查；此注释即"为何不能"的留档。
@@ -1205,11 +1260,12 @@ _CHECKS: List[Tuple[str, str, Any]] = [
     ("PC-24", "L3 持仓锚计数与滞后声明（C1）", _check_pc24),
     ("PC-25", "supplier_lookback 待验证仍撑主斜率（C2）", _check_pc25),
     ("PC-26", "yield gap 身份矛盾检测（C4）", _check_pc26),
+    ("PC-27", "IA 挑战数据判决亮灯（O17）", _check_pc27),
 ]
 
 
 def run_checks_b(run_dir: Path) -> List[Dict[str, Any]]:
-    """对一次 run 的落盘产物执行 PC-11 ~ PC-26 只读检查。"""
+    """对一次 run 的落盘产物执行 PC-11 ~ PC-27 只读检查。"""
     results: List[Dict[str, Any]] = []
     for check_id, name, func in _CHECKS:
         try:

@@ -507,7 +507,11 @@ class IntegratedAdjudication(BaseModel):
     schema_version: str = Field("integrated_adjudication_v1")
     llm_adjudicated: bool = Field(True, description="是否由模型真实裁决（否则为降级拼装）")
     judgment_object: str = Field("NDX", description="判断对象")
-    stance_echo: str = Field(..., min_length=1, description="逐字复制第一层 final_stance；不许改判")
+    stance_echo: str = Field(
+        "",
+        description="第一层 final_stance 的原文回声；由代码装配（2026-08-19 T58/O16），"
+        "模型不填写——它觉得数据判决错了只能写 conflict_matrix/unexplained 异议通道"
+    )
     integrated_verdict: str = Field(..., description="600-1200 字综合判决正文（机器校验带 400-1500）")
     current_phenomena: List[str] = Field(default_factory=list)
     possible_mechanisms: List[str] = Field(default_factory=list)
@@ -943,9 +947,16 @@ class Conflict(BaseModel):
     这就像侦探发现的"矛盾线索"。
     比如 "L4 说估值偏高，但 L5 说趋势强劲"，这是一个潜在冲突。
     """
+    conflict_ordinal: Optional[int] = Field(
+        None,
+        description="沿用上游冲突时，填它在本站输入「冲突清单（按序号引用）」里的序号"
+        "（1-based，第 1 条填 1）；本站新发现的冲突留空 null。"
+        "conflict_id 由代码按序号回填（T58/O15），模型不要填写"
+    )
     conflict_id: Optional[str] = Field(
         None,
-        description="从 synthesis_packet 已给出的 conflict_id 中选一个；本站新发现的冲突留空"
+        description="内部字段，由代码装配、模型不填写：bridge 侧由 typed_conflicts 反向重建"
+        "（T54）；thesis/reviser 侧按 conflict_ordinal 映射回填（2026-08-19 T58/O15）"
     )
     conflict_type: str = Field(
         ...,

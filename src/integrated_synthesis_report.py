@@ -494,6 +494,12 @@ class IntegratedSynthesisReportBuilder:
             raise ValueError("no json object found")
         data = json.loads(text[start : end + 1], strict=False)
         data = self._normalize_adjudication_payload(data, cards, questions)
+        # T58/O16：stance_echo 改代码装配（与下方 model_copy 的 schema_version/
+        # judgment_object 同一模式）——模型答卷里的 stance_echo 一律摘除、不参与校验；
+        # 旧"不等即整包打回"闸门同步撤除（该信号从未真实触发；模型的异议意图改由
+        # conflict_matrix/unexplained 通道表达，由常设检查 PC-27 看守）。
+        if isinstance(data, dict):
+            data.pop("stance_echo", None)
 
         card_ids = {str(card.get("event_id") or "") for card in cards}
         question_by_id = {q["question_id"]: q["question"] for q in questions}
@@ -640,8 +646,6 @@ class IntegratedSynthesisReportBuilder:
         data["conflict_matrix"] = cleaned_rows
 
         model = IntegratedAdjudication.model_validate(data)
-        if model.stance_echo.strip() != str(payload.get("final_stance") or "").strip():
-            raise ValueError("stance_echo deviates from final_stance; layer-3 may not re-adjudicate")
 
         # 正文标注校验（对齐 R3 纪律）：未知 ref 与 audit-only ref 留痕（C3/C2/I7）。
         verdict_notes = list(model.notes) + notes
@@ -668,8 +672,11 @@ class IntegratedSynthesisReportBuilder:
             "llm_adjudicated": True,
             # T54 批 1（机械字段不出答卷）：schema_version / judgment_object 是固定字面量，
             # 由代码装配——模型填错一律覆盖，模型原文留在 prompt_audit。
+            # T58/O16：stance_echo 同款处理——用输入 payload 的 final_stance 回填，
+            # 保留在产物里供审计阅读，模型侧该字段已摘除（见上方 data.pop 注释）。
             "schema_version": "integrated_adjudication_v1",
             "judgment_object": "NDX",
+            "stance_echo": str(payload.get("final_stance") or ""),
         })
         return result.model_dump(mode="json")
 
@@ -709,7 +716,7 @@ class IntegratedSynthesisReportBuilder:
                 return [item for item in items if item]
             return []
 
-        for key in ("principal_contradiction", "principal_aspect", "strongest_counterevidence", "stance_echo"):
+        for key in ("principal_contradiction", "principal_aspect", "strongest_counterevidence"):
             if key in data:
                 data[key] = _to_text(data[key])
         for key in (

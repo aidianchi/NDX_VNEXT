@@ -2145,7 +2145,7 @@ def test_schema_guard_flags_missing_conflict_id_as_possible_id_gap(tmp_path: Pat
     joined = "\n".join(report.consistency_issues)
     assert "High severity conflicts missing" in joined
     assert "T1_real_rate_valuation_tension" in joined
-    assert "无一条填写 conflict_id" in joined, "必须提示这可能是编号缺失而非冲突丢失"
+    assert "无一条带 conflict_id" in joined, "必须提示这可能是编号缺失而非冲突丢失"
 
 
 def test_event_section_summary_errors_carry_prefixed_citation_example(tmp_path: Path):
@@ -3341,26 +3341,24 @@ def test_strict_tool_schema_for_stage_enabled_for_bridge_via_env_var(tmp_path: P
     assert set(schema["required"]) == set(schema["properties"].keys())
 
 
-# --- T34①：thesis retained_conflicts[].conflict_id 严格 schema enum ---------
+# --- T58/O15：thesis/reviser 冲突引用改"报序号"（conflict_ordinal → 代码展开编号）---
 #
-# 真实事故（run 20260730_114704，被本改动直接接替的 T31 假设）：合约要求模型
-# "沿用上游 bridge 的 conflict_id 原文"，实测模型把
-# `TC1_restrictive_macro_vs_moderate_valuation` 写成了
-# `C1_restrictive_macro_vs_moderate_valuation`——后缀一字不差，前缀自行改写。
-# 这证明"要求模型原样抄字符串"没有物理约束、不可靠。修正判据：把候选值直接
-# 写进严格 schema 的 `enum`，模型物理上打不出清单外的值——"让它选"而不是
-# "让它抄"。下面几个测试钉住这条修法本身，而不是钉住某一版 sanitize 输出
-# 的具体形状（另一个 worker 正在并行改 llm_engine.sanitize_json_schema_for_
-# strict_tool_calling，会让可选数组字段的路径从 `properties.X.items` 漂移成
-# `properties.X.anyOf[0].items`——两种形态都必须被正确处理，否则线上一旦
-# 采用了后一种形态，enum 注入会静默失效，问题不会在测试里暴露，只会在下一次
-# 真实 run 里重演"抄错编号"）。
+# 接替 T34①/T42④ 的 conflict_id enum 选单。历史事故链：run 20260730_114704 模型把
+# `TC1_restrictive_macro_vs_moderate_valuation` 抄成 `C1_…`——"让模型抄/选编号字符串"
+# 这条通道本身不可靠。O15 裁决：模型只报"第几条"（conflict_ordinal，1-based），
+# 编号由代码映射回填，抄写笔误物理不可能。下面钉住这条修法本身：strict schema 里
+# conflict_id 被物理摘除、conflict_ordinal 注入 [1..N]∪null；零候选时序号字段一并
+# 摘除（语义上必须为 null）；序号→编号映射与越界反馈。测试只钉行为契约，不钉某一版
+# sanitize 输出的具体形状（直接 items / anyOf 包裹两种形态都必须命中，理由同 T34①
+# 原注释：sanitize 逻辑在并行演进，形态漂移时注入不得静默失效）。
 
 
-def test_constrain_thesis_retained_conflict_id_enum_handles_direct_items_ref_path(tmp_path: Path):
+def test_enforce_thesis_conflict_ordinal_handles_direct_items_ref_path(tmp_path: Path):
     """形态一：`retained_conflicts` 是必填数组，`items` 是指向 `$defs.Conflict`
     的 `$ref`（当前 sanitize_json_schema_for_strict_tool_calling 对非 anyOf
-    分支内的 $ref 不做内联展开，真实产出就是这个形状）。"""
+    分支内的 $ref 不做内联展开，真实产出就是这个形状）。
+    行为契约：conflict_id 从模型面向 schema 物理摘除；conflict_ordinal 注入
+    [1..N]∪null 的 enum；conflict_type 等其余字段不被顺手改写。"""
     orchestrator = VNextOrchestrator(
         available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
     )
@@ -3375,34 +3373,35 @@ def test_constrain_thesis_retained_conflict_id_enum_handles_direct_items_ref_pat
             "Conflict": {
                 "type": "object",
                 "properties": {
+                    "conflict_ordinal": {"type": ["integer", "null"]},
                     "conflict_id": {"type": ["string", "null"]},
                     "conflict_type": {"type": "string"},
                 },
+                "required": ["conflict_ordinal", "conflict_id", "conflict_type"],
             }
         },
     }
 
-    result = orchestrator._constrain_thesis_retained_conflict_id_enum(
+    result = orchestrator._enforce_thesis_conflict_ordinal(
         schema,
-        ["TC1_restrictive_macro_vs_moderate_valuation", "TC2_liquidity_vs_breadth"],
+        ["TC_01", "TC_02"],
     )
 
-    assert result["$defs"]["Conflict"]["properties"]["conflict_id"]["enum"] == [
-        "TC1_restrictive_macro_vs_moderate_valuation",
-        "TC2_liquidity_vs_breadth",
-        None,
-    ]
+    conflict_schema = result["$defs"]["Conflict"]
+    assert "conflict_id" not in conflict_schema["properties"]
+    assert conflict_schema["properties"]["conflict_ordinal"]["enum"] == [1, 2, None]
+    assert conflict_schema["required"] == ["conflict_ordinal", "conflict_type"]
     # 未涉及的字段必须保持原样，不能被顺手改写。
-    assert "enum" not in result["$defs"]["Conflict"]["properties"]["conflict_type"]
+    assert "enum" not in conflict_schema["properties"]["conflict_type"]
 
 
-def test_constrain_thesis_retained_conflict_id_enum_handles_nullable_anyof_items_path(tmp_path: Path):
+def test_enforce_thesis_conflict_ordinal_handles_nullable_anyof_items_path(tmp_path: Path):
     """形态二：`retained_conflicts` 被 T34②（非必填容器字段可空化）改写成
     `{"anyOf": [{"type": "array", "items": {...}}, {"type": "null"}]}`，且
     `items` 内的 `$ref` 已被内联展开成真实 object（这是 fix_anyof 对 anyOf
-    分支内 $ref 的既有处理方式）。enum 注入不能硬编码 `properties.retained_
+    分支内 $ref 的既有处理方式）。摘除与注入不能硬编码 `properties.retained_
     conflicts.items` 这条路径，否则在这种形态下会直接找不到目标字段、静默
-    放弃注入。"""
+    放弃——模型就又能自己填 conflict_id。"""
     orchestrator = VNextOrchestrator(
         available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
     )
@@ -3415,6 +3414,7 @@ def test_constrain_thesis_retained_conflict_id_enum_handles_nullable_anyof_items
                         "items": {
                             "type": "object",
                             "properties": {
+                                "conflict_ordinal": {"type": ["integer", "null"]},
                                 "conflict_id": {"type": ["string", "null"]},
                                 "conflict_type": {"type": "string"},
                             },
@@ -3426,19 +3426,17 @@ def test_constrain_thesis_retained_conflict_id_enum_handles_nullable_anyof_items
         },
     }
 
-    result = orchestrator._constrain_thesis_retained_conflict_id_enum(
-        schema, ["TC1_restrictive_macro_vs_moderate_valuation"]
-    )
+    result = orchestrator._enforce_thesis_conflict_ordinal(schema, ["TC_01"])
 
-    conflict_id_node = result["properties"]["retained_conflicts"]["anyOf"][0]["items"]["properties"]["conflict_id"]
-    assert conflict_id_node["enum"] == ["TC1_restrictive_macro_vs_moderate_valuation", None]
+    item_properties = result["properties"]["retained_conflicts"]["anyOf"][0]["items"]["properties"]
+    assert "conflict_id" not in item_properties
+    assert item_properties["conflict_ordinal"]["enum"] == [1, None]
 
 
-def test_constrain_thesis_retained_conflict_id_enum_noop_when_no_candidates(tmp_path: Path):
-    """本轮 bridge 一个 conflict_id 都没给时必须原样返回 schema：注入空 enum
-    （或 `enum: [null]`）等于物理上禁止模型填任何编号，而 `Conflict.conflict_id`
-    留空是"本站新发现的冲突"的合法表达（见 contracts.py 里的字段描述），
-    不能被这条后处理堵死；部分 provider 对空 enum 也会直接拒绝请求。"""
+def test_enforce_thesis_conflict_ordinal_removes_ordinal_when_no_candidates(tmp_path: Path):
+    """本轮 bridge 零冲突时，序号无处可指——按设计 conflict_ordinal 必须为 null，
+    所以连序号字段本身也从模型面向 schema 摘除（模型物理上无法输出它），而不是
+    注入空 enum 或 `enum: [null]`（部分 provider 会直接拒绝这类请求）。"""
     orchestrator = VNextOrchestrator(
         available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
     )
@@ -3452,14 +3450,21 @@ def test_constrain_thesis_retained_conflict_id_enum_noop_when_no_candidates(tmp_
         "$defs": {
             "Conflict": {
                 "type": "object",
-                "properties": {"conflict_id": {"type": ["string", "null"]}},
+                "properties": {
+                    "conflict_ordinal": {"type": ["integer", "null"]},
+                    "conflict_id": {"type": ["string", "null"]},
+                },
+                "required": ["conflict_ordinal", "conflict_id"],
             }
         },
     }
 
-    result = orchestrator._constrain_thesis_retained_conflict_id_enum(schema, [])
+    result = orchestrator._enforce_thesis_conflict_ordinal(schema, [])
 
-    assert "enum" not in result["$defs"]["Conflict"]["properties"]["conflict_id"]
+    conflict_schema = result["$defs"]["Conflict"]
+    assert "conflict_id" not in conflict_schema["properties"]
+    assert "conflict_ordinal" not in conflict_schema["properties"]
+    assert conflict_schema["required"] == []
 
 
 def test_collect_thesis_conflict_id_candidates_covers_all_three_sources_and_dedupes(tmp_path: Path):
@@ -3514,10 +3519,11 @@ def test_collect_thesis_conflict_id_candidates_covers_all_three_sources_and_dedu
     ]
 
 
-def test_constrain_reviser_conflict_id_enum_injects_into_both_conflict_paths(tmp_path: Path):
-    """T42④：reviser 的 `revised_thesis.retained_conflicts` 与 `remaining_conflicts`
-    都要重新产出 `Conflict.conflict_id`，enum 选单必须覆盖这两条路径；空候选时
-    不注入 enum，保留"本站新发现冲突留空"的合法表达。"""
+def test_enforce_reviser_conflict_ordinal_covers_both_conflict_paths(tmp_path: Path):
+    """T58/O15（接替 T42④）：reviser 的 `revised_thesis.retained_conflicts` 与
+    `remaining_conflicts` 都要重新产出 Conflict——两条路径的 conflict_id 都必须
+    摘除、conflict_ordinal 都必须注入序号 enum；两条路径最终指向同一个
+    `$defs.Conflict` 时重复改写无副作用。"""
     orchestrator = VNextOrchestrator(
         available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
     )
@@ -3534,30 +3540,37 @@ def test_constrain_reviser_conflict_id_enum_injects_into_both_conflict_paths(tmp
                         "retained_conflicts": {"type": "array", "items": {"$ref": "#/$defs/Conflict"}},
                     }
                 },
-                "Conflict": {"properties": {"conflict_id": {"type": ["string", "null"]}}},
+                "Conflict": {
+                    "properties": {
+                        "conflict_ordinal": {"type": ["integer", "null"]},
+                        "conflict_id": {"type": ["string", "null"]},
+                    },
+                    "required": ["conflict_ordinal", "conflict_id"],
+                },
             },
         }
 
-    result = orchestrator._constrain_reviser_conflict_id_enum(
+    result = orchestrator._enforce_reviser_conflict_ordinal(
         _schema(),
-        ["TC1_restrictive_macro_vs_moderate_valuation", "TC3_liquidity_vs_breadth"],
+        ["TC_01", "TC_03"],
     )
-    conflict_id_node = result["$defs"]["Conflict"]["properties"]["conflict_id"]
-    assert conflict_id_node["enum"] == [
-        "TC1_restrictive_macro_vs_moderate_valuation",
-        "TC3_liquidity_vs_breadth",
-        None,
-    ]
+    conflict_schema = result["$defs"]["Conflict"]
+    assert "conflict_id" not in conflict_schema["properties"]
+    assert conflict_schema["properties"]["conflict_ordinal"]["enum"] == [1, 2, None]
+    assert conflict_schema["required"] == ["conflict_ordinal"]
 
-    noop = orchestrator._constrain_reviser_conflict_id_enum(_schema(), [])
-    assert "enum" not in noop["$defs"]["Conflict"]["properties"]["conflict_id"]
+    empty = orchestrator._enforce_reviser_conflict_ordinal(_schema(), [])
+    empty_schema = empty["$defs"]["Conflict"]
+    assert "conflict_id" not in empty_schema["properties"]
+    assert "conflict_ordinal" not in empty_schema["properties"]
 
 
-def test_run_thesis_wires_dynamic_conflict_id_enum_into_strict_schema_when_enabled(tmp_path: Path, monkeypatch):
-    """接线验证：`_run_thesis` 必须把本轮 `synthesis_packet` 实际给出的
-    conflict_id 集合动态注入严格 schema——不能是每次 run 都一样的静态
-    `model_json_schema()`。同时钉住"未启用严格模式时行为逐字节不变"：不设
-    环境变量时，engine 完全收不到 strict_tool_schema/strict_tool_name。"""
+def test_run_thesis_wires_conflict_ordinal_menu_into_strict_schema_when_enabled(tmp_path: Path, monkeypatch):
+    """接线验证：`_run_thesis` 必须把本轮 `synthesis_packet` 实际给出的冲突清单
+    动态接进严格 schema——conflict_id 从模型面向 schema 摘除、conflict_ordinal
+    注入 [1..N]∪null，不能是每次 run 都一样的静态 `model_json_schema()`。同时
+    钉住"未启用严格模式时行为逐字节不变"：不设环境变量时，engine 完全收不到
+    strict_tool_schema/strict_tool_name。"""
     valid_thesis = {
         "environment_assessment": "环境偏紧。",
         "valuation_assessment": "估值偏高。",
@@ -3607,10 +3620,190 @@ def test_run_thesis_wires_dynamic_conflict_id_enum_into_strict_schema_when_enabl
     conflict_object = items_node
     if "$ref" in items_node:
         conflict_object = strict_schema["$defs"][items_node["$ref"].rsplit("/", 1)[-1]]
-    assert conflict_object["properties"]["conflict_id"]["enum"] == [
-        "TC1_restrictive_macro_vs_moderate_valuation",
-        None,
+    assert "conflict_id" not in conflict_object["properties"]
+    assert conflict_object["properties"]["conflict_ordinal"]["enum"] == [1, None]
+
+
+def test_run_thesis_maps_conflict_ordinal_to_id_and_retries_out_of_range(tmp_path: Path):
+    """T58/O15 端到端：模型报 conflict_ordinal 序号，产物里的 conflict_id 由代码
+    按本轮清单映射回填；模型顺手自填的 conflict_id 一律不采信（ordinal 留空 =
+    本站新发现，编号清空）。序号越界走既有"带错误反馈重试"通道，反馈写明合法范围。"""
+    base_thesis = {
+        "environment_assessment": "环境偏紧。",
+        "valuation_assessment": "估值偏高。",
+        "timing_assessment": "趋势仍在。",
+        "main_thesis": "主线仍成立。",
+        "hypothesis_responses": [],
+        "overall_confidence": "medium",
+    }
+    candidates_synthesis = SynthesisPacket(
+        packet_meta={"data_date": "2026-04-24"},
+        high_severity_typed_conflicts=[
+            TypedConflict(
+                conflict_id="TC_01",
+                conflict_type="valuation_discount_rate",
+                severity="high",
+                description="宏观限制性与估值温和并存。",
+                implication="强结论必须保留风险边界。",
+                involved_layers=["L1", "L4"],
+            ),
+            TypedConflict(
+                conflict_id="TC_02",
+                conflict_type="liquidity_vs_breadth",
+                severity="high",
+                description="流动性收紧与广度健康并存。",
+                implication="保留张力。",
+                involved_layers=["L1", "L5"],
+            ),
+        ],
+    )
+
+    def _conflict(ordinal, conflict_id=None):
+        body = {
+            "conflict_ordinal": ordinal,
+            "conflict_type": "valuation_discount_rate",
+            "severity": "high",
+            "description": "宏观限制性与估值温和并存。",
+            "implication": "偏防守。",
+            "involved_layers": ["L1", "L4"],
+        }
+        if conflict_id is not None:
+            body["conflict_id"] = conflict_id
+        return body
+
+    # 1) 正常映射 + 模型自填 conflict_id 被覆盖 + ordinal 留空时编号清空。
+    engine = FakeLLMEngine({"thesis": json.dumps({
+        **base_thesis,
+        "retained_conflicts": [
+            _conflict(2, conflict_id="模型编造的_TC_99"),
+            _conflict(None, conflict_id="模型编造的_TC_01"),
+        ],
+    }, ensure_ascii=False)})
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path / "mapped"), llm_engine=engine
+    )
+    thesis = orchestrator._run_thesis(candidates_synthesis)
+    assert thesis.retained_conflicts[0].conflict_id == "TC_02"
+    assert thesis.retained_conflicts[1].conflict_id is None
+
+    # 2) 越界序号被拒、反馈写明合法范围，修正后收下。
+    invalid = {**base_thesis, "retained_conflicts": [_conflict(5)]}
+    valid = {**base_thesis, "retained_conflicts": [_conflict(1)]}
+    retry_engine = SequencedFakeLLMEngine(
+        {"thesis": [json.dumps(invalid, ensure_ascii=False), json.dumps(valid, ensure_ascii=False)]}
+    )
+    orchestrator_retry = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path / "retry"), llm_engine=retry_engine
+    )
+    thesis_retry = orchestrator_retry._run_thesis(candidates_synthesis)
+    assert thesis_retry.retained_conflicts[0].conflict_id == "TC_01"
+    errors = orchestrator_retry.stage_diagnostics["stages"]["thesis"]["errors"]
+    assert errors and errors[0]["kind"] == "contract_validation_error"
+    assert "合法取值是 1..2" in errors[0]["message"]
+
+    # 3) 零候选（上游零冲突）时序号必须留空，非空即校验错误。
+    empty_synthesis = SynthesisPacket(packet_meta={"data_date": "2026-04-24"})
+    engine_empty = FakeLLMEngine({"thesis": json.dumps({
+        **base_thesis, "retained_conflicts": [_conflict(1)],
+    }, ensure_ascii=False)})
+    orchestrator_empty = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path / "empty"), llm_engine=engine_empty
+    )
+    with pytest.raises(RuntimeError, match="thesis failed"):
+        orchestrator_empty._run_thesis(empty_synthesis)
+    errors_empty = orchestrator_empty.stage_diagnostics["stages"]["thesis"]["errors"]
+    assert any("清单为空" in str(error.get("message")) for error in errors_empty)
+
+
+def test_thesis_prompt_hides_conflict_id_and_appends_ordinal_menu(tmp_path: Path):
+    """T58/O15 非 strict 路径（默认路径）同样物理摘除：thesis 提示词的「输出字段
+    规格」里不得再出现 conflict_id（模型在输出侧无处可抄），且末尾附「冲突清单
+    （按序号引用）」——清单内容/顺序与 `_collect_thesis_conflict_id_candidates`
+    完全一致（同一份清单，序号映射才不会指错）。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    synthesis = SynthesisPacket(
+        packet_meta={"data_date": "2026-04-24"},
+        high_severity_typed_conflicts=[
+            TypedConflict(
+                conflict_id="TC_01",
+                conflict_type="valuation_discount_rate",
+                severity="high",
+                description="宏观限制性与估值温和并存。",
+                implication="强结论必须保留风险边界。",
+                involved_layers=["L1", "L4"],
+            )
+        ],
+    )
+    candidates = orchestrator._collect_thesis_conflict_id_candidates(synthesis)
+    prompt = orchestrator._compose_prompt(
+        "thesis",
+        ThesisDraft,
+        {"synthesis_packet": synthesis.model_dump(mode="json")},
+        prompt_appendix=orchestrator._render_conflict_ordinal_menu(candidates),
+    )
+
+    spec_section = prompt.split("## 输出字段规格", 1)[1].split("## 冲突清单（按序号引用）", 1)[0]
+    assert "conflict_id" not in spec_section
+    assert "conflict_ordinal" in spec_section
+    assert "## 冲突清单（按序号引用）" in prompt
+    assert "第 1 条：TC_01" in prompt
+
+
+def test_conflict_ordinal_menu_renders_empty_state():
+    """零候选时清单必须明说"一律留 null"——否则模型会自己发明序号。"""
+    menu = VNextOrchestrator._render_conflict_ordinal_menu([])
+    assert "一律留 null" in menu
+    assert "第 1 条：" not in menu  # 清单条目形态（带冒号）一条都不能有
+
+
+def test_map_conflict_ordinals_to_ids_unit_cases(tmp_path: Path):
+    """序号映射的单元级钉住：合法映射、ordinal 留空时清空模型自填编号、
+    越界一律报错且反馈写明合法范围、零候选时非空序号非法。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    candidates = ["TC_01", "TC_02"]
+    conflicts = [
+        Conflict(
+            conflict_ordinal=2,
+            conflict_id="模型乱填的",
+            conflict_type="a",
+            severity="high",
+            description="d",
+            implication="i",
+            involved_layers=["L1"],
+        ),
+        Conflict(
+            conflict_ordinal=None,
+            conflict_id="模型乱填的",
+            conflict_type="b",
+            severity="medium",
+            description="d",
+            implication="i",
+            involved_layers=["L2"],
+        ),
     ]
+    assert orchestrator._map_conflict_ordinals_to_ids(conflicts, candidates, "thesis") == []
+    assert conflicts[0].conflict_id == "TC_02"
+    assert conflicts[1].conflict_id is None
+
+    bad = [
+        Conflict(
+            conflict_ordinal=99,  # 越界：清单只有 2 条
+            conflict_type="a",
+            severity="high",
+            description="d",
+            implication="i",
+            involved_layers=["L1"],
+        )
+    ]
+    errors = orchestrator._map_conflict_ordinals_to_ids(bad, candidates, "thesis")
+    assert errors and "1..2" in errors[0]
+
+    errors_empty = orchestrator._map_conflict_ordinals_to_ids(bad, [], "thesis")
+    assert errors_empty and "清单为空" in errors_empty[0]
 
 
 def test_thesis_retries_until_every_candidate_hypothesis_has_auditable_response(tmp_path: Path):

@@ -43,7 +43,7 @@
 - **principal_contradictions**: Bridge 主要矛盾候选
 - **thesis_key_support_chains**: 原始 Thesis 的关键支撑链；修订时可调整，但不能丢失其可追溯 evidence_refs
 - **thesis_hypothesis_responses**: 原始 Thesis 对每个非 downgraded 竞争假说（candidate/leading/kept_unresolved/split）的逐一裁决。**这是必须带进 `revised_thesis.hypothesis_responses` 的字段**，详见上文「竞争假说回应纪律」
-- **high_severity_typed_conflicts**: 必须在最终报告中保留的高严重度跨层冲突
+- **high_severity_typed_conflicts**: 必须在最终报告中保留的高严重度跨层冲突。沿用上游冲突时在 `conflict_ordinal` 填提示词末尾「冲突清单（按序号引用）」里的序号（第 1 条填 1）；不要自己填 `conflict_id`，编号由系统按序号回填
 - **objective_firewall_summary**: 客观性防火墙摘要（对象、发言权、反证）
 - **critique_overall / critique_cross_layer_issues**: Critic 的核心批评与跨层逻辑问题
 - **must_preserve_risks**: Risk Sentinel 列出的必须保留的风险警示
@@ -218,7 +218,7 @@ revision_summary 应包含：
 
 ### 绝对禁止
 - ❌ 抹平冲突（为了"完美"而删除 retained_conflicts）
-- ❌ 沿用上游冲突却改写 `conflict_id`（编号必须原样抄；改了编号，下游审计会把它当成冲突被抹平）
+- ❌ 沿用上游冲突却把 `conflict_ordinal` 报错序号（序号按提示词末尾「冲突清单（按序号引用）」数：第 1 条填 1；`conflict_id` 由系统回填，不要自己填。报错了系统会带合法范围打回；序号对不上，下游审计会把冲突当成被抹平）
 - ❌ 省略 `hypothesis_responses`，或让任何一个竞争假说（candidate/leading/kept_unresolved/split）在回应里消失
 - ❌ 自行拼接证据索引中不存在的 `parent#field` 子引用
 - ❌ 无视批评（不接受任何意见）
@@ -298,7 +298,7 @@ Risk Sentinel 指出：
     ],
     "retained_conflicts": [
       {
-        "conflict_id": "T1_real_rate_valuation_tension",
+        "conflict_ordinal": 1,
         "conflict_type": "L4_expensive_vs_L1_restrictive",
         "severity": "high",
         "description": "...",

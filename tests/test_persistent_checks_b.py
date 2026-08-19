@@ -1,4 +1,4 @@
-"""T47 常设检查 B 包（PC-11 ~ PC-20）的合成用例。
+"""T47 常设检查 B 包（PC-11 ~ PC-27）的合成用例。
 
 全部用例在 tmp_path 里手工构造 run_dir 子集，不依赖 output/ 真实产物。
 每个检查一条"该过"用例 + 一条"该红"用例；另加一个缺失 artifact 用例。
@@ -803,3 +803,76 @@ def test_missing_artifact_reports_failed(tmp_path: Path) -> None:
     pc15 = _find(results, "PC-15")
     assert pc15["passed"] is False
     assert "缺失 artifact" in pc15["detail"]
+
+
+# --------------------------------------------------------------------------
+# PC-27：IA 挑战数据判决亮灯（O17，2026-08-19；当日收窄为只对 challenged_by_data 亮灯）
+# --------------------------------------------------------------------------
+
+def _ia_report(adjudication: Any) -> Dict[str, Any]:
+    return {"schema_version": "integrated_synthesis_report_v1", "integrated_adjudication": adjudication}
+
+
+def test_pc27_skips_when_ia_report_missing(tmp_path: Path) -> None:
+    """IA 未跑（产物文件不存在）→ 跳过并说明，不亮灯。"""
+    result = _find(run_checks_b(tmp_path), "PC-27")
+    assert result["passed"] is True
+    assert "跳过" in result["detail"]
+    assert "integrated_synthesis_report.json" in result["detail"]
+
+
+def test_pc27_skips_when_adjudication_degraded_or_absent(tmp_path: Path) -> None:
+    """降级拼装（llm_adjudicated=false）或 IA 未裁决（adjudication 为 null）→ 跳过。"""
+    _write_json(tmp_path / "integrated_synthesis_report.json", _ia_report(None))
+    result = _find(run_checks_b(tmp_path), "PC-27")
+    assert result["passed"] is True
+    assert "跳过" in result["detail"]
+
+    _write_json(tmp_path / "integrated_synthesis_report.json", _ia_report({
+        "llm_adjudicated": False, "conflict_matrix": [{"card_id": "x"}], "unexplained": ["y"],
+    }))
+    result = _find(run_checks_b(tmp_path), "PC-27")
+    assert result["passed"] is True
+    assert "llm_adjudicated=false" in result["detail"]
+
+
+def test_pc27_lights_up_only_on_challenged_by_data(tmp_path: Path) -> None:
+    """只有 challenged_by_data 行（事件材料挑战了数据判决）才亮灯；message 必须说清
+    这不是系统故障、需要人工阅读，并列出挑战行数。例行行（not_yet_testable 等）与
+    unexplained 不亮灯——它们常态非空，亮了就是狼来了（08-19 老板裁收窄）。"""
+    _write_json(tmp_path / "integrated_synthesis_report.json", _ia_report({
+        "llm_adjudicated": True,
+        "conflict_matrix": [
+            {"card_id": "event_a", "relation": "not_yet_testable"},
+            {"card_id": "event_b", "relation": "confirmed_by_data"},
+            {"card_id": "event_c", "relation": "challenged_by_data"},
+        ],
+        "unexplained": ["盈利能否消化估值"],
+    }))
+    result = _find(run_checks_b(tmp_path), "PC-27")
+    assert result["passed"] is False
+    assert "不是系统故障" in result["detail"]
+    assert "需要人工阅读" in result["detail"]
+    assert "challenged_by_data 1 行" in result["detail"]
+
+
+def test_pc27_passes_on_routine_rows_and_unexplained(tmp_path: Path) -> None:
+    """例行 conflict_matrix 行 + 非空 unexplained → 通过（收窄口径：不视为挑战）。"""
+    _write_json(tmp_path / "integrated_synthesis_report.json", _ia_report({
+        "llm_adjudicated": True,
+        "conflict_matrix": [
+            {"card_id": "event_a", "relation": "not_yet_testable"},
+            {"card_id": "event_b", "relation": "confirmed_by_data"},
+        ],
+        "unexplained": ["盈利能否消化估值", "集中度高企的持续性"],
+    }))
+    result = _find(run_checks_b(tmp_path), "PC-27")
+    assert result["passed"] is True
+
+
+def test_pc27_passes_when_dissent_channels_empty(tmp_path: Path) -> None:
+    _write_json(tmp_path / "integrated_synthesis_report.json", _ia_report({
+        "llm_adjudicated": True, "conflict_matrix": [], "unexplained": [],
+    }))
+    result = _find(run_checks_b(tmp_path), "PC-27")
+    assert result["passed"] is True
