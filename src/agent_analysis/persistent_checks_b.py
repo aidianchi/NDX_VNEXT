@@ -1209,7 +1209,7 @@ _CHECKS: List[Tuple[str, str, Any]] = [
 
 
 def run_checks_b(run_dir: Path) -> List[Dict[str, Any]]:
-    """对一次 run 的落盘产物执行 PC-11 ~ PC-20 只读检查。"""
+    """对一次 run 的落盘产物执行 PC-11 ~ PC-26 只读检查。"""
     results: List[Dict[str, Any]] = []
     for check_id, name, func in _CHECKS:
         try:
