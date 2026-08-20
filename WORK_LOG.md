@@ -59,6 +59,15 @@
 - **立项 T61**：工单 `investigation_reports/20260819_T61_deepseek_harness调研/WORK_ORDERS.md`（六问：插件实况/三圈制度兼容/接线/镣铐承接/风险/对比自建）。仓库已核实存在：DeepSeek 官方开源 agent harness（`dsh`，MIT，Node/TS 生态，开发者预览期、官方明示有 breaking changes），底层为 Cordis。
 - **T60 转后排**：设计稿保留，方向定后再议动工。
 
+### T61 调研报告交付（dsh 源码实读，等老板裁方向）
+
+- **方法**：克隆 `deepseek-ai/deepseek-harness`（0.1.0-rc.8，MIT）到隔离目录（`.t61_scratch/`，本地 git exclude 不入库），通读架构文档与插件源码。历史调研文档（08-11）未覆盖 dsh，本次为零起底稿。
+- **老板预给两答案验证**：模型可自配/锁 flash——**源码证实**（base bundle 默认即 deepseek-v4-flash，Python SDK 默认值同；还可锁思考档）。
+- **六问结论**：①"一切皆插件"属实且颗粒度细（无特权核心，拦截点齐全）；②三圈兼容——议程注入 ✓（CLI/Python SDK/原生 schedule 定时）、预算闸 △（机制都在、无现成插件，自写经费卡插件几十行 TS 或一个 Python hook）、产出对账 ✓ 最强（append-only 事件日志，"模型可见即已落盘"是不变式）；③接线有官方 Python SDK（wheel 自带 Node 运行时，本机 arm64 mac 适用）；④工具边界可靠代码强制（含 Python hooks 桥），语义镣铐两条路线都得自己写；⑤风险：遥测默认关、供应链大但门禁齐、预览期格式无承诺（老板已豁免）、维护活跃度证据不足（开放点）；⑥真实增量 = 运行时底盘（长程上下文治理/子代理/调度/审计日志），语义层两边都自建。
+- **方向建议（不代拍板）**：混合——dsh 底盘 + 我们的语义层（Python，经 hooks 桥/MCP 接入）；且先做一个半天的探针（真实小任务验证接线/日志/经费卡）再正式定方向。
+- **对 T60 的影响**：三圈制度设计一圈不用改，变的只是"循环谁来转"。
+- 报告：`investigation_reports/20260819_T61_deepseek_harness调研/REPORT.md`（全证据索引在文内）。T61 转"等你"（方向裁决）。
+
 ### 【关闭 T58】O15/O16/O17 三件套施工：编号报序号、抄写岗撤除、异议亮灯
 
 - **O15 落地（冲突编号改报序号）**：`Conflict` 新增 `conflict_ordinal`（1-based，null=本站新发现）；thesis/reviser 两站模型面向 schema 里 `conflict_id` 物理摘除、strict 路径给序号注入 `[1..N]∪null` 选单（零候选时连序号字段一并摘除）；提示词末尾渲染"冲突清单（按序号引用）"，展示的清单 ≡ 映射的清单由构造保证。解析后 validator 阶段序号→编号映射（`_map_conflict_ordinals_to_ids`，orchestrator.py:4830）：越界/非整数 → 带合法范围的校验错误走既有反馈重试；ordinal 留空即清空 conflict_id——模型自填编号一律不采信，"抄错编号"最后一条物理路径关闭。下游（schema guard 认亲、final 校验、PC-23、IA 输入）零改动，编号仍是内部身份。
