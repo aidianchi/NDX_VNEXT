@@ -3,11 +3,12 @@
   "_tier_to_source_tier": {
     "official": "official",
     "official_disclosure": "official",
+    "transcript": "primary_news",
     "mainstream_finance": "primary_news",
     "sell_side": "aggregator_news",
     "social": "weak_social"
   },
-  "_body_allowed_tiers": ["official", "official_disclosure", "mainstream_finance"],
+  "_body_allowed_tiers": ["official", "official_disclosure", "transcript", "mainstream_finance"],
   "tiers": {
     "official_disclosure": [
       "microsoft.com",
@@ -22,6 +23,12 @@
       "businesswire.com",
       "prnewswire.com",
       "globenewswire.com"
+    ],
+    "transcript": [
+      "fool.com",
+      "seekingalpha.com",
+      "roic.ai",
+      "discountingcashflows.com"
     ],
     "official": [
       "sec.gov",
@@ -56,7 +63,7 @@
       "jpmorgan.com",
       "ubs.com",
       "morningstar.com",
-      "seekingalpha.com",
+      "semianalysis.com",
       "substack.com"
     ],
     "social": [

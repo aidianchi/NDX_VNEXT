@@ -29,10 +29,11 @@ STATUS_QUOTE_NOT_FOUND = "downgraded_quote_not_found"  # 引文对不上原文
 STATUS_WEAK_TIER = "downgraded_weak_tier"  # 弱档来源进了正文
 STATUS_UNVERIFIED_SOURCE = "downgraded_source_unverified"  # 无法定档（如 web_search 结果）
 
-BODY_ALLOWED_TIERS = ("official", "official_disclosure", "mainstream_finance")
+BODY_ALLOWED_TIERS = ("official", "official_disclosure", "transcript", "mainstream_finance")
 _TIER_TO_SOURCE_TIER = {
     "official": "official",
     "official_disclosure": "official",
+    "transcript": "primary_news",
     "mainstream_finance": "primary_news",
     "sell_side": "aggregator_news",
     "social": "weak_social",

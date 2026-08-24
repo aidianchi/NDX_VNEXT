@@ -14,6 +14,7 @@ from common import domain_tier, emit_additional_context, load_whitelist, read_ho
 _TIER_LABEL = {
     "official": "official（官方，可进正文，source_tier=official）",
     "official_disclosure": "official_disclosure（公司官方披露/IR，可进正文，source_tier=official）",
+    "transcript": "transcript（业绩会逐字稿托管，内容是管理层官方发言，可进正文，source_tier=primary_news；注意转录误差可能）",
     "mainstream_finance": "mainstream_finance（主流财经，可进正文，source_tier=primary_news）",
     "sell_side": "sell_side（卖方，只进线索不进正文，source_tier=aggregator_news）",
     "social": "social（社媒，只进线索不进正文，source_tier=weak_social）",

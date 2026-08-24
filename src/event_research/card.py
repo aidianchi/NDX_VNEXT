@@ -29,12 +29,17 @@ from src.event_research.hooks.common import domain_tier  # noqa: E402
 
 POINTER_FIELDS = ("call_id", "quote")
 
+# G4 可选字段（2026-08-24 老板批）：改判条件 + 最强反方一句话。可选不强制
+# （防"形式拒收内容"），出现则必须是非空字符串。
+OPTIONAL_CARD_FIELDS = ("falsification", "counter_one_liner")
+
 
 def validate_research_card(card: Dict[str, Any], now_utc: Optional[datetime] = None) -> List[str]:
     """校验一张二档材料卡，返回机器可 grep 的错误码列表（空 = 通过）。
 
     在原型错误码之外新增：`source_pointer_missing`、`source_pointer_not_object`、
-    `source_pointer_call_id_empty`、`source_pointer_quote_empty`、`source_pointer_unknown_field:x`。
+    `source_pointer_call_id_empty`、`source_pointer_quote_empty`、`source_pointer_unknown_field:x`、
+    `optional_field_empty:falsification` / `optional_field_empty:counter_one_liner`。
 
     域名口径差异：原型校验器写死了 9 个官方域（`source_url_domain_not_allowed`），
     二档搜索腿的白名单是 config/event_source_whitelist.json 的分档名单（老板
@@ -44,8 +49,15 @@ def validate_research_card(card: Dict[str, Any], now_utc: Optional[datetime] = N
         return ["card_not_object"]
 
     pointer = card.get("source_pointer")
-    base_card = {k: v for k, v in card.items() if k != "source_pointer"}
+    base_card = {
+        k: v
+        for k, v in card.items()
+        if k != "source_pointer" and k not in OPTIONAL_CARD_FIELDS
+    }
     errors = validate_material_card(base_card, now_utc=now_utc)
+    for field in OPTIONAL_CARD_FIELDS:
+        if field in card and (not isinstance(card[field], str) or not card[field].strip()):
+            errors.append(f"optional_field_empty:{field}")
     source_url = card.get("source_url")
     if (
         "source_url_domain_not_allowed" in errors

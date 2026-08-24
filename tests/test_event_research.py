@@ -79,6 +79,7 @@ MINI_WHITELIST = {
     "tiers": {
         "official": ["sec.gov"],
         "mainstream_finance": ["reuters.com"],
+        "transcript": ["fool.com"],
         "sell_side": ["goldmansachs.com"],
         "social": ["x.com"],
     }
@@ -176,6 +177,21 @@ class TestAgenda:
         b = agenda_mod.append_agenda("题二", "charter", ["①已发生的事"], ledger_path=ledger)
         assert a["agenda_id"] != b["agenda_id"]
 
+    def test_tracking_key_recorded_when_given(self, tmp_path):
+        ledger = tmp_path / "a.jsonl"
+        record = agenda_mod.append_agenda(
+            "AI capex 巡逻", "charter", ["③被相信的事"],
+            tracking_key="ai_capex", ledger_path=ledger,
+        )
+        assert record["tracking_key"] == "ai_capex"
+        # 折叠后仍在
+        folded = agenda_mod.get_agenda(record["agenda_id"], ledger)
+        assert folded["tracking_key"] == "ai_capex"
+
+    def test_tracking_key_absent_by_default(self, tmp_path):
+        record = agenda_mod.append_agenda("题", "charter", ["①已发生的事"], ledger_path=tmp_path / "a.jsonl")
+        assert "tracking_key" not in record
+
 
 # ---------------------------------------------------------------------------
 # 2. budget：经费卡
@@ -272,6 +288,38 @@ class TestCard:
     def test_card_not_object(self):
         assert card_mod.validate_research_card("not a dict") == ["card_not_object"]
 
+    def test_optional_fields_present_and_valid(self):
+        """G4 可选字段：falsification / counter_one_liner 出现且非空 → 零错误，
+        且不再触发原型校验器的 unknown_field。"""
+        card = _valid_card()
+        card["falsification"] = "若下季 capex 指引下调则改判"
+        card["counter_one_liner"] = "最强反方：capex 已透支未来两年需求"
+        errors = card_mod.validate_research_card(card, now_utc=FIXED_NOW)
+        assert errors == []
+
+    def test_optional_fields_absent_is_fine(self):
+        card = _valid_card()
+        assert "falsification" not in card and "counter_one_liner" not in card
+        assert card_mod.validate_research_card(card, now_utc=FIXED_NOW) == []
+
+    @pytest.mark.parametrize("field", ["falsification", "counter_one_liner"])
+    @pytest.mark.parametrize("bad_value", ["", "   ", 123])
+    def test_optional_field_empty(self, field, bad_value):
+        card = _valid_card()
+        card[field] = bad_value
+        errors = card_mod.validate_research_card(card, now_utc=FIXED_NOW)
+        assert f"optional_field_empty:{field}" in errors
+
+    def test_whitelist_domain_not_rejected_by_prototype_rule(self):
+        """source_url 在事件层新白名单（任一档，如 transcript 档 fool.com）时，
+        原型的 source_url_domain_not_allowed（写死 9 个官方域）被滤掉。"""
+        card = _valid_card()
+        card["source_tier"] = "primary_news"
+        card["source_url"] = "https://www.fool.com/earnings/call-transcripts/2026/08/01/nvda-q2.aspx"
+        errors = card_mod.validate_research_card(card, now_utc=FIXED_NOW)
+        assert errors == []
+        assert "source_url_domain_not_allowed" not in errors
+
 
 # ---------------------------------------------------------------------------
 # 4. reconcile：对账器
@@ -284,6 +332,8 @@ class TestReconcile:
             _tool_result("call-official", "前言。美联储宣布 维持利率 不变。\n后文。"),
             _tool_call("call-sellside", "web_fetch", "https://www.goldmansachs.com/insights/x"),
             _tool_result("call-sellside", "我们预计降息在即。"),
+            _tool_call("call-transcript", "web_fetch", "https://www.fool.com/earnings/call-transcripts/x.aspx"),
+            _tool_result("call-transcript", "管理层表示资本开支指引维持不变。"),
             _tool_call("call-search", "web_search", "https://www.sec.gov/"),
             _tool_result("call-search", "搜索结果摘要若干条"),
             # 无配对的 result 与缺 callId 的 call 不应崩
@@ -293,7 +343,7 @@ class TestReconcile:
 
     def test_index_tool_calls_pairs_call_and_result(self):
         calls = reconcile_mod.index_tool_calls(self._events())
-        assert set(calls) == {"call-official", "call-sellside", "call-search"}
+        assert set(calls) == {"call-official", "call-sellside", "call-transcript", "call-search"}
         assert calls["call-official"]["name"] == "web_fetch"
         assert calls["call-official"]["url"] == "https://www.sec.gov/Archives/edgar/x.htm"
         assert "维持利率" in calls["call-official"]["result_text"]
@@ -301,6 +351,14 @@ class TestReconcile:
 
     def _card_pointing(self, call_id, quote):
         return {"source_pointer": {"call_id": call_id, "quote": quote}}
+
+    def test_verified_transcript_tier(self):
+        """G5 transcript 档（fool.com）可进正文 → verified，映射 source_tier=primary_news。"""
+        calls = reconcile_mod.index_tool_calls(self._events())
+        card = self._card_pointing("call-transcript", "管理层表示资本开支指引维持不变")
+        result = reconcile_mod.reconcile_card(card, calls, MINI_WHITELIST)
+        assert result["status"] == reconcile_mod.STATUS_VERIFIED
+        assert result["source_tier_expected"] == "primary_news"
 
     def test_verified_official_domain(self):
         calls = reconcile_mod.index_tool_calls(self._events())
@@ -381,6 +439,18 @@ class TestFetchGate:
         decision = json.loads(proc.stdout)
         assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
 
+    def test_transcript_tier_fool_com_allowed(self):
+        """G5 新 transcript 档：fool.com 在白名单内 → 静默放行。"""
+        proc = _run_hook("fetch_gate.py", self._payload("https://www.fool.com/earnings/call-transcripts/x"))
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == ""
+
+    def test_seekingalpha_still_allowed_after_tier_move(self):
+        """seekingalpha.com 从 sell_side 挪到 transcript 档，但仍在白名单内 → 放行。"""
+        proc = _run_hook("fetch_gate.py", self._payload("https://seekingalpha.com/article/123"))
+        assert proc.returncode == 0
+        assert proc.stdout.strip() == ""
+
 
 class TestBudgetGate:
     def _setup_run(self, tmp_path, cap, usage):
@@ -434,6 +504,29 @@ class TestSourceTagger:
         assert proc.returncode == 0
         context = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
         assert "official" in context
+
+    def test_transcript_tier_label(self):
+        """G5 transcript 档标签：fool.com → 标签含 transcript 且提示可进正文。"""
+        payload = {
+            "hook_event_name": "PostToolUse",
+            "tool_input": {"url": "https://www.fool.com/earnings/call-transcripts/x.aspx"},
+        }
+        proc = _run_hook("source_tagger.py", payload)
+        assert proc.returncode == 0
+        context = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        assert "transcript" in context
+
+    def test_seekingalpha_no_longer_sell_side(self):
+        """seekingalpha.com 已挪入 transcript 档 → 标签不再含 sell_side。"""
+        payload = {
+            "hook_event_name": "PostToolUse",
+            "tool_input": {"url": "https://seekingalpha.com/article/123"},
+        }
+        proc = _run_hook("source_tagger.py", payload)
+        assert proc.returncode == 0
+        context = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        assert "transcript" in context
+        assert "sell_side" not in context
 
 
 # ---------------------------------------------------------------------------
@@ -502,3 +595,155 @@ class TestParseFinalPayload:
             '```json\n{"cards": [{"card_id": "second"}]}\n```\n'
         )
         assert runner_mod.parse_final_payload(message2)["cards"][0]["card_id"] == "second"
+
+
+class TestFindPreviousNarrative:
+    """G2 跟踪名单：同 tracking_key 最近一次巡逻的叙事坐标。"""
+
+    def _mk_run(self, runs_root: Path, run_name: str, summary: dict):
+        run_dir = runs_root / run_name
+        run_dir.mkdir(parents=True)
+        (run_dir / "run_summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def _state(self, marker: str):
+        return {"conclusion": marker}
+
+    def test_returns_latest_run_with_same_tracking_key(self, tmp_path):
+        runs_root = tmp_path / "runs"
+        self._mk_run(runs_root, "EV-1_20260101T000000Z",
+                     {"tracking_key": "ai_capex", "narrative_state": self._state("旧坐标")})
+        self._mk_run(runs_root, "EV-1_20260201T000000Z",
+                     {"tracking_key": "ai_capex", "narrative_state": self._state("新坐标")})
+        self._mk_run(runs_root, "EV-2_20260301T000000Z",
+                     {"tracking_key": "fed_rates", "narrative_state": self._state("别的钥匙")})
+        result = runner_mod.find_previous_narrative("ai_capex", runs_root)
+        assert result is not None
+        assert result["run_name"] == "EV-1_20260201T000000Z"  # 目录名字符串序取最新
+        assert result["narrative_state"] == self._state("新坐标")
+
+    def test_skips_empty_narrative_and_bad_json(self, tmp_path):
+        runs_root = tmp_path / "runs"
+        # 最新目录 narrative_state 为空 → 跳过，取上一个有坐标的
+        self._mk_run(runs_root, "EV-1_20260101T000000Z",
+                     {"tracking_key": "ai_capex", "narrative_state": self._state("有效坐标")})
+        self._mk_run(runs_root, "EV-1_20260201T000000Z",
+                     {"tracking_key": "ai_capex", "narrative_state": None})
+        # 更最新但 run_summary.json 是坏 json → 跳过
+        bad_dir = runs_root / "EV-1_20260301T000000Z"
+        bad_dir.mkdir(parents=True)
+        (bad_dir / "run_summary.json").write_text("{坏掉了", encoding="utf-8")
+        result = runner_mod.find_previous_narrative("ai_capex", runs_root)
+        assert result["run_name"] == "EV-1_20260101T000000Z"
+
+    def test_no_match_returns_none(self, tmp_path):
+        runs_root = tmp_path / "runs"
+        self._mk_run(runs_root, "EV-1_20260101T000000Z",
+                     {"tracking_key": "fed_rates", "narrative_state": self._state("x")})
+        assert runner_mod.find_previous_narrative("ai_capex", runs_root) is None
+
+    def test_missing_runs_root_returns_none(self, tmp_path):
+        assert runner_mod.find_previous_narrative("ai_capex", tmp_path / "nonexistent") is None
+
+
+class TestBuildPrompt:
+    def test_no_previous_is_utc_plus_question(self):
+        agenda = {"question": "巡逻 AI capex 叙事"}
+        prompt = runner_mod._build_prompt(agenda, None)
+        # 机械字段代码喂：prompt 以当前 UTC 行开头（collected_at_utc 不许模型估），
+        # 然后是议程问题原文。
+        assert prompt.startswith("当前 UTC 时间：")
+        assert prompt.endswith("巡逻 AI capex 叙事")
+
+    def test_with_previous_injects_narrative(self):
+        agenda = {"question": "巡逻 AI capex 叙事"}
+        previous = {
+            "run_name": "EV-1_20260101T000000Z",
+            "narrative_state": {"conclusion": "标记字符串-上期结论"},
+        }
+        prompt = runner_mod._build_prompt(agenda, previous)
+        assert prompt.startswith("当前 UTC 时间：")
+        assert "巡逻 AI capex 叙事" in prompt
+        assert "上期坐标" in prompt
+        assert "EV-1_20260101T000000Z" in prompt
+        assert "标记字符串-上期结论" in prompt
+        assert "previous_position_delta" in prompt
+
+
+class TestValidateNarrativeState:
+    def _valid_state(self):
+        return {
+            "framework_position": "叙事处于扩张中段",
+            "conclusion": "capex 上行但增速放缓",
+            "bull_strongest": "云厂商指引全线上调",
+            "bear_strongest": "折旧年限拉长美化利润",
+            "falsification": "若两大云厂下调指引则改判",
+            "absence_signals": ["未见供应链砍单报道"],
+            "previous_position_delta": "首期，无上期",
+        }
+
+    def test_valid_state_passes(self):
+        assert runner_mod.validate_narrative_state({"narrative_state": self._valid_state()}) == []
+
+    def test_missing_narrative_state(self):
+        assert runner_mod.validate_narrative_state(None) == ["narrative_state_missing"]
+        assert runner_mod.validate_narrative_state({}) == ["narrative_state_missing"]
+        assert runner_mod.validate_narrative_state({"narrative_state": "not-a-dict"}) == [
+            "narrative_state_missing"
+        ]
+
+    @pytest.mark.parametrize("field", [
+        "framework_position", "conclusion", "bull_strongest",
+        "bear_strongest", "falsification", "previous_position_delta",
+    ])
+    def test_string_field_empty_or_missing(self, field):
+        for bad in (None, "", "   "):
+            state = self._valid_state()
+            if bad is None:
+                del state[field]
+            else:
+                state[field] = bad
+            errors = runner_mod.validate_narrative_state({"narrative_state": state})
+            assert f"narrative_state_field_empty:{field}" in errors
+
+    def test_absence_signals_must_be_non_empty_list(self):
+        for bad in ([], "不是列表", None):
+            state = self._valid_state()
+            state["absence_signals"] = bad
+            errors = runner_mod.validate_narrative_state({"narrative_state": state})
+            assert "narrative_state_absence_signals_empty" in errors
+        # 缺失也算
+        state = self._valid_state()
+        del state["absence_signals"]
+        errors = runner_mod.validate_narrative_state({"narrative_state": state})
+        assert "narrative_state_absence_signals_empty" in errors
+
+    def test_unknown_field(self):
+        state = self._valid_state()
+        state["extra_field"] = "多出来的"
+        errors = runner_mod.validate_narrative_state({"narrative_state": state})
+        assert "narrative_state_unknown_field:extra_field" in errors
+
+
+class TestTierDistribution:
+    def test_counts_and_first_hand_rate(self):
+        cards = [
+            {"source_tier": "official"},
+            {"source_tier": "official"},
+            {"source_tier": "primary_news"},
+            {"source_tier": "aggregator_news"},
+        ]
+        dist = runner_mod.tier_distribution(cards)
+        assert dist["by_source_tier"] == {"official": 2, "primary_news": 1, "aggregator_news": 1}
+        assert dist["first_hand_rate"] == pytest.approx(0.5)
+
+    def test_empty_cards(self):
+        dist = runner_mod.tier_distribution([])
+        assert dist["by_source_tier"] == {}
+        assert dist["first_hand_rate"] is None
+
+    def test_missing_source_tier_counted_as_missing(self):
+        dist = runner_mod.tier_distribution([{"fact_summary": "没写来源档"}])
+        assert dist["by_source_tier"] == {"missing": 1}
+        assert dist["first_hand_rate"] == 0.0

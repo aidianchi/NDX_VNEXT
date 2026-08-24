@@ -11,7 +11,11 @@
 - cordis.yml / hooks.json：本次渲染的 dsh 组合；
 - sessions/：dsh 落盘日志（纯文本 JSONL）；
 - material_cards.jsonl：每张卡 + 镣铐校验结果 + reconciliation 块；
-- run_summary.json：对账通过率、预算是否耗尽、解析是否成功、发布闸门标记。
+- narrative_state.json：层内结论块（框架坐标/结论/多空最强论据/改判条件/缺席信号/与上期差异）；
+- run_summary.json：对账通过率、一手率、预算是否耗尽、发布闸门标记。
+
+G2 跟踪名单：议程带 tracking_key 时，runner 把同一 key 最近一次巡逻的 narrative_state
+作为"上期坐标"注入 prompt，本期必须更新同一口径并写清差异——同口径时间序列由此而来。
 """
 
 from __future__ import annotations
@@ -66,6 +70,88 @@ def _build_persona(agenda: Dict[str, Any]) -> str:
     )
 
 
+def find_previous_narrative(
+    tracking_key: str, runs_root: Path = RUNS_ROOT
+) -> Optional[Dict[str, Any]]:
+    """G2 跟踪名单：找同一 tracking_key 最近一次巡逻的叙事坐标（上期值）。"""
+    best: Optional[Dict[str, Any]] = None
+    runs_root = Path(runs_root)
+    if not runs_root.exists():
+        return None
+    for summary_path in runs_root.glob("*/run_summary.json"):
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if summary.get("tracking_key") != tracking_key:
+            continue
+        narrative = summary.get("narrative_state")
+        if not narrative:
+            continue
+        if best is None or summary_path.parent.name > best["run_name"]:
+            best = {"run_name": summary_path.parent.name, "narrative_state": narrative}
+    return best
+
+
+def _build_prompt(agenda: Dict[str, Any], previous: Optional[Dict[str, Any]]) -> str:
+    """用户消息 = 议程问题 + 当前 UTC（机械字段代码喂，不许模型估）+（若追踪中）上期坐标。"""
+    now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    prompt = (
+        f"当前 UTC 时间：{now_utc}（所有卡的 collected_at_utc 一律填这个值，不许自己估）。\n\n"
+        + agenda["question"]
+    )
+    if previous:
+        prompt += (
+            f"\n\n## 上期坐标（{previous['run_name']}，同一追踪对象）\n\n"
+            f"```json\n{json.dumps(previous['narrative_state'], ensure_ascii=False, indent=2)}\n```\n\n"
+            "本期必须更新同一口径，并在 narrative_state.previous_position_delta 写清与上期相比什么变了。"
+        )
+    return prompt
+
+
+_NARRATIVE_STATE_FIELDS = (
+    "framework_position",
+    "conclusion",
+    "bull_strongest",
+    "bear_strongest",
+    "falsification",
+    "absence_signals",
+    "previous_position_delta",
+)
+
+
+def validate_narrative_state(payload: Optional[Dict[str, Any]]) -> List[str]:
+    """层内结论块的机器校验：字段齐全且非空。返回错误码列表（空 = 通过）。"""
+    if not payload or not isinstance(payload.get("narrative_state"), dict):
+        return ["narrative_state_missing"]
+    state = payload["narrative_state"]
+    errors = []
+    for field in _NARRATIVE_STATE_FIELDS:
+        value = state.get(field)
+        if field == "absence_signals":
+            if not isinstance(value, list) or not value:
+                errors.append("narrative_state_absence_signals_empty")
+        elif not isinstance(value, str) or not value.strip():
+            errors.append(f"narrative_state_field_empty:{field}")
+    for key in state.keys():
+        if key not in _NARRATIVE_STATE_FIELDS:
+            errors.append(f"narrative_state_unknown_field:{key}")
+    return errors
+
+
+def tier_distribution(cards: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """G6 一手率：卡的来源档分布 + 一手率（official 档占比）。"""
+    dist: Dict[str, int] = {}
+    for card in cards:
+        tier = str(card.get("source_tier") or "missing")
+        dist[tier] = dist.get(tier, 0) + 1
+    total = len(cards)
+    return {
+        "by_source_tier": dist,
+        "first_hand_rate": (dist.get("official", 0) / total) if total else None,
+    }
+
+
 def parse_final_payload(final_response: str) -> Optional[Dict[str, Any]]:
     """从最终消息提取最后一个 ```json 块并解析。失败返回 None（收下原文，标不可发布）。"""
     blocks = _JSON_BLOCK_RE.findall(final_response or "")
@@ -102,6 +188,9 @@ def run_agenda(
     )
     _render_templates(run_dir)
 
+    tracking_key = agenda.get("tracking_key")
+    previous = find_previous_narrative(tracking_key, runs_root) if tracking_key else None
+
     from dotenv import load_dotenv
 
     load_dotenv(REPO_ROOT / ".env")
@@ -117,7 +206,7 @@ def run_agenda(
             "DSH_SYSTEM_PROMPT": _build_persona(agenda),
         },
     ) as harness:
-        result = harness.run(agenda["question"])
+        result = harness.run(_build_prompt(agenda, previous))
 
     (run_dir / "final_response.md").write_text(result.final_response, encoding="utf-8")
 
@@ -127,6 +216,13 @@ def run_agenda(
     for card in cards:
         card["validation_errors"] = validate_research_card(card)
 
+    narrative_state = (payload or {}).get("narrative_state")
+    narrative_errors = validate_narrative_state(payload)
+    if narrative_state:
+        (run_dir / "narrative_state.json").write_text(
+            json.dumps(narrative_state, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
     reconciliation = reconcile_cards(cards, run_dir / "sessions")
     budget_state = read_budget_state(run_dir)
     budget_exhausted = bool(budget_state and budget_state.get("exhausted"))
@@ -135,18 +231,23 @@ def run_agenda(
         for card in reconciliation["cards"]:
             f.write(json.dumps(card, ensure_ascii=False) + "\n")
 
-    # 发布闸门：解析失败 / 镣铐不过 / 预算耗尽半成品 → 不可作发布依据。
+    # 发布闸门：解析失败 / 镣铐不过 / 层内结论缺失 / 预算耗尽半成品 → 不可作发布依据。
     shackles_failed = any(c["validation_errors"] for c in reconciliation["cards"])
-    publishable = parse_ok and not shackles_failed and not budget_exhausted
+    publishable = parse_ok and not shackles_failed and not narrative_errors and not budget_exhausted
     run_summary = {
         "agenda_id": agenda_id,
+        "tracking_key": tracking_key,
+        "previous_run": previous["run_name"] if previous else None,
         "run_dir": str(run_dir),
         "model": MODEL,
         "finish_reason": result.finish_reason,
         "parse_ok": parse_ok,
+        "narrative_state": narrative_state,
+        "narrative_errors": narrative_errors,
         "cards_total": reconciliation["total"],
         "cards_verified": reconciliation["verified"],
         "reconcile_pass_rate": reconciliation["pass_rate"],
+        "tier_distribution": tier_distribution(cards),
         "shackles_failed": shackles_failed,
         "budget": budget_state,
         "budget_exhausted": budget_exhausted,
@@ -159,10 +260,12 @@ def run_agenda(
             else "parse_failed"
             if not parse_ok
             else "shackles_failed"
+            if shackles_failed
+            else "narrative_state_invalid"
         ),
         "leads": (payload or {}).get("leads", []),
         "charter_feedback": (payload or {}).get("charter_feedback"),
-        "note": "本材料是第二层候选材料，判断以第一层数据为准；产出流向 IA，不进数据主链。",
+        "note": "本材料是第二层候选材料，判断以第一层数据为准；层内结论以事件层身份流向 IA 对质，不进数据主链。",
     }
     (run_dir / "run_summary.json").write_text(
         json.dumps(run_summary, ensure_ascii=False, indent=2), encoding="utf-8"

@@ -57,8 +57,13 @@ def append_agenda(
     material_classes: List[str],
     budget_cap: Optional[int] = None,
     ledger_path: Path = LEDGER_PATH,
+    tracking_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """追加一条新议程，返回写入的记录。source 决定初始状态。"""
+    """追加一条新议程，返回写入的记录。source 决定初始状态。
+
+    tracking_key：同一追踪对象（如 "ai_capex"）跨 run 序列化的钥匙（G2 跟踪名单）。
+    带上它，runner 会把上一次同 key 巡逻的叙事坐标喂给本次，产出必须更新同一口径。
+    """
     if source not in SOURCE_VALUES:
         raise ValueError(f"source 必须是 {SOURCE_VALUES} 之一，收到 {source!r}")
     if not isinstance(question, str) or not question.strip():
@@ -79,6 +84,8 @@ def append_agenda(
         "status": _INITIAL_STATUS[source],
         "created_at": _utc_now_iso(),
     }
+    if tracking_key:
+        record["tracking_key"] = tracking_key
     _append_record(record, ledger_path)
     return record
 
