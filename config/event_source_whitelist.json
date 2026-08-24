@@ -1,0 +1,71 @@
+{
+  "_doc": "事件层二档搜索腿·分档域名白名单（老板 2026-08-24 拍板：按建议分档；同日补裁：增设 official_disclosure 公司官方披露档——分清主次不代表把好东西都拦了，整体名单仍待专题研究）。official/official_disclosure/mainstream_finance 可进材料卡正文（fact）；sell_side/social 默认只进线索（lead）不进正文，由对账器机器执行降级。匹配规则：host == domain 或 host 以 '.'+domain 结尾；仅 https。",
+  "_tier_to_source_tier": {
+    "official": "official",
+    "official_disclosure": "official",
+    "mainstream_finance": "primary_news",
+    "sell_side": "aggregator_news",
+    "social": "weak_social"
+  },
+  "_body_allowed_tiers": ["official", "official_disclosure", "mainstream_finance"],
+  "tiers": {
+    "official_disclosure": [
+      "microsoft.com",
+      "abc.xyz",
+      "aboutamazon.com",
+      "atmeta.com",
+      "apple.com",
+      "nvidia.com",
+      "broadcom.com",
+      "tesla.com",
+      "netflix.net",
+      "businesswire.com",
+      "prnewswire.com",
+      "globenewswire.com"
+    ],
+    "official": [
+      "sec.gov",
+      "federalreserve.gov",
+      "newyorkfed.org",
+      "stlouisfed.org",
+      "cftc.gov",
+      "finra.org",
+      "bea.gov",
+      "bls.gov",
+      "treasurydirect.gov",
+      "whitehouse.gov",
+      "congress.gov",
+      "nasdaq.com"
+    ],
+    "mainstream_finance": [
+      "wsj.com",
+      "bloomberg.com",
+      "ft.com",
+      "reuters.com",
+      "cnbc.com",
+      "marketwatch.com",
+      "barrons.com",
+      "economist.com",
+      "apnews.com",
+      "caixin.com",
+      "yicai.com"
+    ],
+    "sell_side": [
+      "goldmansachs.com",
+      "morganstanley.com",
+      "jpmorgan.com",
+      "ubs.com",
+      "morningstar.com",
+      "seekingalpha.com",
+      "substack.com"
+    ],
+    "social": [
+      "x.com",
+      "twitter.com",
+      "reddit.com",
+      "weibo.com",
+      "xueqiu.com",
+      "zhihu.com"
+    ]
+  }
+}

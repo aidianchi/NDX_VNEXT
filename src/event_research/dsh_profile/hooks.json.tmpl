@@ -1,0 +1,25 @@
+{
+  "UserPromptSubmit": [
+    {
+      "hooks": [
+        { "type": "command", "command": "{{PYTHON}} {{HOOKS_DIR}}/budget_gate.py", "timeout": 30 }
+      ]
+    }
+  ],
+  "PreToolUse": [
+    {
+      "matcher": "web_fetch",
+      "hooks": [
+        { "type": "command", "command": "{{PYTHON}} {{HOOKS_DIR}}/fetch_gate.py", "timeout": 30 }
+      ]
+    }
+  ],
+  "PostToolUse": [
+    {
+      "matcher": "web_fetch",
+      "hooks": [
+        { "type": "command", "command": "{{PYTHON}} {{HOOKS_DIR}}/source_tagger.py", "timeout": 30 }
+      ]
+    }
+  ]
+}
