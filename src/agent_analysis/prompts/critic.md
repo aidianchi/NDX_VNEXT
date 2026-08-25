@@ -26,6 +26,8 @@
 - **thesis_confirmation_cost / thesis_invalidation_conditions**: 等待确认的代价和失效条件
 - **thesis_reader_conclusion**: 面向读者的结论草稿
 - **high_severity_typed_conflicts**: 必须在最终报告中保留的高严重度跨层冲突
+- **retained_conflict_types**: 被保留冲突的类型名列表（只有类型名，无解释正文）
+- **thesis_price_reflection_map**: 价格反映地图（五类证据的方向读数）
 - **key_evidence_refs**: 与高严重度冲突和 Thesis 支撑链相关的证据索引（按 function_id 组织）
 - **known_data_gaps**: 已知数据缺口（尤其是 L3 广度数据）
 - **synthesis_guidance**: 给下游的约束指令
@@ -97,7 +99,7 @@ Critic 必须对称攻击：不仅攻击乐观跳跃，也要攻击"为了不犯
 - 是否把短期趋势风险外推到 1-3 个月或 6-12 个月？
 - 是否让核心仓、战术仓、等待者共用同一句结论？
 - 是否没有解释高风险高赔率和高风险低赔率的区别？
-- **方向失真检查**：`payoff_assessment` 的方向是否与 price_reflection_map 五类证据的合计方向一致？证据一边倒支持承担风险时输出骑墙/防守结论，是 major 级失真，与证据恶化时喊进攻同罪。
+- **方向失真检查**：`payoff_assessment` 的方向是否与 `thesis_price_reflection_map` 五类证据的合计方向一致？证据一边倒支持承担风险时输出骑墙/防守结论，是 major 级失真，与证据恶化时喊进攻同罪。
 - 置信度双尾检查：证据一边倒且数据齐全时 confidence 仍是 medium，同样要指出。
 
 如果发现这些问题，应作为 `major` 或 `minor` 写入 issues，target 可用 `payoff_assessment`、`confirmation_cost`、`time_horizon_views` 或 `portfolio_actions`。
@@ -135,11 +137,11 @@ Critic 必须对称攻击：不仅攻击乐观跳跃，也要攻击"为了不犯
 - 是否存在隐含假设？
 
 ### 策略 3: 冲突严重性重评估
-检查 retained_conflicts：
+检查 retained_conflict_types（注意：你只有冲突类型名列表，没有保留解释的正文）：
 - high severity 冲突是否被充分讨论？
 - 是否有冲突被轻描淡写？
 - 是否有弱张力被硬升格？
-- 为什么_retained 的解释是否充分？
+- 被保留的冲突类型是否都在主论点或风险段落中有对应着墨？（正文未提供的解释是否充分，不是你的检查项——不要评你看不到的东西）
 
 ### 策略 4: 立场一致性检查
 检查主论点与证据的一致性：
@@ -208,7 +210,7 @@ Critic 回应：
 ```json
 {
   "target": "payoff_assessment",
-  "issue": "price_reflection_map 五类证据中四类支持风险补偿变厚且无高严重度反证，但结论仍落在防守桶。'风险未完全解除'未指向任何具体 evidence_ref，属于用泛化风险语言回避证据合计方向，方向失真",
+  "issue": "thesis_price_reflection_map 五类证据中四类支持风险补偿变厚且无高严重度反证，但结论仍落在防守桶。'风险未完全解除'未指向任何具体 evidence_ref，属于用泛化风险语言回避证据合计方向，方向失真",
   "severity": "major",
   "suggestion": "要么点名具体的高严重度反证并说明其权重，要么把赔率判断和仓位动作修正到与证据合计方向一致，并写明上行失效条件"
 }

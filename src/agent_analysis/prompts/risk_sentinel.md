@@ -168,7 +168,7 @@ Risk Sentinel 必须检查 Bridge 候选主要矛盾（`principal_contradictions
 - **B**: 宏观/情绪乐观 vs 内部健康度恶化
   - L1/L2 中性 + L3 恶化 = 触发
 
-**完整列表（参考 NDX_COMMAND_V9.txt）：**
+**完整列表：**
 - A: 宏观悲观 vs 趋势强势
 - B: 宏观/情绪乐观 vs 内部健康度恶化
 - C: 估值昂贵 vs 趋势强劲

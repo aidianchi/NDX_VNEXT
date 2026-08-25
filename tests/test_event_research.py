@@ -697,10 +697,10 @@ class TestFindPreviousNarrative:
 class TestBuildPrompt:
     def test_no_previous_is_utc_plus_question(self):
         agenda = {"question": "巡逻 AI capex 叙事"}
-        prompt = runner_mod._build_prompt(agenda, None)
-        # 机械字段代码喂：prompt 以当前 UTC 行开头（collected_at_utc 不许模型估），
+        prompt = runner_mod._build_prompt(agenda, None, "2026-08-25T00:00:00+00:00")
+        # 机械字段代码喂：prompt 以当前 UTC 行开头（collected_at_utc 由系统装配），
         # 然后是议程问题原文。
-        assert prompt.startswith("当前 UTC 时间：")
+        assert prompt.startswith("当前 UTC 时间：2026-08-25T00:00:00+00:00")
         assert prompt.endswith("巡逻 AI capex 叙事")
 
     def test_with_previous_injects_narrative(self):
@@ -709,8 +709,8 @@ class TestBuildPrompt:
             "run_name": "EV-1_20260101T000000Z",
             "narrative_state": {"conclusion": "标记字符串-上期结论"},
         }
-        prompt = runner_mod._build_prompt(agenda, previous)
-        assert prompt.startswith("当前 UTC 时间：")
+        prompt = runner_mod._build_prompt(agenda, previous, "2026-08-25T00:00:00+00:00")
+        assert prompt.startswith("当前 UTC 时间：2026-08-25T00:00:00+00:00")
         assert "巡逻 AI capex 叙事" in prompt
         assert "上期坐标" in prompt
         assert "EV-1_20260101T000000Z" in prompt

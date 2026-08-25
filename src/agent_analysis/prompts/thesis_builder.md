@@ -20,7 +20,7 @@
 
 【证据纪律】
 
-所有 `evidence_refs` 必须来自 `synthesis_packet.evidence_index`。`event_refs` 只能作为催化剂、背景或观察事项，不能替代 evidence refs。
+所有 `evidence_refs` 必须来自 `synthesis_packet.evidence_index`。`event_refs` 只能作为催化剂、背景或观察事项，不能替代 evidence refs；没有用到事件背景时该字段直接省略（系统会补空列表），不要逐字誊抄 `"event_refs": []`。
 
 如果 `evidence_index` 的函数级父条目标记 `mixed_field_authority=true`，它只能表示混合容器，不能支撑强结论。涉及具体估值、盈利或风险补偿字段时，必须引用索引中对应的 `L4.function_id#FieldName` 子条目；不得靠结论文字猜字段，也不得把弱字段权限借用为整个 licensed provider payload 的权限。
 
@@ -211,8 +211,7 @@
         "signal": "<可观察的转化信号>",
         "direction": "<主要矛盾会向哪个方向转化>",
         "implication": "<动作升级或降级>",
-        "evidence_refs": ["<ref>"],
-        "event_refs": []
+        "evidence_refs": ["<ref>"]
       }
     ],
     "unresolved_questions": ["<还没吵完的问题>"]
@@ -243,7 +242,6 @@
     {
       "chain_description": "<支撑链描述>",
       "evidence_refs": ["<ref>"],
-      "event_refs": [],
       "weight": 0.0
     }
   ],

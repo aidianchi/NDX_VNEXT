@@ -97,11 +97,10 @@ def find_previous_narrative(
     return best
 
 
-def _build_prompt(agenda: Dict[str, Any], previous: Optional[Dict[str, Any]]) -> str:
+def _build_prompt(agenda: Dict[str, Any], previous: Optional[Dict[str, Any]], now_utc: str) -> str:
     """用户消息 = 议程问题 + 当前 UTC（机械字段代码喂，不许模型估）+（若追踪中）上期坐标。"""
-    now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
     prompt = (
-        f"当前 UTC 时间：{now_utc}（所有卡的 collected_at_utc 一律填这个值，不许自己估）。\n\n"
+        f"当前 UTC 时间：{now_utc}（所有卡的 collected_at_utc 由系统装配，你不用写）。\n\n"
         + agenda["question"]
     )
     if previous:
@@ -200,6 +199,8 @@ def run_agenda(
     load_dotenv(REPO_ROOT / ".env")
     from deepseek_harness import DeepSeekHarness
 
+    collected_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
     with DeepSeekHarness(
         model=MODEL,
         cordis=str(run_dir / "cordis.yml"),
@@ -210,7 +211,7 @@ def run_agenda(
             "DSH_SYSTEM_PROMPT": _build_persona(agenda),
         },
     ) as harness:
-        result = harness.run(_build_prompt(agenda, previous))
+        result = harness.run(_build_prompt(agenda, previous, collected_at))
 
     (run_dir / "final_response.md").write_text(result.final_response, encoding="utf-8")
 
@@ -219,8 +220,11 @@ def run_agenda(
     cards: List[Dict[str, Any]] = payload.get("cards", []) if payload else []
     for card in cards:
         if isinstance(card, dict):
-            # 机械字段不出答卷：治理行是固定字符串，代码装配，不靠模型手写。
+            # 机械字段不出答卷：治理行、议程 ID、采集时间一律代码装配，
+            # 不靠模型手写（治理行抄错、时间戳编造都是实测事故）。
             card["governance_note"] = GOVERNANCE_NOTE
+            card["agenda_id"] = agenda_id
+            card["collected_at_utc"] = collected_at
         card["validation_errors"] = validate_research_card(card)
 
     narrative_state = (payload or {}).get("narrative_state")

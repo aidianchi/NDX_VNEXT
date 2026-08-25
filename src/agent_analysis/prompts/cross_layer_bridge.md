@@ -72,8 +72,7 @@ Bridge 是关系测绘员，不是风险官。支撑关系（共振）与冲突�
         "signal": "<可观察的转化信号>",
         "direction": "<主要矛盾会向哪个方向转化>",
         "implication": "<动作含义>",
-        "evidence_refs": ["<ref>"],
-        "event_refs": []
+        "evidence_refs": ["<ref>"]
       }
     ],
     "unresolved_questions": ["<还没吵完的问题>"]
@@ -105,8 +104,7 @@ Bridge 是关系测绘员，不是风险官。支撑关系（共振）与冲突�
       "signal": "<可观察信号>",
       "direction": "<转化方向>",
       "implication": "<含义>",
-      "evidence_refs": ["<ref>"],
-      "event_refs": []
+      "evidence_refs": ["<ref>"]
     }
   ],
   "implication_for_ndx": "<所有跨层关系对 NDX 的综合影响，方向由证据决定>",
@@ -330,4 +328,4 @@ Bridge 必须从 typed_conflicts、resonance_chains 和 transmission_paths 中�
 
 ## 事件引用 (event_refs)
 
-**本站的 event_refs 必须恒为空。**"事件永不进第一层（含桥接）"是硬边界：输入里不会包含 event_refs；输出里万一写出事件 ID，校验器直接打回（"bridge.event_refs must stay empty"）。事件材料与数据判决的对质只发生在第三层综合裁决，不归桥接。
+**你不需要输出 `event_refs` 字段——系统会把它装配为空列表。** 你的输入里没有任何事件材料；如果你在其它字段（如 `evidence_refs`）里写入了 `event:` 开头的 ID，校验器会打回（"bridge.event_refs must stay empty"）。事件与数据的对质不归你这一站，别在产物里夹带。
