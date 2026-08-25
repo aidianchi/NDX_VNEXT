@@ -27,7 +27,7 @@ from layer2_supplement_prototype.prototype_loop import (  # noqa: E402
 
 from src.event_research.hooks.common import domain_tier  # noqa: E402
 
-POINTER_FIELDS = ("call_id", "quote")
+POINTER_FIELDS = ("url", "quote")
 
 # G4 可选字段（2026-08-24 老板批）：改判条件 + 最强反方一句话。可选不强制
 # （防"形式拒收内容"），出现则必须是非空字符串。
@@ -38,8 +38,12 @@ def validate_research_card(card: Dict[str, Any], now_utc: Optional[datetime] = N
     """校验一张二档材料卡，返回机器可 grep 的错误码列表（空 = 通过）。
 
     在原型错误码之外新增：`source_pointer_missing`、`source_pointer_not_object`、
-    `source_pointer_call_id_empty`、`source_pointer_quote_empty`、`source_pointer_unknown_field:x`、
+    `source_pointer_url_empty`、`source_pointer_quote_empty`、`source_pointer_unknown_field:x`、
     `optional_field_empty:falsification` / `optional_field_empty:counter_one_liner`。
+
+    出生证契约（08-24 修订）：pointer 只填 url + quote——模型只回答需要判断的部分，
+    绑定到具体哪次抓取是代码的活（按 url 对回 session 抓取记录）。早期版本让模型
+    抄 30 位随机 call_id，实测编号编得以假乱真（机械字段不出答卷的教训）。
 
     域名口径差异：原型校验器写死了 9 个官方域（`source_url_domain_not_allowed`），
     二档搜索腿的白名单是 config/event_source_whitelist.json 的分档名单（老板
@@ -74,8 +78,8 @@ def validate_research_card(card: Dict[str, Any], now_utc: Optional[datetime] = N
         for key in pointer.keys():
             if key not in POINTER_FIELDS:
                 errors.append(f"source_pointer_unknown_field:{key}")
-        if not isinstance(pointer.get("call_id"), str) or not pointer["call_id"].strip():
-            errors.append("source_pointer_call_id_empty")
+        if not isinstance(pointer.get("url"), str) or not pointer["url"].strip():
+            errors.append("source_pointer_url_empty")
         if not isinstance(pointer.get("quote"), str) or not pointer["quote"].strip():
             errors.append("source_pointer_quote_empty")
     return errors

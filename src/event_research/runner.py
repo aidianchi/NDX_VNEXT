@@ -12,7 +12,9 @@
 - sessions/：dsh 落盘日志（纯文本 JSONL）；
 - material_cards.jsonl：每张卡 + 镣铐校验结果 + reconciliation 块；
 - narrative_state.json：层内结论块（框架坐标/结论/多空最强论据/改判条件/缺席信号/与上期差异）；
-- run_summary.json：对账通过率、一手率、预算是否耗尽、发布闸门标记。
+- brief.md：给老板看的金字塔简报（第一屏三行：变没变/本期判断/认错条件）；
+- run_summary.json：对账通过率、一手率、判断数字核对（G7 黄灯标注）、预算。
+  二档无发布闸门（老板 08-25 裁决）：一切机器校验都是标注层，随产物走。
 
 G2 跟踪名单：议程带 tracking_key 时，runner 把同一 key 最近一次巡逻的 narrative_state
 作为"上期坐标"注入 prompt，本期必须更新同一口径并写清差异——同口径时间序列由此而来。
@@ -32,8 +34,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.event_research import agenda as agenda_mod
+from src.event_research.brief import render_brief
 from src.event_research.budget import read_budget_state
-from src.event_research.card import validate_research_card
+from src.event_research.card import GOVERNANCE_NOTE, validate_research_card
+from src.event_research.narrative_check import check_narrative_numbers
 from src.event_research.reconcile import reconcile_cards
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -214,6 +218,9 @@ def run_agenda(
     parse_ok = payload is not None
     cards: List[Dict[str, Any]] = payload.get("cards", []) if payload else []
     for card in cards:
+        if isinstance(card, dict):
+            # 机械字段不出答卷：治理行是固定字符串，代码装配，不靠模型手写。
+            card["governance_note"] = GOVERNANCE_NOTE
         card["validation_errors"] = validate_research_card(card)
 
     narrative_state = (payload or {}).get("narrative_state")
@@ -231,9 +238,14 @@ def run_agenda(
         for card in reconciliation["cards"]:
             f.write(json.dumps(card, ensure_ascii=False) + "\n")
 
-    # 发布闸门：解析失败 / 镣铐不过 / 层内结论缺失 / 预算耗尽半成品 → 不可作发布依据。
-    shackles_failed = any(c["validation_errors"] for c in reconciliation["cards"])
-    publishable = parse_ok and not shackles_failed and not narrative_errors and not budget_exhausted
+    # G7：判断段数字核对（纯标注黄灯，不进发布闸门——老板 08-24：避免乱拦）。
+    number_check = check_narrative_numbers(narrative_state, reconciliation["cards"])
+
+    # 老板 08-25 裁决：二档撤发布闸门——"闸门既然乱拦就不要有，措辞细节不是
+    # 逻辑错误或编造"。所有机器校验（镣铐/对账/数字核对/结论字段）都是**标注层**，
+    # 随产物走，不存在"不可发布"状态；只有"预算耗尽=半成品"这类事实标注。
+    cards_with_errors = sum(1 for c in reconciliation["cards"] if c["validation_errors"])
+    cards_downgraded = reconciliation["total"] - reconciliation["verified"]
     run_summary = {
         "agenda_id": agenda_id,
         "tracking_key": tracking_key,
@@ -243,26 +255,16 @@ def run_agenda(
         "finish_reason": result.finish_reason,
         "parse_ok": parse_ok,
         "narrative_state": narrative_state,
-        "narrative_errors": narrative_errors,
+        "narrative_observations": narrative_errors,
         "cards_total": reconciliation["total"],
         "cards_verified": reconciliation["verified"],
+        "cards_downgraded": cards_downgraded,
+        "cards_with_shackle_labels": cards_with_errors,
         "reconcile_pass_rate": reconciliation["pass_rate"],
         "tier_distribution": tier_distribution(cards),
-        "shackles_failed": shackles_failed,
+        "narrative_number_check": number_check,
         "budget": budget_state,
         "budget_exhausted": budget_exhausted,
-        "publishable": publishable,
-        "unpublishable_reason": (
-            None
-            if publishable
-            else "budget_exhausted"
-            if budget_exhausted
-            else "parse_failed"
-            if not parse_ok
-            else "shackles_failed"
-            if shackles_failed
-            else "narrative_state_invalid"
-        ),
         "leads": (payload or {}).get("leads", []),
         "charter_feedback": (payload or {}).get("charter_feedback"),
         "note": "本材料是第二层候选材料，判断以第一层数据为准；层内结论以事件层身份流向 IA 对质，不进数据主链。",
@@ -270,11 +272,14 @@ def run_agenda(
     (run_dir / "run_summary.json").write_text(
         json.dumps(run_summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    (run_dir / "brief.md").write_text(
+        render_brief(run_summary, reconciliation["cards"]), encoding="utf-8"
+    )
 
     agenda_mod.append_status_change(
         agenda_id,
         "done",
-        note=f"run_dir={run_dir} publishable={publishable}",
+        note=f"run_dir={run_dir}",
         ledger_path=ledger_path,
     )
     return run_summary

@@ -3,14 +3,17 @@
 
 读 dsh 的 session 落盘日志（我们的组合固定 compression: none + packChunks: false，
 逐行直白 JSONL），对每张材料卡的 source_pointer 做机器校验：
-1. pointer 的 call_id 必须真实存在于日志的 tool/call；
-2. pointer 的 quote 必须逐字出现在该次 tool/result 的原文里（空白归一化后子串匹配）；
-3. 来源档位：sell_side/social 弱档不进正文 → 降级；web_search 结果等无法定档的
-   一律 unverified → 降级。
+1. pointer 的 url 必须真实出现在日志的 web_fetch 抓取记录里；
+2. pointer 的 quote 必须逐字出现在该 url 的抓取原文里（空白归一化后子串匹配）；
+3. 来源档位：sell_side/social 弱档不进正文 → 降级。
 
 处理原则是降级标注不打回（"形式不得拒收内容"）：对不上的 fact 在
 reconciliation 块里标注 downgraded 及原因码，下游（IA）须按解读对待。
 对账通过率 = verified / total，机器自动出数。
+
+历史注：早期版本让模型在 pointer 里抄 30 位随机 call_id，实测模型会编造
+以假乱真的编号（2026-08-24 第四期巡逻 0/4）——机械字段不出答卷，契约
+改为模型只填 url+quote，绑定由代码做。
 """
 
 from __future__ import annotations
@@ -149,30 +152,31 @@ def reconcile_card(
     tool_calls: Dict[str, Dict[str, Any]],
     whitelist: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """对一张卡做"指回原文"校验，返回 reconciliation 块（不改写卡本身）。"""
+    """对一张卡做"指回原文"校验，返回 reconciliation 块（不改写卡本身）。
+
+    出生证按 url 解析（08-24 修订：模型只填 url+quote，代码对回抓取记录）：
+    同一 url 可能被多次抓取，任一一次的原文命中引文即算对上。
+    """
     pointer = card.get("source_pointer") if isinstance(card, dict) else None
-    call_id = pointer.get("call_id") if isinstance(pointer, dict) else None
+    url = pointer.get("url").strip() if isinstance(pointer, dict) and isinstance(pointer.get("url"), str) else None
     quote = pointer.get("quote") if isinstance(pointer, dict) else None
 
-    call = tool_calls.get(call_id or "")
-    if call is None:
-        return {"status": STATUS_POINTER_MISSING, "detail": f"call_id 不存在：{call_id}"}
+    if not url:
+        return {"status": STATUS_POINTER_MISSING, "detail": "source_pointer 缺 url"}
 
-    if call["name"] != "web_fetch":
-        return {
-            "status": STATUS_UNVERIFIED_SOURCE,
-            "detail": f"pointer 指向 {call['name']}（非 web_fetch），无法定档",
-        }
+    matches = [c for c in tool_calls.values() if c["name"] == "web_fetch" and c["url"] == url]
+    if not matches:
+        return {"status": STATUS_POINTER_MISSING, "detail": f"该 url 未被抓取过：{url}"}
 
-    if not quote or _normalize(str(quote)) not in _normalize(call["result_text"]):
-        return {"status": STATUS_QUOTE_NOT_FOUND, "detail": "引文未在该次抓取原文中找到"}
+    if not quote or not any(_normalize(str(quote)) in _normalize(c["result_text"]) for c in matches):
+        return {"status": STATUS_QUOTE_NOT_FOUND, "detail": "引文未在该 url 的抓取原文中找到"}
 
-    tier = domain_tier(call["url"], whitelist)
+    tier = domain_tier(url, whitelist)
     policy = _whitelist_policy(whitelist)
     if tier not in policy["body_allowed"]:
         return {
             "status": STATUS_WEAK_TIER if tier else STATUS_UNVERIFIED_SOURCE,
-            "detail": f"来源档位 {tier or 'unverified'} 不进正文：{call['url']}",
+            "detail": f"来源档位 {tier or 'unverified'} 不进正文：{url}",
         }
 
     return {"status": STATUS_VERIFIED, "source_tier_expected": policy["tier_map"][tier]}

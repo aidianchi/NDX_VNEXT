@@ -219,6 +219,18 @@ def _contains_english_word(text: str, word: str) -> bool:
     return re.search(r"(?<![a-z])" + re.escape(word) + r"(?![a-z])", text) is not None
 
 
+# 引号豁免（2026-08-24 老板裁定"避免乱拦"）：引号内的模糊词是**别人的原话**
+# （官方公告、业绩指引、报道标题），不是作者在 hedging——事实卡引用指引恰恰是
+# 叙事跟踪的主菜。认标点不认意思，机器可查。
+_QUOTED_SPAN_RE = re.compile(
+    r"「[^」]*」|『[^』]*』|“[^”]*”|‘[^’]*’|\"[^\"]*\"|'[^']*'"
+)
+
+
+def _strip_quoted_spans(text: str) -> str:
+    return _QUOTED_SPAN_RE.sub("", text)
+
+
 def _validate_fetch_url(url: str) -> Optional[str]:
     """校验 URL scheme + host，返回错误码；合法返回 None。"""
     try:
@@ -294,7 +306,9 @@ def validate_material_card(card: Dict[str, Any], now_utc: Optional[datetime] = N
     if not fact:
         errors.append("fact_summary_empty")
     else:
-        fact_no_space, fact_with_space = _normalize_text(fact)
+        # 模糊词检查只看引号外的部分：引号内是引用原话（指引/公告/标题），
+        # 不算作者在 hedging（引号豁免，2026-08-24）。
+        fact_no_space, fact_with_space = _normalize_text(_strip_quoted_spans(fact))
         for word in FACT_HEDGE_WORDS_CN:
             if word in fact_no_space:
                 errors.append(f"fact_summary_hedge_word:{word}")

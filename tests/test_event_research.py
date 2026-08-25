@@ -99,7 +99,8 @@ def _valid_card():
         "needs_data_confirmation": ["用第一层利率数据复核会议决议"],
         "limitations": ["单一官方来源"],
         "governance_note": card_mod.GOVERNANCE_NOTE,
-        "source_pointer": {"call_id": "call-1", "quote": "维持联邦基金利率不变"},
+        "source_pointer": {"url": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20260128a.htm",
+                           "quote": "维持联邦基金利率不变"},
     }
 
 
@@ -265,18 +266,19 @@ class TestCard:
         card["source_pointer"] = "call-1"
         assert "source_pointer_not_object" in card_mod.validate_research_card(card, now_utc=FIXED_NOW)
 
-    def test_empty_call_id_and_quote(self):
+    def test_empty_url_and_quote(self):
         card = _valid_card()
-        card["source_pointer"] = {"call_id": "  ", "quote": ""}
+        card["source_pointer"] = {"url": "  ", "quote": ""}
         errors = card_mod.validate_research_card(card, now_utc=FIXED_NOW)
-        assert "source_pointer_call_id_empty" in errors
+        assert "source_pointer_url_empty" in errors
         assert "source_pointer_quote_empty" in errors
 
     def test_unknown_pointer_field(self):
+        """call_id 已是旧契约的未知字段（08-24 修订后 pointer 只认 url+quote）。"""
         card = _valid_card()
-        card["source_pointer"] = {"call_id": "c1", "quote": "原文", "tool_name": "web_fetch"}
+        card["source_pointer"] = {"url": "https://www.sec.gov/x", "quote": "原文", "call_id": "c1"}
         errors = card_mod.validate_research_card(card, now_utc=FIXED_NOW)
-        assert "source_pointer_unknown_field:tool_name" in errors
+        assert "source_pointer_unknown_field:call_id" in errors
 
     def test_prototype_hedge_word_still_enforced(self):
         """复用原型校验仍生效：fact_summary 含"可能" → fact_summary_hedge_word:可能。"""
@@ -320,6 +322,31 @@ class TestCard:
         assert errors == []
         assert "source_url_domain_not_allowed" not in errors
 
+    def test_quoted_cn_hedge_word_exempt(self):
+        """引号豁免（真实事故）：引号内的"可能"是官方原话，不是作者 hedging → 不报。"""
+        card = _valid_card()
+        card["fact_summary"] = 'NVIDIA 官方博客披露"可能"对单个机会提供最高 25% 残值支持'
+        errors = card_mod.validate_research_card(card, now_utc=FIXED_NOW)
+        assert "fact_summary_hedge_word:可能" not in errors
+
+    def test_unquoted_cn_hedge_word_still_flagged(self):
+        card = _valid_card()
+        card["fact_summary"] = "这可能是个泡沫"
+        errors = card_mod.validate_research_card(card, now_utc=FIXED_NOW)
+        assert "fact_summary_hedge_word:可能" in errors
+
+    def test_quoted_en_hedge_word_exempt(self):
+        card = _valid_card()
+        card["fact_summary"] = 'reports say spending "could" slow'
+        errors = card_mod.validate_research_card(card, now_utc=FIXED_NOW)
+        assert "fact_summary_hedge_word_en:could" not in errors
+
+    def test_unquoted_en_hedge_word_still_flagged(self):
+        card = _valid_card()
+        card["fact_summary"] = "spending could slow"
+        errors = card_mod.validate_research_card(card, now_utc=FIXED_NOW)
+        assert "fact_summary_hedge_word_en:could" in errors
+
 
 # ---------------------------------------------------------------------------
 # 4. reconcile：对账器
@@ -349,13 +376,19 @@ class TestReconcile:
         assert "维持利率" in calls["call-official"]["result_text"]
         assert calls["call-search"]["name"] == "web_search"
 
-    def _card_pointing(self, call_id, quote):
-        return {"source_pointer": {"call_id": call_id, "quote": quote}}
+    # 各抓取记录对应的 url（见 _events）
+    URL_OFFICIAL = "https://www.sec.gov/Archives/edgar/x.htm"
+    URL_SELLSIDE = "https://www.goldmansachs.com/insights/x"
+    URL_TRANSCRIPT = "https://www.fool.com/earnings/call-transcripts/x.aspx"
+    URL_SEARCH_ONLY = "https://www.sec.gov/"  # 只被 web_search 碰过，无 web_fetch 记录
+
+    def _card_pointing(self, url, quote):
+        return {"source_pointer": {"url": url, "quote": quote}}
 
     def test_verified_transcript_tier(self):
         """G5 transcript 档（fool.com）可进正文 → verified，映射 source_tier=primary_news。"""
         calls = reconcile_mod.index_tool_calls(self._events())
-        card = self._card_pointing("call-transcript", "管理层表示资本开支指引维持不变")
+        card = self._card_pointing(self.URL_TRANSCRIPT, "管理层表示资本开支指引维持不变")
         result = reconcile_mod.reconcile_card(card, calls, MINI_WHITELIST)
         assert result["status"] == reconcile_mod.STATUS_VERIFIED
         assert result["source_tier_expected"] == "primary_news"
@@ -363,44 +396,58 @@ class TestReconcile:
     def test_verified_official_domain(self):
         calls = reconcile_mod.index_tool_calls(self._events())
         # quote 与原文有空白差异：去空白子串匹配应命中
-        card = self._card_pointing("call-official", "美联储宣布维持利率不变")
+        card = self._card_pointing(self.URL_OFFICIAL, "美联储宣布维持利率不变")
         result = reconcile_mod.reconcile_card(card, calls, MINI_WHITELIST)
         assert result["status"] == reconcile_mod.STATUS_VERIFIED
         assert result["source_tier_expected"] == "official"
 
+    def test_verified_when_quote_hits_any_fetch_of_same_url(self):
+        """同一 url 被抓多次，quote 只命中其中一条也算 verified。"""
+        events = [
+            _tool_call("fetch-1", "web_fetch", self.URL_OFFICIAL),
+            _tool_result("fetch-1", "第一次抓取的内容，没有那句话。"),
+            _tool_call("fetch-2", "web_fetch", self.URL_OFFICIAL),
+            _tool_result("fetch-2", "第二次抓取：美联储宣布维持利率不变。"),
+        ]
+        calls = reconcile_mod.index_tool_calls(events)
+        card = self._card_pointing(self.URL_OFFICIAL, "美联储宣布维持利率不变")
+        result = reconcile_mod.reconcile_card(card, calls, MINI_WHITELIST)
+        assert result["status"] == reconcile_mod.STATUS_VERIFIED
+
     def test_quote_not_found(self):
         calls = reconcile_mod.index_tool_calls(self._events())
-        card = self._card_pointing("call-official", "原文里根本不存在的一句话")
+        card = self._card_pointing(self.URL_OFFICIAL, "原文里根本不存在的一句话")
         result = reconcile_mod.reconcile_card(card, calls, MINI_WHITELIST)
         assert result["status"] == reconcile_mod.STATUS_QUOTE_NOT_FOUND
 
-    def test_pointer_missing(self):
+    def test_pointer_missing_url_never_fetched(self):
         calls = reconcile_mod.index_tool_calls(self._events())
-        card = self._card_pointing("call-does-not-exist", "随便")
+        card = self._card_pointing("https://www.sec.gov/never-fetched.htm", "随便")
+        result = reconcile_mod.reconcile_card(card, calls, MINI_WHITELIST)
+        assert result["status"] == reconcile_mod.STATUS_POINTER_MISSING
+
+    def test_pointer_missing_when_url_only_seen_by_web_search(self):
+        """web_search 碰过的 url 不算抓取记录（绑定只认 web_fetch）→ pointer_missing。"""
+        calls = reconcile_mod.index_tool_calls(self._events())
+        card = self._card_pointing(self.URL_SEARCH_ONLY, "搜索结果摘要")
         result = reconcile_mod.reconcile_card(card, calls, MINI_WHITELIST)
         assert result["status"] == reconcile_mod.STATUS_POINTER_MISSING
 
     def test_weak_tier_sell_side(self):
         calls = reconcile_mod.index_tool_calls(self._events())
-        card = self._card_pointing("call-sellside", "我们预计降息在即")
+        card = self._card_pointing(self.URL_SELLSIDE, "我们预计降息在即")
         result = reconcile_mod.reconcile_card(card, calls, MINI_WHITELIST)
         assert result["status"] == reconcile_mod.STATUS_WEAK_TIER
-
-    def test_web_search_pointer_unverified(self):
-        calls = reconcile_mod.index_tool_calls(self._events())
-        card = self._card_pointing("call-search", "搜索结果摘要")
-        result = reconcile_mod.reconcile_card(card, calls, MINI_WHITELIST)
-        assert result["status"] == reconcile_mod.STATUS_UNVERIFIED_SOURCE
 
     def test_reconcile_cards_pass_rate(self, tmp_path):
         session_root = tmp_path / "sessions"
         (session_root / "s1").mkdir(parents=True)
         _write_jsonl(session_root / "s1" / "session.jsonl", self._events())
         cards = [
-            self._card_pointing("call-official", "美联储宣布维持利率不变"),  # verified
-            self._card_pointing("call-official", "不存在的引文"),            # quote_not_found
-            self._card_pointing("call-nope", "随便"),                        # pointer_missing
-            self._card_pointing("call-sellside", "我们预计降息在即"),          # weak_tier
+            self._card_pointing(self.URL_OFFICIAL, "美联储宣布维持利率不变"),   # verified
+            self._card_pointing(self.URL_OFFICIAL, "不存在的引文"),             # quote_not_found
+            self._card_pointing("https://www.sec.gov/nope.htm", "随便"),       # pointer_missing
+            self._card_pointing(self.URL_SELLSIDE, "我们预计降息在即"),          # weak_tier
         ]
         result = reconcile_mod.reconcile_cards(cards, session_root, MINI_WHITELIST)
         assert result["total"] == 4
@@ -747,3 +794,294 @@ class TestTierDistribution:
         dist = runner_mod.tier_distribution([{"fact_summary": "没写来源档"}])
         assert dist["by_source_tier"] == {"missing": 1}
         assert dist["first_hand_rate"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 7. narrative_check：G7 判断段数字核对（纯标注不拦截）
+# ---------------------------------------------------------------------------
+
+from src.event_research import narrative_check as ncheck_mod
+from src.event_research import brief as brief_mod
+
+
+class TestExtractNumbers:
+    def _values(self, text):
+        return ncheck_mod._extract_numbers(text)
+
+    def test_amounts_with_units(self):
+        found = self._values("$500B 2200亿 1.5万亿美元 $4.1万亿")
+        # raw 片段会带上单位后的尾随空白（正则 \s* 所致），比对前 strip
+        by_raw = {raw.strip(): (v, k) for v, k, raw in found}
+        assert by_raw["$500B"] == (5000.0, "currency_usd")        # 500 × 10亿
+        assert by_raw["2200亿"] == (2200.0, "currency")            # 裸记 currency
+        assert by_raw["1.5万亿美元"] == (15000.0, "currency_usd")   # 1.5 × 万亿
+        assert by_raw["$4.1万亿"] == (41000.0, "currency_usd")
+
+    def test_percent_and_bp(self):
+        found = self._values("上涨 39.4%，利差收窄 90bp，降息 100bp")
+        by_raw = {raw.strip(): (v, k) for v, k, raw in found}
+        assert by_raw["39.4%"] == (39.4, "percent")
+        assert by_raw["90bp"] == (0.9, "percent")    # 100bp = 1%
+        assert by_raw["100bp"] == (1.0, "percent")
+
+    def test_unit_normalization(self):
+        # $1B = 10亿；$1T = 1万亿 = 10000亿
+        assert (10.0, "currency_usd", "$1B") in self._values("$1B")
+        assert (10000.0, "currency_usd", "$1T") in self._values("$1T")
+        assert (10000.0, "currency", "1万亿") in self._values("1万亿")
+
+    def test_bare_numbers_not_extracted(self):
+        # 年份、日期这类无单位裸数字不查（查了必乱拦）
+        assert self._values("2026 年 8/26 的会议，第 3 季度") == []
+
+
+class TestCheckNarrativeNumbers:
+    def _cards(self):
+        return [
+            {
+                "fact_summary": "管理层称本季资本开支达 2200亿美元，毛利率 73.4%。",
+                "interpretation": "假设 capex 指引延续，则投入强度未见拐点。",
+                "limitations": ["单一季度数据"],
+                "needs_data_confirmation": ["用第一层 capex 数据复核"],
+                "source_pointer": {"url": "https://www.sec.gov/x.htm", "quote": "回购规模 600亿"},
+            }
+        ]
+
+    def _narrative(self, **overrides):
+        state = {
+            "framework_position": "叙事处于扩张中段",
+            "conclusion": "capex 强度延续",
+            "bull_strongest": "指引上调",
+            "bear_strongest": "折旧美化",
+            "falsification": "若指引下调则改判",
+            "absence_signals": ["未见砍单"],
+            "previous_position_delta": "首期无上期",
+        }
+        state.update(overrides)
+        return state
+
+    def test_none_or_non_dict_narrative(self):
+        for bad in (None, "not-a-dict", 42):
+            report = ncheck_mod.check_narrative_numbers(bad, self._cards())
+            assert report == {"checked": 0, "ungrounded": [], "card_refs": [], "anchored": False}
+
+    def test_grounded_number_not_ungrounded(self):
+        narrative = self._narrative(conclusion="本季 capex 2200亿美元，投入强度延续")
+        report = ncheck_mod.check_narrative_numbers(narrative, self._cards())
+        assert report["checked"] == 1
+        assert report["ungrounded"] == []
+
+    def test_ungrounded_number_flagged_with_field_and_text(self):
+        narrative = self._narrative(conclusion="毛利率冲到 81.2%，创新高")
+        report = ncheck_mod.check_narrative_numbers(narrative, self._cards())
+        assert report["checked"] == 1
+        assert len(report["ungrounded"]) == 1
+        entry = report["ungrounded"][0]
+        assert entry["field"] == "conclusion"
+        assert "81.2%" in entry["text"]
+
+    def test_currency_and_currency_usd_interchangeable(self):
+        # 卡写"2200亿美元"，判断写 "$220B"（= 220×10亿）→ 算有依据
+        narrative = self._narrative(conclusion="capex 达 $220B")
+        report = ncheck_mod.check_narrative_numbers(narrative, self._cards())
+        assert report["ungrounded"] == []
+
+    def test_number_grounded_via_pointer_quote(self):
+        # 数字只出现在 source_pointer.quote 里也算有依据
+        narrative = self._narrative(conclusion="回购规模 600亿，力度未减")
+        report = ncheck_mod.check_narrative_numbers(narrative, self._cards())
+        assert report["ungrounded"] == []
+
+    def test_card_refs_and_anchor(self):
+        narrative = self._narrative(conclusion="强度延续（见 c1、c2）")
+        report = ncheck_mod.check_narrative_numbers(narrative, self._cards())
+        assert report["card_refs"] == ["c1", "c2"]
+        assert report["anchored"] is True
+
+    def test_no_card_ref_means_unanchored(self):
+        narrative = self._narrative()
+        report = ncheck_mod.check_narrative_numbers(narrative, self._cards())
+        assert report["card_refs"] == []
+        assert report["anchored"] is False
+
+
+# ---------------------------------------------------------------------------
+# 8. brief：金字塔简报
+# ---------------------------------------------------------------------------
+
+class TestRenderBrief:
+    def _narrative(self):
+        return {
+            "framework_position": "叙事处于扩张中段",
+            "conclusion": "capex 上行但增速放缓",
+            "bull_strongest": "云厂商指引全线上调",
+            "bear_strongest": "折旧年限拉长美化利润",
+            "falsification": "若两大云厂下调指引则改判",
+            "absence_signals": ["未见供应链砍单报道"],
+            "previous_position_delta": "判断不变，证据加强",
+        }
+
+    def _summary(self, **overrides):
+        summary = {
+            "agenda_id": "EV-20260824-abc123",
+            "run_dir": "/repo/output/event_research/runs/EV-20260824-abc123_20260824T000000Z",
+            "narrative_state": self._narrative(),
+            "cards_verified": 1,
+            "cards_total": 2,
+            "tier_distribution": {"by_source_tier": {"official": 1, "aggregator_news": 1},
+                                  "first_hand_rate": 0.5},
+            "narrative_number_check": {"checked": 3, "ungrounded": [],
+                                       "card_refs": ["c1"], "anchored": True},
+            "budget": {"spent": 12345, "budget_cap": 30_000_000},
+            "budget_exhausted": False,
+            "cards_downgraded": 1,
+            "cards_with_shackle_labels": 1,
+        }
+        summary.update(overrides)
+        return summary
+
+    def _cards(self):
+        return [
+            {
+                "card_id": "c1",
+                "fact_summary": "管理层称本季资本开支达 2200亿美元。",
+                "interpretation": "假设指引延续，则投入强度未见拐点。",
+                "falsification": "若下季指引下调则改判",
+                "counter_one_liner": "capex 已透支未来两年需求",
+                "source_tier": "official",
+                "source_url": "https://www.sec.gov/Archives/x.htm",
+                "collected_at_utc": "2026-08-24T00:00:00+00:00",
+                "needs_data_confirmation": ["用第一层数据复核"],
+                "reconciliation": {"status": "verified"},
+            },
+            {
+                "card_id": "c2",
+                "fact_summary": "某卖方预计 capex 见顶。",
+                "interpretation": "假设卖方口径可信，则与官方指引冲突。",
+                "source_tier": "aggregator_news",
+                "source_url": "https://www.goldmansachs.com/insights/x",
+                "collected_at_utc": "2026-08-24T00:00:00+00:00",
+                "needs_data_confirmation": [],
+                "reconciliation": {"status": "downgraded_weak_tier"},
+            },
+        ]
+
+    def test_first_screen_three_lines_before_why(self):
+        md = brief_mod.render_brief(self._summary(), self._cards())
+        # 三行来自 narrative_state 对应字段
+        assert "**变没变**：判断不变，证据加强" in md
+        assert "**本期判断**：capex 上行但增速放缓" in md
+        assert "**认错条件**：若两大云厂下调指引则改判" in md
+        # 出现在"为什么"小节之前
+        assert md.index("**变没变**") < md.index("## 为什么")
+        assert md.index("**本期判断**") < md.index("## 为什么")
+        assert md.index("**认错条件**") < md.index("## 为什么")
+
+    def test_evidence_cards_content(self):
+        md = brief_mod.render_brief(self._summary(), self._cards())
+        # 每张卡含 fact_summary 与来源行（tier 中文标签 + 对账状态标签）
+        assert "管理层称本季资本开支达 2200亿美元。" in md
+        assert "某卖方预计 capex 见顶。" in md
+        assert "（官方；✓ 已对回原文；" in md
+        assert "（卖方；✗ 弱来源进了正文；" in md
+
+    def test_optional_card_fields_shown_only_when_present(self):
+        md = brief_mod.render_brief(self._summary(), self._cards())
+        # c1 有 falsification/counter_one_liner → 显示；c2 没有 → 只有一行
+        assert md.count("改判条件：") == 1
+        assert "改判条件：若下季指引下调则改判" in md
+        assert md.count("最强反方：") == 1
+        assert "最强反方：capex 已透支未来两年需求" in md
+
+    def test_machine_check_section(self):
+        md = brief_mod.render_brief(self._summary(), self._cards())
+        assert "对账通过率：1/2" in md
+        # 张张标价：降级与镣铐标注计数随质检行展示（标注随卡走不连坐）
+        assert "降级 1 张；镣铐标注 1 张" in md
+        assert "一手率：0.5" in md
+        assert "判断数字核对：查了 3 个，无据 0 个" in md
+        # 08-25 裁决：二档撤发布闸门，质检行不再有"发布闸门"
+        assert "发布闸门" not in md
+
+    def test_budget_exhausted_marks_half_finished(self):
+        # 经费耗尽 → 经费行追加半成品标注；未耗尽 → 无
+        md = brief_mod.render_brief(self._summary(budget_exhausted=True), self._cards())
+        assert "（耗尽，本期为半成品）" in md
+        md_ok = brief_mod.render_brief(self._summary(), self._cards())
+        assert "（耗尽，本期为半成品）" not in md_ok
+
+    def test_shackle_annotation_line_shown_only_when_errors(self):
+        cards = self._cards()
+        cards[1]["validation_errors"] = ["source_pointer_url_empty", "optional_field_empty:falsification"]
+        md = brief_mod.render_brief(self._summary(), cards)
+        assert md.count("镣铐标注：") == 1
+        assert "镣铐标注：source_pointer_url_empty、optional_field_empty:falsification" in md
+        # 默认卡无 validation_errors → 不出带冒号的卡级标注行（质检行的"镣铐标注 N 张"无冒号）
+        md_clean = brief_mod.render_brief(self._summary(), self._cards())
+        assert "镣铐标注：" not in md_clean
+
+    def test_machine_check_section_lists_ungrounded(self):
+        summary = self._summary(narrative_number_check={
+            "checked": 2,
+            "ungrounded": [{"field": "conclusion", "text": "81.2%", "normalized": "81.2|percent"}],
+            "card_refs": [], "anchored": False,
+        })
+        md = brief_mod.render_brief(summary, self._cards())
+        assert "无据 1 个" in md
+        assert "conclusion" in md and "81.2%" in md
+        assert "未挂任何证据卡" in md
+
+    def test_charter_feedback_marked_unverified(self):
+        summary = self._summary(charter_feedback="建议把电力瓶颈纳入常备巡逻")
+        md = brief_mod.render_brief(summary, self._cards())
+        assert "宪章反馈" in md
+        assert "未经核实" in md
+        assert "建议把电力瓶颈纳入常备巡逻" in md
+        # 无 charter_feedback 时不出该小节
+        md_no = brief_mod.render_brief(self._summary(), self._cards())
+        assert "宪章反馈" not in md_no
+
+    def test_missing_narrative_state_does_not_crash(self):
+        summary = self._summary(narrative_state=None)
+        md = brief_mod.render_brief(summary, self._cards())
+        assert "**本期判断**：（缺失）" in md
+        assert "**认错条件**：（缺失）" in md
+        assert "**变没变**：（首期无上期）" in md
+
+
+class TestRunSummaryContract:
+    """08-25 撤发布闸门后的 run_summary 字段契约。
+
+    run_agenda 需要真实 API 不可测，这里用 AST 直接读 runner.py 里
+    run_summary 字典字面量的键，锁定：闸门字段全删、标注字段在位。
+    """
+
+    def _summary_keys(self):
+        import ast
+        tree = ast.parse(
+            (REPO_ROOT / "src" / "event_research" / "runner.py").read_text(encoding="utf-8")
+        )
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "run_summary" for t in node.targets)
+                and isinstance(node.value, ast.Dict)
+            ):
+                return {k.value for k in node.value.keys if isinstance(k, ast.Constant)}
+        raise AssertionError("runner.py 里找不到 run_summary 字典字面量")
+
+    def test_gate_fields_removed(self):
+        keys = self._summary_keys()
+        for gone in (
+            "publishable",
+            "unpublishable_reason",
+            "shackles_failed",
+            "narrative_errors",
+            "cards_with_shackle_errors",
+        ):
+            assert gone not in keys, f"已撤销的闸门字段仍在 run_summary：{gone}"
+
+    def test_label_fields_present(self):
+        keys = self._summary_keys()
+        for want in ("narrative_observations", "cards_with_shackle_labels", "cards_downgraded"):
+            assert want in keys, f"标注层字段缺失：{want}"
