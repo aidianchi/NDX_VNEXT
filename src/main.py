@@ -22,6 +22,7 @@ try:
     from .data_evidence import normalize_data_evidence
     from .event_narrative_ledger import write_event_narrative_ledger
     from .event_research.sync_patrol import run_sync_gap_patrol
+    from .event_research.topic_composer import compose_topics
     from .expectation_ledger import write_expectation_ledger, write_expectation_ledger_failure
     from .integrated_synthesis_report import build_pure_data_report_manifest, write_integrated_synthesis_report
     from .news_event_data_linker import write_news_event_data_links
@@ -40,6 +41,7 @@ except ImportError:
     from data_evidence import normalize_data_evidence
     from event_narrative_ledger import write_event_narrative_ledger
     from event_research.sync_patrol import run_sync_gap_patrol
+    from event_research.topic_composer import compose_topics
     from expectation_ledger import write_expectation_ledger, write_expectation_ledger_failure
     from integrated_synthesis_report import build_pure_data_report_manifest, write_integrated_synthesis_report
     from news_event_data_linker import write_news_event_data_links
@@ -806,10 +808,22 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         artifacts=artifacts,
         output_path=pure_data_report_path,
     )
-    # 同步巡逻（老板 2026-08-25 快慢分路裁决）：六站对抗跑完、IA 组装之前，
-    # 缺口桥收题 → 软暂停亮候选清单 → 老板圈题当场巡逻 → 成果装配成
-    # run_dir/event_research_patrols.json（只含对账通过的卡）喂本次 IA。
-    # 软暂停：非交互 / 回测 / 超时一律跳过，run 不等人；失败不阻断 run。
+    # 出题官 + 同步巡逻（老板 2026-08-26 裁决：都在综合裁决**之前**——
+    # 出题官读六站对抗残局出题，老板圈题当场巡逻，成果上研究架，本次 IA
+    # 从架上取（含本次新巡逻的成果）。回测整体跳过（时点纪律）。
+    topics_result: Dict[str, Any] = {}
+    try:
+        if backtest_date:
+            topics_result = {"status": "skipped", "reason": "backtest_run"}
+        else:
+            topics_result = compose_topics(
+                Path(run_dir),
+                llm_caller=orchestrator.llm_engine.call_with_fallback,
+                effective_date=str(data_json.get("effective_date") or data_json.get("data_date") or ""),
+            )
+    except Exception as exc:  # noqa: BLE001 - 出题官挂了不许炸主链
+        topics_result = {"status": "failed", "error": str(exc)[:200]}
+
     gap_patrol_result: Dict[str, Any] = {}
     try:
         gap_patrol_result = run_sync_gap_patrol(
@@ -876,6 +890,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "event_mechanism_cards": os.path.join(run_dir, "event_mechanism_cards.json") if event_narrative_ledger_path else "",
         "pure_data_report": pure_data_report_path,
         "integrated_synthesis_report": integrated_synthesis_report_path,
+        "research_topics": os.path.join(run_dir, "research_topics.json"),
         "gap_patrol": gap_patrol_result,
         "expectation_vs_realized": expectation_ledger_path,
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),

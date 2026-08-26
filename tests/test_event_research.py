@@ -208,90 +208,76 @@ class TestAgenda:
 
 
 # ---------------------------------------------------------------------------
-# 1.5 gap_bridge：缺口桥（主链未解疑点 → 候选议程）
+# 1.5 gap_bridge：缺口桥（出题官任务书 → 候选议程）
 # ---------------------------------------------------------------------------
 
 from src.event_research import gap_bridge as gap_bridge_mod
 
 
-def _mk_run_dir(tmp_path, research_cards=None, inquiry_messages=None, cl_questions=None) -> Path:
-    """造一个假 run_dir：只写缺口桥要读的 artifact。"""
+def _mk_topic(topic_id="topic:aaa111", title="AI 资本开支的市场信心开始动摇了吗", **overrides):
+    topic = {
+        "topic_id": topic_id,
+        "title": title,
+        "why_now": "近两周巨头管理层口径出现松动迹象",
+        "linked_contradiction": "高估值与盈利兑现之间的张力",
+        "known_at_home": "L4 已有 M7 capex 序列与盈利修正斜率",
+        "acceptance_criteria": "至少 2 个一手来源佐证方向",
+        "falsification": "巨头财报重申 capex 上修",
+        "material_classes": ["③被相信的事"],
+    }
+    topic.update(overrides)
+    return topic
+
+
+def _mk_run_dir(tmp_path, topics=None) -> Path:
+    """造一个假 run_dir：只写缺口桥要读的 artifact（出题官的任务书）。"""
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    if research_cards is not None:
-        (run_dir / "event_mechanism_report.json").write_text(
-            json.dumps({"event_research_cards": research_cards}, ensure_ascii=False), encoding="utf-8")
-    if inquiry_messages is not None:
-        (run_dir / "inquiry_messages.json").write_text(
-            json.dumps({"messages": inquiry_messages}, ensure_ascii=False), encoding="utf-8")
-    if cl_questions is not None:
-        (run_dir / "cross_layer_questions.json").write_text(
-            json.dumps({"questions": cl_questions}, ensure_ascii=False), encoding="utf-8")
+    if topics is not None:
+        (run_dir / "research_topics.json").write_text(
+            json.dumps({"topics": topics}, ensure_ascii=False), encoding="utf-8")
     return run_dir
 
 
 class TestGapBridge:
-    def test_harvests_both_sources_as_candidates(self, tmp_path):
-        run_dir = _mk_run_dir(
-            tmp_path,
-            research_cards=[{"title": "AI 盈利链", "needs_data_confirmation": ["实际利率是否继续压制估值"]}],
-            inquiry_messages=[
-                {"message_id": "inq_abc123", "message_type": "adjudication_gap",
-                 "question": "10Y实际利率是否已充分反映到估值？"},
-                {"message_id": "inq_other", "message_type": "event_challenge",
-                 "question": "不收：非 adjudication_gap"},
-            ],
-        )
+    def test_harvests_topics_as_candidates(self, tmp_path):
+        run_dir = _mk_run_dir(tmp_path, topics=[
+            _mk_topic(),
+            _mk_topic(topic_id="topic:bbb222", title="回购转增发的拐点到了吗"),
+        ])
         ledger = tmp_path / "agenda.jsonl"
         result = gap_bridge_mod.harvest_gap_candidates(run_dir, ledger_path=ledger)
 
         assert result["status"] == "ok"
         assert result["candidates_added"] == 2
-        assert result["by_source"]["needs_data_confirmation"] == 1
-        assert result["by_source"]["adjudication_gap"] == 1
+        assert result["by_source"] == {"research_topic": 2}
 
         agendas = agenda_mod.current_agendas(ledger)
         assert len(agendas) == 2
         for record in agendas.values():
             assert record["source"] == "gap"
             assert record["status"] == "candidate"  # 候选→老板激活，不直接 active
-            assert record["gap_ref"]
-            assert record["material_classes"] == ["③被相信的事"]
+            assert record["gap_ref"].startswith("topic:")
+            assert record["topic_brief"]["why_now"]  # 任务简报随议程走
         questions = {r["question"] for r in agendas.values()}
-        assert "「AI 盈利链」待确认：实际利率是否继续压制估值" in questions
-        assert "10Y实际利率是否已充分反映到估值？" in questions
-        refs = {r["gap_ref"] for r in agendas.values()}
-        assert "inq:inq_abc123" in refs
+        assert "AI 资本开支的市场信心开始动摇了吗" in questions
+        assert "回购转增发的拐点到了吗" in questions
 
     def test_dedup_across_runs(self, tmp_path):
-        cards = [{"title": "主线", "needs_data_confirmation": ["同一疑点"]}]
-        msgs = [{"message_id": "inq_dup", "message_type": "adjudication_gap", "question": "同一问题"}]
-        run_dir = _mk_run_dir(tmp_path, research_cards=cards, inquiry_messages=msgs)
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic()])
         ledger = tmp_path / "agenda.jsonl"
 
         first = gap_bridge_mod.harvest_gap_candidates(run_dir, ledger_path=ledger)
         second = gap_bridge_mod.harvest_gap_candidates(run_dir, ledger_path=ledger)
-        assert first["candidates_added"] == 2
+        assert first["candidates_added"] == 1
         assert second["candidates_added"] == 0
-        assert second["skipped_duplicates"] == 2
-        assert len(agenda_mod.current_agendas(ledger)) == 2
-
-    def test_within_run_duplicate_text_collapsed(self, tmp_path):
-        # 同一疑点文本出现在两张主线卡上 → 只入帐一次
-        run_dir = _mk_run_dir(tmp_path, research_cards=[
-            {"title": "卡一", "needs_data_confirmation": ["同一疑点"]},
-            {"title": "卡二", "needs_data_confirmation": ["同一疑点"]},
-        ])
-        ledger = tmp_path / "agenda.jsonl"
-        result = gap_bridge_mod.harvest_gap_candidates(run_dir, ledger_path=ledger)
-        assert result["candidates_added"] == 1
-        assert result["skipped_duplicates"] == 1
+        assert second["skipped_duplicates"] == 1
+        assert len(agenda_mod.current_agendas(ledger)) == 1
 
     def test_closed_candidate_not_revived(self, tmp_path):
-        # 老板关闭过的题，同一疑点再出现也不复活
+        # 老板关闭过的题，同一课题再出现也不复活
         ledger = tmp_path / "agenda.jsonl"
-        run_dir = _mk_run_dir(tmp_path, research_cards=[
-            {"title": "主线", "needs_data_confirmation": ["旧疑点"]}])
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic()])
         first = gap_bridge_mod.harvest_gap_candidates(run_dir, ledger_path=ledger)
         agenda_id = first["agendas"][0]["agenda_id"]
         agenda_mod.append_status_change(agenda_id, "closed", note="老板关闭", ledger_path=ledger)
@@ -301,7 +287,7 @@ class TestGapBridge:
         assert second["skipped_duplicates"] == 1
 
     def test_missing_artifacts_tolerated(self, tmp_path):
-        # 事件层未开的 run：两份 artifact 都不存在，桥安静落地
+        # 出题官没跑/没产出：桥安静落地
         run_dir = tmp_path / "empty_run"
         run_dir.mkdir()
         result = gap_bridge_mod.harvest_gap_candidates(run_dir, ledger_path=tmp_path / "a.jsonl")
@@ -309,34 +295,120 @@ class TestGapBridge:
         assert result["candidates_added"] == 0
         assert result["skipped_duplicates"] == 0
 
-    def test_empty_items_ignored(self, tmp_path):
-        run_dir = _mk_run_dir(
-            tmp_path,
-            research_cards=[{"title": "空卡", "needs_data_confirmation": ["", "  "]}],
-            inquiry_messages=[{"message_id": "inq_noq", "message_type": "adjudication_gap", "question": ""}],
-        )
-        result = gap_bridge_mod.harvest_gap_candidates(run_dir, ledger_path=tmp_path / "a.jsonl")
-        assert result["candidates_added"] == 0
-
-    def test_cross_layer_questions_harvested(self, tmp_path):
-        """拆洞后事件侧求证转二档：cross_layer_questions 的开放题进候选。"""
-        run_dir = _mk_run_dir(tmp_path, cl_questions=[
-            {"question_id": "question:rates", "direction": "event_to_data", "status": "open",
-             "question": "利率事件压力是否已被实际利率确认？"},
-            {"question_id": "question:done", "direction": "event_to_data", "status": "answered",
-             "question": "不收：已答完"},
-            {"question_id": "question:d2e", "direction": "data_to_event", "status": "open",
-             "question": "不收：方向不对"},
-        ])
+    def test_invalid_material_classes_fall_back(self, tmp_path):
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic(material_classes=["⑨不存在的事"])])
         ledger = tmp_path / "agenda.jsonl"
         result = gap_bridge_mod.harvest_gap_candidates(run_dir, ledger_path=ledger)
-        assert result["by_source"]["cross_layer_question"] == 1
+        assert result["candidates_added"] == 1
         agenda = list(agenda_mod.current_agendas(ledger).values())[0]
-        assert agenda["gap_ref"] == "clq:question:rates"
-        assert agenda["status"] == "candidate"
-        # 幂等：同一 question_id 第二遍不重复
-        again = gap_bridge_mod.harvest_gap_candidates(run_dir, ledger_path=ledger)
-        assert again["candidates_added"] == 0
+        assert agenda["material_classes"] == ["③被相信的事"]
+
+
+# ---------------------------------------------------------------------------
+# 1.55 topic_composer：出题官（IA 残局 → 研究任务书）
+# ---------------------------------------------------------------------------
+
+from src.event_research import topic_composer as composer_mod
+
+
+def _mk_ia_run_dir(tmp_path, with_residual=True) -> Path:
+    """造一个带 IA 前产物（六站对抗残局）的假 run_dir。"""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "bridge_memos").mkdir()
+    (run_dir / "bridge_memos" / "bridge_0.json").write_text(json.dumps({
+        "principal_contradiction": "高估值与盈利兑现的张力",
+        "unresolved_questions": ["市场对 capex 回本的信心变化无法从数据确认"] if with_residual else [],
+        "key_uncertainties": [],
+    }, ensure_ascii=False), encoding="utf-8")
+    (run_dir / "cross_layer_questions.json").write_text(json.dumps({
+        "questions": [{
+            "question": "AI 叙事是否被数据确认？", "status": "open",
+            "requested_checks": ["半导体链条数据"],
+        }] if with_residual else [],
+    }, ensure_ascii=False), encoding="utf-8")
+    (run_dir / "final_adjudication.json").write_text(
+        json.dumps({"final_stance": "中性偏谨慎"}, ensure_ascii=False), encoding="utf-8")
+    (run_dir / "evidence_registry.json").write_text(
+        json.dumps({"passports": {"L1.get_10y_real_rate": {}, "L2.get_vix": {}}}, ensure_ascii=False),
+        encoding="utf-8")
+    return run_dir
+
+
+_COMPOSER_RESPONSE = json.dumps({
+    "topics": [{
+        "title": "AI 资本开支的市场信心开始动摇了吗",
+        "why_now": "近两周管理层口径松动",
+        "linked_contradiction": "连着估值与盈利张力",
+        "known_at_home": "L4 capex 序列已有",
+        "acceptance_criteria": "2 个一手来源",
+        "falsification": "财报重申上修",
+        "material_classes": ["③被相信的事"],
+    }],
+    "data_gaps": ["缺 VXN 分位数据"],
+    "no_topic_reason": "",
+}, ensure_ascii=False)
+
+
+class TestTopicComposer:
+    def test_compose_writes_topics_with_code_assembled_id(self, tmp_path):
+        run_dir = _mk_ia_run_dir(tmp_path)
+        result = composer_mod.compose_topics(
+            run_dir, llm_caller=lambda prompt, stage_name="": _COMPOSER_RESPONSE,
+            ledger_path=tmp_path / "a.jsonl", effective_date="2026-08-26")
+        assert len(result["topics"]) == 1
+        topic = result["topics"][0]
+        assert topic["topic_id"].startswith("topic:")
+        assert topic["title"] == "AI 资本开支的市场信心开始动摇了吗"
+        assert result["data_gaps"] == ["缺 VXN 分位数据"]
+        # artifact 落盘
+        saved = json.loads((run_dir / "research_topics.json").read_text(encoding="utf-8"))
+        assert saved["schema_version"] == "research_topics_v1"
+        assert len(saved["topics"]) == 1
+
+    def test_no_residual_means_no_topics(self, tmp_path):
+        run_dir = _mk_ia_run_dir(tmp_path, with_residual=False)
+        result = composer_mod.compose_topics(
+            run_dir, llm_caller=lambda prompt, stage_name="": _COMPOSER_RESPONSE,
+            ledger_path=tmp_path / "a.jsonl")
+        assert result["topics"] == []
+        assert "无残局" in result["no_topic_reason"]
+
+    def test_llm_failure_degrades_to_empty(self, tmp_path):
+        run_dir = _mk_ia_run_dir(tmp_path)
+
+        def _boom(prompt, stage_name=""):
+            raise RuntimeError("API 挂了")
+
+        result = composer_mod.compose_topics(run_dir, llm_caller=_boom, ledger_path=tmp_path / "a.jsonl")
+        assert result["topics"] == []
+        assert "llm_error" in result["no_topic_reason"]
+
+    def test_validate_drops_bad_shape_and_caps_count(self):
+        payload = {
+            "topics": [
+                {"title": "缺字段的题"},  # 缺五字段 → dropped
+                _mk_topic(topic_id="", title="题一"),
+                _mk_topic(topic_id="", title="题二"),
+                _mk_topic(topic_id="", title="题三"),  # 超上限 → 截断
+            ],
+            "data_gaps": ["g1", "", "g2"],
+        }
+        out = composer_mod.validate_topics(payload)
+        assert [t["title"] for t in out["topics"]] == ["题一", "题二"]
+        assert out["dropped"] and "fields_empty" in out["dropped"][0]["reason"]
+        assert out["data_gaps"] == ["g1", "g2"]
+
+    def test_prompt_lists_existing_topics(self, tmp_path):
+        run_dir = _mk_ia_run_dir(tmp_path)
+        ledger = tmp_path / "a.jsonl"
+        agenda_mod.append_agenda("在研：AI capex 叙事", "charter", ["③被相信的事"], ledger_path=ledger)
+        seen = {}
+        composer_mod.compose_topics(
+            run_dir,
+            llm_caller=lambda prompt, stage_name="": seen.setdefault("prompt", prompt) or _COMPOSER_RESPONSE,
+            ledger_path=ledger)
+        assert "在研：AI capex 叙事" in seen["prompt"]
 
 
 # ---------------------------------------------------------------------------
@@ -384,8 +456,7 @@ def _fake_patrol(tmp_path, ledger, record_calls):
     return _patrol
 
 
-_GAP_RUN_CARDS = [{"title": "主线", "needs_data_confirmation": ["疑点甲"]}]
-_GAP_RUN_MSGS = [{"message_id": "inq_x1", "message_type": "adjudication_gap", "question": "疑点乙"}]
+_GAP_NOTE = "sync patrol 的货源是出题官任务书（_mk_topic），见上方 TestGapBridge。"
 
 
 class TestSyncPatrol:
@@ -398,7 +469,7 @@ class TestSyncPatrol:
 
     def test_backtest_skips_everything(self, tmp_path):
         # 时点纪律：回测 run 不收题也不巡逻
-        run_dir = _mk_run_dir(tmp_path, research_cards=_GAP_RUN_CARDS)
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic()])
         ledger = tmp_path / "agenda.jsonl"
         result = sync_patrol_mod.run_sync_gap_patrol(
             run_dir, backtest_date="2026-08-17", ledger_path=ledger, is_interactive=True)
@@ -407,7 +478,7 @@ class TestSyncPatrol:
         assert agenda_mod.load_ledger(ledger) == []
 
     def test_non_interactive_harvests_but_skips_pause(self, tmp_path):
-        run_dir = _mk_run_dir(tmp_path, research_cards=_GAP_RUN_CARDS)
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic()])
         ledger = tmp_path / "agenda.jsonl"
         result = sync_patrol_mod.run_sync_gap_patrol(
             run_dir, ledger_path=ledger, is_interactive=False)
@@ -423,13 +494,13 @@ class TestSyncPatrol:
         assert artifact["skip_reason"] == "non_interactive"
 
     def test_interactive_selection_runs_patrol_and_filters_cards(self, tmp_path):
-        run_dir = _mk_run_dir(tmp_path, research_cards=_GAP_RUN_CARDS, inquiry_messages=_GAP_RUN_MSGS)
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic(), _mk_topic(topic_id="topic:bbb222", title="回购转增发的拐点到了吗")])
         ledger = tmp_path / "agenda.jsonl"
         calls = []
         result = sync_patrol_mod.run_sync_gap_patrol(
             run_dir, ledger_path=ledger, is_interactive=True,
             input_fn=lambda: "1\n", output_fn=lambda _: None,
-            patrol_fn=_fake_patrol(tmp_path, ledger, calls))
+            patrol_fn=_fake_patrol(tmp_path, ledger, calls), shelf_path=tmp_path / "shelf.json")
         assert result["status"] == "ok"
         assert result["patrols_run"] == 1
         assert calls == [result["patrols"][0]["agenda_id"]]
@@ -446,9 +517,14 @@ class TestSyncPatrol:
         assert patrol["downgraded_cards"][0]["reconciliation_status"] == "downgraded_quote_not_found"
         assert patrol["cards_downgraded"] == 1
         assert patrol["narrative_state"]["conclusion"] == "层内结论"
+        # 研究成果架：巡逻成果上架，供下次 run 的 IA 取用
+        shelf = json.loads((tmp_path / "shelf.json").read_text(encoding="utf-8"))
+        assert shelf["schema_version"] == "research_shelf_v1"
+        assert shelf["patrols"][0]["agenda_id"] == calls[0]
+        assert shelf["patrols"][0]["researched_at_utc"]
 
     def test_empty_selection_skips(self, tmp_path):
-        run_dir = _mk_run_dir(tmp_path, research_cards=_GAP_RUN_CARDS)
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic()])
         ledger = tmp_path / "agenda.jsonl"
         calls = []
         result = sync_patrol_mod.run_sync_gap_patrol(
@@ -460,7 +536,7 @@ class TestSyncPatrol:
         assert calls == []
 
     def test_timeout_skips(self, tmp_path, monkeypatch):
-        run_dir = _mk_run_dir(tmp_path, research_cards=_GAP_RUN_CARDS)
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic()])
         ledger = tmp_path / "agenda.jsonl"
         monkeypatch.setattr(sync_patrol_mod, "_read_stdin", lambda timeout: None)
         result = sync_patrol_mod.run_sync_gap_patrol(
@@ -469,7 +545,7 @@ class TestSyncPatrol:
         assert result["reason"] == "timeout"
 
     def test_patrol_failure_returns_to_candidate(self, tmp_path):
-        run_dir = _mk_run_dir(tmp_path, research_cards=_GAP_RUN_CARDS)
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic()])
         ledger = tmp_path / "agenda.jsonl"
 
         def _boom(agenda_id):
@@ -485,7 +561,7 @@ class TestSyncPatrol:
         assert agenda["status"] == "candidate"
 
     def test_disabled_flag_still_harvests(self, tmp_path):
-        run_dir = _mk_run_dir(tmp_path, research_cards=_GAP_RUN_CARDS)
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic()])
         ledger = tmp_path / "agenda.jsonl"
         result = sync_patrol_mod.run_sync_gap_patrol(
             run_dir, ledger_path=ledger, enabled=False, is_interactive=True)
@@ -497,22 +573,22 @@ class TestSyncPatrol:
         # 上期没圈的候选，本期再次亮出（标不标"遗留"是展示层的事，这里验证都在 pending 里）
         ledger = tmp_path / "agenda.jsonl"
         agenda_mod.append_agenda("上周遗留疑点", "gap", ["③被相信的事"],
-                                 gap_ref="ndc:old", ledger_path=ledger)
-        run_dir = _mk_run_dir(tmp_path, research_cards=_GAP_RUN_CARDS)
+                                 gap_ref="topic:old", ledger_path=ledger)
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic()])
         seen_lines = []
         result = sync_patrol_mod.run_sync_gap_patrol(
             run_dir, ledger_path=ledger, is_interactive=True,
             input_fn=lambda: "\n", output_fn=seen_lines.append)
         assert result["pending_candidates"] == 2
         listing = "\n".join(seen_lines)
-        assert "上周遗留疑点" in listing and "疑点甲" in listing
+        assert "上周遗留疑点" in listing and "AI 资本开支的市场信心开始动摇了吗" in listing
 
     def test_console_mode_file_handoff(self, tmp_path, monkeypatch):
         # 控制台启动的 run 没有 stdin：走 pending/answer 文件交接
         import threading
         import time
 
-        run_dir = _mk_run_dir(tmp_path, research_cards=_GAP_RUN_CARDS, inquiry_messages=_GAP_RUN_MSGS)
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic(), _mk_topic(topic_id="topic:bbb222", title="回购转增发的拐点到了吗")])
         ledger = tmp_path / "agenda.jsonl"
         pending_file = tmp_path / "pending.json"
         answer_file = tmp_path / "answer.json"
@@ -535,7 +611,8 @@ class TestSyncPatrol:
         result = sync_patrol_mod.run_sync_gap_patrol(
             run_dir, ledger_path=ledger, is_interactive=False,
             patrol_fn=_fake_patrol(tmp_path, ledger, calls),
-            pending_file=pending_file, answer_file=answer_file, timeout_sec=30)
+            pending_file=pending_file, answer_file=answer_file, timeout_sec=30,
+            shelf_path=tmp_path / "shelf.json")
         thread.join(timeout=10)
 
         assert result["status"] == "ok"
@@ -546,7 +623,7 @@ class TestSyncPatrol:
         assert not pending_file.exists() and not answer_file.exists()
 
     def test_console_mode_timeout(self, tmp_path, monkeypatch):
-        run_dir = _mk_run_dir(tmp_path, research_cards=_GAP_RUN_CARDS)
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic()])
         ledger = tmp_path / "agenda.jsonl"
         pending_file = tmp_path / "pending.json"
         answer_file = tmp_path / "answer.json"
@@ -562,7 +639,7 @@ class TestSyncPatrol:
         import threading
         import time
 
-        run_dir = _mk_run_dir(tmp_path, research_cards=_GAP_RUN_CARDS)
+        run_dir = _mk_run_dir(tmp_path, topics=[_mk_topic()])
         ledger = tmp_path / "agenda.jsonl"
         pending_file = tmp_path / "pending.json"
         answer_file = tmp_path / "answer.json"

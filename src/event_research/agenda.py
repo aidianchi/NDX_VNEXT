@@ -59,6 +59,7 @@ def append_agenda(
     ledger_path: Path = LEDGER_PATH,
     tracking_key: Optional[str] = None,
     gap_ref: Optional[str] = None,
+    topic_brief: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """追加一条新议程，返回写入的记录。source 决定初始状态。
 
@@ -66,7 +67,10 @@ def append_agenda(
     带上它，runner 会把上一次同 key 巡逻的叙事坐标喂给本次，产出必须更新同一口径。
 
     gap_ref：缺口桥（gap_bridge.py）写入的溯源键，指向主链疑点出处的稳定 ID
-    （ndc:<文本哈希> / inq:<message_id>），用于"同一疑点不重复入帐"的去重。
+    （topic:<标题哈希>），用于"同一疑点不重复入帐"的去重。
+    topic_brief：出题官（topic_composer.py）任务书的完整字段（why_now /
+    linked_contradiction / known_at_home / acceptance_criteria / falsification），
+    随议程走，控制台圈题面板展示用。
     """
     if source not in SOURCE_VALUES:
         raise ValueError(f"source 必须是 {SOURCE_VALUES} 之一，收到 {source!r}")
@@ -92,6 +96,8 @@ def append_agenda(
         record["tracking_key"] = tracking_key
     if gap_ref:
         record["gap_ref"] = gap_ref
+    if topic_brief:
+        record["topic_brief"] = dict(topic_brief)
     _append_record(record, ledger_path)
     return record
 

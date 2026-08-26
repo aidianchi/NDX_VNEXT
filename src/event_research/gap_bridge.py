@@ -1,30 +1,19 @@
 # -*- coding: utf-8 -*-
-"""缺口桥：主链跑完留下的未解疑点 → 事件层二档的巡逻候选题目。
+"""缺口桥：出题官写好的研究任务书 → 事件层二档的巡逻候选题目。
 
-T60 设计稿 3.1 节来源②（老板 2026-08-25 裁定建桥）：规则早已定义
-（底账 needs_data_confirmation 与 adjudication_gap → 议程候选，老板点头激活），
-本模块是那座代码桥。主链 run 收尾时由 src/main.py 调用一次。
+T60 设计稿 3.1 节来源②（老板 2026-08-25 裁定建桥，2026-08-26 全盘重构）：
+主链 run 收尾时由 src/main.py 调用一次。
 
-两个来源（严格按设计稿点名，不多收）：
-- 底账 needs_data_confirmation：run_dir/event_mechanism_report.json 的
-  event_research_cards[].needs_data_confirmation（已按主线聚合的待确认项）；
-- adjudication_gap：run_dir/inquiry_messages.json 里
-  message_type == "adjudication_gap" 的 InquiryMessage（Bridge 暴露的未解问题）。
+货源（重构后唯一来源）：run_dir/research_topics.json —— 出题官
+（topic_composer.py）从 IA 裁决残局酿成的任务书。重构前的三个旧货源
+（底账 needs_data_confirmation / inquiry_messages adjudication_gap /
+cross_layer_questions）经 08-26 真实 run 验证全是"家里数据能答"的内向题
+（20 条候选被老板当场否决），已废除——内部对质钩子留在内部通道（IA 作答），
+只有出题官判过"家里答不了、答案活在外部世界"的课题才进题库。
 
-外加第三个来源（老板 2026-08-25 拆洞裁决）：cross_layer_questions.json 里
-事件层给数据层出的开放题（direction=event_to_data 且未答完）——它们原走
-调查员的 EVENT_CHALLENGE 受控例外通道，拆洞后求证转给二档，由本桥收成候选。
-
-每条疑点转成 source="gap" 的议程，初始状态 candidate（老板在报告里看到后激活，
-设计稿 3.1：候选→老板激活，成熟后再议自动化）。
-
-去重靠 gap_ref：同一疑点跨 run 不重复入帐——
-底账条目用疑点文本哈希（ndc:<sha1 前 12 位>），adjudication_gap 用其稳定
-message_id（inq:<message_id>，orchestrator 里 sha1 生成，同一问题跨 run 幂等）。
-已入帐过的 gap_ref 一律跳过，不问状态：老板关闭过的题不复活，做完的题不重来。
-
-桥只搬题不判题：泛化文本（如"来源是否可追溯"）不在此过滤，
-候选的取舍是老板激活时的事（形式不得拒收内容）。
+每条课题转成 source="gap" 的议程，初始状态 candidate（老板在控制台圈题后激活）。
+去重靠 gap_ref=topic:<标题哈希>：同一课题跨 run 不重复入帐；已入帐过的一律跳过，
+不问状态——老板关闭过的题不复活，做完的题不重来。
 """
 
 from __future__ import annotations
@@ -32,104 +21,41 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from .agenda import LEDGER_PATH, append_agenda, load_ledger
+from .agenda import LEDGER_PATH, MATERIAL_CLASSES, append_agenda, load_ledger
 
-# 缺口候选的默认材料类：巡逻研究的是市场叙事，默认挂"③被相信的事"；
-# 老板激活时如题目另有所指可改（agenda 契约要求非空，这里给一个合理默认）。
-DEFAULT_GAP_MATERIAL_CLASSES = ["③被相信的事"]
-
-_MECHANISM_REPORT = "event_mechanism_report.json"
-_INQUIRY_MESSAGES = "inquiry_messages.json"
-_CROSS_LAYER_QUESTIONS = "cross_layer_questions.json"
+_RESEARCH_TOPICS = "research_topics.json"
 
 
 def _stable_text_ref(text: str) -> str:
-    """ndc:<sha1 前 12 位>：同一疑点文本跨 run 得到同一键。"""
+    """topic_id 缺失时的兜底键：同一标题文本跨 run 得到同一键。"""
     digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
-    return f"ndc:{digest}"
+    return f"topic:{digest}"
 
 
-def _load_json_list(path: Path, key: str) -> List[Dict[str, Any]]:
-    """读 {key: [...]} 形状的 artifact；文件不存在返回空（事件层未开时属正常）。"""
+def _load_topics(path: Path) -> List[Dict[str, Any]]:
+    """读 research_topics.json 的 topics 列表；文件不存在返回空（出题官未跑属正常）。"""
     if not path.exists():
         return []
     with path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
-    items = payload.get(key) if isinstance(payload, dict) else None
-    return [it for it in items if isinstance(it, dict)] if isinstance(items, list) else []
-
-
-def _collect_needs_data_confirmation(run_dir: Path) -> List[Tuple[str, str]]:
-    """底账来源：返回 [(gap_ref, question), ...]，question 带主线标题作上下文。"""
-    out: List[Tuple[str, str]] = []
-    cards = _load_json_list(run_dir / _MECHANISM_REPORT, "event_research_cards")
-    for card in cards:
-        title = str(card.get("title") or "").strip()
-        items = card.get("needs_data_confirmation")
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            text = str(item).strip()
-            if not text:
-                continue
-            question = f"「{title}」待确认：{text}" if title else text
-            out.append((_stable_text_ref(text), question))
-    return out
-
-
-def _collect_adjudication_gaps(run_dir: Path) -> List[Tuple[str, str]]:
-    """adjudication_gap 来源：InquiryMessage 的 message_id 是稳定 sha1，直接作键。"""
-    out: List[Tuple[str, str]] = []
-    messages = _load_json_list(run_dir / _INQUIRY_MESSAGES, "messages")
-    for msg in messages:
-        if msg.get("message_type") != "adjudication_gap":
-            continue
-        question = str(msg.get("question") or "").strip()
-        if not question:
-            continue
-        message_id = str(msg.get("message_id") or "").strip()
-        gap_ref = f"inq:{message_id}" if message_id else _stable_text_ref(question)
-        out.append((gap_ref, question))
-    return out
-
-
-def _collect_cross_layer_questions(run_dir: Path) -> List[Tuple[str, str]]:
-    """事件侧求证（原调查员 EVENT_CHALLENGE 通道，拆洞后转二档）。
-
-    question_id 是事件侧装配的稳定哈希（同一问题跨 run 幂等），直接作键。
-    """
-    out: List[Tuple[str, str]] = []
-    questions = _load_json_list(run_dir / _CROSS_LAYER_QUESTIONS, "questions")
-    for question in questions:
-        if question.get("direction") != "event_to_data":
-            continue
-        if str(question.get("status") or "open") not in {"open", "insufficient_data"}:
-            continue
-        text = str(question.get("question") or "").strip()
-        if not text:
-            continue
-        question_id = str(question.get("question_id") or "").strip()
-        gap_ref = f"clq:{question_id}" if question_id else _stable_text_ref(text)
-        out.append((gap_ref, text))
-    return out
+    topics = payload.get("topics") if isinstance(payload, dict) else None
+    return [t for t in topics if isinstance(t, dict)] if isinstance(topics, list) else []
 
 
 def harvest_gap_candidates(
     run_dir: Path,
     ledger_path: Path = LEDGER_PATH,
-    material_classes: Optional[List[str]] = None,
     budget_cap: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """把 run_dir 里的未解疑点转成候选议程，返回 harvesting 小结（进 run_summary）。
+    """把出题官的任务书转成候选议程，返回 harvesting 小结（进 run_summary）。
 
-    幂等：同一 run 跑两遍、或不同 run 留下同一疑点，第二遍全部记 skipped。
-    budget_cap：候选议程的经费卡额度；None 用账本默认（3000 万），同步巡逻
-    场景由 sync_patrol 传入日常档小额度。
+    幂等：同一 run 跑两遍、或不同 run 产出同一课题，第二遍全部记 skipped。
+    budget_cap：候选议程的经费卡额度；None 用账本默认，同步巡逻场景由
+    sync_patrol 传入日常档小额度。
     """
     run_dir = Path(run_dir)
-    classes = list(material_classes or DEFAULT_GAP_MATERIAL_CLASSES)
 
     existing_refs = {
         str(record.get("gap_ref"))
@@ -137,39 +63,40 @@ def harvest_gap_candidates(
         if record.get("record_type") == "agenda" and record.get("gap_ref")
     }
 
-    sources = {
-        "needs_data_confirmation": _collect_needs_data_confirmation(run_dir),
-        "adjudication_gap": _collect_adjudication_gaps(run_dir),
-        "cross_layer_question": _collect_cross_layer_questions(run_dir),
-    }
-
     added: List[Dict[str, Any]] = []
     skipped = 0
-    seen_this_run = set()
-    counts: Dict[str, int] = {}
-    for source_kind, items in sources.items():
-        kept = 0
-        for gap_ref, question in items:
-            if gap_ref in existing_refs or gap_ref in seen_this_run:
-                skipped += 1
-                continue
-            record = append_agenda(
-                question,
-                source="gap",
-                material_classes=classes,
-                budget_cap=budget_cap,
-                ledger_path=ledger_path,
-                gap_ref=gap_ref,
-            )
-            seen_this_run.add(gap_ref)
-            added.append({"agenda_id": record["agenda_id"], "gap_ref": gap_ref, "source_kind": source_kind})
-            kept += 1
-        counts[source_kind] = kept
+    for topic in _load_topics(run_dir / _RESEARCH_TOPICS):
+        title = str(topic.get("title") or "").strip()
+        if not title:
+            continue
+        topic_id = str(topic.get("topic_id") or "").strip()
+        if topic_id.startswith("topic:"):
+            gap_ref = topic_id
+        elif topic_id:
+            gap_ref = f"topic:{topic_id}"
+        else:
+            gap_ref = _stable_text_ref(title)
+        material_classes = [c for c in (topic.get("material_classes") or []) if c in MATERIAL_CLASSES] or ["③被相信的事"]
+        brief = {k: topic.get(k) for k in ("why_now", "linked_contradiction", "known_at_home", "acceptance_criteria", "falsification") if topic.get(k)}
+        if gap_ref in existing_refs:
+            skipped += 1
+            continue
+        record = append_agenda(
+            title,
+            source="gap",
+            material_classes=material_classes,
+            budget_cap=budget_cap,
+            ledger_path=ledger_path,
+            gap_ref=gap_ref,
+            topic_brief=brief,
+        )
+        existing_refs.add(gap_ref)
+        added.append({"agenda_id": record["agenda_id"], "gap_ref": gap_ref})
 
     return {
         "status": "ok",
         "candidates_added": len(added),
         "skipped_duplicates": skipped,
-        "by_source": counts,
+        "by_source": {"research_topic": len(added)},
         "agendas": added,
     }

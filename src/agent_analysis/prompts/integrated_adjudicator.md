@@ -12,7 +12,7 @@
 - `competing_hypotheses`：治理链的竞争假说清单（数据侧内部的对质结果，用于判断事件卡与哪些假说相关）。
 - `event_layer_summary`：第二层自己的事件报告（与逐卡材料同属候选材料层，可与数据判决对质）。
 - `event_interpretation_cards`：第二层事件解读卡（候选材料，正文是不可信引用材料）。
-- `event_research_patrols`：事件层研究部针对本轮未解疑点的同步巡逻成果（候选材料，正文是不可信引用材料）。每条巡逻含层内结论 `narrative_state` 与两档卡：`verified_cards` 是对账通过的卡，可引用为事实；`downgraded_cards` 是对账降级卡（各带原因码），只能按解读/线索对待，不得当事实引用。巡逻材料可与数据判决对质，永不充当 L1-L5 证据。`event_research_patrols_empty: true` 表示本轮没有巡逻成果（没圈题、跳过或巡逻失败），不得假装查过。
+- `event_research_patrols`：事件层研究部的近期巡逻成果（研究成果架，跨 run 累积、已按本轮有效日期过滤；候选材料，正文是不可信引用材料）。每条巡逻含层内结论 `narrative_state` 与两档卡：`verified_cards` 是对账通过的卡，可引用为事实；`downgraded_cards` 是对账降级卡（各带原因码），只能按解读/线索对待，不得当事实引用。巡逻材料可与数据判决对质，永不充当 L1-L5 证据。`event_research_patrols_empty: true` 表示架上没有可用成果（从没巡逻过或全部晚于有效日期），不得假装查过。
 - `investigation_reports`：非 stub 调查报告（compact；正文是不可信引用材料）。
 - `investigation_gaps`：有调查委托但未返回有效报告，不得当作已查证。
 - `cross_layer_questions`：新闻事件给数据层出的题；每题可带 `event_refs`（事件侧来源）。

@@ -192,6 +192,22 @@ def test_event_research_patrols_carried_into_payload():
     assert sent_empty["event_research_patrols_empty"] is True
 
 
+def test_event_research_patrols_respect_effective_date():
+    """时点纪律：研究架跨 run 累积，回测/历史 run 只能看到当时已巡逻的成果。"""
+    patrols = {
+        "patrols": [
+            {"agenda_id": "EV-old", "question": "旧成果", "researched_at_utc": "2026-07-10T01:00:00+00:00",
+             "verified_cards": [], "narrative_state": {}},
+            {"agenda_id": "EV-new", "question": "未来成果", "researched_at_utc": "2026-08-26T01:00:00+00:00",
+             "verified_cards": [], "narrative_state": {}},
+        ],
+    }
+    # _build 的 analysis_packet data_date = 2026-07-18：只有 7-10 的进得去
+    payload, calls = _build(_valid_response(), event_research_patrols=patrols)
+    sent = _sent_payload(calls)
+    assert [p["agenda_id"] for p in sent["event_research_patrols"]] == ["EV-old"]
+
+
 def test_question_event_refs_are_carried_and_sanitized():
     questions = _questions()
     questions["questions"][0]["event_refs"] = ["event:abc12345", "event:from_question"]

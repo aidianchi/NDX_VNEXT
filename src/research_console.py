@@ -226,8 +226,8 @@ class ResearchConsoleGenerator:
 
     <section class="panel gap-panel" id="gapPanel" hidden aria-label="待拍板的未解疑点">
       <div class="panel-head">
-        <h2>待拍板：本次 run 发现的未解疑点</h2>
-        <p>系统在综合裁决前停了下来。勾选要研究部当场巡逻的题（巡逻花 API 经费，一题约百万级 token），其余留在题库里以后再说。都不点的话，超时后系统自动跳过巡逻、照常出报告。</p>
+        <h2>待拍板：研究部新课题</h2>
+        <p>综合裁决已出，出题官把"家里答不了、答案活在外部世界"的残局酿成了下面的研究任务书。勾选要研究部当场巡逻的课题（巡逻花 API 经费，一题约百万级 token），其余留在题库里以后再说。都不点的话，超时后系统自动跳过。</p>
       </div>
       <div class="gap-list" id="gapList"></div>
       <div class="button-row">
@@ -494,6 +494,27 @@ input:focus, textarea:focus {
 }
 .gap-tag.is-new { background: #e3eef7; color: var(--accent); }
 .gap-tag.is-old { background: #efe9d8; color: var(--watch); }
+.gap-title { font-weight: 700; }
+.gap-brief {
+  margin-top: 6px;
+  display: grid;
+  gap: 4px;
+  border-top: 1px dashed var(--rule);
+  padding-top: 6px;
+}
+.gap-brief-row {
+  display: grid;
+  grid-template-columns: 9em minmax(0, 1fr);
+  gap: 8px;
+  color: var(--soft);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.gap-brief-key {
+  color: var(--muted);
+  font-weight: 700;
+  white-space: nowrap;
+}
 .run-now-button {
   width: 100%;
   margin-top: 16px;
@@ -1118,9 +1139,20 @@ async function pollGapCandidates() {
     const candidates = result.candidates || [];
     gapList.innerHTML = candidates.map(c => {
       const tagClass = c.tag === '本期新增' ? 'is-new' : 'is-old';
+      const brief = c.topic_brief || {};
+      const briefRows = [
+        ['为什么现在问', brief.why_now],
+        ['连着哪个矛盾', brief.linked_contradiction],
+        ['家里已经知道', brief.known_at_home],
+        ['答到什么程度算够', brief.acceptance_criteria],
+      ].filter(([, v]) => v).map(([k, v]) =>
+        `<div class="gap-brief-row"><span class="gap-brief-key">${k}</span>${escapeHtml(v)}</div>`
+      ).join('');
+      const briefHtml = briefRows ? `<div class="gap-brief">${briefRows}</div>` : '';
       return '<label><input type="checkbox" name="gapCand" value="' + escapeHtml(c.agenda_id) + '">'
         + '<span><span class="gap-tag ' + tagClass + '">' + escapeHtml(c.tag) + '</span>'
-        + escapeHtml(c.question) + '</span></label>';
+        + '<span class="gap-title">' + escapeHtml(c.question) + '</span>'
+        + briefHtml + '</span></label>';
     }).join('');
     gapStatus.textContent = `共 ${candidates.length} 题等待拍板；超时未选将自动跳过巡逻。`;
     gapPanel.hidden = false;

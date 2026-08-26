@@ -177,6 +177,18 @@ class IntegratedSynthesisReportBuilder:
         event_mechanism_report = event_mechanism_report or {}
         event_interpretation_cards = event_interpretation_cards or {}
         event_research_patrols = event_research_patrols or {}
+        # 时点纪律：研究架是跨 run 累积的，回测 run 只能看 effective_date 当时
+        # 已存在的巡逻成果，晚于该日期的条目对未来的它"不存在"。
+        patrols_dict = event_research_patrols if isinstance(event_research_patrols, dict) else {}
+        meta = (analysis_packet or {}).get("meta") or {}
+        run_effective_date = str(meta.get("backtest_date") or meta.get("data_date") or "").strip()
+        if run_effective_date:
+            visible = [
+                p for p in (patrols_dict.get("patrols") or [])
+                if isinstance(p, dict)
+                and str(p.get("researched_at_utc") or "")[:10] <= run_effective_date
+            ]
+            event_research_patrols = {**patrols_dict, "patrols": visible}
         evidence_registry = evidence_registry or {}
         final_claim_ledger = final_claim_ledger or {}
         all_investigation_reports = [r for r in (investigation_reports or []) if isinstance(r, dict)]
@@ -1405,7 +1417,13 @@ def write_integrated_synthesis_report(
     summary_path = Path(event_layer_summary_path) if event_layer_summary_path else run_path / "event_layer_summary.json"
     mechanism_path = Path(event_mechanism_report_path) if event_mechanism_report_path else run_path / "event_mechanism_report.json"
     interpretation_cards_path = Path(event_interpretation_cards_path) if event_interpretation_cards_path else run_path / "event_interpretation_cards.json"
-    patrols_path = Path(event_research_patrols_path) if event_research_patrols_path else run_path / "event_research_patrols.json"
+    # 08-26 重构：IA 不再读本 run 的巡逻 artifact（出题官在 IA 之后才出题、巡逻更晚），
+    # 改读跨 run 累积的研究成果架（output/event_research/research_shelf.json）。
+    patrols_path = (
+        Path(event_research_patrols_path)
+        if event_research_patrols_path
+        else Path(__file__).resolve().parents[1] / "output" / "event_research" / "research_shelf.json"
+    )
     integrity_path = Path(data_integrity_report_path) if data_integrity_report_path else run_path / "data_integrity_report.json"
     registry_path = Path(evidence_registry_path) if evidence_registry_path else run_path / "evidence_registry.json"
     claim_ledger_path = Path(final_claim_ledger_path) if final_claim_ledger_path else run_path / "final_claim_ledger.json"

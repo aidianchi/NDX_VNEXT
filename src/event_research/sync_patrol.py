@@ -1,25 +1,25 @@
 # -*- coding: utf-8 -*-
-"""同步巡逻：主链 run 的软暂停——缺口候选当场亮给老板，圈定的立刻巡逻，成果喂本次 IA。
+"""同步巡逻：主链 run 的软暂停——出题官的课题亮给老板，圈定的立刻巡逻，成果上研究架。
 
-老板 2026-08-25 裁定（快慢分路）：快变量疑点（缺口桥收的候选）跟本次 run 同步走——
-问题产生、拍板、巡逻、进裁决全在同一天，避免"一周后题目过期"（美伊开战类场景）；
-慢叙事（宪章/跟踪名单）维持异步低频，不经本模块。
+老板 2026-08-25/26 三次裁定（快慢分路 + 出题官重构 + 时序回摆）：快变量课题
+跟 run 同步走，且**出题和巡逻都在综合裁决之前**——出题官读六站对抗残局出题，
+老板圈题当场巡逻，成果上研究成果架，本次 IA 从架上取（含本次新巡逻的成果）。
+不许把题推到下次 run（老板原话教训）；慢叙事（宪章/跟踪名单）维持异步低频。
 
-流程（挂在 src/main.py：六站对抗跑完之后、IA 组装之前）：
-1. 缺口桥收获本次 run 的未解疑点 → 候选议程（gap_ref 去重，历史遗留候选一并亮出）；
-2. 终端亮出候选清单，老板圈题（软暂停：非交互 / 超时 / 直接回车 = 跳过，
+流程（挂在 src/main.py：IA 组装之前）：
+1. 出题官出题（topic_composer.py，0-2 份任务书，铁律"现在能查"）；
+2. 缺口桥把任务书收进议程账本（topic: 稳定键去重，历史遗留候选一并亮出）；
+3. 终端/控制台亮出候选任务卡，老板圈题（软暂停：非交互 / 超时 / 直接回车 = 跳过，
    run 永不等人；没圈的留在账本里仍是候选，事后可激活）；
-3. 圈中的候选激活 → 当场巡逻（runner.run_agenda，经费卡走日常档额度）；
-4. 巡逻成果装配成 run_dir/event_research_patrols.json —— **消费端过滤在这里**：
-   对账通过（reconciliation.status == "verified"）的卡进 verified_cards，
-   可被 IA 引用为事实；降级卡进 downgraded_cards，只带"仅解读"资格
-   （带原因码，不得当事实引用）。内容不扔、身份钉死（老板 08-26 口径：
-   形式不得拒收内容，但资格分层）。
-5. IA 组装（integrated_synthesis_report.py）读这份 artifact，
+4. 圈中的候选激活 → 当场巡逻（runner.run_agenda，经费卡走日常档额度）；
+5. 巡逻成果两份落盘：run_dir/event_research_patrols.json（本次留痕）+
+   output/event_research/research_shelf.json（研究成果架，跨 run 累积）——
+   **消费端过滤在装配时做**：对账通过的卡可当事实，降级卡只带"仅解读"资格；
+6. 本次 IA 从研究架读成果（含刚巡逻的，按 effective_date 时点过滤），
    巡逻材料以"事件层二档候选材料"身份进 prompt，永不进数据主链。
 
 时点纪律：回测 run（backtest_date 非空）整体跳过（含收题）——巡逻抓的是当下网页，
-把今天的材料喂给历史截面等于伪装历史；回测留下的疑点也不进议程账本。
+喂给历史截面等于伪装历史；回测留下的疑点也不进议程账本。
 
 经费：同步巡逻用日常档 SYNC_PATROL_BUDGET_CAP（实测一次巡逻约百万级 token，
 给 3 倍余量；老板可调）。账本里 boss/charter 来源的议程额度不受此影响。
@@ -42,6 +42,12 @@ from .gap_bridge import harvest_gap_candidates
 from .runner import RUNS_ROOT
 
 ARTIFACT_NAME = "event_research_patrols.json"
+
+# 研究成果架：跨 run 累积的巡逻成果（IA 从架子上取近期成果，带时点过滤）。
+# 巡逻是"当下"的活，成果架让下一次 run 的裁决能用上——同一 run 的 IA 来不及用
+# （出题官必须看过 IA 残局才出题，这是 08-26 重构定下的顺序）。
+RESEARCH_SHELF_PATH = Path("output/event_research/research_shelf.json")
+_SHELF_MAX_ENTRIES = 20
 
 # 控制台圈题的文件交接：control_service 启动的 run 没有 stdin（服务以 DEVNULL 拉起
 # 子进程），暂停时把候选清单写 pending 文件、控制台页面轮询展示，老板圈题由
@@ -204,6 +210,38 @@ def build_patrols_artifact(patrols: List[Dict[str, Any]], reason: str = "") -> D
     }
 
 
+def update_research_shelf(
+    patrol_entries: List[Dict[str, Any]],
+    shelf_path: Path = RESEARCH_SHELF_PATH,
+) -> None:
+    """把本次巡逻成果放上研究成果架（跨 run 累积，下次 run 的 IA 从架上取）。
+
+    只追加新面孔（按 agenda_id 去重，同一议程重跑则更新条目），架上最多留
+    _SHELF_MAX_ENTRIES 条最新的。架子是事件层产物，主链只读。
+    """
+    if not patrol_entries:
+        return
+    shelf_path = Path(shelf_path)
+    existing: List[Dict[str, Any]] = []
+    if shelf_path.exists():
+        try:
+            payload = json.loads(shelf_path.read_text(encoding="utf-8"))
+            existing = [e for e in (payload.get("patrols") or []) if isinstance(e, dict)]
+        except (json.JSONDecodeError, OSError):
+            existing = []
+    by_id = {str(e.get("agenda_id")): e for e in existing}
+    for entry in patrol_entries:
+        by_id[str(entry.get("agenda_id"))] = {**entry, "researched_at_utc": _utc_now_iso()}
+    entries = sorted(by_id.values(), key=lambda e: str(e.get("researched_at_utc") or ""), reverse=True)
+    shelf = {
+        "schema_version": "research_shelf_v1",
+        "generated_by": "sync_patrol",
+        "patrols": entries[:_SHELF_MAX_ENTRIES],
+    }
+    shelf_path.parent.mkdir(parents=True, exist_ok=True)
+    shelf_path.write_text(json.dumps(shelf, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _default_patrol_fn(ledger_path: Path, runs_root: Path) -> Callable[[str], Dict[str, Any]]:
     from .runner import run_agenda
 
@@ -238,6 +276,8 @@ def _write_pending_file(
                 "agenda_id": a.get("agenda_id"),
                 "question": a.get("question"),
                 "tag": "本期新增" if a.get("agenda_id") in new_ids else "历史遗留",
+                # 出题官任务书字段（08-26 重构）：面板按任务卡展示，不是干巴巴一行字
+                "topic_brief": a.get("topic_brief") or {},
             }
             for a in pending
         ],
@@ -302,6 +342,7 @@ def run_sync_gap_patrol(
     timeout_sec: Optional[int] = None,
     pending_file: Path = DEFAULT_PENDING_FILE,
     answer_file: Path = DEFAULT_ANSWER_FILE,
+    shelf_path: Path = RESEARCH_SHELF_PATH,
 ) -> Dict[str, Any]:
     """同步巡逻主流程，返回小结 dict（进 run_summary 的 gap_patrol 键）。
 
@@ -427,4 +468,13 @@ def run_sync_gap_patrol(
 
     result["patrols_run"] = len(succeeded)
     result["patrols"] = patrol_reports
-    return _finish_with_artifact("", succeeded)
+    final = _finish_with_artifact("", succeeded)
+    if succeeded:
+        # 上研究成果架：下次 run 的 IA 从架上取（时点过滤在 IA 侧做）。
+        artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        try:
+            update_research_shelf(artifact_payload.get("patrols") or [], shelf_path)
+            final["research_shelf"] = str(shelf_path)
+        except Exception as exc:  # 上架失败不阻断，留痕
+            final["research_shelf_error"] = str(exc)[:200]
+    return final
