@@ -2385,7 +2385,7 @@ class VNextReportGenerator:
   <div class="sec-grid">
     <div class="brief-verdict sec-main prose">
       <p class="kicker">NDX 投资判断书 · 判断对象：{_escape(object_name)} · 数据截至 {_escape(data_date)} · 运行 {_escape(run_path.name)}</p>
-      <h1>{_escape(final.get('final_stance') or reader.get('one_liner') or '本轮判断')}</h1>
+      <h1>{_escape(reader.get('one_liner') or final.get('final_stance') or '本轮判断')}</h1>
       <div class="brief-meta-line badges">
         {f'<span class="badge pill">姿态 <b>{_escape(stance_short)}</b></span>' if stance_short else ''}
         <span class="badge pill">赔率 <b>{_escape(payoff)}</b></span>

@@ -1,0 +1,197 @@
+{
+  "generated_note": "T67/W3 基线测量器，零 AI 调用。渠道真空与 IA 引用两项暂不可量，缺原料见各 metric.note。",
+  "metric_1_fulltext_rate": {
+    "rows": [
+      {
+        "run": "20260826_124855",
+        "total": 63,
+        "raw_text": 22,
+        "raw_rate": 0.3492,
+        "structural_no_body": 23,
+        "adjusted_denom": 40,
+        "adjusted_rate": 0.55
+      },
+      {
+        "run": "t54_confirm_20260817_r4",
+        "total": 65,
+        "raw_text": 19,
+        "raw_rate": 0.2923,
+        "structural_no_body": 23,
+        "adjusted_denom": 42,
+        "adjusted_rate": 0.4524
+      },
+      {
+        "run": "t54_confirm_20260817_r3",
+        "total": 67,
+        "raw_text": 21,
+        "raw_rate": 0.3134,
+        "structural_no_body": 23,
+        "adjusted_denom": 44,
+        "adjusted_rate": 0.4773
+      },
+      {
+        "run": "t54_confirm_20260817_r2",
+        "total": 68,
+        "raw_text": 21,
+        "raw_rate": 0.3088,
+        "structural_no_body": 23,
+        "adjusted_denom": 45,
+        "adjusted_rate": 0.4667
+      },
+      {
+        "run": "t54_confirm_20260817",
+        "total": 67,
+        "raw_text": 21,
+        "raw_rate": 0.3134,
+        "structural_no_body": 23,
+        "adjusted_denom": 44,
+        "adjusted_rate": 0.4773
+      },
+      {
+        "run": "t53_acceptance_20260816_r2",
+        "total": 66,
+        "raw_text": 18,
+        "raw_rate": 0.2727,
+        "structural_no_body": 23,
+        "adjusted_denom": 43,
+        "adjusted_rate": 0.4186
+      }
+    ]
+  },
+  "metric_2_source_tier": {
+    "total": 396,
+    "distribution": {
+      "reliable_mainstream_report": 121,
+      "official_filing": 84,
+      "official_macro": 83,
+      "official": 54,
+      "market_narrative": 44,
+      "aggregator_report": 10
+    }
+  },
+  "metric_3_reconcile": {
+    "rows": [
+      {
+        "run": "EV-20260824-024f55_20260824T154125Z",
+        "tracking_key": "ai_capex",
+        "cards_total": 8,
+        "cards_verified": 3,
+        "reconcile_pass_rate": 0.375,
+        "first_hand_rate": 0.0,
+        "publishable": true
+      },
+      {
+        "run": "EV-20260824-805d8b_20260824T145807Z",
+        "tracking_key": "ai_capex",
+        "cards_total": 10,
+        "cards_verified": 6,
+        "reconcile_pass_rate": 0.6,
+        "first_hand_rate": 0.2,
+        "publishable": false
+      },
+      {
+        "run": "EV-20260824-cdf353_20260824T144732Z",
+        "tracking_key": "ai_capex",
+        "cards_total": 4,
+        "cards_verified": 0,
+        "reconcile_pass_rate": 0.0,
+        "first_hand_rate": 0.75,
+        "publishable": false
+      },
+      {
+        "run": "EV-20260824-d8281f_20260824T072048Z",
+        "tracking_key": "ai_capex",
+        "cards_total": 9,
+        "cards_verified": 9,
+        "reconcile_pass_rate": 1.0,
+        "first_hand_rate": 0.6666666666666666,
+        "publishable": false
+      },
+      {
+        "run": "EV-20260824-a34187_20260824T071239Z",
+        "tracking_key": "ai_capex",
+        "cards_total": 4,
+        "cards_verified": 0,
+        "reconcile_pass_rate": 0.0,
+        "first_hand_rate": 1.0,
+        "publishable": false
+      },
+      {
+        "run": "EV-20260824-458b04_20260824T070311Z",
+        "tracking_key": "ai_capex",
+        "cards_total": 5,
+        "cards_verified": 5,
+        "reconcile_pass_rate": 1.0,
+        "first_hand_rate": 0.4,
+        "publishable": false
+      },
+      {
+        "run": "EV-20260823-7e9c93_20260823T163200Z",
+        "tracking_key": null,
+        "cards_total": 7,
+        "cards_verified": 7,
+        "reconcile_pass_rate": 1.0,
+        "first_hand_rate": null,
+        "publishable": false
+      },
+      {
+        "run": "EV-20260823-376912_20260823T163046Z",
+        "tracking_key": null,
+        "cards_total": 0,
+        "cards_verified": 0,
+        "reconcile_pass_rate": null,
+        "first_hand_rate": null,
+        "publishable": false
+      }
+    ],
+    "aggregate": {
+      "cards_total": 47,
+      "cards_verified": 30,
+      "overall_reconcile_rate": 0.6383
+    }
+  },
+  "metric_4_channel_vacuum": {
+    "measurable": false,
+    "note": "渠道真空核查覆盖率没有结构化落点：无渠道清单、无抽查记录字段。run_summary 的 leads 是线索不是渠道真空覆盖。需先定义渠道清单 + 落盘抽查记录。",
+    "closest_field_probe": {
+      "leads_runs_with_content": [
+        "EV-20260824-024f55_20260824T154125Z",
+        "EV-20260824-805d8b_20260824T145807Z",
+        "EV-20260824-cdf353_20260824T144732Z",
+        "EV-20260824-d8281f_20260824T072048Z",
+        "EV-20260824-a34187_20260824T071239Z"
+      ]
+    }
+  },
+  "metric_5_ia_citation": {
+    "rows": [
+      {
+        "run": "20260826_124855",
+        "patrol_facts_into_ia": 0,
+        "event_cards_into_ia": 9
+      },
+      {
+        "run": "t54_confirm_20260817_r4",
+        "patrol_facts_into_ia": 0,
+        "event_cards_into_ia": 9
+      },
+      {
+        "run": "t54_confirm_20260817_r3",
+        "patrol_facts_into_ia": 0,
+        "event_cards_into_ia": 10
+      },
+      {
+        "run": "t54_confirm_20260817_r2",
+        "patrol_facts_into_ia": 0,
+        "event_cards_into_ia": 9
+      },
+      {
+        "run": "t53_acceptance_20260816_r2",
+        "patrol_facts_into_ia": 0,
+        "event_cards_into_ia": 10
+      }
+    ],
+    "measurable": false,
+    "note": "IA 引用可用率 = 进 IA 的巡逻事实里被 IA 实际引用（带卡 id）的占比。现有全部 main run 的巡逻事实进 IA 数 = 0（研究架未建成、圈题 no_selection），故暂不可量。事件卡进 IA 数可量（见 rows.event_cards_into_ia），但'引用可用'需 IA 输出带卡 id 的引用锚，尚未仪器化。"
+  }
+}

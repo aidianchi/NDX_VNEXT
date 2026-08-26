@@ -373,6 +373,44 @@ def test_brief_stress_section_shows_kept_unresolved_hypotheses_and_their_respons
     assert "已被裁定出局的解释。" not in html
 
 
+def test_facade_h1_prefers_reader_one_liner_over_final_stance(tmp_path: Path):
+    """T67/W1：Brief 门面大标题用给人看的 one_liner，final_stance 留在正文，深度不减。"""
+    reporter = VNextReportGenerator()
+    artifacts = {
+        "final_adjudication": {
+            "final_stance": "主要矛盾仍是贴现率与盈利上修之间的拉锯，维持中性仓位等待确认。",
+            "reader_final": {"one_liner": "现在不是重仓追高的时候，等财报出方向。"},
+            "confidence": "medium",
+        },
+        "analysis_packet": {"meta": {"data_date": "2026-08-26"}},
+        "synthesis_packet": {"packet_meta": {}},
+    }
+    html = reporter._brief_facade_section(tmp_path, artifacts)
+    assert "<h1>现在不是重仓追高的时候，等财报出方向。</h1>" in html
+    # final_stance 不丢弃：判决正文仍承载系统面表述
+    assert "主要矛盾仍是贴现率与盈利上修之间的拉锯" in html
+
+
+def test_facade_h1_falls_back_to_final_stance_without_one_liner(tmp_path: Path):
+    """T67/W1：one_liner 缺失时回退 final_stance，再回退兜底文案。"""
+    reporter = VNextReportGenerator()
+    stance_only = {
+        "final_adjudication": {"final_stance": "证据一边倒，姿态转向进攻。", "confidence": "medium"},
+        "analysis_packet": {"meta": {"data_date": "2026-08-26"}},
+        "synthesis_packet": {"packet_meta": {}},
+    }
+    html = reporter._brief_facade_section(tmp_path, stance_only)
+    assert "<h1>证据一边倒，姿态转向进攻。</h1>" in html
+
+    empty_liner = {
+        "final_adjudication": {"final_stance": "", "reader_final": {"one_liner": ""}, "confidence": "medium"},
+        "analysis_packet": {"meta": {"data_date": "2026-08-26"}},
+        "synthesis_packet": {"packet_meta": {}},
+    }
+    html = reporter._brief_facade_section(tmp_path, empty_liner)
+    assert "<h1>本轮判断</h1>" in html
+
+
 def test_r2_facade_keeps_publish_block_visible(tmp_path: Path):
     html = VNextReportGenerator()._brief_facade_section(
         tmp_path,
