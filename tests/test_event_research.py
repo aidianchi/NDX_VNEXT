@@ -214,8 +214,8 @@ class TestAgenda:
 from src.event_research import gap_bridge as gap_bridge_mod
 
 
-def _mk_run_dir(tmp_path, research_cards=None, inquiry_messages=None) -> Path:
-    """造一个假 run_dir：只写缺口桥要读的两份 artifact。"""
+def _mk_run_dir(tmp_path, research_cards=None, inquiry_messages=None, cl_questions=None) -> Path:
+    """造一个假 run_dir：只写缺口桥要读的 artifact。"""
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     if research_cards is not None:
@@ -224,6 +224,9 @@ def _mk_run_dir(tmp_path, research_cards=None, inquiry_messages=None) -> Path:
     if inquiry_messages is not None:
         (run_dir / "inquiry_messages.json").write_text(
             json.dumps({"messages": inquiry_messages}, ensure_ascii=False), encoding="utf-8")
+    if cl_questions is not None:
+        (run_dir / "cross_layer_questions.json").write_text(
+            json.dumps({"questions": cl_questions}, ensure_ascii=False), encoding="utf-8")
     return run_dir
 
 
@@ -244,7 +247,8 @@ class TestGapBridge:
 
         assert result["status"] == "ok"
         assert result["candidates_added"] == 2
-        assert result["by_source"] == {"needs_data_confirmation": 1, "adjudication_gap": 1}
+        assert result["by_source"]["needs_data_confirmation"] == 1
+        assert result["by_source"]["adjudication_gap"] == 1
 
         agendas = agenda_mod.current_agendas(ledger)
         assert len(agendas) == 2
@@ -313,6 +317,26 @@ class TestGapBridge:
         )
         result = gap_bridge_mod.harvest_gap_candidates(run_dir, ledger_path=tmp_path / "a.jsonl")
         assert result["candidates_added"] == 0
+
+    def test_cross_layer_questions_harvested(self, tmp_path):
+        """拆洞后事件侧求证转二档：cross_layer_questions 的开放题进候选。"""
+        run_dir = _mk_run_dir(tmp_path, cl_questions=[
+            {"question_id": "question:rates", "direction": "event_to_data", "status": "open",
+             "question": "利率事件压力是否已被实际利率确认？"},
+            {"question_id": "question:done", "direction": "event_to_data", "status": "answered",
+             "question": "不收：已答完"},
+            {"question_id": "question:d2e", "direction": "data_to_event", "status": "open",
+             "question": "不收：方向不对"},
+        ])
+        ledger = tmp_path / "agenda.jsonl"
+        result = gap_bridge_mod.harvest_gap_candidates(run_dir, ledger_path=ledger)
+        assert result["by_source"]["cross_layer_question"] == 1
+        agenda = list(agenda_mod.current_agendas(ledger).values())[0]
+        assert agenda["gap_ref"] == "clq:question:rates"
+        assert agenda["status"] == "candidate"
+        # 幂等：同一 question_id 第二遍不重复
+        again = gap_bridge_mod.harvest_gap_candidates(run_dir, ledger_path=ledger)
+        assert again["candidates_added"] == 0
 
 
 # ---------------------------------------------------------------------------

@@ -50,7 +50,6 @@ REQUIRED_INVESTIGATION_OUTPUT_FIELDS = [
 
 MESSAGE_TOOL_POLICY = {
     InquiryMessageType.OBSERVATION_INQUIRY: ["read_allowed_artifacts", "deterministic_data_check"],
-    InquiryMessageType.EVENT_CHALLENGE: ["read_allowed_artifacts", "scenario_stress_check"],
     InquiryMessageType.ADJUDICATION_GAP: ["read_allowed_artifacts", "targeted_artifact_review"],
     InquiryMessageType.EVIDENCE_UPGRADE_REQUEST: ["read_allowed_artifacts", "source_authority_review"],
 }

@@ -593,6 +593,19 @@ def test_pc06_fail_forbidden_stance_field(tmp_path: Path):
     assert "待 C6 装配点" in result["detail"]
 
 
+def test_pc06_fail_event_side_artifact(tmp_path: Path):
+    """拆洞（老板 2026-08-25）：调查员材料块引用事件侧 artifact 必须亮红灯。"""
+    ci_dir = _stage(tmp_path, "controlled_investigation")
+    _write_ci_prompt(
+        ci_dir,
+        "inv_aaaa",
+        '[M1] artifact=cross_layer_questions.json\n{"questions": []}\n[/M1]\n',
+    )
+    result = _result_by_id(run_checks_a(tmp_path), "PC-06")
+    assert result["passed"] is False
+    assert "事件侧 artifact" in result["detail"]
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # PC-07 事件字段恒空
 # ──────────────────────────────────────────────────────────────────────────

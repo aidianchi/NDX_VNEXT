@@ -244,14 +244,15 @@ def test_event_card_candidate_selection_uses_only_three_triggers(tmp_path: Path)
         },
     ]
     _write_event_card_inputs(tmp_path, events, ["news:mainline"])
+    # 拆洞后 inquiry_reference 触发源只剩 OBSERVATION_INQUIRY（调查员不再接事件侧求证）。
     message = InquiryMessage(
-        message_type=InquiryMessageType.EVENT_CHALLENGE,
-        sender_stage="L2",
-        target_stage="integrated_synthesis",
-        trigger="事件需要追问。",
-        question="这条事件是否有数据确认？",
-        allowed_context_refs=["event_mechanism_report.json"],
-        forbidden_context_refs=["layer_cards"],
+        message_type=InquiryMessageType.OBSERVATION_INQUIRY,
+        sender_stage="L3",
+        target_stage="inquiry_router",
+        trigger="数据异常需要追问。",
+        question="这条异常是否有数据确认？",
+        allowed_context_refs=["layer_cards/L3.json"],
+        forbidden_context_refs=["thesis_draft.json"],
         effective_date="2026-07-18",
         event_refs=["event:challenged"],
     )
@@ -1490,9 +1491,10 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
     assert "not injected into L1-L5 prompts" in boundary_manifest["purpose"]
     feedback_manifest = json.loads((tmp_path / "feedback_contract_manifest.json").read_text(encoding="utf-8"))
     assert feedback_manifest["schema_version"] == "feedback_contract_manifest_v1"
+    # 拆洞（老板 2026-08-25）：event_challenge 随调查员例外通道退役，
+    # 事件侧求证（上方种下的 cross_layer_questions）不再产生问询消息，转二档巡逻候选。
     assert feedback_manifest["message_contract"]["message_types"] == [
         "observation_inquiry",
-        "event_challenge",
         "adjudication_gap",
         "evidence_upgrade_request",
     ]
@@ -1501,7 +1503,8 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
     assert router_output["schema_version"] == "inquiry_router_output_v1"
     assert len(router_output["agent_specs"]) <= 3
     message_types = {item["message_type"] for item in router_output["input_messages"]}
-    assert {"adjudication_gap", "event_challenge", "observation_inquiry"}.issubset(message_types)
+    assert {"adjudication_gap", "observation_inquiry"}.issubset(message_types)
+    assert "event_challenge" not in message_types
     assert all(spec["budget"]["max_tool_calls"] <= 1 for spec in router_output["agent_specs"])
     investigation_paths = sorted((tmp_path / "investigation_reports").glob("*.json"))
     assert investigation_paths

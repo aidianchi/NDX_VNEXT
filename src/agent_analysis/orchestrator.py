@@ -1236,7 +1236,6 @@ class VNextOrchestrator:
                 "contract": "InquiryMessage",
                 "message_types": [
                     "observation_inquiry",
-                    "event_challenge",
                     "adjudication_gap",
                     "evidence_upgrade_request",
                 ],
@@ -1369,6 +1368,15 @@ class VNextOrchestrator:
             "analysis_revised.json",
             "final_adjudication.json",
             "post_run_reflection_library.json",
+            # 三明治隔离无例外（老板 2026-08-25 拆洞裁决）：事件侧求证转二档后，
+            # 任何反馈消息都不得把事件侧 artifact 塞进调查员——列进 forbidden，
+            # inquiry_router 会对 allowed∩forbidden 相交直接拒单。
+            "cross_layer_questions.json",
+            "event_layer_summary.json",
+            "event_mechanism_report.json",
+            "event_narrative_ledger.json",
+            "event_interpretation_cards.json",
+            "news_event_ledger.json",
         ]
 
     def _build_feedback_inquiry_messages(
@@ -1419,7 +1427,6 @@ class VNextOrchestrator:
                 )
             )
 
-        messages.extend(self._build_event_challenge_messages(effective_date, forbidden_refs))
         messages.extend(self._build_observation_inquiry_messages(packet, layer_cards, effective_date, forbidden_refs))
 
         deduped: List[InquiryMessage] = []
@@ -1434,59 +1441,6 @@ class VNextOrchestrator:
             {"schema_version": "inquiry_messages_v1", "messages": [_model_dump(message) for message in deduped]},
         )
         return deduped
-
-    def _build_event_challenge_messages(
-        self,
-        effective_date: str,
-        forbidden_refs: List[str],
-    ) -> List[InquiryMessage]:
-        questions_path = self.output_dir / "cross_layer_questions.json"
-        summary_path = self.output_dir / "event_layer_summary.json"
-        questions_payload = self._load_local_json(questions_path, {})
-        raw_questions = _as_list(questions_payload.get("questions")) if isinstance(questions_payload, dict) else []
-        messages: List[InquiryMessage] = []
-        for question in raw_questions:
-            if not isinstance(question, dict):
-                continue
-            if question.get("direction") != "event_to_data":
-                continue
-            if str(question.get("status") or "open") not in {"open", "insufficient_data"}:
-                continue
-            question_text = str(question.get("question") or "").strip()
-            if not question_text:
-                continue
-            messages.append(
-                InquiryMessage(
-                    message_id=self._stable_inquiry_id(InquiryMessageType.EVENT_CHALLENGE, [question.get("question_id"), question_text]),
-                    message_type=InquiryMessageType.EVENT_CHALLENGE,
-                    sender_stage="L2",
-                    target_stage="integrated_synthesis",
-                    trigger=str(question.get("why_it_matters") or "L2 事件账本提出需要数据层压力测试的开放问题。"),
-                    question=question_text,
-                    allowed_context_refs=[
-                        "cross_layer_questions.json",
-                        "event_layer_summary.json",
-                        "event_mechanism_report.json",
-                        "bridge_memos/bridge_0.json",
-                    ],
-                    forbidden_context_refs=forbidden_refs,
-                    effective_date=effective_date,
-                    event_refs=_as_list(question.get("event_refs")),
-                )
-            )
-        if messages or not summary_path.exists():
-            return messages[:2]
-
-        rejection = {
-            "schema_version": "event_challenge_rejections_v1",
-            "generated_at": _utc_now().isoformat(),
-            "status": "rejected",
-            "reason": "event_layer_present_but_no_open_event_to_data_questions",
-            "trigger": "L2 事件层存在，但没有可转成 event_challenge 的开放问题。",
-            "source_refs": ["event_layer_summary.json", "cross_layer_questions.json"],
-        }
-        self._save_json("event_challenge_rejections.json", rejection)
-        return []
 
     def _build_observation_inquiry_messages(
         self,
@@ -1556,7 +1510,6 @@ class VNextOrchestrator:
         inquiry_tokens: set[str] = set()
         for message in feedback_messages:
             if _enum_value(getattr(message, "message_type", "")) not in {
-                InquiryMessageType.EVENT_CHALLENGE.value,
                 InquiryMessageType.OBSERVATION_INQUIRY.value,
             }:
                 continue
@@ -2293,12 +2246,7 @@ class VNextOrchestrator:
         context_notes: List[str],
     ) -> InvestigationReport:
         message_type = message.message_type
-        if message_type == InquiryMessageType.EVENT_CHALLENGE:
-            finding = "本轮未执行真实调查，仅登记事件挑战缺口；事件材料仍不能升级为 L1-L5 主证据。"
-            claims_challenged: List[str] = []
-            cannot_establish = ["事件是否已经因果性改变 NDX 走势", "事件材料是否可直接成为 L1-L5 evidence_ref"]
-            confidence = Confidence.LOW
-        elif message_type == InquiryMessageType.OBSERVATION_INQUIRY:
+        if message_type == InquiryMessageType.OBSERVATION_INQUIRY:
             finding = "本轮未执行真实调查，仅登记数据异常或缺口；二次综合只能把它作为待核查限制。"
             claims_challenged = []
             cannot_establish = ["缺口背后的外部原因", "历史相似样本的胜率或收益"]
@@ -2653,8 +2601,6 @@ class VNextOrchestrator:
         return sorted((keyword for keyword in keywords if keyword not in stopwords), key=len, reverse=True)
 
     def _source_tier_for_allowed_ref(self, ref: str) -> str:
-        if ref.startswith("event_") or ref.startswith("cross_layer_questions"):
-            return "candidate_external_material"
         if ref.startswith("layer_cards/"):
             return "formal_data_source"
         return "unknown"

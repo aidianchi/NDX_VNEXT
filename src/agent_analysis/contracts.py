@@ -102,14 +102,17 @@ class PermissionType(str, Enum):
 
 class InquiryMessageType(str, Enum):
     """
-    反馈环里的四类受控追问。
+    反馈环里的三类受控追问。
 
     【白话解释】
     任何反向追问都不能私下回拨 L1-L5；必须先变成这里的一类消息，
     再由 InquiryRouter 决定是否开一张受控任务书。
+
+    历史上曾有第四类 EVENT_CHALLENGE（事件侧求证，调查员读事件层文件回答）
+    ——那是三明治隔离里唯一的受控例外；老板 2026-08-25 裁定拆洞：
+    事件侧求证转给二档研究部（gap_bridge → 巡逻候选），调查员回归数据侧本分。
     """
     OBSERVATION_INQUIRY = "observation_inquiry"
-    EVENT_CHALLENGE = "event_challenge"
     ADJUDICATION_GAP = "adjudication_gap"
     EVIDENCE_UPGRADE_REQUEST = "evidence_upgrade_request"
 

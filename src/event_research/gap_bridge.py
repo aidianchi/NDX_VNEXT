@@ -11,6 +11,10 @@ T60 设计稿 3.1 节来源②（老板 2026-08-25 裁定建桥）：规则早�
 - adjudication_gap：run_dir/inquiry_messages.json 里
   message_type == "adjudication_gap" 的 InquiryMessage（Bridge 暴露的未解问题）。
 
+外加第三个来源（老板 2026-08-25 拆洞裁决）：cross_layer_questions.json 里
+事件层给数据层出的开放题（direction=event_to_data 且未答完）——它们原走
+调查员的 EVENT_CHALLENGE 受控例外通道，拆洞后求证转给二档，由本桥收成候选。
+
 每条疑点转成 source="gap" 的议程，初始状态 candidate（老板在报告里看到后激活，
 设计稿 3.1：候选→老板激活，成熟后再议自动化）。
 
@@ -38,6 +42,7 @@ DEFAULT_GAP_MATERIAL_CLASSES = ["③被相信的事"]
 
 _MECHANISM_REPORT = "event_mechanism_report.json"
 _INQUIRY_MESSAGES = "inquiry_messages.json"
+_CROSS_LAYER_QUESTIONS = "cross_layer_questions.json"
 
 
 def _stable_text_ref(text: str) -> str:
@@ -90,6 +95,27 @@ def _collect_adjudication_gaps(run_dir: Path) -> List[Tuple[str, str]]:
     return out
 
 
+def _collect_cross_layer_questions(run_dir: Path) -> List[Tuple[str, str]]:
+    """事件侧求证（原调查员 EVENT_CHALLENGE 通道，拆洞后转二档）。
+
+    question_id 是事件侧装配的稳定哈希（同一问题跨 run 幂等），直接作键。
+    """
+    out: List[Tuple[str, str]] = []
+    questions = _load_json_list(run_dir / _CROSS_LAYER_QUESTIONS, "questions")
+    for question in questions:
+        if question.get("direction") != "event_to_data":
+            continue
+        if str(question.get("status") or "open") not in {"open", "insufficient_data"}:
+            continue
+        text = str(question.get("question") or "").strip()
+        if not text:
+            continue
+        question_id = str(question.get("question_id") or "").strip()
+        gap_ref = f"clq:{question_id}" if question_id else _stable_text_ref(text)
+        out.append((gap_ref, text))
+    return out
+
+
 def harvest_gap_candidates(
     run_dir: Path,
     ledger_path: Path = LEDGER_PATH,
@@ -114,6 +140,7 @@ def harvest_gap_candidates(
     sources = {
         "needs_data_confirmation": _collect_needs_data_confirmation(run_dir),
         "adjudication_gap": _collect_adjudication_gaps(run_dir),
+        "cross_layer_question": _collect_cross_layer_questions(run_dir),
     }
 
     added: List[Dict[str, Any]] = []

@@ -29,8 +29,8 @@ def test_inquiry_router_generates_controlled_agent_specs_for_all_message_types()
     )
 
     assert output.schema_version == "inquiry_router_output_v1"
-    assert [message.message_id for message in output.input_messages] == ["inq_1", "inq_2", "inq_3", "inq_4"]
-    assert len(output.agent_specs) == 4
+    assert [message.message_id for message in output.input_messages] == ["inq_1", "inq_2", "inq_3"]
+    assert len(output.agent_specs) == 3
     assert not output.rejected_messages
     for spec in output.agent_specs:
         assert spec.allowed_context_refs == ["bridge_memos/bridge_0.json"]
@@ -55,7 +55,7 @@ def test_inquiry_router_rejects_unauditable_or_over_budget_messages():
         forbidden_context_refs=["thesis_draft.json"],
         effective_date="2026-07-06",
     )
-    over_budget = _message("inq_over_budget", InquiryMessageType.EVENT_CHALLENGE)
+    over_budget = _message("inq_over_budget", InquiryMessageType.EVIDENCE_UPGRADE_REQUEST)
 
     output = router.route([valid, missing_context, over_budget])
 

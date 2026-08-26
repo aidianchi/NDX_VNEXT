@@ -20,6 +20,14 @@
 - **否决/未做**：全自动放行未开（先积累老板圈题记录再议自动化）；`--no-gap-pause` 供无人值守。
 - 全量测试 1417 绿（新增 32 条）；文档一致性 11 绿；`系统说明书.md` 同批更新。
 
+### T60 第二件：调查员拆洞完成——三明治隔离恢复无例外，事件侧求证转二档
+
+- **拆掉的洞**：调查员（controlled_investigation）回答 EVENT_CHALLENGE 类问题时读事件层文件的受控例外——`orchestrator.py` 的 `_build_event_challenge_messages`（把 cross_layer_questions 转成允许读三份事件侧 artifact 的问询消息）整体拆除，`contracts.py` 的 `EVENT_CHALLENGE` 枚举、`inquiry_router.py` 的工具政策行、事件侧 `event_challenges.json` 出口（`event_narrative_ledger.py`）一并退役。
+- **求证转二档**：事件层给数据层出的开放题（cross_layer_questions）改由缺口桥直接收成巡逻候选（gap_ref=`clq:<question_id>`，question_id 本来就是稳定哈希），老板圈题后二档巡逻求证——IA 对质通道（question_answers）不受影响、本来就和调查员无关。
+- **隔离加牙**：`_feedback_forbidden_refs` 把事件侧六份 artifact 列入 forbidden（路由器对 allowed∩forbidden 相交直接拒单，从"没人这么写"升级为"写了也被拒"）；PC-06 新增断言——调查员材料块引用事件侧 artifact 即红灯。用 8-17 旧 run 实测：新检查当场抓到当时的例外材料（证明有牙）；新代码的全链测试确认 event_challenge 不再产生。
+- **无声后果处理**：事件卡选品的 inquiry_reference 触发源收窄为 OBSERVATION_INQUIRY（EVENT_CHALLENGE 没了）；IA 的 question_answers 中事件题可能更多落到 cannot_answer_yet——这是设计意图（答不了就亮着，等二档巡逻），不是退化。
+- 全量测试 1419 绿（新增 3 条：clq 收题、PC-06 事件断言、旧断言改拆洞后语义）。
+
 ---
 
 ## 2026-08-24

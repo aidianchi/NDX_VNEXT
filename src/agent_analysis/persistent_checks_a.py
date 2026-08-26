@@ -54,6 +54,17 @@ INSTRUCTION_REF_KEYS = ("raw_data", "NO_DATA_AVAILABLE")
 # A7 点名的立场/仓位字段（PC-06）。
 CI_FORBIDDEN_MATERIAL_TOKENS = ("dominant_side", "action_implication", "不宜重仓", "触发核心仓")
 
+# 三明治隔离无例外（老板 2026-08-25 拆洞裁决）：调查员的 [M#] 材料块
+# 不得来自事件侧 artifact——事件侧求证已转二档研究部（gap_bridge → 巡逻候选）。
+CI_FORBIDDEN_EVENT_ARTIFACTS = (
+    "cross_layer_questions.json",
+    "event_layer_summary.json",
+    "event_mechanism_report.json",
+    "event_narrative_ledger.json",
+    "event_interpretation_cards.json",
+    "news_event_ledger.json",
+)
+
 
 def _read_json(path: Path) -> Any:
     """读 JSON；编码统一 UTF-8。失败抛异常，由各 check 捕获。"""
@@ -693,13 +704,16 @@ def _check_pc06(run_dir: Path) -> Dict[str, Any]:
     for investigation in sorted(prompts_by_investigation):
         prompt_path = prompts_by_investigation[investigation]
         text = prompt_path.read_text(encoding="utf-8")
-        blocks = re.findall(r"\[M(\d+)\][^\n]*\n(.*?)\[/M\1\]", text, re.S)
+        blocks = re.findall(r"\[M(\d+)\]([^\n]*)\n(.*?)\[/M\1\]", text, re.S)
         if not blocks:
             errors.append(f"{investigation}: 未发现 [M#]...[/M#] 材料块")
             continue
-        for number, body in blocks:
+        for number, header, body in blocks:
             block_count += 1
             block_id = f"{investigation}.M{number}"
+            for artifact in CI_FORBIDDEN_EVENT_ARTIFACTS:
+                if f"artifact={artifact}" in header:
+                    errors.append(f"{block_id}: 材料块引用事件侧 artifact {artifact}（拆洞后隔离无例外）")
             parse_error = None
             try:
                 json.loads(body, strict=False)
@@ -712,8 +726,8 @@ def _check_pc06(run_dir: Path) -> Dict[str, Any]:
                     errors.append(f"{block_id}: 材料含立场/仓位字段 {token!r}（待 C6 装配点）")
 
     passed = not errors
-    detail = "; ".join(errors[:10]) if errors else f"{len(prompts_by_investigation)} 份调查材料、{block_count} 个 [M#] 块全部闭合且无立场字段"
-    return _result("PC-06", "CI 材料闭合性 + 立场字段检测（A7）", passed, detail,
+    detail = "; ".join(errors[:10]) if errors else f"{len(prompts_by_investigation)} 份调查材料、{block_count} 个 [M#] 块全部闭合且无立场字段、无事件侧 artifact"
+    return _result("PC-06", "CI 材料闭合性 + 立场字段 + 事件侧 artifact 隔离（A7/拆洞）", passed, detail,
                    f"prompt_audit/controlled_investigation:{len(prompts_by_investigation)} 份")
 
 

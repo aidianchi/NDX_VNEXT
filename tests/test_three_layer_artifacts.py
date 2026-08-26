@@ -228,17 +228,15 @@ def test_event_research_pipeline_writes_required_layer_two_artifacts(tmp_path: P
     assert any((run_dir / "event_research_packets").iterdir())
     mechanism = json.loads((run_dir / "event_mechanism_report.json").read_text(encoding="utf-8"))
     questions = json.loads((run_dir / "cross_layer_questions.json").read_text(encoding="utf-8"))
-    event_challenges = json.loads((run_dir / "event_challenges.json").read_text(encoding="utf-8"))
     cards = json.loads((run_dir / "event_mechanism_cards.json").read_text(encoding="utf-8"))
     html = (run_dir / "event_mechanism_report.html").read_text(encoding="utf-8")
     assert mechanism["schema_version"] == "event_mechanism_report_v1"
     assert mechanism["headline_judgment"]["title"] == "新闻事件初步判断"
     assert mechanism["headline_judgment"]["cannot_be_used_as_primary_evidence"] is True
     assert questions["schema_version"] == "cross_layer_questions_v1"
-    assert event_challenges["schema_version"] == "event_challenges_v1"
-    assert event_challenges["message_type"] == "event_challenge"
-    assert event_challenges["challenge_candidates"]
-    assert "must not become L1-L5 evidence_ref" in event_challenges["no_backflow_rule"]
+    # 拆洞（老板 2026-08-25）：event_challenges.json 随调查员例外通道一并退役，
+    # 事件侧求证经 gap_bridge 转二档巡逻候选。
+    assert not (run_dir / "event_challenges.json").exists()
     assert cards["schema_version"] == "event_mechanism_cards_v1"
     assert "新闻事件初步判断" in html
     assert "可以说" in html
