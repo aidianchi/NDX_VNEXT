@@ -8,6 +8,15 @@
 
 ## 2026-08-26
 
+### 立 T67（第三层治理与门面准备）：架构第一性原理体检 → 老板六件全批 → 施工工单落盘 + W2 当场完成
+
+- **体检方法**：文档声明（系统说明书/架构图）× 代码实况 × 真实 run 产物三方对账，对照基线 TradingAgents（GitHub 当日查证：事件源=Alpha Vantage+Yahoo 新闻时间窗定向、Reddit/StockTwits 情绪、Polymarket 前瞻概率；无底账/无来源分级/无对账/无正文——比我们浅一个量级，可借鉴点=Polymarket 预测市场隐含概率源，未立项等老板）。
+- **新发现（此前不在账上）**：①治理深度与影响力倒挂——数据判决 7 站对抗+27PC 只是锚，IA 单次调用零对抗却是老板直接读的最终产物；②单向盲——事件卡解读输入含数据链反方假说（orchestrator.py:541-559/1653，supports/refutes 锚定），4.7"双轨盲跑"与代码不符；③孔径漏斗——底账 63-68 条、进 IA ≤10 张（LIMIT=10，orchestrator.py:312），孔径约 16%；④Brief 人话断线——reader_final.one_liner 每轮都在写且质量好，但 H1 优先 final_stance（vnext_reporter.py:2388），08-26 Brief 全文不含 one_liner（07-19 好看是 final_stance 碰巧像人话，运气非机制）。
+- **账目更正（重要）**：T47"70% raw_text_available=False"混算了——08-26 run 41 条无正文里 28 条是 SEC 文件号/官方日历（结构性无正文，不是病）；真缺口=Yahoo 正文 7/16 + Reddit 0/4 + 关键词表静态（news_event_ledger.py:177-215，焦距固定）。病灶比账面小，账目已拆开重记。
+- **老板裁决（23:47，六件全批）**：W1 Brief 标题换人话 / W2 文档说实话 / W3 量五项基线 / W4 抗诉通道 / W5 裁决批评者 / W6 底账修缺口；⑦ IA 接门脸等条件（基线达标+治理缺口关上）后单独复议。抗诉通道裁定口径="该抗诉才抗诉"：三条件同时满足（verified 事实+正面冲突+实质矛盾）才亮灯，互相印证走正常通道；上线前拿历史 run 离线校准灯频（防狼来了）。
+- **工单**：`investigation_reports/20260826_第三层治理施工工单/WORK_ORDERS.md`（W1-W6 各带证据/改法/验收/认错条件/红线/分支纪律，自包含可接力；W2 本批完成，代码项待任务分支 t67-layer3-governance 开工）。
+- **W2 当场完成**：说明书 4.7 硬规矩 2 改单向盲口径（含已知代价登记：假说空间外事件被系统性弱化）；系统架构图第二层标注同步（删"互相看不见"）。T47 历史案卷不改，更正只记本条。
+
 ### T60 缺口桥建成 + 老板快慢分路裁决落地：同步巡逻 + 控制台圈题 + 消费端过滤
 
 - **缺口桥（`src/event_research/gap_bridge.py`）**：主链未解疑点（底账 `event_mechanism_report.json` 的 `event_research_cards[].needs_data_confirmation` + `inquiry_messages.json` 的 adjudication_gap）自动转成事件层候选议程（source=gap，candidate 待激活）；`gap_ref` 稳定键去重（同一疑点跨 run 不重复入帐、老板关闭的题不复活）。
