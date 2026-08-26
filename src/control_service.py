@@ -285,6 +285,10 @@ class JobStore:
                 process_env[key] = value
             else:
                 process_env.pop(key, None)
+        # 服务启动的 run 没有 stdin：打上标记，同步巡逻的软暂停改走
+        # 控制台圈题（pending/answer 文件 + /gap-candidates、/gap-selection 端点）。
+        # 服务注入，不经 env_overrides 白名单。
+        process_env["NDX_CONSOLE_LAUNCHED"] = "1"
         with open(log_path, "w", encoding="utf-8") as log:
             process = subprocess.Popen(
                 actual_args,
@@ -511,6 +515,20 @@ class ControlServiceHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 _json_response(self, 500, {"ok": False, "message": str(exc)})
             return
+        if parsed.path == "/gap-candidates":
+            # 同步巡逻软暂停：run 进程暂停时写的候选清单，控制台页面轮询展示。
+            try:
+                pending_path = _repo_root() / "output/state_ledger/gap_selection_pending.json"
+                if not pending_path.exists():
+                    _json_response(self, 200, {"ok": True, "pending": False})
+                    return
+                pending = json.loads(pending_path.read_text(encoding="utf-8"))
+                deadline = str(pending.get("deadline_at_utc") or "")
+                expired = bool(deadline) and deadline <= datetime.now(timezone.utc).isoformat()
+                _json_response(self, 200, {"ok": True, "pending": not expired, "expired": expired, **pending})
+            except Exception as exc:
+                _json_response(self, 500, {"ok": False, "message": str(exc)})
+            return
         if parsed.path.startswith("/status/"):
             job_id = parsed.path.rsplit("/", 1)[-1]
             try:
@@ -524,6 +542,37 @@ class ControlServiceHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/gap-selection":
+            # 控制台圈题：写 answer 文件，暂停中的 run 进程轮询读到后放行。
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8")
+            try:
+                payload = json.loads(raw or "{}")
+                pending_path = _repo_root() / "output/state_ledger/gap_selection_pending.json"
+                if not pending_path.exists():
+                    raise ValueError("当前没有等待圈题的 run。")
+                pending = json.loads(pending_path.read_text(encoding="utf-8"))
+                run_dir = str(payload.get("run_dir") or "")
+                if not run_dir or run_dir != str(pending.get("run_dir") or ""):
+                    raise ValueError("run_dir 与等待中的 run 不匹配。")
+                known_ids = {str(c.get("agenda_id")) for c in pending.get("candidates") or []}
+                selected = [str(a) for a in (payload.get("selected_agenda_ids") or []) if str(a) in known_ids]
+                answer_path = _repo_root() / "output/state_ledger/gap_selection_answer.json"
+                answer_path.write_text(
+                    json.dumps(
+                        {
+                            "run_dir": run_dir,
+                            "selected_agenda_ids": selected,
+                            "answered_at_utc": datetime.now(timezone.utc).isoformat(),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                _json_response(self, 200, {"ok": True, "selected": selected})
+            except Exception as exc:
+                _json_response(self, 400, {"ok": False, "message": str(exc)})
+            return
         if parsed.path == "/manual-data":
             length = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(length).decode("utf-8")

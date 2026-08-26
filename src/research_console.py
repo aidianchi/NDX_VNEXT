@@ -224,6 +224,19 @@ class ResearchConsoleGenerator:
       </aside>
     </section>
 
+    <section class="panel gap-panel" id="gapPanel" hidden aria-label="待拍板的未解疑点">
+      <div class="panel-head">
+        <h2>待拍板：本次 run 发现的未解疑点</h2>
+        <p>系统在综合裁决前停了下来。勾选要研究部当场巡逻的题（巡逻花 API 经费，一题约百万级 token），其余留在题库里以后再说。都不点的话，超时后系统自动跳过巡逻、照常出报告。</p>
+      </div>
+      <div class="gap-list" id="gapList"></div>
+      <div class="button-row">
+        <button type="button" id="gapSubmit">巡逻选中项</button>
+        <button class="secondary-button" type="button" id="gapSkip">都不查，继续出报告</button>
+      </div>
+      <p class="small-note" id="gapStatus"></p>
+    </section>
+
     <details class="advanced-panel">
       <summary>高级设置</summary>
       <div class="advanced-grid">
@@ -448,6 +461,39 @@ input:focus, textarea:focus {
   line-height: 1.55;
 }
 .is-warning { color: var(--watch); }
+.gap-panel {
+  margin-top: 14px;
+  border-color: #d9bd7b;
+}
+.gap-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.gap-list label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: #fbfaf4;
+  padding: 10px 12px;
+  color: var(--ink);
+  font: 13px/1.55 var(--sans);
+  cursor: pointer;
+}
+.gap-list label:hover { border-color: #94a5ac; background: #fffdf5; }
+.gap-list input { margin-top: 3px; }
+.gap-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font: 700 11px var(--sans);
+  margin-right: 6px;
+}
+.gap-tag.is-new { background: #e3eef7; color: var(--accent); }
+.gap-tag.is-old { background: #efe9d8; color: var(--watch); }
 .run-now-button {
   width: 100%;
   margin-top: 16px;
@@ -1043,6 +1089,74 @@ loadManualDataFromService().finally(() => {
   buildCommand();
   refreshResumable();
 });
+
+// ---------------------------------------------------------------------------
+// 缺口圈题：run 暂停时轮询候选清单，老板勾选后 POST 放行
+// ---------------------------------------------------------------------------
+const gapPanel = document.getElementById('gapPanel');
+const gapList = document.getElementById('gapList');
+const gapStatus = document.getElementById('gapStatus');
+let gapRunDir = '';
+
+function escapeHtml(text) {
+  return String(text || '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch]));
+}
+
+async function pollGapCandidates() {
+  try {
+    const response = await fetch(`${controlOrigin}/gap-candidates`);
+    const result = await response.json();
+    if (!response.ok || !result.ok || !result.pending) {
+      gapPanel.hidden = true;
+      gapRunDir = '';
+      return;
+    }
+    if (gapRunDir === result.run_dir && !gapPanel.hidden) return;  // 同一份清单已在展示
+    gapRunDir = result.run_dir || '';
+    const candidates = result.candidates || [];
+    gapList.innerHTML = candidates.map(c => {
+      const tagClass = c.tag === '本期新增' ? 'is-new' : 'is-old';
+      return '<label><input type="checkbox" name="gapCand" value="' + escapeHtml(c.agenda_id) + '">'
+        + '<span><span class="gap-tag ' + tagClass + '">' + escapeHtml(c.tag) + '</span>'
+        + escapeHtml(c.question) + '</span></label>';
+    }).join('');
+    gapStatus.textContent = `共 ${candidates.length} 题等待拍板；超时未选将自动跳过巡逻。`;
+    gapPanel.hidden = false;
+  } catch (error) {
+    // 静态打开或服务未启动时静默。
+  }
+}
+
+async function submitGapSelection(selectedIds) {
+  if (!gapRunDir) return;
+  try {
+    const response = await fetch(`${controlOrigin}/gap-selection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_dir: gapRunDir, selected_agenda_ids: selectedIds }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    gapStatus.textContent = selectedIds.length
+      ? `已提交 ${selectedIds.length} 题，研究部开始巡逻，报告稍后出。`
+      : '已提交：都不查，系统继续出报告。';
+    gapPanel.hidden = true;
+    gapRunDir = '';
+  } catch (error) {
+    gapStatus.textContent = `提交失败：${error.message || error}`;
+  }
+}
+
+document.getElementById('gapSubmit').addEventListener('click', () => {
+  const selected = Array.from(document.querySelectorAll('input[name="gapCand"]:checked')).map(node => node.value);
+  submitGapSelection(selected);
+});
+document.getElementById('gapSkip').addEventListener('click', () => submitGapSelection([]));
+
+pollGapCandidates();
+window.setInterval(pollGapCandidates, 5000);
 """
 
 

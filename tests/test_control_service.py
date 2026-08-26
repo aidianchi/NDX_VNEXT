@@ -97,6 +97,91 @@ def test_control_service_records_env_overrides_for_job(tmp_path, monkeypatch):
     assert "noop.py" in " ".join(job["requested_command"])
 
 
+def test_create_job_marks_console_launched(tmp_path, monkeypatch):
+    """服务启动的 run 子进程必须带 NDX_CONSOLE_LAUNCHED=1（同步巡逻改走控制台圈题）。"""
+    import control_service
+
+    captured = {}
+
+    class _FakeProc:
+        pid = 424242
+
+        def poll(self):
+            return 0
+
+    def _fake_popen(args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return _FakeProc()
+
+    monkeypatch.setattr(control_service.subprocess, "Popen", _fake_popen)
+    store = JobStore(root=tmp_path / "logs")
+    store.create_job(["python3", "noop.py"])
+
+    assert captured["env"]["NDX_CONSOLE_LAUNCHED"] == "1"
+
+
+def test_gap_selection_endpoints(tmp_path, monkeypatch):
+    """GET /gap-candidates 读 pending 文件；POST /gap-selection 校验 run_dir 后写 answer。"""
+    import json
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    import control_service
+
+    monkeypatch.setattr(control_service, "_repo_root", lambda: tmp_path)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), control_service.ControlServiceHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        def _get(path):
+            with urllib.request.urlopen(base + path) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+
+        def _post(path, payload):
+            req = urllib.request.Request(
+                base + path,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req) as resp:
+                    return resp.status, json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                return exc.code, json.loads(exc.read().decode("utf-8"))
+
+        # 无 pending 文件 → pending False
+        assert _get("/gap-candidates")["pending"] is False
+
+        ledger_dir = tmp_path / "output" / "state_ledger"
+        ledger_dir.mkdir(parents=True)
+        (ledger_dir / "gap_selection_pending.json").write_text(json.dumps({
+            "run_dir": "R1",
+            "deadline_at_utc": "2999-01-01T00:00:00+00:00",
+            "candidates": [{"agenda_id": "EV-1", "question": "疑点甲", "tag": "本期新增"}],
+        }), encoding="utf-8")
+
+        got = _get("/gap-candidates")
+        assert got["pending"] is True
+        assert got["candidates"][0]["question"] == "疑点甲"
+
+        # run_dir 不匹配 → 400
+        status, _ = _post("/gap-selection", {"run_dir": "WRONG", "selected_agenda_ids": ["EV-1"]})
+        assert status == 400
+
+        # 匹配 → answer 落盘，未知 id 被过滤
+        status, body = _post("/gap-selection", {"run_dir": "R1", "selected_agenda_ids": ["EV-1", "EV-GHOST"]})
+        assert status == 200
+        assert body["selected"] == ["EV-1"]
+        answer = json.loads((ledger_dir / "gap_selection_answer.json").read_text(encoding="utf-8"))
+        assert answer["run_dir"] == "R1"
+        assert answer["selected_agenda_ids"] == ["EV-1"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_control_service_allows_console_resume_command():
     args = validate_command(
         "python3 src/console_run_all.py --resume-run-dir output/analysis/vnext/20260719_130534 --enable-news"

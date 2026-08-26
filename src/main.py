@@ -7,6 +7,7 @@ import logging
 import os
 import shlex
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
@@ -20,6 +21,7 @@ try:
     from .core import DataCollector, DataIntegrity, ReportGenerator
     from .data_evidence import normalize_data_evidence
     from .event_narrative_ledger import write_event_narrative_ledger
+    from .event_research.sync_patrol import run_sync_gap_patrol
     from .expectation_ledger import write_expectation_ledger, write_expectation_ledger_failure
     from .integrated_synthesis_report import build_pure_data_report_manifest, write_integrated_synthesis_report
     from .news_event_data_linker import write_news_event_data_links
@@ -37,6 +39,7 @@ except ImportError:
     from core import DataCollector, DataIntegrity, ReportGenerator
     from data_evidence import normalize_data_evidence
     from event_narrative_ledger import write_event_narrative_ledger
+    from event_research.sync_patrol import run_sync_gap_patrol
     from expectation_ledger import write_expectation_ledger, write_expectation_ledger_failure
     from integrated_synthesis_report import build_pure_data_report_manifest, write_integrated_synthesis_report
     from news_event_data_linker import write_news_event_data_links
@@ -97,6 +100,12 @@ def parse_args() -> argparse.Namespace:
         "--resume-from-existing",
         action="store_true",
         help="Reuse complete vNext stage artifacts in this output dir when input hashes match.",
+    )
+    parser.add_argument(
+        "--no-gap-pause",
+        dest="no_gap_pause",
+        action="store_true",
+        help="Skip the interactive gap-patrol pause before IA (unattended runs). Gap candidates are still harvested into the agenda ledger.",
     )
     chart_group = parser.add_mutually_exclusive_group()
     chart_group.add_argument(
@@ -797,6 +806,20 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         artifacts=artifacts,
         output_path=pure_data_report_path,
     )
+    # 同步巡逻（老板 2026-08-25 快慢分路裁决）：六站对抗跑完、IA 组装之前，
+    # 缺口桥收题 → 软暂停亮候选清单 → 老板圈题当场巡逻 → 成果装配成
+    # run_dir/event_research_patrols.json（只含对账通过的卡）喂本次 IA。
+    # 软暂停：非交互 / 回测 / 超时一律跳过，run 不等人；失败不阻断 run。
+    gap_patrol_result: Dict[str, Any] = {}
+    try:
+        gap_patrol_result = run_sync_gap_patrol(
+            Path(run_dir),
+            backtest_date=backtest_date,
+            enabled=not getattr(args, "no_gap_pause", False),
+        )
+    except Exception as exc:  # noqa: BLE001 - 同步巡逻挂了不许炸主链
+        gap_patrol_result = {"status": "failed", "error": str(exc)[:200]}
+
     integrated_synthesis_report_path = write_integrated_synthesis_report(
         run_dir,
         pure_data_report=pure_data_report_payload,
@@ -853,6 +876,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "event_mechanism_cards": os.path.join(run_dir, "event_mechanism_cards.json") if event_narrative_ledger_path else "",
         "pure_data_report": pure_data_report_path,
         "integrated_synthesis_report": integrated_synthesis_report_path,
+        "gap_patrol": gap_patrol_result,
         "expectation_vs_realized": expectation_ledger_path,
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
         "approval_status": _enum_value(getattr(artifacts["final_adjudication"], "approval_status", "")),

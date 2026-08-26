@@ -162,6 +162,36 @@ def test_event_layer_summary_is_compacted_into_payload():
     assert sent_empty["event_layer_summary"] == {"summary": "", "cards_available": False}
 
 
+def test_event_research_patrols_carried_into_payload():
+    """同步巡逻成果（事件层二档候选材料）进 IA prompt；缺省为空且如实标注。"""
+    patrols = {
+        "schema_version": "event_research_patrols_v1",
+        "patrols": [
+            {
+                "agenda_id": "EV-20260825-abc123",
+                "question": "实际利率是否继续压制估值",
+                "narrative_state": {"conclusion": "层内结论文本"},
+                "verified_cards": [{"fact_summary": "对账通过的事实", "source_tier": "official"}],
+                "downgraded_cards": [{"fact_summary": "降级卡事实", "reconciliation_status": "downgraded_quote_not_found"}],
+                "cards_downgraded": 1,
+            }
+        ],
+    }
+    payload, calls = _build(_valid_response(), event_research_patrols=patrols)
+    assert payload["integrated_adjudication"] is not None
+    assert "event_research_patrols" in payload["policy"]["inputs"]
+    sent = _sent_payload(calls)
+    assert sent["event_research_patrols_empty"] is False
+    assert sent["event_research_patrols"][0]["agenda_id"] == "EV-20260825-abc123"
+    assert sent["event_research_patrols"][0]["verified_cards"][0]["fact_summary"] == "对账通过的事实"
+    assert sent["event_research_patrols"][0]["downgraded_cards"][0]["reconciliation_status"] == "downgraded_quote_not_found"
+
+    payload_empty, calls_empty = _build(_valid_response())
+    sent_empty = _sent_payload(calls_empty)
+    assert sent_empty["event_research_patrols"] == []
+    assert sent_empty["event_research_patrols_empty"] is True
+
+
 def test_question_event_refs_are_carried_and_sanitized():
     questions = _questions()
     questions["questions"][0]["event_refs"] = ["event:abc12345", "event:from_question"]

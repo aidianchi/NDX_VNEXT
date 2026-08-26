@@ -58,11 +58,15 @@ def append_agenda(
     budget_cap: Optional[int] = None,
     ledger_path: Path = LEDGER_PATH,
     tracking_key: Optional[str] = None,
+    gap_ref: Optional[str] = None,
 ) -> Dict[str, Any]:
     """追加一条新议程，返回写入的记录。source 决定初始状态。
 
     tracking_key：同一追踪对象（如 "ai_capex"）跨 run 序列化的钥匙（G2 跟踪名单）。
     带上它，runner 会把上一次同 key 巡逻的叙事坐标喂给本次，产出必须更新同一口径。
+
+    gap_ref：缺口桥（gap_bridge.py）写入的溯源键，指向主链疑点出处的稳定 ID
+    （ndc:<文本哈希> / inq:<message_id>），用于"同一疑点不重复入帐"的去重。
     """
     if source not in SOURCE_VALUES:
         raise ValueError(f"source 必须是 {SOURCE_VALUES} 之一，收到 {source!r}")
@@ -86,6 +90,8 @@ def append_agenda(
     }
     if tracking_key:
         record["tracking_key"] = tracking_key
+    if gap_ref:
+        record["gap_ref"] = gap_ref
     _append_record(record, ledger_path)
     return record
 
