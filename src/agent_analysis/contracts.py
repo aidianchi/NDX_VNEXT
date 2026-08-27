@@ -503,6 +503,33 @@ class IntegratedConflictRow(BaseModel):
         return self
 
 
+class DataVerdictObjection(BaseModel):
+    """T67/W4 抗诉通道：外部材料让裁决人怀疑第一层数据判决时的正式异议。
+
+    方向语义（区别于 IntegratedConflictRow 的"数据检验事件叙事"）：挑战者 =
+    外部材料（事件卡或研究架巡逻事实），被挑战者 = 数据判决。老板 08-26 裁定
+    "该抗诉才抗诉"，三条件同时满足才亮红灯：
+      ① 材料是研究架对账通过（verified）的核实事实 —— 代码核验（source_ref 命中
+         verified_cards 的 source_url）；
+      ② 与数据姿态正面冲突 —— 模型判断（contradicted_data 点名 + materiality）；
+      ③ 实质矛盾非噪声 —— 模型判断（materiality == "material"）。
+    事件卡挑战（未核实）只记录不亮灯；本字段是"事件/事实挑战数据判决"的正式出口，
+    修掉了旧 conflict_matrix 用 challenged_by_data（=数据削弱事件叙事）顶替此义的错位。
+    """
+    model_config = {"extra": "forbid"}
+
+    source_ref: str = Field(..., min_length=1, description="挑战来源：研究架事实逐字写 source_url；事件卡写 event:<event_id>")
+    claim: str = Field(..., min_length=1, description="外部材料的主张（一句话）")
+    contradicted_data: List[str] = Field(default_factory=list, description="被挑战的数据判决具体点/data refs")
+    materiality: Literal["material", "tangential"] = Field("tangential", description="实质矛盾 vs 擦边")
+
+    @model_validator(mode="after")
+    def _validate_material_refs(self):
+        if self.materiality == "material" and not self.contradicted_data:
+            raise ValueError("material objections must name contradicted_data")
+        return self
+
+
 class IntegratedAdjudication(BaseModel):
     """第三层真裁决产物：数据判决为锚的综合解释与对质记录，不回流 L1-L5。"""
     model_config = {"extra": "forbid"}
@@ -529,6 +556,7 @@ class IntegratedAdjudication(BaseModel):
     strongest_counterevidence: str = Field("", description="当前最强反证")
     question_answers: List[IntegratedQuestionAnswer] = Field(default_factory=list)
     conflict_matrix: List[IntegratedConflictRow] = Field(default_factory=list)
+    data_verdict_objections: List[DataVerdictObjection] = Field(default_factory=list, description="抗诉通道：外部材料挑战数据判决的正式异议（T67/W4）")
     falsifiers: List[str] = Field(default_factory=list)
     watch_next: List[str] = Field(default_factory=list)
     notes: List[str] = Field(default_factory=list)

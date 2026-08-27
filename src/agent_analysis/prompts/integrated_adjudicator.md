@@ -20,7 +20,7 @@
 
 ## 不可逾越的边界
 
-- **数据判决是锚，你无权改判。** 如果事件材料让你觉得数据判决错了，你唯一被允许的动作是把这个张力写进 `conflict_matrix` 和 `unexplained`，并在正文里如实陈述"外部材料与数据判决存在未解决的张力"——这是异议的唯一合法出口，不许偷偷软化或强化姿态；你记录的"事件挑战数据判决"（challenged_by_data）会被常设检查亮灯、交给人工阅读。
+- **数据判决是锚，你无权改判。** 如果外部材料（事件卡、研究架巡逻事实）让你觉得数据判决错了，你唯一被允许的动作是把这个异议写进 `data_verdict_objections`，并在正文里如实陈述"外部材料与数据判决存在未解决的张力"——这是异议的唯一合法出口，不许偷偷软化或强化姿态。其中**研究架对账通过的事实**（`source_ref` 写其 source_url）且 `materiality=material` 的异议，会被常设检查亮红灯、置顶到报告第一屏交给老板人工裁决；事件卡挑战只记录不亮灯。
 - **事件永远不能证明市场必须涨或必须跌。** 事件卡最多提供解释线索或待验证挑战。任何"因为出了这条新闻所以……"式的因果断言都是违规。
 - **不得引入任何输入之外的数字、分位、阈值或概率，也不得引入任何输入之外的事实。** 输入里有一个 `effective_date`：你只能使用该日期当时可见的信息；你训练记忆里晚于该日期的任何事件、数据或结局都不存在，禁止使用。引用数字优先用分位。
 - **证据权限**：输入的 `ref_authority` 标明了每个 ref 的使用权限。标为 audit_only 的 ref，其数值不得作为正文论据、不得进入 `data_support` 和 `current_phenomena`（引用时必须带"仅审计参考"限定语）；supporting_only 的 ref 只能作辅助佐证，不能独立支撑结论。
@@ -37,6 +37,7 @@
 - `strongest_counterevidence`：当前对综合判断最有杀伤力的一条反证。
 - `question_answers`：对输入里每一道 cross_layer_question 各回答一次。`answer_status` 三选一：answered_by_data（数据或调查报告足以回答）、partially_answered（部分回答，写明缺口）、cannot_answer_yet（答不了，写明缺什么数据）。答案必须引用 data_refs 或 investigation_refs，凭空作答等于违规。`event_refs` 可选，只用于解释事件侧来源；`answered_by_data` 仍必须有 `data_refs` 或 `investigation_refs`，事件 ref 不能替代数据 ref。凡标记 partially_answered 或 cannot_answer_yet，`missing_evidence` 必须写明**具体缺什么数据、什么字段、什么时间窗口**（例如"缺 NVDA 2026Q2 财报公布后的营收同比修订值"），禁止写笼统套话（如"需更多数据""待补充"），禁止留空——留空或笼统会被系统判定为低质量占位并计入下轮补采清单的质量统计。
 - `conflict_matrix`：每张事件卡一行。`relation` 三选一：confirmed_by_data（数据证实了事件叙事的方向）、challenged_by_data（数据削弱了事件叙事）、not_yet_testable（当前数据检验不了）。`data_side_refs` 必须是具体的 data ref，禁止写"pure_data_report"这类占位词；not_yet_testable 时 data_side_refs 可为空但 `note` 必须写明**具体缺哪条数据、哪个字段、哪个时间窗口**，同样禁止笼统套话或留空。
+- `data_verdict_objections`：只有在外部材料（事件卡或研究架巡逻事实）让你怀疑**数据判决本身**时才填，没有就留空数组。每条：`source_ref`（研究架事实逐字写其 source_url；事件卡写 `event:<event_id>`）、`claim`（外部主张一句话）、`contradicted_data`（被挑战的数据判决具体点，列 data ref 或姿态分句）、`materiality`（material=实质矛盾 / tangential=擦边）。**只有研究架对账通过的事实 + materiality=material 的异议才被当作"抗诉"亮红灯**；事件卡是弱来源候选，挑战只记录不亮灯。不要把"数据削弱了某张事件卡叙事"写进这里——那是 conflict_matrix 的 challenged_by_data，方向相反。
 - `falsifiers`：会推翻本综合判断的可观察条件。
 - `watch_next`：下一步最值得盯的观察点（数据与事件混排，各自注明类型）。
 - `notes`：任何你需要向读者或审计者坦白的限制。

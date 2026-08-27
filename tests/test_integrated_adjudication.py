@@ -313,6 +313,25 @@ def test_placeholder_data_side_ref_is_rejected_by_contract():
         )
 
 
+def test_data_verdict_objection_material_requires_contradicted_data():
+    """T67/W4：material 异议必须点名被挑战的数据点；tangential 可空。"""
+    from agent_analysis.contracts import DataVerdictObjection
+    with pytest.raises(Exception, match="material objections must name"):
+        DataVerdictObjection(
+            source_ref="https://example.com/fact", claim="外部事实与数据姿态相反",
+            contradicted_data=[], materiality="material",
+        )
+    ok = DataVerdictObjection(
+        source_ref="https://example.com/fact", claim="外部事实与数据姿态相反",
+        contradicted_data=["L1.get_10y_real_rate"], materiality="material",
+    )
+    assert ok.materiality == "material"
+    tangential = DataVerdictObjection(
+        source_ref="event:abc", claim="擦边", materiality="tangential",
+    )
+    assert tangential.contradicted_data == []
+
+
 def test_unknown_question_and_card_are_dropped_with_notes():
     response = _valid_response()
     data = json.loads(response)

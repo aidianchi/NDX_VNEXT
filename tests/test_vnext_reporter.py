@@ -411,6 +411,47 @@ def test_facade_h1_falls_back_to_final_stance_without_one_liner(tmp_path: Path):
     assert "<h1>本轮判断</h1>" in html
 
 
+def test_facade_renders_objection_banner_on_verified_material_objection(tmp_path: Path):
+    """T67/W4：核实事实+实质矛盾挑战数据判决 → 门面置顶抗诉横幅；擦边/事件卡不置顶。"""
+    reporter = VNextReportGenerator()
+    base = {
+        "final_adjudication": {"final_stance": "中性", "confidence": "medium"},
+        "analysis_packet": {"meta": {"data_date": "2026-08-26"}},
+        "synthesis_packet": {"packet_meta": {}},
+        "integrated_synthesis_report": {
+            "event_research_patrols": {"patrols": [{"verified_cards": [{"source_url": "https://example.com/fact"}]}]},
+            "integrated_adjudication": {
+                "llm_adjudicated": True,
+                "data_verdict_objections": [
+                    {"source_ref": "https://example.com/fact", "claim": "外部核实事实与数据姿态相反",
+                     "contradicted_data": ["L1.get_10y_real_rate"], "materiality": "material"},
+                ],
+            },
+        },
+    }
+    html = reporter._brief_facade_section(tmp_path, base)
+    assert "【抗诉】" in html
+    assert "外部核实事实与数据姿态相反" in html
+
+    tangential = {
+        **base,
+        "integrated_synthesis_report": {
+            "event_research_patrols": {"patrols": [{"verified_cards": [{"source_url": "https://example.com/fact"}]}]},
+            "integrated_adjudication": {
+                "llm_adjudicated": True,
+                "data_verdict_objections": [
+                    {"source_ref": "https://example.com/fact", "claim": "擦边",
+                     "contradicted_data": [], "materiality": "tangential"},
+                    {"source_ref": "event:abc", "claim": "事件卡挑战",
+                     "contradicted_data": ["L1.get_10y_real_rate"], "materiality": "material"},
+                ],
+            },
+        },
+    }
+    html = reporter._brief_facade_section(tmp_path, tangential)
+    assert "【抗诉】" not in html
+
+
 def test_r2_facade_keeps_publish_block_visible(tmp_path: Path):
     html = VNextReportGenerator()._brief_facade_section(
         tmp_path,

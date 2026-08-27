@@ -1,4 +1,4 @@
-"""T47 常设检查 B 包（PC-11 ~ PC-27）。
+"""T47 常设检查 B 包（PC-11 ~ PC-28）。
 
 只读机器检查：输入 = 一次 run 的落盘产物目录（run_dir），输出 = 结构化结果列表。
 不调 LLM、不联网、不写 run_dir；模块 import 无副作用。
@@ -1181,16 +1181,16 @@ def _check_pc26(run_dir: Path) -> Dict[str, Any]:
 
 
 def _check_pc27(run_dir: Path) -> Dict[str, Any]:
-    """O17（2026-08-19 老板裁决，当日收窄）：IA 挑战数据判决即亮灯。
+    """O17（2026-08-19 老板裁决，当日收窄）。
 
-    stance_echo 改代码装配（O16）后，`conflict_matrix` / `unexplained` 是"IA 认为
-    数据判决与外部世界存在未解决张力"的看守通道。初版按"非空即亮灯"实现，实测最近
-    四次真实跑 conflict_matrix 常态 9-10 行、unexplained 常态 3-4 条（多为
-    not_yet_testable 例行登记）——天天亮等于没有灯。老板当日裁收窄：**只有
-    `challenged_by_data` 行（事件材料挑战了数据判决）才亮灯**——该行在合约里必须
-    带具体 data_side_refs（contracts.py IntegratedConflictRow），平时安静、出事才叫。
-    亮灯**不是系统故障**——是 IA 按合约记录了挑战，需要人工阅读，不许静默流过。"""
-    check_name = "IA 挑战数据判决亮灯（O17）"
+    口径更正（T67/W4，2026-08-26 体检发现）：O17 原意是"事件材料挑战数据判决才亮灯"，
+    但实现点的是 `challenged_by_data`——合约里该枚举的真实语义是"数据削弱了事件叙事"
+    （方向相反，见 contracts.py IntegratedConflictRow 与 integrated_adjudicator.md）。
+    即 PC-27 一直在看"数据削弱事件"（本是正常情形），老板要的"事件/核实事实挑战数据
+    判决"的异议通道，由 PC-28（data_verdict_objections）正式承接。PC-27 行为不动（已批
+    检查不擅改），仅更正语义说明；是否退役/改语义留老板裁决。
+    亮灯**不是系统故障**——需要人工阅读，不许静默流过。"""
+    check_name = "IA 矩阵 challenged_by_data 亮灯（O17；语义更正：=数据削弱事件叙事，异议转 PC-28）"
     evidence = "integrated_synthesis_report.json:integrated_adjudication.conflict_matrix/unexplained"
     report_path = run_dir / "integrated_synthesis_report.json"
     if not report_path.is_file():
@@ -1234,6 +1234,78 @@ def _check_pc27(run_dir: Path) -> Dict[str, Any]:
     return _make_result("PC-27", check_name, True, "IA 未记录对数据判决的挑战", evidence)
 
 
+def _check_pc28(run_dir: Path) -> Dict[str, Any]:
+    """T67/W4 抗诉通道亮灯：只有"研究架对账通过的核实事实 + 实质矛盾"挑战数据判决才亮。
+
+    老板 08-26 裁定"该抗诉才抗诉"，三条件同时满足才亮：
+      ① 材料是研究架对账通过（verified）的核实事实 —— 代码核验：source_ref 命中本报告
+         event_research_patrols 里 verified_cards 的 source_url；
+      ② 与数据姿态正面冲突 —— 模型判断（contradicted_data 非空）；
+      ③ 实质矛盾非噪声 —— 模型判断（materiality == "material"）。
+    事件卡挑战（source_ref 为 event: 前缀，未核实）不亮；擦边（tangential）不亮。
+    亮灯不是系统故障，是经核实的外部事实与数据判决正面冲突，需老板人工裁决。"""
+    check_name = "抗诉通道亮灯：核实事实挑战数据判决（T67/W4）"
+    evidence = "integrated_synthesis_report.json:integrated_adjudication.data_verdict_objections"
+    report_path = run_dir / "integrated_synthesis_report.json"
+    if not report_path.is_file():
+        return _make_result(
+            "PC-28", check_name, True,
+            "跳过：缺失 artifact integrated_synthesis_report.json（IA 未跑）",
+            "integrated_synthesis_report.json",
+        )
+    try:
+        report = _load_json(report_path)
+    except Exception as exc:
+        return _make_result(
+            "PC-28", check_name, False,
+            f"check_error:{type(exc).__name__}:{exc}",
+            "integrated_synthesis_report.json",
+        )
+    adjudication = report.get("integrated_adjudication") if isinstance(report, dict) else None
+    if not isinstance(adjudication, dict):
+        return _make_result(
+            "PC-28", check_name, True,
+            "跳过：integrated_adjudication 为空（IA 未跑或降级未裁决）",
+            evidence,
+        )
+    if not adjudication.get("llm_adjudicated"):
+        return _make_result(
+            "PC-28", check_name, True,
+            "跳过：llm_adjudicated=false（降级拼装），抗诉通道不适用",
+            evidence,
+        )
+    objections = [o for o in (adjudication.get("data_verdict_objections") or []) if isinstance(o, dict)]
+    if not objections:
+        return _make_result("PC-28", check_name, True, "无外部材料异议", evidence)
+    verified_urls = set()
+    patrols = (report.get("event_research_patrols") or {}).get("patrols") or []
+    for patrol in patrols:
+        if not isinstance(patrol, dict):
+            continue
+        for card in patrol.get("verified_cards") or []:
+            if isinstance(card, dict) and str(card.get("source_url") or "").strip():
+                verified_urls.add(str(card["source_url"]).strip().casefold())
+    escalated = []
+    for obj in objections:
+        src = str(obj.get("source_ref") or "").strip()
+        material = str(obj.get("materiality") or "") == "material"
+        verified = bool(src) and src.casefold() in verified_urls
+        if verified and material:
+            escalated.append(src)
+    if escalated:
+        return _make_result(
+            "PC-28", check_name, False,
+            "这不是系统故障：经核实的研究架事实与数据判决正面冲突，需老板人工裁决——"
+            f"抗诉 {len(escalated)} 条",
+            evidence,
+        )
+    return _make_result(
+        "PC-28", check_name, True,
+        f"异议 {len(objections)} 条，无核实事实+实质矛盾的抗诉（该抗诉才抗诉）",
+        evidence,
+    )
+
+
 # B14（摘要层取舍标准无定义）不能机器化：必须先由人声明每层摘要取舍标准，之后才能
 # 机械化检查"被省掉的恰是关键指标"这类语义问题。标准归 C9/T38 设计文档一并定，不单
 # 独设检查；此注释即"为何不能"的留档。
@@ -1261,11 +1333,12 @@ _CHECKS: List[Tuple[str, str, Any]] = [
     ("PC-25", "supplier_lookback 待验证仍撑主斜率（C2）", _check_pc25),
     ("PC-26", "yield gap 身份矛盾检测（C4）", _check_pc26),
     ("PC-27", "IA 挑战数据判决亮灯（O17）", _check_pc27),
+    ("PC-28", "抗诉通道亮灯：核实事实挑战数据判决（T67/W4）", _check_pc28),
 ]
 
 
 def run_checks_b(run_dir: Path) -> List[Dict[str, Any]]:
-    """对一次 run 的落盘产物执行 PC-11 ~ PC-27 只读检查。"""
+    """对一次 run 的落盘产物执行 PC-11 ~ PC-28 只读检查。"""
     results: List[Dict[str, Any]] = []
     for check_id, name, func in _CHECKS:
         try:

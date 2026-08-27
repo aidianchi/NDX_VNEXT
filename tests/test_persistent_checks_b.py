@@ -1,4 +1,4 @@
-"""T47 常设检查 B 包（PC-11 ~ PC-27）的合成用例。
+"""T47 常设检查 B 包（PC-11 ~ PC-28）的合成用例。
 
 全部用例在 tmp_path 里手工构造 run_dir 子集，不依赖 output/ 真实产物。
 每个检查一条"该过"用例 + 一条"该红"用例；另加一个缺失 artifact 用例。
@@ -875,4 +875,60 @@ def test_pc27_passes_when_dissent_channels_empty(tmp_path: Path) -> None:
         "llm_adjudicated": True, "conflict_matrix": [], "unexplained": [],
     }))
     result = _find(run_checks_b(tmp_path), "PC-27")
+    assert result["passed"] is True
+
+
+# --------------------------------------------------------------------------
+# PC-28：抗诉通道亮灯（T67/W4，2026-08-26 老板六件全批）
+# --------------------------------------------------------------------------
+
+def _ia_report_with_objections(objections: Any, verified_urls: List[str]) -> Dict[str, Any]:
+    """带研究架 verified_cards 与 data_verdict_objections 的 IA 产物合成。"""
+    patrols = {
+        "patrols": [{"verified_cards": [{"source_url": u} for u in verified_urls]}],
+    }
+    return {
+        "schema_version": "integrated_synthesis_report_v1",
+        "event_research_patrols": patrols,
+        "integrated_adjudication": {
+            "llm_adjudicated": True,
+            "data_verdict_objections": objections,
+        },
+    }
+
+
+def test_pc28_lights_on_verified_material_objection(tmp_path: Path) -> None:
+    """核实事实（source_ref 命中 verified source_url）+ 实质矛盾 → 亮灯。"""
+    _write_json(tmp_path / "integrated_synthesis_report.json", _ia_report_with_objections(
+        [{"source_ref": "https://example.com/fact", "claim": "外部核实事实与数据姿态相反",
+          "contradicted_data": ["L1.get_10y_real_rate"], "materiality": "material"}],
+        verified_urls=["https://example.com/fact"],
+    ))
+    result = _find(run_checks_b(tmp_path), "PC-28")
+    assert result["passed"] is False
+    assert "不是系统故障" in result["detail"]
+    assert "抗诉 1 条" in result["detail"]
+
+
+def test_pc28_passes_on_tangential_or_unverified(tmp_path: Path) -> None:
+    """擦边（tangential）或未核实来源（event 卡 / 不在 verified 里）→ 不亮灯。"""
+    _write_json(tmp_path / "integrated_synthesis_report.json", _ia_report_with_objections(
+        [
+            {"source_ref": "https://example.com/fact", "claim": "擦边",
+             "contradicted_data": ["L1.get_10y_real_rate"], "materiality": "tangential"},
+            {"source_ref": "event:abc", "claim": "事件卡挑战（弱来源）",
+             "contradicted_data": ["L1.get_10y_real_rate"], "materiality": "material"},
+        ],
+        verified_urls=["https://example.com/fact"],
+    ))
+    result = _find(run_checks_b(tmp_path), "PC-28")
+    assert result["passed"] is True
+    assert "该抗诉才抗诉" in result["detail"]
+
+
+def test_pc28_passes_when_no_objections(tmp_path: Path) -> None:
+    _write_json(tmp_path / "integrated_synthesis_report.json", _ia_report_with_objections(
+        [], verified_urls=["https://example.com/fact"],
+    ))
+    result = _find(run_checks_b(tmp_path), "PC-28")
     assert result["passed"] is True

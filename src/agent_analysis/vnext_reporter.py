@@ -2379,6 +2379,7 @@ class VNextReportGenerator:
             f'<aside class="hero-risks dissent"><b>最强异议</b>：{_escape(strongest_dissent)}</aside>'
             if strongest_dissent else ""
         )
+        objection_banner = self._data_verdict_objection_banner(artifacts)
         return f"""
 <section class="sec facade-section" id="facade">
   <div class="facade">
@@ -2392,6 +2393,7 @@ class VNextReportGenerator:
         <span class="badge pill">可信度 <b>{_escape(confidence)}</b></span>
         {publish_note if not blocked else ''}
       </div>
+      {objection_banner}
       <div class="reasoned-verdict">{self._reasoned_verdict_html(verdict)}</div>
       {f'<p class="section-note verdict-signature">{_escape(verdict_signature)}</p>' if verdict_signature else ''}
       {publish_note if blocked else ''}
@@ -2405,6 +2407,48 @@ class VNextReportGenerator:
   </div>
 </section>
 """
+
+    def _data_verdict_objection_banner(self, artifacts: Dict[str, Any]) -> str:
+        """T67/W4 抗诉横幅：只有"研究架对账通过的核实事实 + 实质矛盾"挑战数据判决才置顶。
+
+        与 PC-28 同一判定口径（该抗诉才抗诉）：source_ref 命中 verified_cards 的
+        source_url 且 materiality=material。事件卡挑战、擦边异议不置顶。"""
+        report = artifacts.get("integrated_synthesis_report", {}) or {}
+        if not isinstance(report, dict):
+            return ""
+        adjudication = report.get("integrated_adjudication") or {}
+        if not isinstance(adjudication, dict) or not adjudication.get("llm_adjudicated"):
+            return ""
+        objections = [
+            o for o in adjudication.get("data_verdict_objections") or [] if isinstance(o, dict)
+        ]
+        if not objections:
+            return ""
+        verified_urls = set()
+        patrols = (report.get("event_research_patrols") or {}).get("patrols") or []
+        for patrol in patrols:
+            if not isinstance(patrol, dict):
+                continue
+            for card in patrol.get("verified_cards") or []:
+                if isinstance(card, dict) and str(card.get("source_url") or "").strip():
+                    verified_urls.add(str(card["source_url"]).strip().casefold())
+        escalated = []
+        for obj in objections:
+            src = str(obj.get("source_ref") or "").strip()
+            if str(obj.get("materiality") or "") == "material" and src and src.casefold() in verified_urls:
+                escalated.append(obj)
+        if not escalated:
+            return ""
+        items = "".join(
+            f"<li>{_escape(str(o.get('claim') or ''))}"
+            f"<div class=\"obj-src\">{_escape(str(o.get('source_ref') or ''))}</div></li>"
+            for o in escalated
+        )
+        return (
+            '<aside class="objection-banner">'
+            "<b>【抗诉】</b>经核实的外部事实与数据判决正面冲突——改判与否由你裁决，数据判决为锚、系统不改。"
+            f"<ul>{items}</ul></aside>"
+        )
 
     def _brief_thesis_section(self, artifacts: Dict[str, Any]) -> str:
         final = artifacts.get("final_adjudication", {}) or {}
