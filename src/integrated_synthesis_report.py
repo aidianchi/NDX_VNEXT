@@ -13,6 +13,7 @@ except ImportError:  # pragma: no cover - direct script execution
     from agent_analysis.contracts import IntegratedAdjudication
 
 _INTEGRATED_PROMPT_PATH = Path(__file__).resolve().parent / "agent_analysis" / "prompts" / "integrated_adjudicator.md"
+_INTEGRATED_CRITIC_PROMPT_PATH = Path(__file__).resolve().parent / "agent_analysis" / "prompts" / "integrated_adjudicator_critic.md"
 
 # W2/Q6：模型未明示缺口时，代码侧补的占位文案；用于识别低质量补采条目（不是模型真实产出）。
 _MISSING_EVIDENCE_PLACEHOLDER = "缺口未由模型明示，需人工补记"
@@ -215,7 +216,7 @@ class IntegratedSynthesisReportBuilder:
             if isinstance(claim, dict)
         ]
         judgment = self._main_judgment(pure_data_report, claims, publish_gate)
-        adjudication, llm_note = self._llm_adjudication(
+        adjudication, llm_note, critique = self._llm_adjudication(
             final_adjudication=final_adjudication or {},
             cards=[card for card in _as_list((event_interpretation_cards or {}).get("cards"))[:10] if isinstance(card, dict)],
             investigation_reports=all_investigation_reports,
@@ -264,6 +265,7 @@ class IntegratedSynthesisReportBuilder:
                 [{**judgment, "superseded_by_adjudication": bool(adjudication)}] if judgment else []
             ),
             "integrated_adjudication": adjudication,
+            "integrated_adjudication_critique": critique,
             "conflict_matrix": [
                 ({**row, "superseded_by": "integrated_adjudication"} if adjudication else row)
                 for row in self._conflict_matrix(claims)
@@ -298,26 +300,26 @@ class IntegratedSynthesisReportBuilder:
         evidence_index: Optional[Dict[str, Any]] = None,
         llm_caller: Optional[Callable[..., Optional[str]]],
         audit_dir: Optional[str | Path],
-    ) -> tuple[Optional[Dict[str, Any]], str]:
+    ) -> tuple[Optional[Dict[str, Any]], str, List[Dict[str, Any]]]:
         if any(
             str(reason).startswith("time_inconsistency:")
             for reason in _as_list(publish_gate.get("blocking_reasons"))
         ):
-            return None, "time_inconsistency_publish_gate_audit_only"
+            return None, "time_inconsistency_publish_gate_audit_only", []
         if os.environ.get("INTEGRATED_ADJUDICATION_LLM_ENABLED", "1").strip().lower() in {"0", "false", "off", "no"}:
-            return None, "disabled_by_env"
+            return None, "disabled_by_env", []
         if llm_caller is None:
-            return None, "no_llm_caller_available"
+            return None, "no_llm_caller_available", []
         if not isinstance(final_adjudication, dict) or not final_adjudication.get("final_stance"):
-            return None, "final_adjudication_unavailable"
+            return None, "final_adjudication_unavailable", []
         if publish_gate.get("status") == "audit_only":
-            return None, "publish_gate_audit_only"
+            return None, "publish_gate_audit_only", []
         if not publish_gate.get("formal_investment_conclusion_allowed", False):
-            return None, "publish_gate_forbids_formal_conclusion"
+            return None, "publish_gate_forbids_formal_conclusion", []
         try:
             prompt_template = _INTEGRATED_PROMPT_PATH.read_text(encoding="utf-8")
         except OSError:
-            return None, "prompt_file_missing"
+            return None, "prompt_file_missing", []
 
         questions = []
         for i, q in enumerate(_as_list(cross_layer_questions.get("questions"))):
@@ -429,10 +431,113 @@ class IntegratedSynthesisReportBuilder:
                     adjudication["notes"] = list(adjudication.get("notes") or []) + date_notes
                 if audit_failed:
                     adjudication["notes"] = list(adjudication.get("notes") or []) + ["audit_write_failed"]
-                return adjudication, "adjudicated"
+                critique, final_adjudication, critic_note = self._critic_and_finalize(
+                    draft=adjudication, prompt=prompt, payload=payload, cards=cards,
+                    questions=questions, llm_caller=llm_caller,
+                    invocation_dir=invocation_dir,
+                )
+                final_adjudication["notes"] = list(final_adjudication.get("notes") or []) + [critic_note]
+                return final_adjudication, "adjudicated", critique
             except (ValueError, KeyError, TypeError) as exc:
                 last_error = f"invalid_response: {exc}"
-        return None, f"llm_adjudication_failed: {last_error}"
+        return None, f"llm_adjudication_failed: {last_error}", []
+
+    @staticmethod
+    def _parse_critique(raw: str) -> List[Dict[str, Any]]:
+        """解析裁决批评者的输出：{"critiques": [...]}。挑不出问题返回空清单。"""
+        text = raw.strip()
+        fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
+        if fenced:
+            text = fenced.group(1)
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError("no json object found")
+        data = json.loads(text[start : end + 1], strict=False)
+        critiques = data.get("critiques") if isinstance(data, dict) else None
+        if not isinstance(critiques, list):
+            raise ValueError("no critiques list")
+        out: List[Dict[str, Any]] = []
+        for item in critiques:
+            if not isinstance(item, dict) or not str(item.get("issue") or "").strip():
+                continue
+            out.append({
+                "category": str(item.get("category") or "").strip(),
+                "severity": str(item.get("severity") or "medium").strip(),
+                "target": str(item.get("target") or "").strip(),
+                "issue": str(item.get("issue") or "").strip(),
+                "suggested_fix": str(item.get("suggested_fix") or "").strip(),
+            })
+        return out
+
+    def _critic_and_finalize(
+        self,
+        *,
+        draft: Dict[str, Any],
+        prompt: str,
+        payload: Dict[str, Any],
+        cards: List[Dict[str, Any]],
+        questions: List[Dict[str, Any]],
+        llm_caller: Callable[..., Optional[str]],
+        invocation_dir: Optional[Path],
+    ) -> tuple[List[Dict[str, Any]], Dict[str, Any], str]:
+        """T67/W5 裁决批评者：IA 草稿 → 批评者挑刺 → IA 定稿逐条回应。
+
+        失败兜底：批评者或定稿两次失败 → 退回草稿 + critic_degraded 标注（不阻断 run）。
+        分料纪律：批评者只拿 IA 草稿 + 同一输入面（payload），不给额外原始数据。
+        """
+        if os.environ.get("INTEGRATED_ADJUDICATION_CRITIC_ENABLED", "1").strip().lower() in {"0", "false", "off", "no"}:
+            return [], draft, "critic_disabled_by_env"
+        try:
+            critic_template = _INTEGRATED_CRITIC_PROMPT_PATH.read_text(encoding="utf-8")
+        except OSError:
+            return [], draft, "critic_prompt_missing"
+        critic_prompt = (
+            critic_template
+            + "\n\n## 综合裁决草稿\n\n```json\n"
+            + json.dumps(draft, ensure_ascii=False, indent=1)
+            + "\n```\n\n## 本轮输入材料\n\n```json\n"
+            + json.dumps(payload, ensure_ascii=False, indent=1)
+            + "\n```\n"
+        )
+        critiques: Optional[List[Dict[str, Any]]] = None
+        for _ in (1, 2):
+            try:
+                raw = llm_caller(critic_prompt, stage_name="integrated_adjudicator_critic")
+            except Exception:  # noqa: BLE001 - 批评者任何异常都降级，不许炸管线
+                continue
+            if not raw:
+                continue
+            try:
+                critiques = self._parse_critique(raw)
+                break
+            except (ValueError, KeyError, TypeError):
+                continue
+        if critiques is None:
+            return [], draft, "critic_degraded"
+        if not critiques:
+            return [], draft, "critic_no_issues"
+        final_prompt = (
+            prompt
+            + "\n\n## 你的草稿（已生成，请基于它修订）\n\n```json\n"
+            + json.dumps(draft, ensure_ascii=False, indent=1)
+            + "\n```\n\n## 批评者意见（必须逐条回应：接受修正，或驳回并说明理由）\n\n```json\n"
+            + json.dumps({"critiques": critiques}, ensure_ascii=False, indent=1)
+            + "\n```\n\n请输出修订后的最终 JSON（字段与首次一致），并在 notes 里写明你对每条批评的处理。\n"
+        )
+        for _ in (1, 2):
+            try:
+                raw = llm_caller(final_prompt, stage_name="integrated_adjudicator_final")
+            except Exception:  # noqa: BLE001
+                continue
+            if not raw:
+                continue
+            try:
+                final = self._parse_and_validate(raw, payload, cards, questions)
+                final["notes"] = list(final.get("notes") or []) + [f"critic_applied:{len(critiques)}"]
+                return critiques, final, "adjudicated_with_critic"
+            except (ValueError, KeyError, TypeError):
+                continue
+        return critiques, draft, "finalize_degraded_after_critic"
 
     def _ref_authority_map(
         self,

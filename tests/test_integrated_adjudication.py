@@ -86,6 +86,10 @@ def _build(llm_response, **kwargs):
 
     def caller(prompt, stage_name=""):
         calls.append(prompt)
+        # T67/W5：裁决批评者独立成站——mock 里 critic 返回空清单（无问题），
+        # 使既有"单次草稿、无重试"语义保持可测（draft=1 次 + critic=1 次）。
+        if stage_name == "integrated_adjudicator_critic":
+            return json.dumps({"critiques": []})
         if callable(llm_response):
             return llm_response(len(calls))
         return llm_response
@@ -282,7 +286,7 @@ def test_successful_adjudication_and_unanswered_question_note():
     assert q2["answer_status"] == "cannot_answer_yet"
     assert q2["missing_evidence"] == ["缺口未由模型明示，需人工补记"]
     assert any(request["source_id"] == "q2" for request in payload["recollection_requests"]["requests"])
-    assert len(calls) == 1
+    assert len(calls) == 2  # draft 1 次 + critic（无问题）1 次，无定稿重跑
 
 
 def test_stance_echo_assembled_by_code_not_model():
@@ -295,7 +299,7 @@ def test_stance_echo_assembled_by_code_not_model():
     assert adj is not None
     assert adj["stance_echo"] == FINAL_STANCE
     assert payload["policy"]["llm_note"] == "adjudicated"
-    assert len(calls) == 1  # 不再因姿态抄写偏差重试
+    assert len(calls) == 2  # draft 1 次 + critic 1 次；不再因姿态抄写偏差重试
 
 
 def test_empty_response_falls_back_without_blocking():
@@ -839,3 +843,62 @@ def test_mechanical_literals_are_code_assembled():
     assert ia is not None
     assert ia["schema_version"] == "integrated_adjudication_v1"
     assert ia["judgment_object"] == "NDX"
+
+
+def _build_critic_flow(critic_response: str, final_response=None, **kwargs):
+    """T67/W5：按 stage 返回不同响应的 builder，供裁决批评者路径测试。"""
+    calls = []
+    stages = []
+
+    def caller(prompt, stage_name=""):
+        calls.append(prompt)
+        stages.append(stage_name)
+        if stage_name == "integrated_adjudicator_critic":
+            return critic_response
+        if stage_name == "integrated_adjudicator_final":
+            return final_response
+        return _valid_response()
+
+    builder = IntegratedSynthesisReportBuilder()
+    payload = builder.build(
+        pure_data_report={"principal_contradictions": []},
+        analysis_packet={"meta": {"data_date": "2026-07-18"}},
+        data_integrity_report={"publish_status": "publishable"},
+        event_narrative_ledger={"events": [{"claims": []}]},
+        event_interpretation_cards=_cards(),
+        final_adjudication=_final_adjudication(),
+        cross_layer_questions=_questions(),
+        llm_caller=caller,
+        **kwargs,
+    )
+    return payload, stages
+
+
+def test_critic_finds_issues_triggers_finalize_and_records_critique():
+    """批评者挑出真问题 → 触发定稿调用 → 产物带 critic_applied 标注 + 批评落盘。"""
+    critic = json.dumps({"critiques": [{
+        "category": "logical_leap", "severity": "high", "target": "integrated_verdict",
+        "issue": "把可能写成已经", "suggested_fix": "改为条件句",
+    }]})
+    payload, stages = _build_critic_flow(critic, final_response=_valid_response())
+    assert "integrated_adjudicator_final" in stages
+    adj = payload["integrated_adjudication"]
+    assert any(note.startswith("critic_applied:1") for note in adj["notes"])
+    assert len(payload["integrated_adjudication_critique"]) == 1
+
+
+def test_critic_failure_degrades_to_draft_without_blocking():
+    """批评者两次失败（返回非 JSON）→ 退回草稿 + critic_degraded，不阻断 run。"""
+    payload, stages = _build_critic_flow("not-a-json")
+    assert "integrated_adjudicator_final" not in stages
+    adj = payload["integrated_adjudication"]
+    assert adj is not None  # 草稿仍在
+    assert any("critic_degraded" in n for n in adj["notes"])
+    assert payload["integrated_adjudication_critique"] == []
+
+
+def test_critic_disabled_by_env(monkeypatch):
+    monkeypatch.setenv("INTEGRATED_ADJUDICATION_CRITIC_ENABLED", "0")
+    payload, stages = _build_critic_flow("ignored")
+    assert "integrated_adjudicator_critic" not in stages
+    assert any("critic_disabled_by_env" in n for n in payload["integrated_adjudication"]["notes"])
