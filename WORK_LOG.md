@@ -8,6 +8,20 @@
 
 ## 2026-08-26
 
+### T67 施工推进（08-27 凌晨）：W1/W3/W4 完成并提交，剩 W5/W6
+
+- **分支**：`t67-layer3-governance`（从 docs/consolidation 切出；W2 文档批已先在 docs/consolidation 提交 `cc49c4b`）。代码项全部落此分支，未混入文档分支。
+- **W1 Brief 标题换人话（✅）**：`vnext_reporter.py:2388` 优先级反转——H1 用 `reader_final.one_liner`（人话先行），`final_stance` 退为姿态 badge + 判决正文（深度不减）。先红后绿 2 条测试；真实 run（20260826_124855）重渲染验证 H1 = "现在不是重仓追高的时候；等NVDA财报出方向"。提交 `67d8472`。
+- **W3 五项基线（✅）**：`scripts/measure_layer2_baseline.py`（零 AI 调用）。实测基线——全文率 raw 27-35%、**adjusted 42-55%**（剔除 SEC 文件号+官方日历的结构性无正文后，真缺口仍约一半，Yahoo 7/16、Reddit 0/4）；来源等级分布健康（主流报道+官方文件+官方宏观占绝对多数）；对账通过率聚合 30/47=64%（分新旧段：代码装配修好后的近 3 期 9/9、5/5、6/10）；渠道真空覆盖率、IA 引用可用率两项**暂不可量**（无结构化落点 + 研究架未建成）。落盘 `baseline_measurements.{md,json}`。提交 `67d8472`。
+- **W4 抗诉通道（✅）**：新合约 `DataVerdictObjection`（方向语义=外部材料挑战数据判决）+"data_verdict_objections" 字段；三条件触发红灯（①对账通过 verified 事实——`source_ref` 命中 verified_cards 的 source_url 代码核验 ②正面冲突 ③materiality=material），PC-28 亮灯 + Brief 第一屏"抗诉"横幅，改判权留老板。**顺手抓到并更正一个方向性错位**：O17 的 PC-27 原意"事件挑战数据判决亮灯"，实现却点 `challenged_by_data`（合约语义=数据削弱事件叙事，方向相反）——异议通道实际从未生效；已由 PC-28 正式承接，PC-27 行为不动、语义说明更正、是否退役留老板。离线校准：PC-28 跑 104 个历史 run、0 次误亮。全量 1430 绿 + docs 11 绿。提交 `00b463e`。
+- **剩 W5 裁决批评者（IA 草稿→挑刺→定稿回应）+ W6 底账修缺口（Yahoo/Reddit 正文 + 词表活化设计稿）**。工单 `investigation_reports/20260826_第三层治理施工工单/WORK_ORDERS.md`。
+
+### T67 全部六件完成（08-27 深夜）：W5/W6 收口，⑦ 等条件
+
+- **W5 裁决批评者（✅，`48f9edd`）**：IA 草稿 → 裁决批评者（`integrated_adjudicator_critic.md`，专挑四类：逻辑跳步/事件写成既成因果/和稀泥/引用越权与编造数字）→ IA 定稿逐条回应。批评与回应落盘 `integrated_adjudication_critique`；失败退回草稿 + `critic_degraded`（不阻断）；`INTEGRATED_ADJUDICATION_CRITIC_ENABLED=0` 可关。治理倒挂补上关键一环——影响力最大的综合报告首次有复核者（数据侧六站对抗，此前 IA 是零对抗单次调用）。
+- **W6 底账修缺口（✅，`69ed71d`）**：**根因诊断**——Yahoo 正文率 44% 的真相是 16 条里 7 条"关键词闸门故意不抓"（`body_fetch_not_attempted`）、2 条真失败、7 条成功；根因 = 正文抓取关键词表漏 M7 公司名（只有芯片名 nvidia/amd/intc）。即时补丁：M7 别名并入正文抓取判定（`M7_BODY_FETCH_TERMS`）。Reddit 0/4 结论：`social=True` 默认不抓正文是**设计**不是 bug，维持+如实标注、开关留老板。词表活化机制设计稿 `W6c_词表活化设计稿.md`（候选来源=出题官/巡逻缺席信号/data_gaps → 候选账 → 老板圈定入表，边界归老板，不做全自动）待拍板。
+- **收口状态**：W1-W6 全部完成，分支 `t67-layer3-governance` 五个 commit（W2 在 docs/consolidation）。全量 1434 绿 + docs 11 绿。**⑦ IA 接门脸**等条件：W3 基线里 ④渠道真空、⑤IA 引用两项缺原料 + 全文率抬升，条件到了再复议。
+
 ### 立 T67（第三层治理与门面准备）：架构第一性原理体检 → 老板六件全批 → 施工工单落盘 + W2 当场完成
 
 - **体检方法**：文档声明（系统说明书/架构图）× 代码实况 × 真实 run 产物三方对账，对照基线 TradingAgents（GitHub 当日查证：事件源=Alpha Vantage+Yahoo 新闻时间窗定向、Reddit/StockTwits 情绪、Polymarket 前瞻概率；无底账/无来源分级/无对账/无正文——比我们浅一个量级，可借鉴点=Polymarket 预测市场隐含概率源，未立项等老板）。
