@@ -229,6 +229,13 @@ HIGH_RELEVANCE_BODY_FETCH_KEYWORDS = [
     "盈利",
 ]
 
+# T67/W6：正文抓取闸门此前只认芯片名（nvidia/amd/intc 等），漏掉 M7 其余公司名——
+# 实测 16 条 Yahoo 里 7 条"not_attempted"全是 TSLA/META/AAPL/AMZN 等标题（不含关键词）。
+# M7 占 NDX 权重约四成，任何 M7 公司新闻都是高相关，正文值得抓。此处把 M7 别名并入判定。
+M7_BODY_FETCH_TERMS = sorted(
+    {term.lower() for aliases in M7_ENTITY_ALIASES.values() for term in aliases}
+)
+
 
 class _ReadableTextParser(HTMLParser):
     def __init__(self) -> None:
@@ -1065,7 +1072,11 @@ class NewsEventLedgerBuilder:
             return False
         text = f"{title} {url}".lower()
         has_ai = bool(re.search(r"(?<![a-z])ai(?![a-z])", text))
-        return has_ai or any(keyword in text for keyword in HIGH_RELEVANCE_BODY_FETCH_KEYWORDS)
+        return (
+            has_ai
+            or any(keyword in text for keyword in HIGH_RELEVANCE_BODY_FETCH_KEYWORDS)
+            or any(term in text for term in M7_BODY_FETCH_TERMS)
+        )
 
     def _fetch_article_body(self, title: str, url: str, *, social: bool = False) -> tuple[str, str]:
         if not self._should_fetch_article_body(title, url, social=social):

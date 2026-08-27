@@ -551,3 +551,35 @@ END:VCALENDAR
         "Future CPI release",
         "Future employment release",
     }
+
+
+def test_body_fetch_gate_recognizes_m7_entity_names():
+    """T67/W6：正文抓取闸门须覆盖 M7 公司名（此前只认芯片名，漏掉 TSLA/META 等，
+    实测 16 条 Yahoo 里 7 条因此 not_attempted）。social 仍默认不抓。"""
+    b = NewsEventLedgerBuilder()
+    assert b._should_fetch_article_body("Apple iPhone sales miss estimates", "https://example.com/a")
+    assert b._should_fetch_article_body("Tesla recalls 500k vehicles", "https://example.com/a")
+    assert b._should_fetch_article_body("Meta AI chip roadmap leaked", "https://example.com/a")
+    assert b._should_fetch_article_body("亚马逊 资本开支 创新高", "https://example.com/a")
+    # social（Reddit 等）默认不抓正文——设计如此
+    assert not b._should_fetch_article_body("Tesla recalls vehicles", "https://example.com/a", social=True)
+    # 与 NDX/M7 无关的新闻不抓
+    assert not b._should_fetch_article_body("Local bakery opens downtown", "https://example.com/a")
+    # 非 http 不抓
+    assert not b._should_fetch_article_body("Nvidia earnings", "not-a-url")
+
+
+def test_body_fetch_gate_recognizes_m7_entity_names():
+    """T67/W6：正文抓取闸门须覆盖 M7 公司名（此前只认芯片名，漏掉 TSLA/META 等，
+    实测 16 条 Yahoo 里 7 条因此 not_attempted）。social 仍默认不抓。"""
+    b = NewsEventLedgerBuilder()
+    assert b._should_fetch_article_body("Apple iPhone sales miss estimates", "https://example.com/a")
+    assert b._should_fetch_article_body("Tesla recalls 500k vehicles", "https://example.com/a")
+    assert b._should_fetch_article_body("Meta AI chip roadmap leaked", "https://example.com/a")
+    assert b._should_fetch_article_body("亚马逊 资本开支 创新高", "https://example.com/a")
+    # social（Reddit 等）默认不抓正文——设计如此
+    assert not b._should_fetch_article_body("Tesla recalls vehicles", "https://example.com/a", social=True)
+    # 与 NDX/M7 无关的新闻不抓
+    assert not b._should_fetch_article_body("Local bakery opens downtown", "https://example.com/a")
+    # 非 http 不抓
+    assert not b._should_fetch_article_body("Nvidia earnings", "not-a-url")
