@@ -535,9 +535,10 @@ class LLMEngine:
                 return self._call_kimi_http(prompt, model_name, config["max_tokens"])
 
             if client_type == "openai_compatible" and service_name in self.clients:
-                # json_object 表单锁：deepseek 与 zhipu 都支持 response_format=json_object，
-                # 共用这条路径保证 JSON 可靠性；其余 openai 兼容服务维持纯文本+extract_json。
-                use_json_output = service_name in ("deepseek", "zhipu")
+                # json_object 表单锁：deepseek / zhipu（开放平台线）/ zhipu_coding（编码套餐线）
+                # 都支持 response_format=json_object，共用这条路径保证 JSON 可靠性；
+                # 其余 openai 兼容服务维持纯文本+extract_json。
+                use_json_output = service_name in ("deepseek", "zhipu", "zhipu_coding")
                 # 严格工具调用（DeepSeek Beta strict function calling）是 DeepSeek 专属特性
                 # （/beta 端点 + tools 内 strict 标记），显式只认 deepseek 服务——绝不能随
                 # json 白名单扩大而泄漏给其他供应商（GLM 等不认这套会直接报错）。未传入

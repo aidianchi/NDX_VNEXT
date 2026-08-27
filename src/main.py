@@ -64,6 +64,7 @@ DEFAULT_MODEL_PRIORITY = [
 DRIVER_PROVIDER_MODEL_PRIORITIES = {
     "deepseek": DEFAULT_MODEL_PRIORITY,
     "zhipu": ["glm-5.3-flash"],
+    "zhipu-coding": ["glm-5.3-flash-coding"],
 }
 DEFAULT_DRIVER_PROVIDER = "deepseek"
 

@@ -108,6 +108,13 @@ _FALLBACK_MODEL_CONFIGS = {
         "model": "glm-5.3-flash",
         "max_tokens": 65536,
     },
+    "glm-5.3-flash-coding": {
+        "name": "GLM 5.3 Flash (Coding Plan)",
+        "client": "openai_compatible",
+        "service": "zhipu_coding",
+        "model": "glm-5.3-flash",
+        "max_tokens": 65536,
+    },
 }
 
 try:

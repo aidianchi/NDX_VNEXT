@@ -189,6 +189,27 @@ DEFAULT_API_CONFIG: ApiConfigDict = {
                 },
             ],
         },
+        "zhipu_coding": {
+            "category": "ai_service",
+            "transport": "openai_compatible",
+            "name": "Zhipu Coding Plan (智谱编码套餐)",
+            "enabled": True,
+            "key": "",
+            "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
+            "env_key": "ZHIPU_CODING_API_KEY",
+            "env_key_aliases": [],
+            "base_url_env_key": "ZHIPU_CODING_BASE_URL",
+            "required": False,
+            "docs_url": "https://docs.bigmodel.cn/",
+            "models": [
+                {
+                    "key": "glm-5.3-flash-coding",
+                    "name": "GLM 5.3 Flash (Coding Plan)",
+                    "model": "glm-5.3-flash",
+                    "max_tokens": 65536,
+                },
+            ],
+        },
         "kimi": {
             "category": "ai_service",
             "transport": "openai_compatible",

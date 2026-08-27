@@ -21,6 +21,13 @@
 - **验收**：新增 `tests/test_zhipu_runtime_config.py` 12 条全绿（注册表正确性、供应商切换与未知值兜底、名单不混断言、strict 泄漏守卫【zhipu 带 schema 也绝无 tools；对称锚：deepseek 带 schema 仍有 tools】、zhipu 客户端无 /beta 提升、GLM 调用绝不含 reasoning_effort/extra_body/tools/tool_choice）；全量 `.venv/bin/python -m pytest --cache-clear -q` **1466 通过零失败**（含 docs consistency）。
 - **未做与剩余风险**：①真实冒烟未做——`.env` 尚无 `ZHIPU_API_KEY`，钥匙填入后实调一条即可补验（验证点：标准 endpoint 接受度、模型 ID 拼写、json_object 参数）；②GLM max_tokens 65536 是起步值，若实测被拒改注册表一处即可；③不做 GLM pro 档（老板只挂 flash 的既有口径）。
 
+### 全链 GLM 补遗（08-27 下午）：老板钥匙到位 → 双线真实冒烟全通过 + 编码套餐线上线
+
+- **真实冒烟（老板填入 `ZHIPU_API_KEY` 后补验）**：标准线经项目引擎全链路 200 OK——客户端工厂按注册表拼出开放平台地址、`response_format=json_object` 被接受、返回干净 JSON 且 extract_json 解析成功、`prompt_cache_hit_tokens=None` 语义正确（未知≠0）。模型 ID 拼写 `glm-5.3-flash` 实测正确。
+- **编码套餐线（老板当场提供第二把钥匙，要求顺手加上）**：新增独立服务 `zhipu_coding`（接入地址 `https://open.bigmodel.cn/api/coding/paas/v4`，env `ZHIPU_CODING_API_KEY`），本地模型键 `glm-5.3-flash-coding`（远端模型 ID 与标准线同名，线路区别只在服务/base_url/计费层）。裸探+引擎全链路双冒烟均 200 OK。json 白名单同步扩为 `("deepseek","zhipu","zhipu_coding")`；主链预设新增 `"zhipu-coding"` 值；控制台加第五个单选钮"全链 GLM·编码套餐线"。两线名单互斥，"不混挂、不回落"铁律不变；strict 仍显式锁 deepseek。
+- **验收**：智谱测试文件增至 15 条全绿（套餐线注册表/切换不混挂/调用门控三条新增）；相关引擎回归 41 条绿；套餐线真实调用实测输出正常。密钥卫生：两把钥匙只住 `.env`（gitignored），仓库与提交零接触。
+- **遗留观察**：GLM flash 是思考型模型，小 max_tokens 下 thinking 会吃满配额导致正文为空（冒烟时 64 token 出现过）；主链配置 65536 输出空间充足，但未来若调小此值需留意。
+
 ---
 
 ## 2026-08-26（08-27 晚续：三件拍板全部落实）

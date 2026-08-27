@@ -57,6 +57,33 @@ def test_glm_model_registered_in_model_configs():
     assert MODEL_CONFIGS["deepseek-v4-pro"]["service"] == "deepseek"
 
 
+def test_zhipu_coding_line_registered_as_separate_service():
+    """编码套餐线：独立服务（独立接入地址/钥匙），同一模型 ID，绝不与标准线混挂。"""
+    services = _services()
+    coding = services["zhipu_coding"]
+    assert coding["enabled"] is True
+    assert coding["transport"] == "openai_compatible"
+    assert coding["env_key"] == "ZHIPU_CODING_API_KEY"
+    assert coding["base_url"] == "https://open.bigmodel.cn/api/coding/paas/v4"
+
+    from config import MODEL_CONFIGS
+
+    entry = MODEL_CONFIGS["glm-5.3-flash-coding"]
+    assert entry["service"] == "zhipu_coding"
+    # 远端模型 ID 与标准线同名；线路区别只体现在服务/base_url 层
+    assert entry["model"] == "glm-5.3-flash"
+
+
+def test_driver_provider_zhipu_coding_switches_roster_without_mixing(monkeypatch):
+    main = _patch_resolver_availability(monkeypatch)
+    monkeypatch.setenv("NDX_DRIVER_PROVIDER", "zhipu-coding")
+
+    roster = main.resolve_available_models(None)
+    assert roster == ["glm-5.3-flash-coding"]
+    for key in roster:
+        assert main.MODEL_CONFIGS[key]["service"] == "zhipu_coding"
+
+
 # ---------------------------------------------------------------------------
 # 供应商预设与切换：名单不混挂
 # ---------------------------------------------------------------------------
@@ -203,6 +230,21 @@ def test_glm_strict_schema_request_still_never_receives_tools():
     assert "tools" not in sent
     assert "tool_choice" not in sent
     assert sent["response_format"] == {"type": "json_object"}
+
+
+def test_zhipu_coding_call_sends_json_object_but_never_deepseek_extras():
+    """编码套餐线走引擎同样只拿 json_object 表单锁，无 DeepSeek 专属参数。"""
+    engine, fake_client = _engine_with_client("zhipu_coding")
+
+    result, _ = engine._call_ai("{}", "glm-5.3-flash-coding")
+
+    assert result == '{"ok": true}'
+    sent = fake_client.chat.completions.kwargs
+    assert sent["response_format"] == {"type": "json_object"}
+    assert "reasoning_effort" not in sent
+    assert "extra_body" not in sent
+    assert "tools" not in sent
+    assert "tool_choice" not in sent
 
 
 def test_deepseek_strict_schema_request_keeps_receiving_tools():

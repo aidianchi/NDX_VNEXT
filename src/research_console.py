@@ -261,6 +261,7 @@ class ResearchConsoleGenerator:
             <label><input type="radio" name="modelMode" value="all_flash"> 全部 Flash（所有 Agent 走 Flash）</label>
             <label><input type="radio" name="modelMode" value="deepseek-v4-pro"> pro only</label>
             <label><input type="radio" name="modelMode" value="glm_flash"> 全链 GLM（智谱 Flash；除 dsh 巡逻仍走 DeepSeek，失败不回落 DeepSeek）</label>
+            <label><input type="radio" name="modelMode" value="glm_flash_coding"> 全链 GLM·编码套餐线（同上，走套餐接入地址与计费）</label>
             <label><input type="radio" name="modelMode" value="custom"> 自定义顺序</label>
           </div>
           <label class="text-field">自定义模型顺序 <input id="customModels" type="text" value="deepseek-v4-flash,deepseek-v4-pro"></label>
@@ -738,6 +739,9 @@ function currentModels() {
   }
   if (selected && selected.value === 'glm_flash') {
     return 'glm-5.3-flash';
+  }
+  if (selected && selected.value === 'glm_flash_coding') {
+    return 'glm-5.3-flash-coding';
   }
   if (selected && selected.value === 'custom') {
     return document.getElementById('customModels').value.trim() || 'deepseek-v4-flash,deepseek-v4-pro';
