@@ -168,6 +168,27 @@ DEFAULT_API_CONFIG: ApiConfigDict = {
                 },
             ],
         },
+        "zhipu": {
+            "category": "ai_service",
+            "transport": "openai_compatible",
+            "name": "Zhipu (智谱GLM)",
+            "enabled": True,
+            "key": "",
+            "base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "env_key": "ZHIPU_API_KEY",
+            "env_key_aliases": [],
+            "base_url_env_key": "ZHIPU_BASE_URL",
+            "required": False,
+            "docs_url": "https://docs.bigmodel.cn/",
+            "models": [
+                {
+                    "key": "glm-5.3-flash",
+                    "name": "GLM 5.3 Flash",
+                    "model": "glm-5.3-flash",
+                    "max_tokens": 65536,
+                },
+            ],
+        },
         "kimi": {
             "category": "ai_service",
             "transport": "openai_compatible",

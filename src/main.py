@@ -57,6 +57,26 @@ DEFAULT_MODEL_PRIORITY = [
     "deepseek-v4-pro",
 ]
 
+# 全链供应商预设：一套名单就是一个供应商的完整启动名单，回退链只在名单内运转，
+# 绝不跨供应商混挂（选了 zhipu 就不存在回落 deepseek 的暗道）。
+# 边界：dsh 二档调查员走独立的 deepseek_harness 管道（event_research/runner.py 锁死
+# deepseek-v4-flash），不受此开关影响——全链 GLM 选项不含它。
+DRIVER_PROVIDER_MODEL_PRIORITIES = {
+    "deepseek": DEFAULT_MODEL_PRIORITY,
+    "zhipu": ["glm-5.3-flash"],
+}
+DEFAULT_DRIVER_PROVIDER = "deepseek"
+
+
+def resolve_driver_provider() -> str:
+    """读环境变量 NDX_DRIVER_PROVIDER 选全链供应商；未设或写错值都安全落回 deepseek。"""
+    raw = os.environ.get("NDX_DRIVER_PROVIDER", "").strip().lower()
+    return raw if raw in DRIVER_PROVIDER_MODEL_PRIORITIES else DEFAULT_DRIVER_PROVIDER
+
+
+def default_model_priority() -> List[str]:
+    return DRIVER_PROVIDER_MODEL_PRIORITIES[resolve_driver_provider()]
+
 
 def _enum_value(value: Any) -> Any:
     return getattr(value, "value", value)
@@ -146,7 +166,7 @@ def resolve_available_models(raw_models: Optional[str]) -> List[str]:
     requested = []
     if raw_models:
         requested = [item.strip() for item in raw_models.split(",") if item.strip()]
-    order = requested or DEFAULT_MODEL_PRIORITY
+    order = requested or default_model_priority()
 
     available: List[str] = []
     for model_key in order:

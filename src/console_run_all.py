@@ -39,7 +39,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the full console product flow.")
     parser.add_argument("--date", help="Analysis date in YYYY-MM-DD format.")
     parser.add_argument("--data-json", help="Use an existing collector output JSON.")
-    parser.add_argument("--models", default="deepseek-v4-flash,deepseek-v4-pro")
+    # 默认不传名单，交给 main.resolve_available_models 按供应商预设解析
+    # （NDX_DRIVER_PROVIDER 可切全链 GLM；显式 --models 始终最优先）。
+    parser.add_argument("--models", default=None)
     parser.add_argument(
         "--model-mode",
         choices=["default", "all_flash"],

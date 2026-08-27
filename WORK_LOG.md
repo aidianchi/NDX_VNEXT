@@ -6,6 +6,23 @@
 
 ---
 
+## 2026-08-27
+
+### 全链智谱 GLM 供应商选项（老板当场提的需求：默认 DeepSeek 不动、dsh 不动、"其他都不要混"）
+
+- **需求**：增加智谱 GLM 作为可选的全链驱动模型（全部走 glm-5.3-flash 一个档），唯一例外是 dsh 二档调查员继续走 DeepSeek；不得侵害现有稳定 DeepSeek 选项。老板凭证 = bigmodel.cn 标准 API key；入口选择 = 控制台按钮 + 环境变量双门。
+- **施工面（五个文件 + 一个测试文件）**：
+  - 注册插座：`src/api_config.py` DEFAULT_API_CONFIG 新增 zhipu 服务块（openai_compatible，`https://open.bigmodel.cn/api/paas/v4`，env `ZHIPU_API_KEY` / 别名 `ZHIPU_BASE_URL`），模型条目 `glm-5.3-flash`（max_tokens 65536 起步值）；镜像到 `config/api_config.example.json` 与 `src/config.py` 兜底注册表。deepseek 块逐字节未动。
+  - 引擎闸门：`llm_engine.py` 的 `use_json_output` 白名单从 `=="deepseek"` 扩为 `in ("deepseek","zhipu")`（两家都支持 response_format=json_object）；**strict 工具调用从推导式改为显式锁 deepseek 服务**——原式 `use_json_output and schema is not None` 在白名单扩大后会把 DeepSeek Beta 特有的 tools+strict 泄漏给 GLM（会被拒），属本次要堵的真隐患。reasoning_effort/thinking 本就按模型名前缀门控，GLM 天然不命中，补测试锚住。/beta 提升只在 deepseek 分支，未动。
+  - 切换开关：`src/main.py` 新增 `DRIVER_PROVIDER_MODEL_PRIORITIES = {"deepseek": [flash,pro], "zhipu": ["glm-5.3-flash"]}` + `NDX_DRIVER_PROVIDER` 环境变量（strip+lower 归一，未设/写错安全落回 deepseek）。**设计核心是"名单即边界"**：resolve 只会吐出预设整份名单，call_with_fallback 回退链只在名单内运转——不存在混挂或回落 DeepSeek 的暗道；显式 `--models` 永远最优先。`console_run_all.py --models` 默认值从硬编码改为 None 交主链按预设解析（环境变量在那条路也生效）。
+  - 控制台：`research_console.py` 高级设置模型选择区新增单选钮"全链 GLM（智谱 Flash；除 dsh 巡逻仍走 DeepSeek，失败不回落 DeepSeek）"，选中即以 `--models glm-5.3-flash` 启动；现有三个选项与默认勾选原样。
+  - `config/stage_model_routing.json` **一字未动**：GLM 名单下六站偏好交集恒空、自动按名单顺序执行（既有行为已核实）；O8/O9 老板裁决 notes 原样保留。
+- **dsh 边界的物证**：`event_research/runner.py` 锁死 `MODEL="deepseek-v4-flash"` 且走独立 deepseek_harness SDK，不经主链引擎；新测试加了 `test_dsh_runner_model_lock_untouched` 护栏断言防误改。
+- **验收**：新增 `tests/test_zhipu_runtime_config.py` 12 条全绿（注册表正确性、供应商切换与未知值兜底、名单不混断言、strict 泄漏守卫【zhipu 带 schema 也绝无 tools；对称锚：deepseek 带 schema 仍有 tools】、zhipu 客户端无 /beta 提升、GLM 调用绝不含 reasoning_effort/extra_body/tools/tool_choice）；全量 `.venv/bin/python -m pytest --cache-clear -q` **1466 通过零失败**（含 docs consistency）。
+- **未做与剩余风险**：①真实冒烟未做——`.env` 尚无 `ZHIPU_API_KEY`，钥匙填入后实调一条即可补验（验证点：标准 endpoint 接受度、模型 ID 拼写、json_object 参数）；②GLM max_tokens 65536 是起步值，若实测被拒改注册表一处即可；③不做 GLM pro 档（老板只挂 flash 的既有口径）。
+
+---
+
 ## 2026-08-26（08-27 晚续：三件拍板全部落实）
 
 ### T67/W7+W8 收尾施工（08-27 晚，老板三选全落定：推远程 / 批词表活化 / PC-27 退役）

@@ -101,6 +101,13 @@ _FALLBACK_MODEL_CONFIGS = {
         "model": "kimi-for-coding",
         "max_tokens": 32768,
     },
+    "glm-5.3-flash": {
+        "name": "GLM 5.3 Flash",
+        "client": "openai_compatible",
+        "service": "zhipu",
+        "model": "glm-5.3-flash",
+        "max_tokens": 65536,
+    },
 }
 
 try:

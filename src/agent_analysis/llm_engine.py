@@ -535,11 +535,14 @@ class LLMEngine:
                 return self._call_kimi_http(prompt, model_name, config["max_tokens"])
 
             if client_type == "openai_compatible" and service_name in self.clients:
-                use_json_output = service_name == "deepseek"
-                # 严格工具调用（DeepSeek Beta strict function calling）只在 deepseek 服务、
-                # 且调用方显式传入 schema 时启用；未传入时走原有 json_object 路径，逐字节
-                # 不变——这是本次试点唯一的分叉点，其余所有 stage 不受影响。
-                use_strict_tools = use_json_output and strict_tool_schema is not None
+                # json_object 表单锁：deepseek 与 zhipu 都支持 response_format=json_object，
+                # 共用这条路径保证 JSON 可靠性；其余 openai 兼容服务维持纯文本+extract_json。
+                use_json_output = service_name in ("deepseek", "zhipu")
+                # 严格工具调用（DeepSeek Beta strict function calling）是 DeepSeek 专属特性
+                # （/beta 端点 + tools 内 strict 标记），显式只认 deepseek 服务——绝不能随
+                # json 白名单扩大而泄漏给其他供应商（GLM 等不认这套会直接报错）。未传入
+                # schema 时走原有 json_object 路径，逐字节不变。
+                use_strict_tools = service_name == "deepseek" and strict_tool_schema is not None
                 # Use system message for constraints (higher authority than user message)
                 messages: List[Dict[str, Any]] = [
                     {"role": "system", "content": self._load_system_constraints()},
