@@ -22,10 +22,12 @@ import requests
 try:
     from .api_config import get_api_key, get_base_url, get_requests_proxies, is_service_enabled
     from .config import path_config
+    from .event_research.term_activation import load_keyword_overrides
     from .tools_L4 import get_m7_earnings_blackout_calendar
 except ImportError:
     from api_config import get_api_key, get_base_url, get_requests_proxies, is_service_enabled
     from config import path_config
+    from event_research.term_activation import load_keyword_overrides
     from tools_L4 import get_m7_earnings_blackout_calendar
 
 logger = logging.getLogger(__name__)
@@ -235,6 +237,22 @@ HIGH_RELEVANCE_BODY_FETCH_KEYWORDS = [
 M7_BODY_FETCH_TERMS = sorted(
     {term.lower() for aliases in M7_ENTITY_ALIASES.values() for term in aliases}
 )
+
+
+# T67/W7 词表活化：代码默认表是底座，老板圈选的增量词（keyword_table_overrides.json）
+# 合并进判定。load_keyword_overrides 自带 mtime 缓存，文件不存在=机制未启用、行为与
+# 历史完全一致。词表边界归老板：增量词的增删必走双账留痕（term_activation.py），
+# 代码内默认表的变更仍走 git——两条通道都有据可查。
+def _merged_pool_keywords() -> set:
+    return set(HIGH_RELEVANCE_KEYWORDS) | set(load_keyword_overrides()["pool"])
+
+
+def _merged_body_fetch_terms() -> set:
+    return (
+        set(HIGH_RELEVANCE_BODY_FETCH_KEYWORDS)
+        | set(M7_BODY_FETCH_TERMS)
+        | set(load_keyword_overrides()["body_fetch"])
+    )
 
 
 class _ReadableTextParser(HTMLParser):
@@ -1074,8 +1092,7 @@ class NewsEventLedgerBuilder:
         has_ai = bool(re.search(r"(?<![a-z])ai(?![a-z])", text))
         return (
             has_ai
-            or any(keyword in text for keyword in HIGH_RELEVANCE_BODY_FETCH_KEYWORDS)
-            or any(term in text for term in M7_BODY_FETCH_TERMS)
+            or any(term in text for term in _merged_body_fetch_terms())
         )
 
     def _fetch_article_body(self, title: str, url: str, *, social: bool = False) -> tuple[str, str]:
@@ -1101,7 +1118,7 @@ class NewsEventLedgerBuilder:
                     if not title:
                         continue
                     title_l = title.lower()
-                    confidence = "high" if any(keyword in title_l for keyword in HIGH_RELEVANCE_KEYWORDS) else "medium"
+                    confidence = "high" if any(keyword in title_l for keyword in _merged_pool_keywords()) else "medium"
                     url = item.get("url", "")
                     raw_text, body_status = self._fetch_article_body(title, url)
                     dedupe_id = _dedupe_id(source["source_id"], title, item.get("url", ""), item.get("published_at", ""))

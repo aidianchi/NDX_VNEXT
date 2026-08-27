@@ -621,7 +621,8 @@ class IntegratedSynthesisReportBuilder:
         # T58/O16：stance_echo 改代码装配（与下方 model_copy 的 schema_version/
         # judgment_object 同一模式）——模型答卷里的 stance_echo 一律摘除、不参与校验；
         # 旧"不等即整包打回"闸门同步撤除（该信号从未真实触发；模型的异议意图改由
-        # conflict_matrix/unexplained 通道表达，由常设检查 PC-27 看守）。
+        # conflict_matrix/unexplained 通道表达；原看守灯 PC-27 已于 2026-08-27 退役，
+        # 外部材料异议由 PC-28 抗诉通道承接）。
         if isinstance(data, dict):
             data.pop("stance_echo", None)
 

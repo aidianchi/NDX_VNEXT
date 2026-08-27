@@ -1180,58 +1180,11 @@ def _check_pc26(run_dir: Path) -> Dict[str, Any]:
     )
 
 
-def _check_pc27(run_dir: Path) -> Dict[str, Any]:
-    """O17（2026-08-19 老板裁决，当日收窄）。
-
-    口径更正（T67/W4，2026-08-26 体检发现）：O17 原意是"事件材料挑战数据判决才亮灯"，
-    但实现点的是 `challenged_by_data`——合约里该枚举的真实语义是"数据削弱了事件叙事"
-    （方向相反，见 contracts.py IntegratedConflictRow 与 integrated_adjudicator.md）。
-    即 PC-27 一直在看"数据削弱事件"（本是正常情形），老板要的"事件/核实事实挑战数据
-    判决"的异议通道，由 PC-28（data_verdict_objections）正式承接。PC-27 行为不动（已批
-    检查不擅改），仅更正语义说明；是否退役/改语义留老板裁决。
-    亮灯**不是系统故障**——需要人工阅读，不许静默流过。"""
-    check_name = "IA 矩阵 challenged_by_data 亮灯（O17；语义更正：=数据削弱事件叙事，异议转 PC-28）"
-    evidence = "integrated_synthesis_report.json:integrated_adjudication.conflict_matrix/unexplained"
-    report_path = run_dir / "integrated_synthesis_report.json"
-    if not report_path.is_file():
-        return _make_result(
-            "PC-27", check_name, True,
-            "跳过：缺失 artifact integrated_synthesis_report.json（IA 未跑）",
-            "integrated_synthesis_report.json",
-        )
-    try:
-        report = _load_json(report_path)
-    except Exception as exc:
-        return _make_result(
-            "PC-27", check_name, False,
-            f"check_error:{type(exc).__name__}:{exc}",
-            "integrated_synthesis_report.json",
-        )
-    adjudication = report.get("integrated_adjudication") if isinstance(report, dict) else None
-    if not isinstance(adjudication, dict):
-        return _make_result(
-            "PC-27", check_name, True,
-            "跳过：integrated_adjudication 为空（IA 未跑或降级未裁决）",
-            evidence,
-        )
-    if not adjudication.get("llm_adjudicated"):
-        return _make_result(
-            "PC-27", check_name, True,
-            "跳过：llm_adjudicated=false（降级拼装），异议通道不适用",
-            evidence,
-        )
-    challenged = [
-        row for row in adjudication.get("conflict_matrix") or []
-        if isinstance(row, dict) and str(row.get("relation") or "") == "challenged_by_data"
-    ]
-    if challenged:
-        return _make_result(
-            "PC-27", check_name, False,
-            "这不是系统故障，是 IA 记录了事件材料对数据判决的挑战，需要人工阅读："
-            f"challenged_by_data {len(challenged)} 行",
-            evidence,
-        )
-    return _make_result("PC-27", check_name, True, "IA 未记录对数据判决的挑战", evidence)
+# PC-27 已退役（2026-08-27 老板裁决）：O17 原意"事件挑战数据判决才亮灯"，但实现点在
+# `challenged_by_data`——合约里该枚举的真实语义是"数据削弱事件叙事"，方向装反、自
+# 08-19 落地起从未按原意生效；异议通道由 PC-28（data_verdict_objections 抗诉三条件，
+# T67/W4，104 个历史 run 离线校准零误亮）正确承接。编号 PC-27 永不复用。IA 合约不动：
+# conflict_matrix 里 challenged_by_data 行照常落盘，只是不再单独亮灯。
 
 
 def _check_pc28(run_dir: Path) -> Dict[str, Any]:
@@ -1311,6 +1264,56 @@ def _check_pc28(run_dir: Path) -> Dict[str, Any]:
 # 独设检查；此注释即"为何不能"的留档。
 
 
+# PC-29：词表活化三账一致（T67/W7，2026-08-27 老板批准 W7 整体——设计稿第 4 步
+# "机器闸门：词表变更落盘留痕，防静默增删"即本检查，批准依据随工单存档）。
+def _check_pc29(run_dir: Path) -> Dict[str, Any]:
+    """新闻增量词表的三本账互相说得通（overrides ↔ change_log ↔ term_candidates）。
+
+    只做形状校验与身份比对（总纲：闸门不判意思）：
+    - overrides 里每条生效词必须能在留痕账找到同词同用途的 adopt 记录——
+      静默手改 JSON 绕过圈选流程会被点名；
+    - 留痕账每条记录引用的 candidate_id 必须真实存在于候选账；
+    - 枚举值、时间戳等字段形状完整。
+    机制未启用（三本账全缺）→ 跳过通过，不打扰未启用者。
+    账本是全局账（output/state_ledger/），不在单次 run 目录内，故按仓库根相对路径读；
+    与 agenda.LEDGER_PATH、sync_patrol 各 DEFAULT_* 文件同一 cwd 假设。"""
+    from event_research.term_activation import (
+        KEYWORD_CHANGE_LOG_PATH,
+        KEYWORD_OVERRIDES_PATH,
+        TERM_CANDIDATES_LEDGER,
+        verify_keyword_ledgers,
+    )
+    check_name = "词表活化三账一致（T67/W7）"
+    evidence = "output/state_ledger/{keyword_table_overrides.json,keyword_change_log.jsonl,term_candidates.jsonl}"
+    try:
+        problems = verify_keyword_ledgers(
+            candidates_path=Path(TERM_CANDIDATES_LEDGER),
+            overrides_path=Path(KEYWORD_OVERRIDES_PATH),
+            change_log_path=Path(KEYWORD_CHANGE_LOG_PATH),
+        )
+    except Exception as exc:
+        return _make_result(
+            "PC-29", check_name, False,
+            f"check_error:{type(exc).__name__}:{exc}",
+            evidence,
+        )
+    if problems is None:
+        return _make_result(
+            "PC-29", check_name, True,
+            "跳过：机制未启用（三本词表账都不存在）",
+            evidence,
+        )
+    if problems:
+        return _make_result(
+            "PC-29", check_name, False,
+            f"词表账目对不上 {len(problems)} 处：" + "；".join(problems[:5]),
+            evidence,
+        )
+    return _make_result("PC-29", check_name, True, "词表三账一致", evidence)
+
+
+
+
 # --------------------------------------------------------------------------
 # 总入口
 # --------------------------------------------------------------------------
@@ -1332,13 +1335,13 @@ _CHECKS: List[Tuple[str, str, Any]] = [
     ("PC-24", "L3 持仓锚计数与滞后声明（C1）", _check_pc24),
     ("PC-25", "supplier_lookback 待验证仍撑主斜率（C2）", _check_pc25),
     ("PC-26", "yield gap 身份矛盾检测（C4）", _check_pc26),
-    ("PC-27", "IA 挑战数据判决亮灯（O17）", _check_pc27),
     ("PC-28", "抗诉通道亮灯：核实事实挑战数据判决（T67/W4）", _check_pc28),
+    ("PC-29", "词表活化三账一致（T67/W7）", _check_pc29),
 ]
 
 
 def run_checks_b(run_dir: Path) -> List[Dict[str, Any]]:
-    """对一次 run 的落盘产物执行 PC-11 ~ PC-28 只读检查。"""
+    """对一次 run 的落盘产物执行 B 包只读检查（PC-11~PC-26、PC-28；PC-27 已退役，编号永不复用）。"""
     results: List[Dict[str, Any]] = []
     for check_id, name, func in _CHECKS:
         try:

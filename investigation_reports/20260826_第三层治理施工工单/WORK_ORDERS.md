@@ -161,3 +161,46 @@
 2. **代码实况**：`orchestrator.py:312/541-559/1490-1547/1653`、`integrated_synthesis_report.py:186-191/218-231/220`、`vnext_reporter.py:2338/2388/2582`、`news_event_ledger.py:177-215/715-798`、`event_card_interpreter.md:6,9`、`main.py:819-837`。
 3. **真实 run 产物**：20260826_124855（底账 63 条拆解、Brief one_liner 缺席检索）、20260719_130534（旧 Brief 对照）、最近 6 run 底账统计（63-68 条，全文率 27-35%）。
 4. **对照基线**：TradingAgents（GitHub，2026-08-26 查证）——事件源为 Alpha Vantage + Yahoo 新闻（时间窗+符号定向）、Reddit/StockTwits 情绪、Polymarket 前瞻概率；无底账、无来源分级、无对账、无正文抓取。可借鉴点：Polymarket 预测市场隐含概率作为前瞻事件源（已记入 WORK_LOG，未立项，等老板）。
+
+---
+
+## W7 · 词表活化机制（2026-08-27 老板批准施工，本批）
+
+**批准依据**：老板 2026-08-27 拍板"批准施工（推荐）"，与⑦的'渠道清单'前置准备合批；设计稿 `W6c_词表活化设计稿.md` §3 四步（系统提名候选 → 候选落账 → 老板圈选 → 机器留痕）为蓝本。边界归老板（红线 5），不做全自动、不做语义召回。
+
+**施工内容**：
+1. 新模块 `src/event_research/term_activation.py`：
+   - `collect_term_candidates(run_dir)`：机械抽取 run_dir 下 `narrative_state.json` 的 absence_signals 与 `research_topics.json` 的 data_gaps（两来源已在产"够不着的新主题"），追加落账 `output/state_ledger/term_candidates.jsonl`；candidate_id = `tc_<sha1(规范化原句)前12>`，同 id 已在账即跳过（幂等）。失败不阻断主链。
+   - `load_keyword_overrides(path)`：读增量词表 `output/state_ledger/keyword_table_overrides.json`（use ∈ {pool, body_fetch}），带 mtime 缓存。
+   - `adopt_term / reject_term / remove_term`：原子写双账——overrides json + 留痕账 `output/state_ledger/keyword_change_log.jsonl`（谁、何时、加/删了什么词、源自哪条候选）。
+   - `verify_keyword_ledgers()`：三账一致性校验（overrides ↔ change_log ↔ candidates），供 PC-29 复用。形状+身份比对，不判意思。
+2. 消费端接线 `news_event_ledger.py`：正文抓取闸门 `_should_fetch_article_body` 与相关度打分 confidence 改用"代码默认表 ∪ overrides"合并表；M7 默认表仍由代码派生（机械字段不出答卷）。
+3. 收集挂钩（**实现偏差留档**）：设计初稿写挂 gap_bridge/sync_patrol 库内——实测发现库内默认写真实账本会让既有测试污染 `output/state_ledger/`；改为**编排层挂钩**：src/main.py 在 `run_sync_gap_patrol` 返回后统一收集（主 run_dir 抓 data_gaps、各巡逻子目录抓 absence_signals），小结进 run_summary 的 `term_candidates_harvest` 键。库函数保持纯净，既有测试零改动、零污染。
+4. 圈选入口：control_service 新增 GET `/term-candidates`、POST `/term-selection`（action: adopt/reject/remove）；research_console 新增词表区块（同 gap 面板交互模式，异步非等待型——圈完下次采集生效）。
+5. 闸门 PC-29（新增常设检查）：三账一致 + 形状完整；机制未启用（无 overrides 文件）→ 跳过通过。**新增常设检查的所有者批准已含在老板对 W7 的整体批准内（设计稿第 4 步"机器闸门：词表变更落盘留痕，防静默增删"），WORK_LOG 登记此依据。**
+
+**范围裁剪（特此留档）**：track_only 用途不做（无消费方的字段是摆设）；LLM 自动提名第一版不做（先纯机械搬句子，老板看着原句亲手填词）；语义向量召回不做（设计稿明确否决，采集层保持死板可审计）。**路径偏差**：设计稿写候选账落 `output/event_research/`，实际与既有四本台账同居 `output/state_ledger/`，按"最贴近现有架构"原则裁定。
+
+**验收**：新增单测全绿（收集幂等/合并生效/双账原子性/PC-29 三态/端点行为/console 区块渲染）；全量 pytest 绿 + docs consistency 绿；手动冒烟：伪造缺信号句子 → collect 落账 → 面板可见 → adopt 后 `_should_fetch_article_body("Robotaxi expansion..." )` 由 False 变 True。
+
+**认错条件**：若圈选入口与现有 console 版式冲突难以兼容，回退为独立轻量页（单独 HTML），不阻塞双账+闸门的落地。（实际未触发：面板已与现有版式兼容。）
+
+**验收记录（2026-08-27）**：✅ 全部达成——19 个新单测绿（test_term_activation.py）；沙盒冒烟六步：collect ok → 圈选前 robotaxi 拒抓(False) → adopt 留痕 → 圈选后放行(True) → PC-29 三账通过 → 未启用态跳过；端点与面板测试并入 test_control_service.py / test_research_console.py。
+
+## W8 · PC-27 退役（2026-08-27 老板拍板"现在退役"）
+
+**批准依据**：老板 2026-08-27 从三选项（等 run 观察 / 现在退役 / 改语义保留）中拍板"现在退役"。理由已存档于代码注释：O17 原意装反（challenged_by_data 实为"数据削弱事件叙事"），自 08-19 起从未按原意生效，异议通道由 PC-28 承接（104 个历史 run 离线校准零误亮）。
+
+**施工内容**：`_check_pc27` 移出 B 包清单并删除函数、原地留档案注释（编号永不复用）；5 个 PC-27 测试并为 1 个防复活断言；`integrated_synthesis_report.py` / `test_integrated_adjudication.py` 两处旧口径注释同步；《系统说明书.md》B 包行补退役注。
+
+**验收**：PC-27 不再出现在 run_checks_b 结果；相关测试绿；编号不再被任何新检查复用。**验收记录（2026-08-27）**：✅ 达成——B 包现为 PC-11~26+28+29；防复活断言 test_pc27_retired_not_in_b_pack 绿。
+
+## 完成状态（W7/W8 追加，2026-08-27 关单）
+
+| 项 | 内容 | 状态 |
+|---|---|---|
+| W7 | 词表活化机制 | ✅ 已完成（2026-08-27 老板批准当日施工，全链落地） |
+| W8 | PC-27 退役 | ✅ 已完成（2026-08-27 老板拍板当日退役） |
+| 附带 | 推远程 main（101 提交）+ 删已合并旧分支名 docs/consolidation、t67-layer3-governance | ✅ 已完成（老板拍板，备份单点风险解除） |
+| 后续 | 下次真实 run 顺带验收 W1/W4/W5/W6 四件；⑦ IA 接门脸另议（④渠道清单小工单可与词表运营合批看效果后开） | 待真实 run |
+

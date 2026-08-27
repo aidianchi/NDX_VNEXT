@@ -22,6 +22,7 @@ try:
     from .data_evidence import normalize_data_evidence
     from .event_narrative_ledger import write_event_narrative_ledger
     from .event_research.sync_patrol import run_sync_gap_patrol
+    from .event_research.term_activation import collect_term_candidates
     from .event_research.topic_composer import compose_topics
     from .expectation_ledger import write_expectation_ledger, write_expectation_ledger_failure
     from .integrated_synthesis_report import build_pure_data_report_manifest, write_integrated_synthesis_report
@@ -41,6 +42,7 @@ except ImportError:
     from data_evidence import normalize_data_evidence
     from event_narrative_ledger import write_event_narrative_ledger
     from event_research.sync_patrol import run_sync_gap_patrol
+    from event_research.term_activation import collect_term_candidates
     from event_research.topic_composer import compose_topics
     from expectation_ledger import write_expectation_ledger, write_expectation_ledger_failure
     from integrated_synthesis_report import build_pure_data_report_manifest, write_integrated_synthesis_report
@@ -834,6 +836,22 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - 同步巡逻挂了不许炸主链
         gap_patrol_result = {"status": "failed", "error": str(exc)[:200]}
 
+    # T67/W7 词表活化：把出题任务书的 data_gaps 与巡逻缺席信号里"系统够不着的
+    # 新主题"原句搬进候选账（output/state_ledger/term_candidates.jsonl），供老板在
+    # 控制台圈选入词表。边界归老板：这里只提名、不出决定；收集是旁路，挂了
+    # 不许炸主链。挂钩放编排层不放库内——库函数保持纯净，既有测试零污染。
+    try:
+        term_harvest = collect_term_candidates(Path(run_dir))
+        patrol_dirs = [
+            str(p.get("run_dir") or "")
+            for p in gap_patrol_result.get("patrols") or []
+            if isinstance(p, dict) and p.get("run_dir")
+        ]
+        for patrol_dir in patrol_dirs:
+            collect_term_candidates(Path(patrol_dir))
+    except Exception as exc:  # noqa: BLE001 - 词表候选收集挂了不许炸主链
+        term_harvest = {"status": "failed", "error": str(exc)[:200]}
+
     integrated_synthesis_report_path = write_integrated_synthesis_report(
         run_dir,
         pure_data_report=pure_data_report_payload,
@@ -892,6 +910,7 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
         "integrated_synthesis_report": integrated_synthesis_report_path,
         "research_topics": os.path.join(run_dir, "research_topics.json"),
         "gap_patrol": gap_patrol_result,
+        "term_candidates_harvest": term_harvest,
         "expectation_vs_realized": expectation_ledger_path,
         "final_stance": getattr(artifacts["final_adjudication"], "final_stance", ""),
         "approval_status": _enum_value(getattr(artifacts["final_adjudication"], "approval_status", "")),

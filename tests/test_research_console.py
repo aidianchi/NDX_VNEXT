@@ -101,3 +101,29 @@ def test_research_console_generates_simple_launcher(tmp_path: Path, monkeypatch)
     assert parsed["latestDataJsonMeta"]["name"] == "data_collected_v9_20260509.json"
     assert parsed["latestDataJsonMeta"]["data_date"] == "2026-05-09"
     assert parsed["latestDataJsonMeta"]["is_backtest"] is False
+
+
+def test_research_console_renders_term_panel(tmp_path: Path, monkeypatch):
+    """词表活化（T67/W7）：控制台渲染词表圈选面板、端点与交互脚本。"""
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+
+    import research_console
+
+    monkeypatch.setattr(research_console.path_config, "data_dir", str(data_dir))
+    monkeypatch.setattr(research_console.path_config, "logs_dir", str(logs_dir))
+    generator = ResearchConsoleGenerator(reports_dir=reports_dir)
+    output = Path(generator.run(output_path=tmp_path / "console.html"))
+    html = output.read_text(encoding="utf-8")
+
+    assert 'id="termPanel"' in html
+    assert "新闻词表：候选词圈选" in html
+    assert 'id="termList"' in html
+    assert "/term-candidates" in html
+    assert "/term-selection" in html
+    assert "refreshTermPanel" in html
+    assert "收编" in html and "驳回" in html

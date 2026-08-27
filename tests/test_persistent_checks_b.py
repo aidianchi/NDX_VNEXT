@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -806,76 +807,29 @@ def test_missing_artifact_reports_failed(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# PC-27：IA 挑战数据判决亮灯（O17，2026-08-19；当日收窄为只对 challenged_by_data 亮灯）
+# PC-27：已退役（2026-08-27 老板裁决）。原 O17 灯装反方向（challenged_by_data 实为
+# "数据削弱事件叙事"），异议通道由 PC-28 正确承接；编号永不复用。此节只留退役
+# 防复活断言，防止将来误把 PC-27 加回 B 包。
 # --------------------------------------------------------------------------
 
 def _ia_report(adjudication: Any) -> Dict[str, Any]:
     return {"schema_version": "integrated_synthesis_report_v1", "integrated_adjudication": adjudication}
 
 
-def test_pc27_skips_when_ia_report_missing(tmp_path: Path) -> None:
-    """IA 未跑（产物文件不存在）→ 跳过并说明，不亮灯。"""
-    result = _find(run_checks_b(tmp_path), "PC-27")
-    assert result["passed"] is True
-    assert "跳过" in result["detail"]
-    assert "integrated_synthesis_report.json" in result["detail"]
-
-
-def test_pc27_skips_when_adjudication_degraded_or_absent(tmp_path: Path) -> None:
-    """降级拼装（llm_adjudicated=false）或 IA 未裁决（adjudication 为 null）→ 跳过。"""
-    _write_json(tmp_path / "integrated_synthesis_report.json", _ia_report(None))
-    result = _find(run_checks_b(tmp_path), "PC-27")
-    assert result["passed"] is True
-    assert "跳过" in result["detail"]
-
-    _write_json(tmp_path / "integrated_synthesis_report.json", _ia_report({
-        "llm_adjudicated": False, "conflict_matrix": [{"card_id": "x"}], "unexplained": ["y"],
-    }))
-    result = _find(run_checks_b(tmp_path), "PC-27")
-    assert result["passed"] is True
-    assert "llm_adjudicated=false" in result["detail"]
-
-
-def test_pc27_lights_up_only_on_challenged_by_data(tmp_path: Path) -> None:
-    """只有 challenged_by_data 行（事件材料挑战了数据判决）才亮灯；message 必须说清
-    这不是系统故障、需要人工阅读，并列出挑战行数。例行行（not_yet_testable 等）与
-    unexplained 不亮灯——它们常态非空，亮了就是狼来了（08-19 老板裁收窄）。"""
+def test_pc27_retired_not_in_b_pack(tmp_path: Path) -> None:
+    """PC-27 不应出现在 B 包结果里；即便 IA 记录了 challenged_by_data 行（数据削弱
+    事件叙事，正常情形）也不再触发任何 PC-27 亮灯——异议由 PC-28 独立判定。"""
     _write_json(tmp_path / "integrated_synthesis_report.json", _ia_report({
         "llm_adjudicated": True,
         "conflict_matrix": [
             {"card_id": "event_a", "relation": "not_yet_testable"},
-            {"card_id": "event_b", "relation": "confirmed_by_data"},
             {"card_id": "event_c", "relation": "challenged_by_data"},
         ],
-        "unexplained": ["盈利能否消化估值"],
+        "unexplained": [],
     }))
-    result = _find(run_checks_b(tmp_path), "PC-27")
-    assert result["passed"] is False
-    assert "不是系统故障" in result["detail"]
-    assert "需要人工阅读" in result["detail"]
-    assert "challenged_by_data 1 行" in result["detail"]
-
-
-def test_pc27_passes_on_routine_rows_and_unexplained(tmp_path: Path) -> None:
-    """例行 conflict_matrix 行 + 非空 unexplained → 通过（收窄口径：不视为挑战）。"""
-    _write_json(tmp_path / "integrated_synthesis_report.json", _ia_report({
-        "llm_adjudicated": True,
-        "conflict_matrix": [
-            {"card_id": "event_a", "relation": "not_yet_testable"},
-            {"card_id": "event_b", "relation": "confirmed_by_data"},
-        ],
-        "unexplained": ["盈利能否消化估值", "集中度高企的持续性"],
-    }))
-    result = _find(run_checks_b(tmp_path), "PC-27")
-    assert result["passed"] is True
-
-
-def test_pc27_passes_when_dissent_channels_empty(tmp_path: Path) -> None:
-    _write_json(tmp_path / "integrated_synthesis_report.json", _ia_report({
-        "llm_adjudicated": True, "conflict_matrix": [], "unexplained": [],
-    }))
-    result = _find(run_checks_b(tmp_path), "PC-27")
-    assert result["passed"] is True
+    results = run_checks_b(tmp_path)
+    assert all(r["check_id"] != "PC-27" for r in results)
+    assert any(r["check_id"] == "PC-28" for r in results)
 
 
 # --------------------------------------------------------------------------
@@ -932,3 +886,61 @@ def test_pc28_passes_when_no_objections(tmp_path: Path) -> None:
     ))
     result = _find(run_checks_b(tmp_path), "PC-28")
     assert result["passed"] is True
+
+
+# --------------------------------------------------------------------------
+# PC-29：词表活化三账一致（T67/W7）
+# --------------------------------------------------------------------------
+
+def test_pc29_passes_when_mechanism_disabled(tmp_path: Path) -> None:
+    """三本词表账全缺 = 机制未启用，跳过通过，不打扰。"""
+    with _pc29_cwd(tmp_path):
+        result = _find(run_checks_b(tmp_path), "PC-29")
+        assert result["passed"] is True
+        assert "未启用" in result["detail"]
+
+
+@contextmanager
+def _pc29_cwd(tmp_path: Path):
+    """PC-29 按仓库根相对路径读全局词表账（output/state_ledger/），测试切到 tmp。"""
+    old = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        yield
+    finally:
+        os.chdir(old)
+
+
+def test_pc29_catches_silent_override(tmp_path: Path) -> None:
+    """overrides 有词但没有 adopt 留痕 → 静默增删嫌疑，亮红。"""
+    with _pc29_cwd(tmp_path):
+        raw = '{"record_type":"candidate","candidate_id":"tc_a","status":"candidate"}\n'
+        target = tmp_path / "output/state_ledger/term_candidates.jsonl"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(raw, encoding="utf-8")
+        overrides_path = tmp_path / "output/state_ledger/keyword_table_overrides.json"
+        overrides_path.write_text(json.dumps({
+            "schema_version": "keyword_table_overrides_v1",
+            "terms": [{"term": "幽灵词", "use": "pool", "decided_by": "owner"}],
+        }, ensure_ascii=False), encoding="utf-8")
+        pc29s = [r for r in run_checks_b(tmp_path) if r["check_id"] == "PC-29"]
+        assert len(pc29s) == 1
+        assert pc29s[0]["passed"] is False
+        assert "静默增删嫌疑" in pc29s[0]["detail"]
+
+
+def test_pc29_passes_consistent_ledgers(tmp_path: Path) -> None:
+    from event_research.term_activation import adopt_term
+    with _pc29_cwd(tmp_path):
+        cand_raw = ('{"record_type":"candidate","candidate_id":"tc_b","raw_text":"某重组公告缺席",'
+                    '"source":"absence_signal","status":"candidate",'
+                    '"proposed_at_utc":"2026-08-27T00:00:00+00:00"}\n')
+        cand_path = tmp_path / "output/state_ledger/term_candidates.jsonl"
+        cand_path.parent.mkdir(parents=True, exist_ok=True)
+        cand_path.write_text(cand_raw, encoding="utf-8")
+        adopt_term("tc_b", "重组公告", "body_fetch",
+                   candidates_path=cand_path,
+                   overrides_path=tmp_path / "output/state_ledger/keyword_table_overrides.json",
+                   change_log_path=tmp_path / "output/state_ledger/keyword_change_log.jsonl")
+        pc29s = [r for r in run_checks_b(tmp_path) if r["check_id"] == "PC-29"]
+        assert pc29s[0]["passed"] is True

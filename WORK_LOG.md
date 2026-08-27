@@ -6,7 +6,20 @@
 
 ---
 
-## 2026-08-26
+## 2026-08-26（08-27 晚续：三件拍板全部落实）
+
+### T67/W7+W8 收尾施工（08-27 晚，老板三选全落定：推远程 / 批词表活化 / PC-27 退役）
+
+- **git 治理**：推远程落地——`origin/main 3c6baad..c46c782` 共 101 提交上 GitHub，"全项目唯一副本在本机"的单点风险解除；已合并旧分支名 `docs/consolidation`、`t67-layer3-governance` 删除（均停在 main 同一提交）。五月的 claude/*、codex/* 历史分支未越权处理。
+- **W8 PC-27 退役（✅）**：`_check_pc27` 移出 B 包、函数删除原地留档案注释（编号永不复用）；5 个 PC-27 测试并为 1 个防复活断言 `test_pc27_retired_not_in_b_pack`；`integrated_synthesis_report.py:624` 与 test_integrated_adjudication.py 两处"PC-27 看守"旧口径同步更正；说明书 B 包行补退役注。退役依据：challenged_by_data 方向装反从未按原意生效，PC-28 抗诉通道（104 run 校准零误亮）正式承接。
+- **W7 词表活化全链落地（✅）**：
+  - **新模块** `src/event_research/term_activation.py`：候选收集（机械抽取 narrative_state.absence_signals + research_topics.data_gaps 原句，append-only 账本 `output/state_ledger/term_candidates.jsonl`，sha1 规范化去重幂等）；增量词表读取（`keyword_table_overrides.json`，use ∈ {pool 打分, body_fetch 抓正文}，mtime 缓存）；圈选双账原子写（adopt/reject/remove 同步更新 overrides + 留痕账 `keyword_change_log.jsonl` + 候选翻面）；三账校验 `verify_keyword_ledgers()`（形状+身份比对，不判意思）。
+  - **消费端**：news_event_ledger 正文抓取闸门与相关度打分改用"代码默认表 ∪ overrides"合并；无 overrides 时行为与历史逐位一致（171 个既有测试零改动全绿实证）。
+  - **圈选入口**：control_service GET `/term-candidates` + POST `/term-selection`（adopt/reject/remove）；research_console 新增词表面板（复用 gap 面板交互，**异步非等待型**——随时圈、下次采集生效；页内直接显示生效增量词表与三账红灯）。
+  - **闸门 PC-29**：词表三账一致挂进 B 包（B 包现为 PC-11~26+28+29）。批准依据=W7 整体批含设计稿第 4 步机器闸门。静默手改 overrides JSON 会被点名"静默增删嫌疑"。
+  - **两个实现偏差（工单已留档）**：①候选账路径设计稿写 event_research/，实际随既有台账同居 state_ledger/；②收集挂钩从库内（gap_bridge/sync_patrol 尾部）改为编排层 main.py——库内默认写真实账本会让既有测试污染 output/state_ledger，编排层挂钩让库函数纯净、既有测试零改动。挂钩小结进 run_summary 的 term_candidates_harvest 键，失败不炸主链。
+  - **范围裁剪（第一版不做）**：track_only 用途（无消费方的字段是摆设）、LLM 自动提名（先纯机械搬句子）、语义召回（设计稿否决）。
+- **验收**：新增 test_term_activation.py 19 测 + 端点/console/PC-29 追加测试全绿；沙盒端到端冒烟六步过（collect→圈前拒抓→adopt 留痕→圈后放行→PC-29 绿→未启用态跳过）；docs consistency 11 绿；全量见本日收口行。
 
 ### T67 合并到 main + 收尾交接（08-27 下午，老板拍板合并）
 

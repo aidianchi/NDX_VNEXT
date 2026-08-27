@@ -19,10 +19,32 @@ from urllib.parse import parse_qs, quote, urlparse
 
 try:
     from .config import path_config
+    from .event_research.term_activation import (
+        KEYWORD_CHANGE_LOG_PATH,
+        KEYWORD_OVERRIDES_PATH,
+        TERM_CANDIDATES_LEDGER,
+        adopt_term,
+        load_candidates,
+        load_keyword_overrides,
+        reject_term,
+        remove_term,
+        verify_keyword_ledgers,
+    )
     from .manual_data import get_manual_data_local_path, load_manual_data, save_manual_data
     from .research_console import ResearchConsoleGenerator
 except ImportError:
     from config import path_config
+    from event_research.term_activation import (
+        KEYWORD_CHANGE_LOG_PATH,
+        KEYWORD_OVERRIDES_PATH,
+        TERM_CANDIDATES_LEDGER,
+        adopt_term,
+        load_candidates,
+        load_keyword_overrides,
+        reject_term,
+        remove_term,
+        verify_keyword_ledgers,
+    )
     from manual_data import get_manual_data_local_path, load_manual_data, save_manual_data
     from research_console import ResearchConsoleGenerator
 
@@ -529,6 +551,33 @@ class ControlServiceHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 _json_response(self, 500, {"ok": False, "message": str(exc)})
             return
+        if parsed.path == "/term-candidates":
+            # 词表活化（T67/W7）：候选原句清单 + 当前生效的圈选增量词表。
+            # 异步面板：不是 run 暂停等待型——老板随时圈，下一次采集生效；
+            # 顺手带上三账体检结果，账目有问题老板在页面上直接看得见红灯。
+            try:
+                root = _repo_root()
+                pending = [
+                    c for c in load_candidates(root / TERM_CANDIDATES_LEDGER)
+                    if str(c.get("status")) == "candidate"
+                ]
+                overrides = load_keyword_overrides(root / KEYWORD_OVERRIDES_PATH)
+                problems = verify_keyword_ledgers(
+                    candidates_path=root / TERM_CANDIDATES_LEDGER,
+                    overrides_path=root / KEYWORD_OVERRIDES_PATH,
+                    change_log_path=root / KEYWORD_CHANGE_LOG_PATH,
+                )
+                response = {
+                    "ok": True,
+                    "pending": bool(pending),
+                    "candidates": pending,
+                    "overrides": overrides,
+                    "ledger_problems": problems or [],
+                }
+                _json_response(self, 200, response)
+            except Exception as exc:
+                _json_response(self, 500, {"ok": False, "message": str(exc)})
+            return
         if parsed.path.startswith("/status/"):
             job_id = parsed.path.rsplit("/", 1)[-1]
             try:
@@ -570,6 +619,47 @@ class ControlServiceHandler(BaseHTTPRequestHandler):
                     encoding="utf-8",
                 )
                 _json_response(self, 200, {"ok": True, "selected": selected})
+            except Exception as exc:
+                _json_response(self, 400, {"ok": False, "message": str(exc)})
+            return
+        if parsed.path == "/term-selection":
+            # 词表活化（T67/W7）：老板圈选——收编 / 驳回候选词、移除生效词。
+            # 每次操作由 term_activation 原子写双账留痕，边界归老板，这里不做任何自动判断。
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8")
+            try:
+                payload = json.loads(raw or "{}")
+                action = str(payload.get("action") or "")
+                root = _repo_root()
+                candidates_path = root / TERM_CANDIDATES_LEDGER
+                overrides_path = root / KEYWORD_OVERRIDES_PATH
+                change_log_path = root / KEYWORD_CHANGE_LOG_PATH
+                if action == "adopt":
+                    change = adopt_term(
+                        str(payload.get("candidate_id") or ""),
+                        str(payload.get("term") or ""),
+                        str(payload.get("use") or ""),
+                        candidates_path=candidates_path,
+                        overrides_path=overrides_path,
+                        change_log_path=change_log_path,
+                    )
+                elif action == "reject":
+                    change = reject_term(
+                        str(payload.get("candidate_id") or ""),
+                        note=str(payload.get("note") or ""),
+                        candidates_path=candidates_path,
+                        change_log_path=change_log_path,
+                    )
+                elif action == "remove":
+                    change = remove_term(
+                        str(payload.get("term") or ""),
+                        str(payload.get("use") or ""),
+                        overrides_path=overrides_path,
+                        change_log_path=change_log_path,
+                    )
+                else:
+                    raise ValueError(f"action 必须是 adopt/reject/remove，收到 {action!r}")
+                _json_response(self, 200, {"ok": True, "change": change})
             except Exception as exc:
                 _json_response(self, 400, {"ok": False, "message": str(exc)})
             return

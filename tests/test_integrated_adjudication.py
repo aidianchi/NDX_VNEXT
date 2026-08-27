@@ -293,7 +293,7 @@ def test_stance_echo_assembled_by_code_not_model():
     """T58/O16：stance_echo 改代码装配——模型即使自报偏离的姿态（旧机制的"改判
     意图信号"，实测从未真实触发），也不再触发整包打回；产物里的 stance_echo
     恒等于输入 payload 的 final_stance。异议意图由 conflict_matrix/unexplained
-    通道表达，PC-27 常设检查看守。"""
+    通道表达（原看守灯 PC-27 已退役，外部材料异议归 PC-28 承接）。"""
     payload, calls = _build(_valid_response(stance_echo="其实应该看多"))
     adj = payload["integrated_adjudication"]
     assert adj is not None

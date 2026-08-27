@@ -237,6 +237,20 @@ class ResearchConsoleGenerator:
       <p class="small-note" id="gapStatus"></p>
     </section>
 
+    <section class="panel gap-panel" id="termPanel" hidden aria-label="新闻词表圈选">
+      <div class="panel-head">
+        <h2>新闻词表：候选词圈选</h2>
+        <p>巡逻与出题官发现"系统够不着的新主题"时，会把原句记进下面的候选账（词表活化机制）。你决定哪些词收进哪张表：<strong>抓正文</strong>让含该词的新闻去抓全文，<strong>相关性打分</strong>让含该词的标题升为高相关。提交后下一次采集生效；不圈的原句永远留在账上，不会复活。加错的词可以删，删除同样留痕。</p>
+      </div>
+      <p class="small-note" id="termLedgerProblems" hidden></p>
+      <div class="gap-list term-list" id="termList"></div>
+      <p class="small-note" id="termStatus"></p>
+      <details class="term-current">
+        <summary>当前生效的增量词表（老板圈选部分；代码默认表见 news_event_ledger.py）</summary>
+        <div id="termCurrent"></div>
+      </details>
+    </section>
+
     <details class="advanced-panel">
       <summary>高级设置</summary>
       <div class="advanced-grid">
@@ -515,6 +529,30 @@ input:focus, textarea:focus {
   font-weight: 700;
   white-space: nowrap;
 }
+.term-row { padding: 12px 2px; border-bottom: 1px solid var(--rule); }
+.term-meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.term-actions { display: flex; gap: 8px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+.term-input {
+  flex: 1;
+  min-width: 150px;
+  padding: 5px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+.term-use { padding: 5px; border: 1px solid var(--rule); border-radius: 4px; background: #fff; }
+.term-current { margin-top: 14px; }
+.term-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #efe9d8;
+  color: var(--watch);
+  border-radius: 4px;
+  padding: 3px 8px;
+  margin: 6px 6px 0 0;
+  font-size: 13px;
+}
+.term-remove { border: none; background: none; color: var(--watch); cursor: pointer; font-weight: 700; padding: 0 2px; }
 .run-now-button {
   width: 100%;
   margin-top: 16px;
@@ -1189,6 +1227,113 @@ document.getElementById('gapSkip').addEventListener('click', () => submitGapSele
 
 pollGapCandidates();
 window.setInterval(pollGapCandidates, 5000);
+
+// ---------------------------------------------------------------------------
+// 词表活化（T67/W7）：候选原句圈选——异步面板，不是 run 等待型；
+// 老板随时收编/驳回，下一次采集生效。生效增量词可查看、可移除。
+// ---------------------------------------------------------------------------
+const termPanel = document.getElementById('termPanel');
+const termList = document.getElementById('termList');
+const termStatus = document.getElementById('termStatus');
+const termLedgerProblems = document.getElementById('termLedgerProblems');
+const TERM_SOURCE_LABEL = {
+  absence_signal: '巡逻缺席信号',
+  topic_data_gap: '出题官缺口',
+};
+let termAdopting = false;
+
+function renderTermCurrent(overrides) {
+  const rows = [];
+  [['pool', '打分'], ['body_fetch', '抓正文']].forEach(([use, label]) => {
+    (overrides[use] || []).forEach(t => rows.push(
+      '<span class="term-chip">' + escapeHtml(label) + '：' + escapeHtml(t)
+      + '<button type="button" class="term-remove" data-term="' + escapeHtml(t) + '" data-use="' + use
+      + '" title="移除该词">×</button></span>'
+    ));
+  });
+  document.getElementById('termCurrent').innerHTML = rows.length
+    ? rows.join('')
+    : '还没有圈选的增量词——采集行为完全走代码默认表。';
+}
+
+async function refreshTermPanel() {
+  try {
+    const response = await fetch(`${controlOrigin}/term-candidates`);
+    const result = await response.json();
+    if (!response.ok || !result.ok) return;
+    if (result.ledger_problems && result.ledger_problems.length) {
+      termLedgerProblems.hidden = false;
+      termLedgerProblems.textContent = '词表账目异常：' + result.ledger_problems.join('；');
+    } else {
+      termLedgerProblems.hidden = true;
+    }
+    renderTermCurrent(result.overrides || {});
+    if (!result.pending) {
+      termPanel.hidden = true;
+      return;
+    }
+    if (termAdopting && !termPanel.hidden) return;  // 提交进行中不重绘输入框
+    const candidates = result.candidates || [];
+    termList.innerHTML = candidates.map(c => (
+      '<div class="term-row" data-cid="' + escapeHtml(c.candidate_id) + '">'
+      + '<div class="gap-title">' + escapeHtml(c.raw_text) + '</div>'
+      + '<div class="term-meta">'
+      + escapeHtml(TERM_SOURCE_LABEL[c.source] || c.source || '')
+      + (c.proposed_at_utc ? ' · ' + escapeHtml(String(c.proposed_at_utc).slice(0, 16).replace('T', ' ')) : '')
+      + '</div>'
+      + '<div class="term-actions">'
+      + '<input class="term-input" placeholder="填词（如 robotaxi；小写英文效果最稳）">'
+      + '<select class="term-use"><option value="body_fetch">抓正文</option><option value="pool">相关性打分</option></select>'
+      + '<button type="button" class="run-now-button term-adopt">收编</button>'
+      + '<button type="button" class="secondary-button term-reject">驳回</button>'
+      + '</div></div>'
+    )).join('');
+    termStatus.textContent = `共 ${candidates.length} 条候选等待拍板；驳回的原句永不复活。`;
+    termPanel.hidden = false;
+  } catch (error) {
+    // 静态打开或服务未启动时静默。
+  }
+}
+
+async function postTermSelection(body) {
+  try {
+    const response = await fetch(`${controlOrigin}/term-selection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.message || `HTTP ${response.status}`);
+    termStatus.textContent = '已提交，词表变更已留痕，下一次采集生效。';
+    refreshTermPanel();
+  } catch (error) {
+    termStatus.textContent = `提交失败：${error.message || error}`;
+  }
+}
+
+termList.addEventListener('click', e => {
+  const row = e.target.closest('.term-row');
+  if (!row) return;
+  const cid = row.dataset.cid;
+  if (e.target.classList.contains('term-adopt')) {
+    const term = row.querySelector('.term-input').value.trim();
+    if (!term) { termStatus.textContent = '先在输入框填好要收编的词。'; return; }
+    termAdopting = true;
+    postTermSelection({ action: 'adopt', candidate_id: cid, term, use: row.querySelector('.term-use').value })
+      .finally(() => { termAdopting = false; });
+  } else if (e.target.classList.contains('term-reject')) {
+    postTermSelection({ action: 'reject', candidate_id: cid });
+  }
+});
+
+document.getElementById('termCurrent').addEventListener('click', e => {
+  const button = e.target.closest('.term-remove');
+  if (!button) return;
+  postTermSelection({ action: 'remove', term: button.dataset.term, use: button.dataset.use });
+});
+
+refreshTermPanel();
+window.setInterval(refreshTermPanel, 30000);
 """
 
 

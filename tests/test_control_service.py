@@ -227,3 +227,82 @@ def test_resumable_candidates_list_incomplete_runs_and_verify_snapshot(tmp_path)
     assert "final_adjudication.json" in by_id["broken_run"]["missing_artifacts"]
     assert by_id["broken_run"]["console_command"].startswith("python3 src/console_run_all.py --resume-run-dir")
     assert by_id["stale_snapshot_run"]["data_snapshot_intact"] is False
+
+
+def test_term_selection_endpoints(tmp_path, monkeypatch):
+    """词表活化（T67/W7）：GET /term-candidates 读候选账与生效词表；
+    POST /term-selection 收编落双账、非法 action 400、幽灵 candidate 400。"""
+    import json
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    import control_service
+
+    monkeypatch.setattr(control_service, "_repo_root", lambda: tmp_path)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), control_service.ControlServiceHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        def _get(path):
+            with urllib.request.urlopen(base + path) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+
+        def _post(path, payload):
+            req = urllib.request.Request(
+                base + path,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req) as resp:
+                    return resp.status, json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                return exc.code, json.loads(exc.read().decode("utf-8"))
+
+        # 无候选 → pending False，无红灯
+        empty = _get("/term-candidates")
+        assert empty["pending"] is False
+        assert empty["ledger_problems"] == []
+
+        from event_research.term_activation import collect_term_candidates
+        run_dir = tmp_path / "run_x"
+        run_dir.mkdir()
+        (run_dir / "narrative_state.json").write_text(
+            json.dumps({"absence_signals": ["某公司重组公告缺席"]}, ensure_ascii=False), encoding="utf-8")
+        collect_term_candidates(run_dir, ledger_path=tmp_path / "output/state_ledger/term_candidates.jsonl")
+
+        got = _get("/term-candidates")
+        assert got["pending"] is True
+        candidate = got["candidates"][0]
+        assert candidate["raw_text"] == "某公司重组公告缺席"
+
+        cid = candidate["candidate_id"]
+        status, body = _post("/term-selection", {
+            "action": "adopt", "candidate_id": cid, "term": "重组公告", "use": "body_fetch"})
+        assert status == 200
+        assert body["change"]["action"] == "adopt"
+
+        overrides = (tmp_path / "output/state_ledger/keyword_table_overrides.json").read_text(encoding="utf-8")
+        assert "重组公告" in overrides
+        change_log = (tmp_path / "output/state_ledger/keyword_change_log.jsonl").read_text(encoding="utf-8")
+        assert "adopt" in change_log
+
+        # 圈选完成后候选不再 pending；生效词表出现在 GET 里
+        after = _get("/term-candidates")
+        assert after["pending"] is False
+        assert after["overrides"]["body_fetch"] == ["重组公告"]
+
+        # 非法 action → 400；幽灵 candidate → 400
+        assert _post("/term-selection", {"action": "bless"})[0] == 400
+        assert _post("/term-selection", {"action": "adopt", "candidate_id": "tc_ghost",
+                                         "term": "x", "use": "pool"})[0] == 400
+
+        # remove 有留痕地撤销
+        status, body = _post("/term-selection", {"action": "remove", "term": "重组公告", "use": "body_fetch"})
+        assert status == 200 and body["change"]["removed_existed"] is True
+        assert _get("/term-candidates")["overrides"]["body_fetch"] == []
+    finally:
+        server.shutdown()
+        server.server_close()
