@@ -32,13 +32,27 @@
 - **新增未跟踪**：`investigation_reports/20260828_run_performance/`（交接文档 + 01 方案 + 本工单，随批提交）；`.zcode/` 是会话工作目录，**不入库**。
 - **测试基线**：全量 1476 passed + 文档闸门 11 passed（2026-08-28）；提交前重跑确认环境无漂移。
 
-### W3 并行改造（未开工）
+### W3 并行改造（代码完成 2026-08-30，待真实 run 验收）
 
-照 `01_并行改造方案_技术版.md` 方案 A：`orchestrator.py:995`（五层 for）、`:1634`（事件卡 for，行号按 08-28 现状）换 ThreadPoolExecutor，默认并发 3、`NDX_STAGE_PARALLELISM` 可调；manifest 加锁、checkpoint 按站独立、日志带 stage 前缀。四步验证：mock 单测（含 resume 零 LLM 调用红灯）→ GLM 冒烟看 429 → 同 snapshot 串行对照跑（目标省 ≥40 分钟）→ 灰度并发 3。
+照 `01_并行改造方案_技术版.md` 方案 A 已施工：`orchestrator.py` 五层循环（`_run_layer_cards`）与事件卡循环（`_build_event_interpretation_cards`）换 ThreadPoolExecutor，默认并发 3、`NDX_STAGE_PARALLELISM` 可调（≤1 退化串行）；manifest 与 llm_stage_diagnostics 两条 read-modify-write 写盘路径各加一把锁（`_manifest_lock`/`_diagnostics_lock`）；checkpoint 按站独立文件天然无冲突。四步验证进度：①mock 单测 6 条全绿（含 resume 零 LLM 调用红灯、manifest 锁竞态 50 次双线程）✅；②GLM 冒烟 ✅（2026-08-30 实测：并发 3×3 轮 9 调用全 200 零 429，单调用 2-7.5 秒；并发 5×2 轮 10 调用也零 429，但尾延迟升至 19.5 秒——服务端软性排队，故默认并发维持 3，5 留作灰度后升级档）→ ③同 snapshot 串行对照跑（目标省 ≥40 分钟）、④灰度并发 3——③④并入验收总闸的真实 run 一并做。全量 1482 项测试通过（基线 1476+新增 6）。
 
-### W4 Yahoo 抓取专项（未开工）
+### W4 Yahoo 抓取专项（✅ 排查完成 2026-08-30，修复方案待定）
 
 从 `event_source_raw.jsonl` 按来源统计正文率入手（20260827：84 条事件 21 条带正文，Yahoo M7 头条 0/8），顺抓取代码查"只有标题可抓"还是"有正文没抓"。验收：下轮真实 run 正文率抬升，T67/W6 转绿。
+
+**排查结论**（证据：run 目录 `news_event_ledger.json` 的 `article_body_status` 字段 + 2026-08-30 两次实测）：
+
+1. **不是源头只给标题，也不是我们没抓——是抓了被 Yahoo 反爬拦下**。那晚 Yahoo 16 条里 12 条状态是 `body_fetch_empty_or_unreadable`（抓了没读到）、3 条 `body_fetch_not_attempted`（关键词闸没放行）、1 条同题重复。
+2. 关键对照：带正文的 4 条全部是 RSS 里链接到**第三方站 247wallst.com** 的条目；凡是 `finance.yahoo.com` 自家链接全部无正文。说明抓取器和正文解析器本身没坏。
+3. 实测根因：用代码同款请求头抓 Yahoo 正文页返回 **HTTP 403 拦截页**（"sad panda" 反爬页，3.4KB）；换浏览器 UA 仍 403——不是 UA 问题，是更底层的客户端/IP 信誉拦截，`requests` 直取此路不通。
+4. 次要发现：`_should_fetch_article_body`（`src/news_event_ledger.py:1088`）有关键词闸——标题/URL 不含 "ai" 或指定词就不尝试抓正文（那晚 3 条因此未尝试）。这是相关性过滤设计，但见正文率目标可复议口径。
+5. 其余无正文条目大头是**设计如此**：24 条官方日历（bea/bls/fomc，本来就只有日程）、16 条 SEC  filings 索引（只有元数据，未抓 filing 正文）、7 条 Reddit（social 默认不抓正文）。
+
+**修复选项**（待老板拍板，均有先例/边界考量）：
+
+- A. **走浏览器 sidecar 抓 Yahoo 正文**：项目已有 `src/browser_sidecar.py`；但常驻边界"浏览器采集默认隔离观察、未升级不得成 evidence_ref"——Yahoo 已是白名单可靠主流源，换运输方式不换来源层级，需明确这不触发弱来源降级。
+- B. **接受 Yahoo 自家链接无正文**：RSS 里第三方链接能抓多少算多少；Yahoo 条目只当标题级催化剂。
+- C. **换源**：用可抓正文的同源新闻源替代 Yahoo RSS（涉及 T67/O6 数据源去留名单，等老板复核）。
 
 ### 配置项（不立项，跑前检查清单）
 
@@ -89,7 +103,7 @@
 
 ### 执行步骤
 
-1. **全量建账**：①代码闸门（contracts 各校验器、`_event_card_validation_errors` 各条、schema guard、persistent checks PC 系列、各站长度/窗口类）②提示词硬性条款（`src/agent_analysis/prompts/*.md` 的"必须/不得"）。每条登记：判的是哪类（机械事实/语义/形状代理语义）→ 历史 run 触发与误伤记录 → 处置。
+1. **全量建账**（✅ 2026-08-30 建成，总账在 `T69_闸门总账.md`：代码闸门约 80 条 + 提示词硬性条款约 270 条逐条登记，分类+处置提案齐全；运行时语义/形状代理语义拦截 10 条列为主靶，处置分 P0-P3 四批，待六原则点头后开工）：①代码闸门（contracts 各校验器、`_event_card_validation_errors` 各条、schema guard、persistent checks PC 系列、各站长度/窗口类）②提示词硬性条款（`src/agent_analysis/prompts/*.md` 的"必须/不得"）。每条登记：判的是哪类（机械事实/语义/形状代理语义）→ 历史 run 触发与误伤记录 → 处置。
 2. **处置阶梯**：能删则删 → 有代码装配替代则装配替代 → 降级事后审计 →（原则上不批）保留运行时拦截。机械事实类且历史零误伤的原样留任并记账。
 3. **与 T63 分工不变**：T63 抓摆设（该叫不叫），T69 抓越权（不该判的判了）。
 4. **已知嫌疑（建账优先过堂）**：

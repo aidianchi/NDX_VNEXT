@@ -6,6 +6,8 @@ import logging
 import os
 import re
 import hashlib
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type
@@ -606,9 +608,28 @@ class VNextOrchestrator:
         self.investigation_reports_dir.mkdir(exist_ok=True)
         self.prompt_audit_dir.mkdir(exist_ok=True)
         self.stage_diagnostics: Dict[str, Any] = {"schema_version": "vnext_llm_stage_diagnostics_v1", "stages": {}}
+        # T68-W3（08-27 真实 run 五层串行 28+32 分钟的整改，方案见
+        # investigation_reports/20260828_run_performance/01_并行改造方案_技术版.md 方案 A）：
+        # L1-L5 层卡与事件解读卡改为 ThreadPoolExecutor 并行后，stage_manifest 与
+        # llm_stage_diagnostics 两条 read-modify-write 整体写盘路径会被并行站同时写，
+        # 必丢更新/写出撕裂 JSON，故各配一把锁。锁必须在 _load_stage_manifest 之前建好。
+        self._manifest_lock = threading.Lock()
+        self._diagnostics_lock = threading.Lock()
         self.stage_manifest_path = self.output_dir / "stage_manifest.json"
         self.stage_manifest = self._load_stage_manifest()
         self.stage_model_routing = self._load_stage_model_routing()
+
+    @staticmethod
+    def _stage_parallelism() -> int:
+        """T68-W3 并行度：环境变量 `NDX_STAGE_PARALLELISM`（正整数）控制层卡/事件卡
+        线程池大小，未设或非法值回退默认 3。来历：08-27 run 串行 28+32 分钟的整改
+        （方案 A），并行不改变依赖链、契约与提示词，只压缩等待时间。"""
+        raw = os.environ.get("NDX_STAGE_PARALLELISM", "").strip()
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return 3
+        return value if value > 0 else 3
 
     def run(self, packet: AnalysisPacket | Dict[str, Any]) -> Dict[str, Any]:
         packet_model = packet if isinstance(packet, AnalysisPacket) else AnalysisPacket.model_validate(packet)
@@ -1088,8 +1109,9 @@ class VNextOrchestrator:
         }
 
     def _run_layer_cards(self, packet: AnalysisPacket, context_brief: ContextBrief) -> List[LayerCard]:
-        cards: List[LayerCard] = []
-        for layer in ["L1", "L2", "L3", "L4", "L5"]:
+        layers = ["L1", "L2", "L3", "L4", "L5"]
+
+        def _one(layer: str) -> LayerCard:
             layer_payload = self._build_layer_stage_payload(packet, context_brief, layer)
             self._save_json(self.layer_context_dir / f"{layer}.json", layer_payload["context_brief"])
             checkpoint = self._load_stage_checkpoint(
@@ -1100,8 +1122,7 @@ class VNextOrchestrator:
                 expected_payload=layer_payload,
             )
             if checkpoint is not None:
-                cards.append(checkpoint)
-                continue
+                return checkpoint
             card = self._run_stage(
                 stage_key=f"{layer.lower()}_analyst",
                 stage_name=layer.lower(),
@@ -1115,7 +1136,6 @@ class VNextOrchestrator:
             )
             if str(card.layer) != layer and getattr(card.layer, "value", None) != layer:
                 raise ValueError(f"{layer} analyst returned mismatched layer: {card.layer}")
-            cards.append(card)
             # B7：落盘层卡片同样补 percentile_scale 声明（PC-13 扫 payload 与卡片两处）。
             self._save_json(
                 self.layer_cards_dir / f"{layer}.json",
@@ -1127,7 +1147,15 @@ class VNextOrchestrator:
                 stage_name=layer.lower(),
                 payload=layer_payload,
             )
-        return cards
+            return card
+
+        # T68-W3：五层之间按层间隔离原则无运行时依赖，可并行；pool.map 保序返回。
+        # 并发度 <=1 时退化为原串行路径，避免线程开销、便于调试。
+        workers = min(self._stage_parallelism(), len(layers))
+        if workers <= 1:
+            return [_one(layer) for layer in layers]
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return list(pool.map(_one, layers))
 
     def _build_layer_stage_payload(
         self,
@@ -1733,7 +1761,8 @@ class VNextOrchestrator:
         allowed_hypothesis_ids = {str(item["hypothesis_id"]) for item in hypotheses}
         cards: List[EventInterpretationCard] = []
         failures: List[Dict[str, Any]] = []
-        for event in selected:
+
+        def _one(event: Dict[str, Any]) -> Tuple[str, Any]:
             event_id = str(event.get("event_id") or "")
             stage_token = re.sub(r"[^A-Za-z0-9_.-]+", "_", event_id).strip("_") or "event"
             payload = {
@@ -1776,9 +1805,8 @@ class VNextOrchestrator:
                     ),
                 )
             except Exception as exc:
-                failures.append({"event_id": event_id, "error": f"{type(exc).__name__}: {str(exc)[:600]}"})
                 logger.warning("Event interpretation card failed for %s: %s", event_id, exc)
-                continue
+                return ("failure", {"event_id": event_id, "error": f"{type(exc).__name__}: {str(exc)[:600]}"})
             passport = EventInterpretationPassport(
                 source=str(event.get("source_name") or "unknown source"),
                 tier=str(event.get("source_tier") or "unknown"),
@@ -1797,15 +1825,29 @@ class VNextOrchestrator:
                     "passport": passport,
                 }
             )
-            cards.append(finalized_card)
             # T49 第二件：落盘副本带上源材料的正文摘录（逐字注入，非模型输出）；
             # 内存/模型对象保持契约纯净（EventInterpretationCard extra="forbid"）。
             card_dict = _model_dump(finalized_card)
             _inject_evidence_fields(card_dict, event)
+            # T68-W3：落盘留在 worker 内——每张卡独立文件，并行写无冲突。
             self._save_json(
                 self.output_dir / "event_interpretation_cards" / f"{stage_token}.json",
                 card_dict,
             )
+            return ("ok", finalized_card)
+
+        # T68-W3：事件卡彼此无依赖，可并行；pool.map 保序，主线程按 selected 顺序装配。
+        workers = min(self._stage_parallelism(), len(selected)) if selected else 1
+        if workers <= 1:
+            results = [_one(event) for event in selected]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                results = list(pool.map(_one, selected))
+        for status, value in results:
+            if status == "ok":
+                cards.append(value)
+            else:
+                failures.append(value)
 
         events_by_id = {str(event.get("event_id") or ""): event for event in selected}
         section_summary, summary_failure = self._build_event_section_summary(
@@ -5848,7 +5890,10 @@ class VNextOrchestrator:
                 "attempts": [],
             },
         }
-        self.stage_diagnostics["stages"][stage_name] = stage_record
+        # T68-W3：新增 stage 键会改变 stages 字典尺寸，须与并行站的整份 dump 互斥，
+        # 否则 json.dumps 迭代途中字典变尺寸直接抛 RuntimeError。
+        with self._diagnostics_lock:
+            self.stage_diagnostics["stages"][stage_name] = stage_record
         self._save_stage_diagnostics()
         for attempt in range(1, self.max_node_retries + 1):
             stage_record["attempts"] = attempt
@@ -6222,8 +6267,11 @@ class VNextOrchestrator:
         }.get(stage_name, "")
 
     def _save_stage_diagnostics(self) -> None:
-        path = self.output_dir / "llm_stage_diagnostics.json"
-        path.write_text(json.dumps(self.stage_diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
+        # T68-W3：整份 diagnostics 一次性 json.dumps 写盘，并行站同时写会相互覆盖/
+        # 撕裂，写盘须串行化（`_record_stage_artifact` 内部另有 manifest 锁）。
+        with self._diagnostics_lock:
+            path = self.output_dir / "llm_stage_diagnostics.json"
+            path.write_text(json.dumps(self.stage_diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
         self._record_stage_artifact(path)
 
     # Field keys that carry evidence_ref-style citations inside reviser JSON output;
@@ -8099,51 +8147,55 @@ class VNextOrchestrator:
         payload: Optional[Dict[str, Any]] = None,
         checkpoint_reusable: Optional[bool] = None,
     ) -> None:
-        """登记产物指纹。`checkpoint_reusable=False` 用于显式拒绝复用降级产物。"""
-        if path.resolve() == self.stage_manifest_path.resolve() or not path.exists():
-            return
-        relpath = self._artifact_relpath(path)
-        previous = self.stage_manifest.get("artifacts", {}).get(relpath, {})
-        input_sha256 = self._current_input_sha256()
-        item = {
-            "stage": self._manifest_stage_for_path(relpath),
-            "path": relpath,
-            "sha256": self._sha256_file(path),
-            "input_sha256": input_sha256,
-            "bytes": path.stat().st_size,
-            "status": "complete",
-            "checkpoint_reusable": relpath.endswith(".json")
-            and not relpath.startswith("prompt_audit/")
-            and relpath != "run_review_report.json"
-            and relpath != "outcome_review_report.json"
-            and relpath != "post_run_reflection_library.json",
-            "updated_at": _utc_now().isoformat(),
-            "effective_date": self._infer_effective_date_from_prompt_audit(""),
-        }
-        if stage_key:
-            item["stage_key"] = stage_key
-        if stage_name:
-            item["stage_name"] = stage_name
-        if checkpoint_reusable is not None:
-            item["checkpoint_reusable"] = bool(checkpoint_reusable)
-        if stage_key and payload is not None:
-            item["payload_sha256"] = self._stable_stage_payload_sha256(stage_key, payload)
-        # 续跑静默覆盖已验证产物是本项目踩过的真实坑（run 20260728_110702：首跑那批
-        # 竞争假说样本被续跑覆盖后无迹可寻）。这里不改变覆盖行为——重跑就该写新结果——
-        # 但必须留痕，让"我读到的那份还在不在"可被事后追查。
-        if self.resume_from_existing and previous.get("sha256"):
-            if previous["sha256"] != item["sha256"]:
-                item["overwritten_in_resume"] = {
-                    "previous_sha256": previous["sha256"],
-                    "previous_updated_at": previous.get("updated_at", ""),
-                }
-            elif previous.get("overwritten_in_resume"):
-                # 同一份产物常被登记两次：`_save_json` 先无 stage_key 记一次，调用方再带
-                # stage_key/payload 补记一次。第二次的 sha 与第一次相同，若不继承就会把
-                # 第一次留下的覆盖痕迹擦掉——留痕机制自己被覆盖，是最讽刺的失败方式。
-                item["overwritten_in_resume"] = previous["overwritten_in_resume"]
-        self.stage_manifest.setdefault("artifacts", {})[relpath] = item
-        self._write_stage_manifest()
+        """登记产物指纹。`checkpoint_reusable=False` 用于显式拒绝复用降级产物。
+
+        T68-W3：整条 read-modify-write（读 manifest → setdefault → 整体写盘）包进
+        `_manifest_lock`——层卡/事件卡并行后多站同时登记，不加锁必丢更新。"""
+        with self._manifest_lock:
+            if path.resolve() == self.stage_manifest_path.resolve() or not path.exists():
+                return
+            relpath = self._artifact_relpath(path)
+            previous = self.stage_manifest.get("artifacts", {}).get(relpath, {})
+            input_sha256 = self._current_input_sha256()
+            item = {
+                "stage": self._manifest_stage_for_path(relpath),
+                "path": relpath,
+                "sha256": self._sha256_file(path),
+                "input_sha256": input_sha256,
+                "bytes": path.stat().st_size,
+                "status": "complete",
+                "checkpoint_reusable": relpath.endswith(".json")
+                and not relpath.startswith("prompt_audit/")
+                and relpath != "run_review_report.json"
+                and relpath != "outcome_review_report.json"
+                and relpath != "post_run_reflection_library.json",
+                "updated_at": _utc_now().isoformat(),
+                "effective_date": self._infer_effective_date_from_prompt_audit(""),
+            }
+            if stage_key:
+                item["stage_key"] = stage_key
+            if stage_name:
+                item["stage_name"] = stage_name
+            if checkpoint_reusable is not None:
+                item["checkpoint_reusable"] = bool(checkpoint_reusable)
+            if stage_key and payload is not None:
+                item["payload_sha256"] = self._stable_stage_payload_sha256(stage_key, payload)
+            # 续跑静默覆盖已验证产物是本项目踩过的真实坑（run 20260728_110702：首跑那批
+            # 竞争假说样本被续跑覆盖后无迹可寻）。这里不改变覆盖行为——重跑就该写新结果——
+            # 但必须留痕，让"我读到的那份还在不在"可被事后追查。
+            if self.resume_from_existing and previous.get("sha256"):
+                if previous["sha256"] != item["sha256"]:
+                    item["overwritten_in_resume"] = {
+                        "previous_sha256": previous["sha256"],
+                        "previous_updated_at": previous.get("updated_at", ""),
+                    }
+                elif previous.get("overwritten_in_resume"):
+                    # 同一份产物常被登记两次：`_save_json` 先无 stage_key 记一次，调用方再带
+                    # stage_key/payload 补记一次。第二次的 sha 与第一次相同，若不继承就会把
+                    # 第一次留下的覆盖痕迹擦掉——留痕机制自己被覆盖，是最讽刺的失败方式。
+                    item["overwritten_in_resume"] = previous["overwritten_in_resume"]
+            self.stage_manifest.setdefault("artifacts", {})[relpath] = item
+            self._write_stage_manifest()
 
     def _load_stage_checkpoint(
         self,
@@ -8188,22 +8240,24 @@ class VNextOrchestrator:
             validated = model_cls.model_validate(payload)
         except Exception:
             return None
-        self.stage_diagnostics["stages"][stage_name] = {
-            "stage_key": stage_key,
-            "stage_name": stage_name,
-            "attempts": 0,
-            "errors": [],
-            "status": "resumed",
-            "checkpoint": {
-                "artifact": relpath,
-                "sha256": manifest_item.get("sha256"),
-                "resume_scope": self.stage_manifest.get("resume_scope"),
-            },
-            "prompt_audit": {
-                "stage_dir": self._prompt_audit_relpath(stage_name),
-                "attempts": [],
-            },
-        }
+        # T68-W3：同 `_run_stage` 起手处——新增 stage 键须与并行站的整份 dump 互斥。
+        with self._diagnostics_lock:
+            self.stage_diagnostics["stages"][stage_name] = {
+                "stage_key": stage_key,
+                "stage_name": stage_name,
+                "attempts": 0,
+                "errors": [],
+                "status": "resumed",
+                "checkpoint": {
+                    "artifact": relpath,
+                    "sha256": manifest_item.get("sha256"),
+                    "resume_scope": self.stage_manifest.get("resume_scope"),
+                },
+                "prompt_audit": {
+                    "stage_dir": self._prompt_audit_relpath(stage_name),
+                    "attempts": [],
+                },
+            }
         self._save_stage_diagnostics()
         return validated
 

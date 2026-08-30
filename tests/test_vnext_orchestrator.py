@@ -1,6 +1,8 @@
 import json
 import os
 import sys
+import threading
+import time
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8895,3 +8897,207 @@ def test_risk_boundary_conflict_matrix_check_tolerates_nested_notes():
         {"conflict_matrix_check": {"C": True}}
     )["conflict_matrix_check"] == {"C": True}
     assert orchestrator_module._normalize_risk_boundary_payload({"other": 1}) == {"other": 1}
+
+
+# ---------------------------------------------------------------------------
+# T68-W3：层卡 / 事件解读卡 ThreadPoolExecutor 并行化（方案 A，
+# investigation_reports/20260828_run_performance/01_并行改造方案_技术版.md）。
+# 08-27 真实 run 五层串行 28+32 分钟的整改；依赖链、契约、提示词不动。
+# ---------------------------------------------------------------------------
+
+
+def _parallel_layer_card_dict(layer: str) -> dict:
+    """T68-W3 测试用最小合法 LayerCard 载荷（形状抄 test_orchestrator_runs_full_chain_with_fake_llm）。"""
+    return {
+        "layer": layer,
+        "core_facts": [{"metric": "synthetic", "value": 1.0}],
+        "local_conclusion": f"{layer} 合成结论。",
+        "confidence": "medium",
+        "risk_flags": [],
+        "cross_layer_hooks": [],
+        "indicator_analyses": [],
+        "layer_synthesis": f"{layer} 合成层综述。",
+        "internal_conflict_analysis": f"{layer} 无内部冲突。",
+        "quality_self_check": _quality_self_check(),
+    }
+
+
+def _fake_layer_run_stage(**kwargs):
+    """T68-W3：mock `_run_stage`，sleep 放大竞态窗口，按 stage_name 回对应层卡。"""
+    time.sleep(0.01)
+    model_cls = kwargs["model_cls"]
+    return model_cls.model_validate(_parallel_layer_card_dict(str(kwargs["stage_name"]).upper()))
+
+
+def test_run_layer_cards_parallel_completeness_and_manifest(tmp_path: Path, monkeypatch):
+    """T68-W3 红灯 1：五层并行后卡片保序、卡文件齐全、manifest 五站齐全无丢（连跑 5 次防竞态侥幸）。"""
+    monkeypatch.setenv("NDX_STAGE_PARALLELISM", "3")
+    packet = _mock_packet()
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    context_brief = orchestrator._build_context_brief(packet)
+    monkeypatch.setattr(orchestrator, "_run_stage", _fake_layer_run_stage)
+
+    for _ in range(5):
+        cards = orchestrator._run_layer_cards(packet, context_brief)
+        assert [card.layer.value for card in cards] == ["L1", "L2", "L3", "L4", "L5"]
+        for layer in ["L1", "L2", "L3", "L4", "L5"]:
+            assert (orchestrator.layer_cards_dir / f"{layer}.json").exists()
+        manifest = json.loads(orchestrator.stage_manifest_path.read_text(encoding="utf-8"))
+        for layer in ["L1", "L2", "L3", "L4", "L5"]:
+            entry = manifest["artifacts"][f"layer_cards/{layer}.json"]
+            assert entry["stage_key"] == f"{layer.lower()}_analyst"
+            assert len(entry["sha256"]) == 64
+
+
+def test_event_cards_parallel_completeness_order_and_manifest(tmp_path: Path, monkeypatch):
+    """T68-W3 红灯 2：10 事件并行后 cards/failures 按输入顺序、卡文件齐全、manifest 无丢。"""
+    monkeypatch.setenv("NDX_STAGE_PARALLELISM", "3")
+    events = [
+        {
+            "event_id": f"event:{index}",
+            "title": f"Event {index}",
+            "source_name": "Official Source",
+            "source_tier": "official",
+            "event_type": "policy_news",
+            "published_at": "2026-07-18T09:00:00Z",
+            "event_date": "2026-07-18",
+            "raw_text_available": True,
+            "raw_text_excerpt": "材料称公司发布了更新。",
+        }
+        for index in range(10)
+    ]
+    _write_event_card_inputs(tmp_path, events, [f"news:{index}" for index in range(10)])
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    competition = HypothesisCompetition(
+        hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_rates",
+                hypothesis_text="利率约束仍是主线。",
+                support_evidence_refs=["L1.rate"],
+                diagnostic_evidence_refs=["L1.rate"],
+                falsification_conditions=["利率回落"],
+            )
+        ]
+    )
+    selected = orchestrator._select_event_card_candidates(
+        effective_date="2026-07-18", feedback_messages=[]
+    )
+    expected_ids = [str(event.get("event_id") or "") for event in selected]
+    assert len(expected_ids) == 10
+
+    def fake_run_stage(**kwargs):
+        if kwargs["stage_key"] == "event_section_summary":
+            # 章节总结是独立站，不在本次并行范围；让它失败以隔离断言目标。
+            raise RuntimeError("synthetic summary failure")
+        time.sleep(0.01)
+        return kwargs["model_cls"].model_validate(json.loads(_event_card_response(tier="official")))
+
+    monkeypatch.setattr(orchestrator, "_run_stage", fake_run_stage)
+
+    artifact = orchestrator._build_event_interpretation_cards(
+        effective_date="2026-07-18",
+        feedback_messages=[],
+        hypothesis_competition=competition,
+    )
+
+    assert [card["event_id"] for card in artifact["cards"]] == expected_ids
+    assert artifact["failures"] == []
+    manifest = json.loads(orchestrator.stage_manifest_path.read_text(encoding="utf-8"))
+    for event_id in expected_ids:
+        stage_token = event_id.replace(":", "_")
+        assert (tmp_path / "event_interpretation_cards" / f"{stage_token}.json").exists()
+        assert f"event_interpretation_cards/{stage_token}.json" in manifest["artifacts"]
+
+
+def test_run_layer_cards_parallel_resume_makes_zero_llm_calls(tmp_path: Path, monkeypatch):
+    """T68-W3 红灯 3（核心）：并行路径下 checkpoint 命中时 `_run_stage` 零调用。"""
+    monkeypatch.setenv("NDX_STAGE_PARALLELISM", "3")
+    packet = _mock_packet()
+    first = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    monkeypatch.setattr(first, "_run_stage", _fake_layer_run_stage)
+    first_cards = first._run_layer_cards(packet, first._build_context_brief(packet))
+    assert len(first_cards) == 5
+
+    second = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+        resume_from_existing=True,
+    )
+
+    def forbidden_run_stage(**kwargs):
+        raise AssertionError(f"resume 命中后不得调用 _run_stage，收到 stage={kwargs.get('stage_name')}")
+
+    monkeypatch.setattr(second, "_run_stage", forbidden_run_stage)
+    cards = second._run_layer_cards(packet, second._build_context_brief(packet))
+    assert [card.layer.value for card in cards] == ["L1", "L2", "L3", "L4", "L5"]
+    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
+    for layer in ["l1", "l2", "l3", "l4", "l5"]:
+        assert diagnostics["stages"][layer]["status"] == "resumed"
+
+
+def test_stage_parallelism_env_config(tmp_path: Path, monkeypatch):
+    """T68-W3 红灯 4a：NDX_STAGE_PARALLELISM 未设/非法值回退默认 3，正整数生效。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    monkeypatch.delenv("NDX_STAGE_PARALLELISM", raising=False)
+    assert orchestrator._stage_parallelism() == 3
+    for invalid in ("abc", "-2", "0", ""):
+        monkeypatch.setenv("NDX_STAGE_PARALLELISM", invalid)
+        assert orchestrator._stage_parallelism() == 3
+    monkeypatch.setenv("NDX_STAGE_PARALLELISM", "5")
+    assert orchestrator._stage_parallelism() == 5
+
+
+def test_stage_parallelism_one_degrades_to_serial(tmp_path: Path, monkeypatch):
+    """T68-W3 红灯 4b：并发度 1 时退化为串行路径，不得创建线程池。"""
+    monkeypatch.setenv("NDX_STAGE_PARALLELISM", "1")
+    packet = _mock_packet()
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    context_brief = orchestrator._build_context_brief(packet)
+    monkeypatch.setattr(orchestrator, "_run_stage", _fake_layer_run_stage)
+
+    def no_thread_pool(*args, **kwargs):
+        raise AssertionError("并发度 1 时不得创建 ThreadPoolExecutor")
+
+    monkeypatch.setattr(orchestrator_module, "ThreadPoolExecutor", no_thread_pool)
+    cards = orchestrator._run_layer_cards(packet, context_brief)
+    assert [card.layer.value for card in cards] == ["L1", "L2", "L3", "L4", "L5"]
+
+
+def test_record_stage_artifact_concurrent_writes_do_not_lose_updates(tmp_path: Path):
+    """T68-W3 红灯 5：两线程同时登记 50 份不同产物，manifest 落盘结果两者都在。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    errors = []
+
+    def worker(tag: str):
+        try:
+            for index in range(50):
+                path = orchestrator.layer_cards_dir / f"{tag}_{index}.json"
+                path.write_text(json.dumps({"tag": tag, "index": index}), encoding="utf-8")
+                orchestrator._record_stage_artifact(path)
+        except Exception as exc:  # 线程内断言失败要带回主线程
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(tag,)) for tag in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    manifest = json.loads(orchestrator.stage_manifest_path.read_text(encoding="utf-8"))
+    for tag in ("a", "b"):
+        for index in range(50):
+            assert f"layer_cards/{tag}_{index}.json" in manifest["artifacts"]
