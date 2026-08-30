@@ -2870,3 +2870,25 @@ def test_audit_section_displays_snapshot_identity_and_hash(tmp_path: Path):
     assert "abc123def456" in html
     assert "2025-04-09" in html
     assert "source_snapshot.json" in html
+
+
+def test_reasoned_verdict_fallback_splits_enumeration_anchors():
+    """T68/W2（2026-08-28）：模型不给空行时按枚举锚点兜底切段。
+
+    20260827 run 终审正文 1398 字一整段（无空行），开篇"懒得看"的实测教训；
+    此前分段全靠模型自觉，07-28 版有 3 段、08-27 版 1 段。"""
+    reporter = VNextReportGenerator()
+    text = (
+        "本轮判断保持防守等待，核心仓持有不加码。第一条理由：折现率对薄安全垫的压制处在历史极值。"
+        "第二条理由：盈利与广度是唯一在工作的正向变量。第三条理由：隐藏的向下凸性。综上，等待两侧分出胜负。"
+    )
+    html = reporter._reasoned_verdict_html(text)
+    assert html.count("<p>") == 5  # 开头 + 三条理由 + 综上
+
+    # 带空行的输出照旧按空行分段（07-28 版行为不变）
+    html_blank = reporter._reasoned_verdict_html("第一段。\n\n第二段。")
+    assert html_blank.count("<p>") == 2
+
+    # 句中位置不切：锚点前没有句末标点（"其中第一条"）
+    html_mid = reporter._reasoned_verdict_html("其中第一条理由是A，第二条是B，构成一个整体论断。")
+    assert html_mid.count("<p>") == 1

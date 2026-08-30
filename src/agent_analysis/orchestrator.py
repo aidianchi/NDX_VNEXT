@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
+from pydantic import ValidationError
+
 try:
     from .contracts import (
         AgentBudget,
@@ -392,6 +394,99 @@ def _as_list(value: Any) -> List[Any]:
     return value if isinstance(value, list) else []
 
 
+_DIRECTIONAL_OVERREACH_TOKENS = ("必然上涨", "必然下跌", "必须上涨", "必须下跌", "一定上涨", "一定下跌")
+_DIRECTIONAL_OVERREACH_NEGATION = re.compile(r"不|未|无|没|非|别|勿|难以|无法")
+_DIRECTIONAL_OVERREACH_NEGATION_WINDOW = 12
+
+
+def _directional_overreach_hits(text: str) -> List[str]:
+    """文本中"不在否定语境里"的强制方向词（T68/W1，2026-08-28）。
+
+    20260827 run 实测误伤：模型写"本卡不构成对市场必须上涨或下跌的任何支持"——
+    是在**否认**强制方向，旧裸子串匹配照样把"必须上涨"判违规、整卡打空。现在对
+    每个命中词回看 12 字窗口，出现否定词即视为否认、不判；同词后续出现位置继续查。
+    取舍：宁可放过"如果不涨就必跌"这类嵌套表达的误放，也不误杀合格产出（与
+    2026-07-30 撤三条措辞闸门同一取向：闸门宁松勿冤）。
+    """
+    hits: List[str] = []
+    for token in _DIRECTIONAL_OVERREACH_TOKENS:
+        start = 0
+        while True:
+            pos = text.find(token, start)
+            if pos < 0:
+                break
+            window = text[max(0, pos - _DIRECTIONAL_OVERREACH_NEGATION_WINDOW) : pos]
+            if not _DIRECTIONAL_OVERREACH_NEGATION.search(window):
+                hits.append(token)
+                break
+            start = pos + len(token)
+    return hits
+
+
+def _strip_extra_forbidden_fields(data: Dict[str, Any], exc: ValidationError) -> List[str]:
+    """按 pydantic 报错剥掉 extra="forbid" 不认的多余字段，返回被剥字段路径（T68/W1）。
+
+    20260827 run 实测：事件卡在 mechanism_hypothesis 里多塞一个 financial_link_note，
+    整张卡被打空——多塞字段是内容冗余不是内容错误（老板 08-28 裁决：多塞字段不卡）。
+    只处理 extra_forbidden 这一类报错，其余类型错误一律不碰、照旧走重试。模型原文
+    永远留在 prompt_audit raw 里可逐字审计。"""
+    stripped: List[str] = []
+    for error in exc.errors():
+        if error.get("type") != "extra_forbidden":
+            continue
+        loc = [str(part) for part in error.get("loc") or []]
+        if not loc:
+            continue
+        container: Any = data
+        reachable = True
+        for key in loc[:-1]:
+            if isinstance(container, dict) and key in container:
+                container = container[key]
+            else:
+                reachable = False
+                break
+        key = loc[-1]
+        if reachable and isinstance(container, dict) and key in container:
+            container.pop(key, None)
+            stripped.append(".".join(loc))
+    return stripped
+
+
+_RISK_LOOSE_BOOL_FALSY = {"", "false", "0", "no", "n", "f", "否", "无", "未触发", "假"}
+
+
+def _risk_loose_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().casefold() not in _RISK_LOOSE_BOOL_FALSY
+    return bool(value)
+
+
+def _normalize_risk_boundary_payload(parsed: Dict[str, Any]) -> Dict[str, Any]:
+    """risk 站 pre_validate_transform（T68/W1，2026-08-28）：conflict_matrix_check
+    收到非布尔值不再拒收整份风险报告。
+
+    20260827 run 实测：模型在 "notes" 键下塞逐条说明（{"notes": {"B": "触发：…"}}），
+    Dict[str, bool] 直接判死。语义上那段说明就是在逐条给冲突矩阵下"触发/未触发"
+    结论——把一层嵌套 dict 展平回 冲突编号 → 布尔（真值判定见 _risk_loose_bool），
+    模型原文留在 prompt_audit raw。"""
+    if not isinstance(parsed, dict):
+        return parsed
+    checks = parsed.get("conflict_matrix_check")
+    if not isinstance(checks, dict):
+        return parsed
+    normalized: Dict[str, Any] = {}
+    for key, value in checks.items():
+        if isinstance(value, dict):
+            for inner_key, inner_value in value.items():
+                normalized[str(inner_key)] = _risk_loose_bool(inner_value)
+        else:
+            normalized[str(key)] = _risk_loose_bool(value)
+    parsed["conflict_matrix_check"] = normalized
+    return parsed
+
+
 _SEVERITY_HIGH_MEDIUM = frozenset({"high", "medium"})
 # T54 批 3：原 _PERMISSION_TYPE_VALUES（08-16 过渡安全带"非枚举才回正"的配套表）
 # 已随无条件法典装配下线——不再有"枚举内合法值保留"的判定需求。
@@ -595,6 +690,7 @@ class VNextOrchestrator:
             model_cls=RiskBoundaryReport,
             payload={"governance_input": _dump_governance_input(gov_input_risk, "risk")},
             filename="risk_boundary_report.json",
+            pre_validate_transform=_normalize_risk_boundary_payload,
         )
 
         schema_report = self._run_schema_guard(packet_model, layer_cards, bridge_memos, thesis, critique, risk_report)
@@ -635,6 +731,7 @@ class VNextOrchestrator:
                 model_cls=RiskBoundaryReport,
                 payload={"governance_input": _dump_governance_input(gov_input_risk_retry, "risk")},
                 filename="risk_boundary_report.json",
+                pre_validate_transform=_normalize_risk_boundary_payload,
             )
             schema_report = self._run_schema_guard(
                 packet_model, layer_cards, bridge_memos, thesis, critique, risk_report
@@ -1575,9 +1672,14 @@ class VNextOrchestrator:
         #
         # 保留下面的方向越权检查：它是**禁止型**规则，代码无法替代（渲染标不出
         # "这句话有没有断言必涨必跌"），且在那 28 条里一次都没触发过，成本为零。
-        directional_overreach = ("必然上涨", "必然下跌", "必须上涨", "必须下跌", "一定上涨", "一定下跌")
-        if any(token in f"{card.interpretation} {hypothesis_text}" for token in directional_overreach):
-            errors.append("event_card.direction_overreach: must not claim mandatory market direction")
+        # 保留方向越权检查（禁止型规则，代码无法替代），但 T68/W1 起带否定语境
+        # 感知——20260827 run 的否认句误伤见 _directional_overreach_hits docstring。
+        overreach = _directional_overreach_hits(f"{card.interpretation} {hypothesis_text}")
+        if overreach:
+            errors.append(
+                "event_card.direction_overreach: must not claim mandatory market direction"
+                f" ({', '.join(sorted(set(overreach)))})"
+            )
 
         material_text = f"{event.get('title') or ''} {event.get('raw_text_excerpt') or ''}"
         material_declares_alternative = bool(re.search(r"(?:\bor\b|或)", material_text, flags=re.IGNORECASE))
@@ -5865,7 +5967,23 @@ class VNextOrchestrator:
             # 合法表达，两条路径统一走这一层归一化才不会分叉。
             parsed = normalize_none_list_fields_for_strict_schema_validation(model_cls, parsed)
             try:
-                validated = model_cls.model_validate(parsed)
+                try:
+                    validated = model_cls.model_validate(parsed)
+                except ValidationError as exc:
+                    # T68/W1：契约外多余字段剥掉重验一次，不再判死整份答卷
+                    #（20260827 run 事件卡 financial_link_note 误杀实测，见
+                    # _strip_extra_forbidden_fields docstring）。剥不动的照旧报错。
+                    stripped_paths = _strip_extra_forbidden_fields(parsed, exc)
+                    if not stripped_paths:
+                        raise
+                    logger.warning(
+                        "%s: stripped %d extra field(s) not in contract (%s); "
+                        "model original kept in prompt_audit raw response",
+                        stage_name,
+                        len(stripped_paths),
+                        ", ".join(stripped_paths),
+                    )
+                    validated = model_cls.model_validate(parsed)
             except Exception as exc:
                 last_error = str(exc)
                 stage_record["errors"].append(

@@ -415,13 +415,24 @@ class IntegratedSynthesisReportBuilder:
         last_error = ""
         audit_failed = False
         for attempt in (1, 2):
+            # 2026-08-28 T68/W1：重试不再盲撞——第二次尝试把上一次被拒的原因附进
+            # 提示词（与 _run_stage 既有重试反馈同一模式）。此前两轮发同一份提示词，
+            # 模型无从知道第一次为何被拒，20260827 run 实测两次死在同一处。
+            attempt_prompt = prompt
+            if attempt > 1 and last_error:
+                attempt_prompt = (
+                    prompt
+                    + "\n\n## 上一次输出被拒的原因（必须修正后重新输出完整 JSON）\n\n```\n"
+                    + last_error
+                    + "\n```\n"
+                )
             try:
-                raw = llm_caller(prompt, stage_name="integrated_adjudicator")
+                raw = llm_caller(attempt_prompt, stage_name="integrated_adjudicator")
             except Exception as exc:  # noqa: BLE001 - 任何调用异常都必须转为降级，不许炸管线
                 last_error = f"caller_exception: {type(exc).__name__}: {exc}"
-                audit_failed |= not self._write_audit(invocation_dir, attempt, prompt, f"[caller exception] {exc}")
+                audit_failed |= not self._write_audit(invocation_dir, attempt, attempt_prompt, f"[caller exception] {exc}")
                 continue
-            audit_failed |= not self._write_audit(invocation_dir, attempt, prompt, raw)
+            audit_failed |= not self._write_audit(invocation_dir, attempt, attempt_prompt, raw)
             if not raw:
                 last_error = "empty_response"
                 continue
@@ -440,6 +451,10 @@ class IntegratedSynthesisReportBuilder:
                 return final_adjudication, "adjudicated", critique
             except (ValueError, KeyError, TypeError) as exc:
                 last_error = f"invalid_response: {exc}"
+        # 2026-08-28 T68/W1：失败原因独立落盘到审计目录（此前只写 policy.llm_note，
+        # 报告里一处孤证，日志翻不到）。raw 为 None 时不重复写响应文件。
+        if invocation_dir is not None:
+            self._write_failure_record(invocation_dir, last_error, raw)
         return None, f"llm_adjudication_failed: {last_error}", []
 
     @staticmethod
@@ -1075,6 +1090,24 @@ class IntegratedSynthesisReportBuilder:
             return True
         except OSError:
             return False
+
+    def _write_failure_record(self, audit_dir: Optional[str | Path], last_error: str, raw: Optional[str]) -> None:
+        """2026-08-28 T68/W1：IA 校验失败原因独立落盘，供事后分辨"真违规"还是"规矩冤枉人"。"""
+        if not audit_dir:
+            return
+        try:
+            target = Path(audit_dir)
+            target.mkdir(parents=True, exist_ok=True)
+            record = {
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+                "error": str(last_error)[:2000],
+                "last_raw_response_chars": len(raw) if raw else 0,
+            }
+            (target / "validation_failure.json").write_text(
+                json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8"
+            )
+        except OSError:
+            pass
 
     def _publish_gate(
         self,

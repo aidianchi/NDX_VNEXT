@@ -542,7 +542,10 @@ class IntegratedAdjudication(BaseModel):
         description="第一层 final_stance 的原文回声；由代码装配（2026-08-19 T58/O16），"
         "模型不填写——它觉得数据判决错了只能写 conflict_matrix/unexplained 异议通道"
     )
-    integrated_verdict: str = Field(..., description="600-1200 字综合判决正文（机器校验带 400-1500）")
+    integrated_verdict: str = Field(
+        ...,
+        description="综合判决正文（长度不设硬闸门；600-1200 字由软提示窗口在解析层记 note）",
+    )
     current_phenomena: List[str] = Field(default_factory=list)
     possible_mechanisms: List[str] = Field(default_factory=list)
     principal_contradiction: str = Field("", description="主要矛盾（继承数据判决，可用事件语境丰富表述）")
@@ -561,13 +564,11 @@ class IntegratedAdjudication(BaseModel):
     watch_next: List[str] = Field(default_factory=list)
     notes: List[str] = Field(default_factory=list)
 
-    @field_validator("integrated_verdict")
-    @classmethod
-    def _validate_integrated_verdict_length(cls, value: str) -> str:
-        text = str(value or "").strip()
-        if text and not 400 <= len(text) <= 1500:
-            raise ValueError("integrated_verdict must be empty or contain 400-1500 characters")
-        return text
+    # 2026-08-28 T68/W1：撤销 integrated_verdict 的 400-1500 字硬闸门。20260827 run
+    # 实测两份内容完整的裁决正文（1515 / 1906 字）仅因超长被整包打回，第一次只超
+    # 15 字，且两连败导致整个 IA 对质降级为空。长度是形式不是内容，超窗由
+    # integrated_synthesis_report._parse_and_validate 的软提示窗口记 note 留痕，
+    # 不再判死（老板 08-28 裁决：规矩放宽，先重审规矩不修模型）。
 
 
 class AgentSpec(BaseModel):

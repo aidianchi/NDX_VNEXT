@@ -8787,3 +8787,111 @@ def test_layer_card_validator_rejects_unknown_function_ids(tmp_path: Path):
     errors = orchestrator._validate_layer_card_v2(card, "L1", {"get_fed_funds_rate": "Fed Funds Rate"})
 
     assert any("get_invented_indicator" in error and "not an input function_id" in error for error in errors)
+
+
+def test_direction_overreach_allows_negated_statements(tmp_path: Path):
+    """T68/W1（2026-08-28）：方向越权检查加否定语境感知。
+
+    20260827 run 实测误伤：event_8e58b8bd 的解读原文写"本卡不构成对市场必须上涨
+    或下跌的任何支持"——是在**否认**强制方向，旧裸子串匹配把"必须上涨"照样判
+    违规、整卡打空（重试两次全灭）。本测试用那次被拦的原句锁定：否认句不触发。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    card = EventInterpretationCard.model_validate(
+        json.loads(_event_card_response(tier="official"))
+    ).model_copy(
+        update={
+            "interpretation": (
+                "分寸限定：据报道、且仅凭标题，无法确认纳指100相关合约的具体方向与幅度；"
+                "期货涨跌不一本身不含单一方向信息，本卡不构成对市场必须上涨或下跌的任何支持。"
+            ),
+        }
+    )
+
+    errors = orchestrator._event_card_validation_errors(
+        card,
+        event={
+            "source_tier": "official",
+            "title": "Inflation Data Release",
+            "published_at": "2026-08-26",
+            "event_date": "2026-08-26",
+            "raw_text_available": True,
+            "raw_text_excerpt": "Equity futures mixed pre-bell amid inflation data release.",
+        },
+        allowed_hypothesis_ids={"hyp_rates"},
+    )
+
+    assert not any("direction_overreach" in error for error in errors)
+
+
+def test_direction_overreach_still_rejects_bare_assertions(tmp_path: Path):
+    """T68/W1：否定感知只豁免否认句——真断言强制方向仍然拦截（禁止型规则保留）。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    card = EventInterpretationCard.model_validate(
+        json.loads(_event_card_response(tier="official"))
+    ).model_copy(update={"interpretation": "该事件落地后纳指100必然上涨，无悬念。"})
+
+    errors = orchestrator._event_card_validation_errors(
+        card,
+        event={
+            "source_tier": "official",
+            "title": "Update",
+            "published_at": "2026-07-18",
+            "event_date": "2026-07-18",
+            "raw_text_available": True,
+            "raw_text_excerpt": "Company update.",
+        },
+        allowed_hypothesis_ids={"hyp_rates"},
+    )
+
+    assert any("direction_overreach" in error and "必然上涨" in error for error in errors)
+
+
+def test_extra_contract_fields_are_stripped_not_fatal():
+    """T68/W1：契约外多余字段剥掉重验，不再判死整份答卷。
+
+    20260827 run 实测：事件卡在 mechanism_hypothesis 里多塞一个 financial_link_note，
+    extra="forbid" 把整张卡打空（老板裁决：多塞字段不卡）。"""
+    raw = json.loads(_event_card_response(tier="official"))
+    raw["mechanism_hypothesis"]["financial_link_note"] = "以 discount_rate 为主，次级渠道假设。"
+
+    with pytest.raises(ValidationError) as exc_info:
+        EventInterpretationCard.model_validate(raw)
+    stripped = orchestrator_module._strip_extra_forbidden_fields(raw, exc_info.value)
+    assert stripped == ["mechanism_hypothesis.financial_link_note"]
+
+    card = EventInterpretationCard.model_validate(raw)
+    assert card.mechanism_hypothesis.financial_link == "discount_rate"
+    # 非 extra_forbidden 的类型错误不归它管：剥不动就原样报错
+    with pytest.raises(ValidationError) as type_exc:
+        EventInterpretationCard.model_validate(
+            {**raw, "upgrade_candidate": "不是布尔"}
+        )
+    assert orchestrator_module._strip_extra_forbidden_fields(raw, type_exc.value) == []
+
+
+def test_risk_boundary_conflict_matrix_check_tolerates_nested_notes():
+    """T68/W1：risk 站 conflict_matrix_check 收到嵌套说明不再拒收。
+
+    20260827 run 实测：模型写 {"notes": {"B": "触发：…"}}，Dict[str, bool] 直接
+    判死整份风险报告；归一化把一层嵌套展平回 冲突编号 → 布尔。"""
+    parsed = orchestrator_module._normalize_risk_boundary_payload(
+        {
+            "conflict_matrix_check": {
+                "notes": {"B": "触发：L2自满收窄 vs CCC-BB走阔", "C": True},
+                "A": False,
+                "D": "未触发",
+            }
+        }
+    )
+    assert parsed["conflict_matrix_check"] == {"B": True, "C": True, "A": False, "D": False}
+    RiskBoundaryReport.model_validate(parsed)  # 展平结果过得了合约
+
+    # 布尔直通、无该字段原样返回
+    assert orchestrator_module._normalize_risk_boundary_payload(
+        {"conflict_matrix_check": {"C": True}}
+    )["conflict_matrix_check"] == {"C": True}
+    assert orchestrator_module._normalize_risk_boundary_payload({"other": 1}) == {"other": 1}

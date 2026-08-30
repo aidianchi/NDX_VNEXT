@@ -364,8 +364,59 @@ def test_env_disable_skips_llm(monkeypatch):
 
 
 def test_verdict_length_band():
-    with pytest.raises(Exception, match="integrated_verdict"):
-        IntegratedAdjudication(stance_echo="x", integrated_verdict="太短")
+    """T68/W1（2026-08-28）：判决正文长度不再设硬闸门。
+
+    20260827 run 实测两份内容完整的裁决正文（1515 / 1906 字）被旧的 400-1500
+    硬窗口整包打回——第一次只超 15 字，两连败导致整个 IA 对质降级为空。长度
+    超窗现在只由解析层软提示记 note，不再判死；本测试锁定"长不拒、短不拒"。"""
+    # 20260827 attempt_1 的实际长度：1515 字，旧闸门下超长 15 字即整包打回。
+    IntegratedAdjudication.model_validate(
+        {"integrated_verdict": "裁" * 1515}
+    )
+    # 20260827 attempt_2 的实际长度：1906 字。
+    IntegratedAdjudication.model_validate(
+        {"integrated_verdict": "裁" * 1906}
+    )
+    # 短正文同样放行（旧闸门 <400 字拒收），缺内容由软提示与补采机制兜底。
+    IntegratedAdjudication.model_validate({"integrated_verdict": "太短"})
+    IntegratedAdjudication.model_validate({"integrated_verdict": ""})
+
+
+def test_adjudication_retry_feeds_error_back_to_model():
+    """T68/W1：重试不再盲撞——第二次尝试的提示词必须带上一次被拒的原因。
+
+    20260827 run 实测：两次尝试发同一份提示词，模型无从知道第一次为何被拒，
+    两次死在同一处。本测试锁定：第二次调用的 prompt 含失败原因原文。"""
+
+    def flaky_then_valid(n: int) -> str:
+        if n == 1:
+            return "这不是 JSON，也不是合格答卷。"
+        return _valid_response()
+
+    payload, prompts = _build(flaky_then_valid)
+    assert payload["integrated_adjudication"] is not None
+    assert payload["policy"]["llm_note"] == "adjudicated"
+    assert len(prompts) == 3  # 草稿 2 次 + 批评者 1 次
+    assert "上一次输出被拒的原因" in prompts[1]
+    assert "no json object found" in prompts[1]
+
+
+def test_adjudication_failure_record_written_to_audit_dir(tmp_path: Path):
+    """T68/W1：IA 校验失败原因独立落盘（validation_failure.json）。
+
+    此前失败原因只写 policy.llm_note 一处孤证；现在审计目录里必须有独立
+    记录，供事后分辨"真违规"还是"规矩冤枉人"（20260827 考古教训）。"""
+    audit_dir = tmp_path / "audit"
+
+    def always_bad(n: int) -> str:
+        return "这不是 JSON。"
+
+    payload, _ = _build(always_bad, audit_dir=audit_dir)
+    assert payload["integrated_adjudication"] is None
+    records = list(audit_dir.glob("*/validation_failure.json"))
+    assert records, "失败原因必须独立落盘到审计目录（时间戳子目录内）"
+    record = json.loads(records[0].read_text(encoding="utf-8"))
+    assert "invalid_response" in record["error"]
 
 
 def test_facade_holds_layer1_verdict_and_block_renders_integrated_body():

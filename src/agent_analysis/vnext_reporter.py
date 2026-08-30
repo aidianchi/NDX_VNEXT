@@ -6600,8 +6600,25 @@ class VNextReportGenerator:
         parts.append(_escape(fragment[cursor:]))
         return "".join(parts)
 
+    # T68/W2（2026-08-28）：分段不再赌模型自觉给空行——07-28 那版（DeepSeek）输出
+    # 自带空行显示成 3 段，08-27 这版（GLM）1398 字一整段。模型不给空行时按中文
+    # 论证文的常见枚举锚点兜底切段；锚点必须紧跟句末标点，"其中第一条"这类句中
+    # 位置不会误切。只影响渲染分段，不改任何文字。
+    _VERDICT_PARAGRAPH_ANCHOR = re.compile(
+        r"(?<=[。！？；!?;\n])(?=(?:第[一二三四五六七八九十]+[条点，,：:]|首先[，,：:]|其次[，,：:]"
+        r"|再次[，,：:]|此外[，,：:]|另外[，,：:]|最后[，,：:]|综上|[一二三四五六七八九十]+[，,]是))"
+    )
+
     def _reasoned_verdict_html(self, verdict: Any) -> str:
         paragraphs = [part.strip() for part in re.split(r"\n\s*\n+", str(verdict or "")) if part.strip()]
+        if len(paragraphs) <= 1:
+            fragments = [
+                part.strip()
+                for part in self._VERDICT_PARAGRAPH_ANCHOR.split(str(verdict or ""))
+                if part.strip()
+            ]
+            if len(fragments) > len(paragraphs):
+                paragraphs = fragments
         return "".join(f"<p>{self._inline_ref_html(paragraph)}</p>" for paragraph in paragraphs)
 
     def _css(self, style: str = "slate_v2") -> str:

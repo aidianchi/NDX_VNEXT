@@ -102,7 +102,7 @@ body {
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-h1 { font-size: 31px; line-height: 1.5; font-weight: 700; margin: 0 0 6px; }
+h1 { font-size: 24px; line-height: 1.5; font-weight: 700; margin: 0 0 6px; overflow-wrap: anywhere; }
 h2 { font-size: 21px; line-height: 1.5; margin: 0 0 4px; }
 h3 { font-size: 16.5px; line-height: 1.6; margin: 0 0 2px; }
 h4 { font-size: 14.5px; margin: 0 0 2px; }
@@ -154,7 +154,7 @@ button { font-family: var(--sans); }
 .hero .facade, .facade .facade { border: none; box-shadow: none; padding: 0; margin: 0; }
 .sec.facade-section { margin-top: 6px; }
 .facade-section > .facade { margin-top: 0; }
-.brief-verdict h1 { font-size: 31px; }
+.brief-verdict h1 { font-size: 24px; }
 .reasoned-verdict p, .prose p, .brief-verdict p { text-align: justify; }
 body.style-b-light .brief-verdict,
 body.style-b-light .prose,
