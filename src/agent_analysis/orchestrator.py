@@ -19,6 +19,7 @@ try:
         AgentBudget,
         AnalysisPacket,
         AnalysisRevised,
+        ApprovalStatus,
         BridgeMemo,
         AdjudicationChangeRecord,
         AdjudicationHistory,
@@ -75,6 +76,7 @@ except ImportError:
         AgentBudget,
         AnalysisPacket,
         AnalysisRevised,
+        ApprovalStatus,
         BridgeMemo,
         AdjudicationChangeRecord,
         AdjudicationHistory,
@@ -655,6 +657,8 @@ class VNextOrchestrator:
         # 必丢更新/写出撕裂 JSON，故各配一把锁。锁必须在 _load_stage_manifest 之前建好。
         self._manifest_lock = threading.Lock()
         self._diagnostics_lock = threading.Lock()
+        # T69 P3-1：事件卡剥离留痕暂存（key=stage_token，worker 线程各写各的 key，无冲突）。
+        self._event_card_stripped_hypothesis_refs: Dict[str, List[str]] = {}
         self.stage_manifest_path = self.output_dir / "stage_manifest.json"
         self.stage_manifest = self._load_stage_manifest()
         self.stage_model_routing = self._load_stage_model_routing()
@@ -923,29 +927,14 @@ class VNextOrchestrator:
             expected_payload=final_payload,
         )
         if final_adjudication is None:
-            final_adjudication = self._run_stage(
-                stage_key="final",
-                stage_name="final_adjudicator",
-                model_cls=FinalAdjudication,
-                payload=final_payload,
-                strict_tool_schema=self._strict_tool_schema_for_stage("final", FinalAdjudication),
-                strict_tool_name="emit_final_adjudication",
-                validator=lambda candidate: (
-                    self._validate_stage_evidence_refs(
-                        candidate,
-                        set(synthesis_packet.evidence_index.keys()),
-                        "final",
-                    )
-                    + self._validate_reasoned_verdict_refs(
-                        candidate,
-                        set(synthesis_packet.evidence_index.keys()),
-                        source_text=final_source_text,
-                    )
-                    + self._validate_final_conflict_responses(
-                        candidate,
-                        analysis_revised.revised_thesis,
-                    )
-                ),
+            final_adjudication = self._run_final_adjudicator_stage(
+                final_payload=final_payload,
+                synthesis_packet=synthesis_packet,
+                analysis_revised=analysis_revised,
+                final_source_text=final_source_text,
+            )
+            final_stage_degraded = "final_adjudicator_degraded_validation_exhausted" in str(
+                getattr(final_adjudication.quality_gate, "notes", "") or ""
             )
             token_report = self.llm_engine.get_token_report() if hasattr(self.llm_engine, "get_token_report") else {}
             final_adjudication.token_usage = token_report
@@ -955,6 +944,9 @@ class VNextOrchestrator:
                 stage_key="final",
                 stage_name="final_adjudicator",
                 payload=final_payload,
+                # T69 P3-2：降级产物不得被续跑当合格 checkpoint 复用
+                # （counter_thesis 确定性兜底同先例）。
+                checkpoint_reusable=False if final_stage_degraded else None,
             )
         self._annotate_reasoned_verdict_refs(
             final_adjudication,
@@ -1723,6 +1715,42 @@ class VNextOrchestrator:
             key=lambda event: min(priority[reason] for reason in event["trigger_reasons"]),
         )
 
+    def _event_card_hypothesis_ref_scrubber(
+        self,
+        *,
+        stage_token: str,
+        allowed_hypothesis_ids: set,
+    ) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+        """T69 P3-1（2026-08-31，闸门宪法 v2 装配自检姿势）：supports/refutes 指向未知
+        hypothesis_id——存在性检查本身合法（白名单从实发 payload 出），但失败后果从
+        "重试耗尽整卡作废"改为"剥掉指向未知 id 的条目、留痕、卡片收下"。剥了什么记在
+        `_event_card_stripped_hypothesis_refs`，由 `_one` 装配进落盘的 semantic_warnings。
+        校验器里的同款检查保留作兜底（正常路径下不会再触发）。"""
+
+        def _scrub(parsed: Dict[str, Any]) -> Dict[str, Any]:
+            stripped: List[str] = []
+            for field in ("supports_hypotheses", "refutes_hypotheses"):
+                values = parsed.get(field)
+                if not isinstance(values, list):
+                    continue
+                kept = []
+                for value in values:
+                    if str(value) in allowed_hypothesis_ids:
+                        kept.append(value)
+                    else:
+                        stripped.append(str(value))
+                parsed[field] = kept
+            if stripped:
+                self._event_card_stripped_hypothesis_refs[stage_token] = stripped
+                logger.warning(
+                    "event card %s: stripped unknown hypothesis_id refs (留痕不废卡): %s",
+                    stage_token,
+                    stripped,
+                )
+            return parsed
+
+        return _scrub
+
     def _event_card_validation_errors(
         self,
         card: EventInterpretationCard,
@@ -1833,6 +1861,10 @@ class VNextOrchestrator:
                         "event_card_interpreter", EventInterpretationCard
                     ),
                     strict_tool_name="emit_event_interpretation_card",
+                    pre_validate_transform=self._event_card_hypothesis_ref_scrubber(
+                        stage_token=stage_token,
+                        allowed_hypothesis_ids=allowed_hypothesis_ids,
+                    ),
                     validator=lambda candidate, event=event: self._event_card_validation_errors(
                         candidate,
                         event=event,
@@ -1840,6 +1872,7 @@ class VNextOrchestrator:
                     ),
                 )
             except Exception as exc:
+                self._event_card_stripped_hypothesis_refs.pop(stage_token, None)
                 logger.warning("Event interpretation card failed for %s: %s", event_id, exc)
                 return ("failure", {"event_id": event_id, "error": f"{type(exc).__name__}: {str(exc)[:600]}"})
             passport = EventInterpretationPassport(
@@ -1867,6 +1900,11 @@ class VNextOrchestrator:
             # 2026-08-31 T69 P1-3/P1-7：语义留痕只记不拦——命中写进落盘副本的
             # semantic_warnings 并打 logger.warning，不再触发重试/废卡。
             semantic_warnings = self._event_card_semantic_warnings(finalized_card, event=event)
+            # T69 P3-1：剥离留痕并入同一通道（pop 清暂存，防跨 run/跨卡残留）。
+            semantic_warnings = semantic_warnings + [
+                f"event_card.stripped_unknown_hypothesis_id:{ref}"
+                for ref in self._event_card_stripped_hypothesis_refs.pop(stage_token, [])
+            ]
             if semantic_warnings:
                 card_dict["semantic_warnings"] = semantic_warnings
                 for note in semantic_warnings:
@@ -6765,6 +6803,57 @@ class VNextOrchestrator:
         if note not in notes:
             notes.append(note)
             final.quality_gate.notes = "；".join(notes)
+
+    def _run_final_adjudicator_stage(
+        self,
+        *,
+        final_payload: Dict[str, Any],
+        synthesis_packet: SynthesisPacket,
+        analysis_revised: AnalysisRevised,
+        final_source_text: str,
+    ) -> FinalAdjudication:
+        """T69 P3-2（2026-08-31，闸门宪法 v2 执法姿势）：final 校验链（引用身份比对 +
+        判决正文数字 token 存在性比对）是合法机械检查，但"重试耗尽=RuntimeError 整跑
+        硬崩"越权（真实事故：run 20260728_110702）。降级姿势：耗尽→产出一份
+        approval_status=rejected 的兜底裁决（发布闸门据此转 audit_only，IA 前置闸
+        随之不裁决），质量闸门记 final_adjudicator_degraded_validation_exhausted，
+        run 继续走完。绝不硬崩、绝不把降级品伪装成正常裁决。"""
+        try:
+            return self._run_stage(
+                stage_key="final",
+                stage_name="final_adjudicator",
+                model_cls=FinalAdjudication,
+                payload=final_payload,
+                strict_tool_schema=self._strict_tool_schema_for_stage("final", FinalAdjudication),
+                strict_tool_name="emit_final_adjudication",
+                validator=lambda candidate: (
+                    self._validate_stage_evidence_refs(
+                        candidate,
+                        set(synthesis_packet.evidence_index.keys()),
+                        "final",
+                    )
+                    + self._validate_reasoned_verdict_refs(
+                        candidate,
+                        set(synthesis_packet.evidence_index.keys()),
+                        source_text=final_source_text,
+                    )
+                    + self._validate_final_conflict_responses(
+                        candidate,
+                        analysis_revised.revised_thesis,
+                    )
+                ),
+            )
+        except RuntimeError as exc:
+            logger.error("final_adjudicator exhausted retries, degrading to rejected placeholder: %s", exc)
+            degraded = FinalAdjudication(
+                approval_status=ApprovalStatus.REJECTED,
+                final_stance="终审降级：判决正文机械校验连续未过",
+                confidence=Confidence.LOW,
+                must_preserve_risks=["终审产物缺失：本结论为降级兜底，不可作发布依据"],
+                adjudicator_notes=f"final_adjudicator 校验耗尽降级：{str(exc)[:600]}",
+            )
+            self._append_final_quality_note(degraded, "final_adjudicator_degraded_validation_exhausted")
+            return degraded
 
     def _annotate_event_section_summary_degradation(
         self,

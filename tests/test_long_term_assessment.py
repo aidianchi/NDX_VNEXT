@@ -29,13 +29,17 @@ def _final(**overrides):
     return FinalAdjudication(**payload)
 
 
-def test_direct_construction_still_rejects_numeric_percent_without_refs():
-    with pytest.raises(Exception, match="numeric percent requires evidence_refs"):
-        LongTermAssessment(
-            object_quality="结构质量待观察",
-            valuation_implied_return="长期年化回报可能为 8%",
-            evidence_refs=[" "],
-        )
+def test_direct_construction_traces_numeric_percent_without_refs_t69_p3():
+    # T69 P3-3：存在性检查留任，但执法姿势从 raise 改字段级 fail-closed——
+    # 清空+留痕，不为一个可选辅助字段炸掉整份裁决（含 checkpoint 复验路径）。
+    assessment = LongTermAssessment(
+        object_quality="结构质量待观察",
+        valuation_implied_return="长期年化回报可能为 8%",
+        evidence_refs=[" "],
+    )
+    assert assessment.valuation_implied_return == ""
+    assert any("未附可追溯 evidence_refs" in note for note in assessment.uncertainty_notes)
+    assert assessment.object_quality == "结构质量待观察"
 
     accepted = _final(long_term_assessment={
         "object_quality": "结构质量待观察",

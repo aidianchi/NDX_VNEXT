@@ -15,8 +15,9 @@
 - **W4 Yahoo 根因与修复**：根因=Yahoo 对大陆 IP 地区封锁（requests 与真实 Chrome 同得 403 封锁页，浏览器 sidecar 路线物理出局；顺手清掉 6 月僵尸 daemon 修复 sidecar 管道）。老板批 B+D 组合：本机代理（规则模式 127.0.0.1:7897）配入 api_config proxy 段，实测新旧两文取到 3-4KB 正文。连带修解析器误杀："Oops, something went wrong"否决守卫把嵌错误模块的真文章页也毙了，改为纯错误页（<600 字符可读文本）才否决。另拆一颗日期炸弹测试（SEC 夹具硬编码 2026-07-17 越过 45 天回看窗误红，改相对日期）。
 - **T69 P0（冤案前科四条）**：final 300-3000 字硬闸门删除；IA 600-1200 软窗子条删除（总账原写"加软 note"与删软窗矛盾，按宪法统一为删除不加 note）；事件总结"引用 2-5 张/100-1500 字"删除、固定尾句改代码装配（`_ensure_event_section_boundary_sentence`）；reasoned_verdict"≥3 方括号组"子条删除（引用可解析+数字存在性比对保留）。
 - **T69 P1（运行时语义拦截清零）**：direction_overreach 整条删除（含 W1-D1 否定窗口补丁退役，老板已定终审归宿）；alternative_classification 删除；sign_reversal、事件总结⑦因果词表、stance 方向共现、E1 claim gate、fact/interpretation 逐字相同——五条降级为留痕不拦（新落盘字段 `semantic_warnings` / quality_gate note，与 T49 注入先例同法）。E1 降级后 20260719 真实事故归档带留痕复演成功。残留 grep 清零。
-- **红灯测试**：P0/P1 全部先红后绿（改前 13+ 个测试红）；全量 1489 项通过。
-- **未做（下批）**：P2 提示词脏活六件、P3 执法姿势改造；提示词侧"必须涨或必须跌""缺失证据不得定方向"等原则条款有意留任（质量把关走提示词+事后审计）。
+- **T69 P2a/P2b/P2c（提示词脏活清零）**：脏活六件全部落地——固定尾句改代码装配、counter_thesis 35 行字段名教学整删、event_refs 吓阻段删除、600-1200 字窗口两处删除、失效条件【转多】【转空】前缀改 `invalidation_items` 方向枚举字段+代码渲染（下游零改动）、question_id/hypothesis_id 回声改"报序号、代码展开"（conflict_ordinal 先例，strict schema 下 id 字段从模型面向物理摘除，checkpoint 双路兼容）。同族连清：五层字数下限、reviser 300/500 残留、refs"逐字"吓阻 7 处。
+- **T69 P3（执法姿势改造）**：事件卡未知 hypothesis_id 耗尽废卡→剥条目留痕收卡；final 校验耗尽整跑硬崩→降级 rejected 兜底进发布闸门（`_run_final_adjudicator_stage`，降级产物 checkpoint 不复用）；LongTermAssessment 百分比无 refs raise→字段级清空留痕。三条红灯均"只回退 src 留新测试"验真。
+- **红灯测试**：P0/P1 全部先红后绿（改前 13+ 个测试红）；全量 1511 项通过。
 
 ---
 

@@ -5699,6 +5699,66 @@ def test_reasoned_verdict_tolerates_comma_joined_refs_inside_one_bracket(tmp_pat
     assert one_bracket == []
 
 
+def test_final_adjudicator_validation_exhaustion_degrades_instead_of_crashing_t69_p3(tmp_path: Path):
+    """T69 P3-2（2026-08-31，闸门宪法 v2 执法姿势）：final 校验链合法，但"重试耗尽=
+    RuntimeError 整跑硬崩"越权（真实事故 run 20260728_110702）。新姿势：耗尽→兜底裁决
+    （approval_status=rejected → 发布闸门转 audit_only）+ 质量闸门留痕，run 继续。
+    红灯构造：fake engine 两轮都交编造数字（9.9% 不在 payload），旧路径必抛 RuntimeError。"""
+    base = {
+        "approval_status": "approved_with_reservations",
+        "final_stance": "中性偏谨慎",
+        "confidence": "medium",
+        "must_preserve_risks": ["估值压缩风险"],
+        "blocking_issues": [],
+        "adjudicator_notes": "保留风险边界。",
+    }
+    fabricated_verdict = "实际利率 9.9% 仍压制估值 [L1.get_fed_funds_rate]。"
+    engine = SequencedFakeLLMEngine({
+        "final_adjudicator": [
+            json.dumps({**base, "reasoned_verdict": fabricated_verdict}, ensure_ascii=False),
+            json.dumps({**base, "reasoned_verdict": fabricated_verdict}, ensure_ascii=False),
+        ]
+    })
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+    synthesis = SynthesisPacket(
+        packet_meta={"data_date": "2026-08-31"},
+        evidence_index={"L1.get_fed_funds_rate": {"layer": "L1"}},
+    )
+    analysis_revised = AnalysisRevised(
+        revision_summary="测试",
+        revised_thesis=ThesisDraft(
+            environment_assessment="宏观测试",
+            valuation_assessment="估值测试",
+            timing_assessment="时机测试",
+            main_thesis="主线测试",
+            overall_confidence="low",
+        ),
+    )
+    final_source_text = json.dumps(
+        {"governance_input": {"key_evidence_refs": {"L1.get_fed_funds_rate": {"current_reading": "实际利率 2.3%"}}}},
+        ensure_ascii=False,
+    )
+
+    result = orchestrator._run_final_adjudicator_stage(
+        final_payload={"example": "payload"},
+        synthesis_packet=synthesis,
+        analysis_revised=analysis_revised,
+        final_source_text=final_source_text,
+    )
+
+    assert engine.calls["final_adjudicator"] == 2, "重试通道保留（带反馈重试合法）"
+    assert str(getattr(result.approval_status, "value", result.approval_status)) == "rejected", \
+        "耗尽必须降级为 rejected 兜底（发布闸门转 audit_only），不得硬崩"
+    assert "final_adjudicator_degraded_validation_exhausted" in str(result.quality_gate.notes), \
+        "降级必须进质量闸门留痕"
+    assert "9.9%" not in (result.reasoned_verdict or ""), "编造数字不得进产物"
+
+
 def test_reasoned_verdict_flags_numbers_absent_from_stage_payload(tmp_path: Path):
     """T42②：判决正文里的百分数/小数必须逐字出现在终审实际收到的 payload 中。
     "报告里写的 2.3%，原始 payload 里找不找得到 2.3%"是身份比对，不是语义判断。"""
@@ -9411,6 +9471,68 @@ def test_event_card_sign_reversal_traced_not_blocked_t69_p1(tmp_path: Path):
         "event_card.sign_reversal_suspect" in note
         for note in (aggregate["cards"][0].get("semantic_warnings") or [])
     ), "汇总落盘件同样要带留痕（IA 从文件读卡）"
+
+
+def test_event_card_unknown_hypothesis_id_stripped_not_discarded_t69_p3(tmp_path: Path):
+    """2026-08-31 T69 P3-1（闸门宪法 v2 装配自检姿势）：supports/refutes 指向未知
+    hypothesis_id 是存在性问题，但"重试耗尽整卡作废"越权——改为装配层剥掉未知条目、
+    留痕（semantic_warnings）、卡片收下。（红灯构造：无剥离器时未知 id 触发校验错误，
+    fake engine 两次返回同一响应，重试耗尽必进 failures——旧姿势必红。）"""
+    event = {
+        "event_id": "event:abc",
+        "title": "Company update",
+        "source_name": "Mainstream Media",
+        "source_tier": "reliable_mainstream_report",
+        "event_type": "company_news",
+        "published_at": "2026-07-18T09:00:00Z",
+        "event_date": "2026-07-18",
+        "symbols": ["NVDA"],
+        "raw_text_available": True,
+        "raw_text_excerpt": "公司发布了更新。",
+    }
+    response = json.loads(_event_card_response(event_id="event:abc", tier="reliable_mainstream_report"))
+    response["supports_hypotheses"] = ["hyp_rates", "hyp_ghost"]
+    response["refutes_hypotheses"] = ["hyp_phantom"]
+    _write_event_card_inputs(tmp_path, [event], ["news:abc"])
+    engine = UniformEventCardFakeLLMEngine(json.dumps(response, ensure_ascii=False))
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine
+    )
+    competition = HypothesisCompetition(
+        hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_rates",
+                hypothesis_text="利率约束仍是主线。",
+                support_evidence_refs=["L1.rate"],
+                diagnostic_evidence_refs=["L1.rate"],
+                falsification_conditions=["利率回落"],
+            )
+        ]
+    )
+
+    artifact = orchestrator._build_event_interpretation_cards(
+        effective_date="2026-07-18",
+        feedback_messages=[],
+        hypothesis_competition=competition,
+    )
+
+    assert not artifact["failures"], "未知 hypothesis_id 不得再废卡"
+    assert len(engine.calls) == 1, "剥离在装配层完成，不得触发重试"
+    saved_card = json.loads(
+        (tmp_path / "event_interpretation_cards" / "event_abc.json").read_text(encoding="utf-8")
+    )
+    assert saved_card["supports_hypotheses"] == ["hyp_rates"], "未知 id 必须被剥掉"
+    assert saved_card["refutes_hypotheses"] == [], "未知 id 必须被剥掉"
+    assert any(
+        "event_card.stripped_unknown_hypothesis_id:hyp_ghost" in note
+        for note in saved_card.get("semantic_warnings") or []
+    ), "剥了什么必须留痕"
+    assert any(
+        "event_card.stripped_unknown_hypothesis_id:hyp_phantom" in note
+        for note in saved_card.get("semantic_warnings") or []
+    ), "剥了什么必须留痕"
+    # 剥离暂存不得残留（防跨卡串味）
+    assert not orchestrator._event_card_stripped_hypothesis_refs
 
 
 def test_extra_contract_fields_are_stripped_not_fatal():

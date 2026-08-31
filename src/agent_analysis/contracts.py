@@ -1713,7 +1713,16 @@ class LongTermAssessment(BaseModel):
     def _require_refs_for_numeric_percent_return(self) -> "LongTermAssessment":
         has_concrete_ref = any(str(ref or "").strip() for ref in self.evidence_refs)
         if _NUMERIC_PERCENT_PATTERN.search(self.valuation_implied_return) and not has_concrete_ref:
-            raise ValueError("valuation_implied_return with a numeric percent requires evidence_refs")
+            # T69 P3-3（2026-08-31）：存在性检查留任，执法姿势从 raise（直接构造与
+            # checkpoint 复验会整份炸掉）改为字段级 fail-closed——清空该字段+留痕，
+            # 与 `_normalize_long_term_assessment_payload`（FinalAdjudication 路径）
+            # 同法同措辞。数字没有 refs 就不能留，但绝不为它毙掉整份裁决。
+            self.uncertainty_notes = [
+                *self.uncertainty_notes,
+                "估值隐含回报字段已被系统移除：原文含百分比数字但未附可追溯 evidence_refs"
+                "（字段级 fail-closed，原文保留在 prompt_audit 审计件中）",
+            ]
+            self.valuation_implied_return = ""
         return self
 
 
