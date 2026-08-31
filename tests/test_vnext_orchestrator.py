@@ -4990,19 +4990,22 @@ def test_critic_overall_assessment_has_no_length_cap(tmp_path: Path):
     assert engine.calls["critic"] == 1
 
 
-def test_critic_stage_retries_after_overlong_revision_direction(tmp_path: Path):
-    """`Critique.revision_direction` 仍保留长度上限（2026-07-26 从 300 放宽到 500，
-    不是移除）——这条测试锁定"写长了仍能靠重试自愈"这条安全网继续有效。"""
+def test_critic_revision_direction_has_no_length_cap(tmp_path: Path):
+    """2026-08-31 T69 P2a-⑧：`Critique.revision_direction` 的 `max_length=500`
+    已删除——该字段不进入任何固定宽度展示位，字数不代理质量（闸门宪法 v2：
+    形状代理语义出局）；提示词 critic.md 的 500 字符条款同步删除。
+
+    这条测试反向锁定"上限不再回来"：一段远超原 500 字符上限的修订方向必须
+    一次通过，不再触发任何重试。"""
     base = {
         "issues": [],
         "cross_layer_issues": [],
         "overall_assessment": "未发现重大问题，最强反对意见是盈利修正数据置信度偏低。",
     }
+    long_direction = "保留主要论点，补充证据引用。" * 60
+    assert len(long_direction) > 500
     engine = SequencedFakeLLMEngine({
-        "critic": [
-            json.dumps({**base, "revision_direction": "过长的修订方向文本" * 60}, ensure_ascii=False),
-            json.dumps({**base, "revision_direction": "保留主要论点，补充证据引用。"}, ensure_ascii=False),
-        ]
+        "critic": [json.dumps({**base, "revision_direction": long_direction}, ensure_ascii=False)]
     })
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
@@ -5017,12 +5020,9 @@ def test_critic_stage_retries_after_overlong_revision_direction(tmp_path: Path):
         model_cls=Critique,
         payload={"example": "payload"},
     )
-    diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
 
-    assert result.revision_direction == "保留主要论点，补充证据引用。"
-    assert engine.calls["critic"] == 2
-    assert diagnostics["stages"]["critic"]["errors"][0]["kind"] == "schema_validation_error"
-    assert "revision_direction" in diagnostics["stages"]["critic"]["errors"][0]["message"]
+    assert result.revision_direction == long_direction
+    assert engine.calls["critic"] == 1
 
 
 def test_layer_prompt_documents_local_conclusion_as_required_field(tmp_path: Path):

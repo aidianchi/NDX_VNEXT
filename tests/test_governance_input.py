@@ -1054,6 +1054,36 @@ def test_governance_prompts_ban_fabricated_subfield_refs():
         assert "不得编造历史胜率、回测收益、样本区间或概率数字" in text, f"{name} missing ban on fabricated statistics"
 
 
+def test_prompts_no_longer_carry_dead_format_clauses_t69_p2a():
+    """T69 P2a（2026-08-31）提示词死条款清除的反向锁定：删掉的机械字段/字数窗口/
+    吓阻修辞不得回流。
+
+    清除依据（闸门宪法 v2 + 总账 2.1/2.2）：机械字段由 _compose_prompt 的契约字段
+    规格机械注入、由 pydantic/model_validate 守；字数窗口是形状代理语义；"打回/逐字
+    照抄/系统会拦截"是吓阻修辞，代码闸门与重试反馈已接管执法。"""
+    prompt_dir = Path(__file__).resolve().parents[1] / "src" / "agent_analysis" / "prompts"
+    dead_clauses = {
+        # ① 固定尾句代码装配（_ensure_event_section_boundary_sentence）、引用计数与
+        # 100-1500 字窗口代码侧已删（T69 P0-3）。
+        "event_section_summary.md": ["逐字保留", "至少引用两张", "100-1500"],
+        # ② 背字段名/背报错文案整节删除。
+        "counter_thesis.md": ["输出字段纪律", "逐字照抄", "Field required"],
+        # ④ event_refs 由代码装配为空列表，提示词一个字都不必再提。
+        "cross_layer_bridge.md": ["校验器会打回", "不需要输出 `event_refs`"],
+        # ⑥ 600-1200 字数窗口与方括号计数（代码侧"≥3 括号组"已于 P0-4 删除）。
+        "final_adjudicator.md": ["600-1200", "至少三个独立的方括号"],
+        "integrated_adjudicator.md": ["600-1200"],
+        # ⑧ 字数窗口与吓阻修辞（contracts.py 的 500 硬上限同批删除）。
+        "critic.md": ["500 字符", "打回重写"],
+        "l1_analyst.md": ["稳定超过 160"],
+        "context_loader.md": ["300 字符"],
+    }
+    for name, clauses in dead_clauses.items():
+        text = (prompt_dir / name).read_text(encoding="utf-8")
+        for clause in clauses:
+            assert clause not in text, f"{name} 仍残留已清除的死条款：{clause!r}"
+
+
 # ── 辅助函数 ──
 
 def _empty_layer_cards(*layers: str) -> list:

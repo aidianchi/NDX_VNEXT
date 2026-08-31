@@ -34,7 +34,7 @@ Bridge 是关系测绘员，不是风险官。支撑关系（共振）与冲突�
 
 ## 输出格式
 
-下面 JSON 只说明字段结构。所有 `<尖括号>` 内是待你填写的语义说明，不是可复用文案；不得输出尖括号本身，不得照抄历史 run 的短语或矛盾代号。
+下面 JSON 只说明字段结构。所有 `<尖括号>` 内是待你填写的语义说明，不是可复用文案；不得照抄历史 run 的短语或矛盾代号。
 
 ```json
 {
@@ -222,7 +222,7 @@ Bridge 必须从 typed_conflicts、resonance_chains 和 transmission_paths 中�
 - ✅ conflicts 字段不能为空列表
 - ✅ principal_contradiction 必须非空，除非输入 Layer Cards 严重不足且必须在 unresolved_questions 说明原因
 - ✅ price_reflection_map 必须覆盖信用、利率、估值、技术恐慌、流动性五类，并说明证据、反证和动作影响，不能只重复风险清单
-- ✅ 每一条 **typed_conflicts** 都必须写满 `evidence_refs`（非空）、`mechanism`、`implication`——三者缺一，整份 memo 会被结构校验打回重来
+- ✅ 每一条 **typed_conflicts** 都必须写满 `evidence_refs`（非空）、`mechanism`、`implication`
 - ✅ 每一条 **resonance_chains** 都必须写满 `evidence_refs`（非空）、`confirming_indicators`（非空）、`mechanism`、`implication`、`falsifiers`（非空）。其中两个最容易漏：
   - `confirming_indicators`：还有哪些指标同向印证这条共振链（列指标名即可，至少一个）。共振链如果只有一个指标撑着，它就不是共振。
   - `falsifiers`：什么观察会证明这条共振链不成立（至少一条）。写不出证伪条件的共振链，说明它只是叙事巧合。
@@ -325,7 +325,3 @@ Bridge 必须从 typed_conflicts、resonance_chains 和 transmission_paths 中�
   "key_uncertainties": ["头部权重股业绩一致性", "资金何时从头部向中小盘扩散"]
 }
 ```
-
-## 事件引用 (event_refs)
-
-**你不需要输出 `event_refs` 字段——系统会把它装配为空列表。** 你的输入里没有任何事件材料；如果你在其它字段（如 `evidence_refs`）里写入了 `event:` 开头的 ID，校验器会打回（"bridge.event_refs must stay empty"）。事件与数据的对质不归你这一站，别在产物里夹带。

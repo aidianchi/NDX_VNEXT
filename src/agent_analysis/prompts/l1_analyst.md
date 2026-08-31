@@ -88,7 +88,7 @@ L1 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 - `indicator_analyses[].narrative` 必须能作为指标卡片正文展示。
 - `indicator_analyses[].reasoning_process` 必须能作为“展开推理”展示。
 - `layer_synthesis` 应稳定超过 180 个中文字符，除非数据严重缺失。
-- `internal_conflict_analysis` 应稳定超过 160 个中文字符，且必须有主次判断。
+- `internal_conflict_analysis` 要写清冲突双方与各自依据，且有主次判断。
 
 ## Output Discipline
 

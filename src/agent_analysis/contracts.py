@@ -1877,9 +1877,10 @@ class Critique(BaseModel):
         description="跨层逻辑问题"
     )
 
-    # 建议修订方向。上限从 300 放宽到 500（2026-07-26）：与 overall_assessment 同理，
-    # 同样不进入固定宽度展示位，没有理由比它更紧。
-    revision_direction: str = Field(..., description="建议修订方向", max_length=500)
+    # 建议修订方向。原 300/500 字符上限已删除（2026-08-31 T69 P2a）：与
+    # overall_assessment 同理，该字段不进入任何固定宽度展示位，字数不代理质量
+    # （闸门宪法 v2：形状代理语义出局）；提示词侧 500 字符条款同步删除。
+    revision_direction: str = Field(..., description="建议修订方向")
 
 
 class RiskBoundaryReport(BaseModel):

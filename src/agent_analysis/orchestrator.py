@@ -195,24 +195,21 @@ STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
     # _validate_counter_thesis_draft + CompetingHypothesis 必填字段（真实事故 run
     # 20260724_223804：counter_thesis.md 从未逐字写过 hypothesis_text /
     # falsification_conditions，模型两次尝试各猜错一个字段名，约 28 万 prompt token
-    # 被烧光后退回确定性兜底稿）
+    # 被烧光后退回确定性兜底稿）。
+    # 2026-08-31 T69 P2a-②：提示词里"背字段名/背报错文案"整节删除——字段名由
+    # _compose_prompt 的契约字段规格机械注入，写错由 pydantic 报错路径 + _run_stage
+    # 重试反馈纠正，不再要求说明书逐字教。登记词同步瘦身为剩余定制校验
+    # （refs ⊆ evidence_index 存在性比对）真正点名的字段。
     "counter_thesis": (
-        "hypothesis_text",
-        "falsification_conditions",
         "support_evidence_refs",
         "diagnostic_evidence_refs",
         "evidence_index",
     ),
-    # Critique.revision_direction 是 pydantic max_length 硬约束（不是自定义 validator，
-    # 但同样是"模型没被告知就会被拒"的合约面）。真实事故复现于 20260725_232410：
-    # critic.md 当时未提及 200 字符上限，模型认真写长了被打回重试一次。这里的登记与
-    # 来源不限于自定义 validator——凡是会让结构校验/合约校验判失败、却可能没被写进
-    # 说明书的约束，都值得登记，不局限于 lambda validator。
-    #
-    # 2026-07-26 数字规则重构：overall_assessment 的 200 字符上限已确认无下游依据、
-    # 纯属人为限制并已移除，故从此登记撤下；revision_direction 上限放宽至 500，
-    # 登记同步更新为新数字。
-    "critic": ("500",),
+    # 2026-08-31 T69 P2a-⑧：Critique.revision_direction 的 500 字符硬上限删除
+    # （不进入任何固定宽度展示位，字数不代理质量），critic 站不再有任何"模型没被告知
+    # 就会被拒"的合约面，登记条目随之撤下。历史：20260725_232410 critic.md 未提及
+    # 200 字符上限曾致一次打回重试；2026-07-26 overall_assessment 上限移除、
+    # revision_direction 放宽至 500；2026-08-31 上限整体删除。
     # 2026-07-28「丙」反射闸门上线后立刻查出的三个漏登记 stage。前两个的说明书本来就
     # 写过对应规则，只是从没登记；bridge 是真缺口——`_validate_bridge_memo_v2` 硬性要求
     # resonance_chains 的 confirming_indicators / falsifiers 非空，而 cross_layer_bridge.md
