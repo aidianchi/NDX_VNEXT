@@ -185,7 +185,8 @@ STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
     "thesis": ("hypothesis_responses", "evidence_index", "kept_unresolved", "downgraded", "conflict_ordinal"),
     # reviser 同时受上述两条合约约束，是合约面最宽的治理 stage
     "reviser": ("hypothesis_responses", "evidence_index", "kept_unresolved", "downgraded", "conflict_ordinal"),
-    # _validate_stage_evidence_refs + _validate_reasoned_verdict_refs（三条理由各带引用）
+    # _validate_stage_evidence_refs + _validate_reasoned_verdict_refs（零引用拦截 +
+    # 引用/数字存在性比对；2026-08-31 T69 P0-4 起不再按方括号组数强制"三条理由各带引用"）
     # 2026-08-17 T54 批 6：claim_ledger 从模型答卷撤下——台账整本由代码装配
     # （_build_final_claim_ledger），模型输出在归一化阶段摘除、不进校验，登记词同步摘下。
     # 2026-08-16 T42②/③追加两个关键词：数字存在性比对（判决正文里的百分数/小数
@@ -223,10 +224,12 @@ STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
     # 用户裁决删除（措辞由代码渲染保证，见 _event_card_validation_errors 的说明）。
     # 仅保留方向越权这条禁止型规则。
     "event_card_interpreter": ("必须涨或必须跌",),
-    # _event_section_summary_validation_errors：卡片引用格式与 2-5 张的引用数量区间。
+    # _event_section_summary_validation_errors：卡片引用格式（[card:] 标记）与身份合法性。
     # T36（2026-07-31）：cited_event_ids 已改为代码从正文 [card:...] 标记里提取，
     # 不再要求模型自报这份清单，故从登记里摘下——它不再是"模型必须被告知的字段名"。
-    "event_section_summary": ("[card:", "至少引用两张"),
+    # 2026-08-31 T69 P0-3③：2-5 张引用计数子条删除，"至少引用两张"登记词同步摘下
+    # （计数不再代理质量；提示词条款的删除属于 P2 批，本批只动代码）。
+    "event_section_summary": ("[card:",),
 }
 
 # 「丙」的豁免名单：`_run_stage` 的 stage_key 在这些调用点是运行时拼出来的，静态扫描
@@ -314,6 +317,9 @@ NARRATIVE_STAGE_PROMPT_DROP_FIELDS: Dict[str, tuple] = {
     "counter_thesis": ("evidence_registry_summary",),
 }
 EVENT_INTERPRETATION_CARD_LIMIT = 10
+# 事件总结章节的固定边界句。2026-08-31 T69 P0-3④：从"模型必须写、漏写就拒"改为
+# 代码代劳——机械字段不出答卷，产物落盘时由 _ensure_event_section_boundary_sentence 保证。
+_EVENT_SECTION_BOUNDARY_SENTENCE = "以上事件材料不构成主证据，判断以数据层为准。"
 EVENT_FINANCIAL_LINKS = [
     "earnings_path",
     "valuation_multiple",
@@ -1886,7 +1892,8 @@ class VNextOrchestrator:
         看不到 raw_text_available/limitations/发布时间，既无法履行"如实说明材料质量限制"
         的提示词要求，也没有代码兜底防止把标题材料写实、把事后信息写进历史报告。
         本版从 selected 事件底账（而非只信任模型自报的 limitations）代码级富化 payload，
-        并新增两条硬校验：材料质量豁免句、日期泄漏。
+        硬校验保留日期泄漏（事后信息回流）等机械检查；2026-08-31 T69 P0-3 起，引用计数、
+        长度带与固定尾句三条形状代理语义子条已删除，尾句改由代码在落盘时保证。
         """
         if len(cards) < 2:
             return None, "insufficient_cards" if cards else "no_cards"
@@ -1929,7 +1936,7 @@ class VNextOrchestrator:
                 "event_material_only": True,
                 "must_not_reference_l1_l5": True,
                 "must_not_exceed_effective_date": effective_date,
-                "must_end_with": "以上事件材料不构成主证据，判断以数据层为准。",
+                "must_end_with": _EVENT_SECTION_BOUNDARY_SENTENCE,
                 "citation_rule": (
                     "引用一律原样抄 event_cards[].citation 字段的值，不要自行拼接、不要删改 id；"
                     "代码会从正文里的 [card:...] 标记自动提取，不需要另外列出引用清单。"
@@ -1995,6 +2002,11 @@ class VNextOrchestrator:
             logger.warning("Event section summary failed: %s", exc)
             return None, f"{type(exc).__name__}: {str(exc)[:300]}"
         summary_dict = _model_dump(summary)
+        # 2026-08-31 T69 P0-3④：结尾边界句代码代劳——模型写了就不重复加，没写就在这里
+        # 补上；正常路径与 T36 解析失败兜底路径都经过这里，两处都罩住。
+        summary_dict["summary_text"] = self._ensure_event_section_boundary_sentence(
+            str(summary_dict.get("summary_text") or "")
+        )
         stage_record = self.stage_diagnostics.get("stages", {}).get("event_section_summary", {})
         degraded_kind = (
             stage_record.get("degraded_fallback_kind")
@@ -2013,6 +2025,17 @@ class VNextOrchestrator:
         return summary_dict, ""
 
     _EVENT_CARD_CITATION_ID_PATTERN = re.compile(r"\[card:([^\[\]]+)\]")
+
+    @staticmethod
+    def _ensure_event_section_boundary_sentence(text: str) -> str:
+        """保证事件总结以固定边界句收尾（2026-08-31 T69 P0-3④，代码代劳）。
+
+        模型写了（出现在正文任意位置）就不重复加；没写就在末尾补上。只做形状
+        处理，不读内容。"""
+        body = str(text or "").rstrip()
+        if not body or _EVENT_SECTION_BOUNDARY_SENTENCE in body:
+            return body
+        return body + _EVENT_SECTION_BOUNDARY_SENTENCE
 
     @staticmethod
     def _salvage_text_field_from_broken_json(raw_text: str, field_name: str) -> str:
@@ -2119,22 +2142,13 @@ class VNextOrchestrator:
                 f"event_section_summary.citation_ids: cited_event_ids contain ids outside this run's cards: {unknown[:5]}"
                 f"；本轮合法 id 形如 {example_id}，不得删去 event: 前缀"
             )
-        if len(declared) < 2:
-            errors.append("event_section_summary.citation_count: summary must cite at least 2 event cards")
-        if len(declared) > 5:
-            errors.append("event_section_summary.citation_count: summary must cite at most 5 event cards")
-        if not text.rstrip().endswith("以上事件材料不构成主证据，判断以数据层为准。"):
-            errors.append("event_section_summary.boundary_sentence: summary_text must end with the fixed boundary sentence")
+        # 2026-08-31 T69 P0-3：删除三条形状代理语义子条（闸门宪法 v2）——
+        # ③引用 2-5 张计数（计数不代理质量）、⑥正文 100-1500 字长度带（同 W1-A 先例）、
+        # ④固定边界句结尾检查（改为代码代劳，见 _ensure_event_section_boundary_sentence）。
+        # 保留的 ①清单一致、②引用⊆本轮卡、⑤禁 L1-L5 ref、⑧日期≤effective_date 全是
+        # 身份/存在性/隔离/时点类机械检查；⑦事后/确定因果词表留待 P1 处置，本批不动。
         if re.search(r"L[1-5]\.get_", text):
             errors.append("event_section_summary.data_layer_isolation: summary_text must not reference L1-L5 data refs")
-        # 下限 100 予以保留：短于此难以对多张事件卡（含各自降级措辞）给出实质总结，
-        # 是在强制内容而非任意数字。上限从 600 放宽到 1500（2026-07-26 数字规则
-        # 重构）：渲染进 `<div class="prose event-summary"><p>` 普通段落，不是固定
-        # 宽度展示位，原上限无下游依据；尤其是最多可引用 5 张卡、每张仅标题/非官方
-        # 来源卡都要求带各自的降级措辞时，600 字经常装不下诚实的表达。
-        plain = re.sub(r"\[card:[^\[\]]+\]", "", text)
-        if not 100 <= len(plain) <= 1500:
-            errors.append(f"event_section_summary.length_band: summary_text length {len(plain)} outside tolerant band 100-1500")
         # 2026-07-30 用户裁决：删除"被引弱来源卡必须在同句带降级措辞"这条闸门。
         #
         # 它先后有过两个实现，都在真实 run 上误伤了合格产出：扫写死的词表（0729 误伤
@@ -6597,10 +6611,13 @@ class VNextOrchestrator:
         这里补成真正的合约校验，接进 `_run_stage` 的 validator 链：说明书已经给了
         模型示例格式（`[L1.get_10y_real_rate]`），这不是"模型不知道规则"（reviser/
         counter_thesis 那两次事故的根因），而是"规则没有被强制"，补一道校验、让重试
-        机制把报错原样喂回去即可，不需要改说明书。`reasoned_verdict` 长度已经是硬性
-        pydantic 校验（`test_final_stage_retries_after_overlong_reasoned_verdict`
-        锁定的既有行为），这里只是把"必须带引用"这条也提到同一严重度，不额外放大
-        终审阶段本来就有的爆炸半径。
+        机制把报错原样喂回去即可，不需要改说明书。
+
+        2026-08-31 T69 P0-4：删除"≥3 方括号组且 ≥3 条不同引用"计数子条——括号组数
+        代理"总-分-总"结构是形状代理语义（闸门宪法 v2），且 2026-07-27 的收紧曾把
+        模型推向"一个方括号塞多条"的写法、在真实 run 20260728_110702 整跑硬崩。
+        保留的全是机械检查：零引用拦截、引用逐字 ∈ evidence_index 的身份比对、
+        数字 token 在 payload 的存在性比对。
 
         `source_text`（T42②）是终审这一站实际收到的 payload 文本。传了就额外做
         "数字存在性比对"：判决正文里出现的百分数 / 小数值必须逐字出现在本次输入
@@ -6617,32 +6634,12 @@ class VNextOrchestrator:
                 "reasoned_verdict must cite at least one evidence_ref in [brackets] "
                 "(e.g. [L1.get_10y_real_rate]); found zero citations."
             ]
-        # final_adjudicator.md:243-245 要求"总-分-总"结构，中间按最有分量的**三条理由**
-        # 展开，且"三条主要理由每条必须至少带一个方括号标注的 evidence_ref"。只校验
-        # "至少一条引用"会放过真实事故形态：run 20260725_232410 的 514 字判决书把状态、
-        # 矛盾、风险、定价、赔率、仓位、失效条件全部压进单段连续文字，没有三条理由的
-        # 层级，读者拿不到"哪条证据支撑哪条理由"。三条理由各至少一条引用 ⇒ 至少三条
-        # 不同引用，这不是新拍的数字，是把说明书里已经写死的结构提到同一强制等级。
-        # 真实事故 run 20260728_110702：模型把两条合法 ref 逗号合并进同一个方括号
-        # （`[L1.get_10y_real_rate, L4.get_equity_risk_premium#level]`），旧解析把整段
-        # 当成一个 ref，两条都合法却被判"引用不在索引内"，终审两次尝试后整跑硬崩。
-        # 这是 2026-07-27 把"至少一条引用"收紧为"至少三条不同引用"之后的第一次真实 run，
-        # 收紧恰好把模型推向了这种写法——所以修法是让解析容忍逗号合并（每一段仍须逐字
-        # 合法，不放松任何一条 ref 的合法性），而不是把计数要求退回去。
-        #
-        # 但只按"不同 ref 条数"计数会重新打开 2026-07-27 要堵的洞：一段连续文字里塞一个
-        # 装三条 ref 的方括号也能凑够 3 条。所以这里同时要求**方括号组数 ≥ 3**——这才是
-        # `final_adjudicator.md:244` 写死的原文（"三条主要理由每条必须至少带一个方括号
-        # 标注的 evidence_ref"），比"3 条不同引用"更贴近说明书，不是新拍的数字。
-        if len(bracket_groups) < 3 or len(set(cited_refs)) < 3:
-            return [
-                "reasoned_verdict must follow the documented 总-分-总 structure: the three "
-                "main reasons each need at least one [bracketed] evidence_ref, i.e. at least "
-                "3 separate [bracket] groups and at least 3 distinct citations. Found "
-                f"{len(bracket_groups)} bracket group(s) and {len(set(cited_refs))} distinct "
-                f"citation(s): {sorted(set(cited_refs))}. Put one evidence_ref per bracket and "
-                "do not merge the three reasons into one continuous paragraph."
-            ]
+        # 逗号合并容忍的来历（真实事故 run 20260728_110702）：模型把两条合法 ref 逗号
+        # 合并进同一个方括号（`[L1.get_10y_real_rate, L4.get_equity_risk_premium#level]`），
+        # 旧解析把整段当成一个 ref，两条都合法却被判"引用不在索引内"，终审两次尝试后
+        # 整跑硬崩。修法是让解析容忍逗号合并（每一段仍须逐字合法，不放松任何一条 ref
+        # 的合法性）；配套的"方括号组数 ≥3 且不同引用 ≥3"计数子条已于 2026-08-31
+        # T69 P0-4 删除（形状代理语义，见 docstring）。
         lower_key_map = {key.lower(): key for key in allowed_refs}
         passports = {key: None for key in allowed_refs}
         unresolved = [

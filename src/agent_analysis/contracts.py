@@ -442,7 +442,7 @@ class EventSectionSummary(BaseModel):
     """
     model_config = {"extra": "forbid"}
 
-    summary_text: str = Field(..., min_length=1, description="含 [card:<event_id>] 引用与结尾边界句的总结正文")
+    summary_text: str = Field(..., min_length=1, description="含 [card:<event_id>] 引用的总结正文；结尾边界句由代码在产物落盘时保证（2026-08-31 T69 P0-3），模型写不写都行")
     cited_event_ids: List[str] = Field(
         default_factory=list,
         description=(
@@ -544,7 +544,7 @@ class IntegratedAdjudication(BaseModel):
     )
     integrated_verdict: str = Field(
         ...,
-        description="综合判决正文（长度不设硬闸门；600-1200 字由软提示窗口在解析层记 note）",
+        description="综合判决正文（长度不设硬闸门；2026-08-31 T69 P0-2 起也不设软窗 note）",
     )
     current_phenomena: List[str] = Field(default_factory=list)
     possible_mechanisms: List[str] = Field(default_factory=list)
@@ -2254,18 +2254,11 @@ class FinalAdjudication(BaseModel):
         description="阶段 4：最终自然语言结论的 claim-level 台账；完整产物另存 final_claim_ledger.json",
     )
 
-    @field_validator("reasoned_verdict")
-    @classmethod
-    def _validate_reasoned_verdict_length(cls, value: str) -> str:
-        """下限 300 字符予以保留：final_adjudicator.md 要求"总-分-总"结构、三条主要
-        理由各带方括号引用，篇幅太短物理上装不下这个结构，下限是在强制实质内容，
-        不是任意数字。上限从 1300 放宽到 3000（2026-07-26 数字规则重构）：原上限
-        无下游依据（不进入任何固定宽度展示位），只留一个远高于正常篇幅的安全网，
-        防止真正失控的输出，不再充当"逼它写简短"的强制手段。"""
-        text = str(value or "").strip()
-        if text and not 300 <= len(text) <= 3000:
-            raise ValueError("reasoned_verdict must be empty or contain 300-3000 characters")
-        return text
+    # 2026-08-31 T69 P0-1：删除 reasoned_verdict 的 300-3000 字硬闸门。字数代理"有料"
+    # 是形状代理语义（闸门宪法 v2）；先例即 20260827 run 的 IA 1515 字冤案（见上方
+    # IntegratedAdjudication 的 T68/W1 注释），本闸门是它的 final 侧同形物。内容缺失
+    # 由 _note_missing_reasoned_verdict 软 note 留痕，引用与数字的真实性由
+    # orchestrator._validate_reasoned_verdict_refs 的存在性比对守，不需要长度裁判。
 
     @field_validator("long_term_assessment", mode="before")
     @classmethod

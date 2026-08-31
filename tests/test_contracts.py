@@ -511,16 +511,23 @@ def test_final_adjudication_reasoned_verdict_contract_and_missing_note():
     assert missing.quality_gate is not None
     assert "判决正文缺失" in missing.quality_gate.notes
 
-    for invalid in ("过短", "过长" * 1501):  # 上限已放宽至 3000（2026-07-26），需超过新上限
-        with pytest.raises(Exception, match="reasoned_verdict"):
-            FinalAdjudication(
-                approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
-                final_stance="中性偏谨慎",
-                confidence=Confidence.MEDIUM,
-                must_preserve_risks=["估值压缩风险"],
-                adjudicator_notes="保留风险边界。",
-                reasoned_verdict=invalid,
-            )
+
+def test_reasoned_verdict_length_gate_removed_t69_p0():
+    """T69 P0-1（2026-08-31）：终审正文 300-3000 字硬闸门删除——字数代理"有料"是
+    形状代理语义（闸门宪法 v2）。先例：20260827 run 的 IA 1515 字冤案（contracts.py
+    IntegratedAdjudication 上方 W1-A 注释），本闸门是它的 final 侧同形物。
+    3500 字的合法正文必须直接通过 model_validate；短正文同样不再被字数闸拦，
+    缺内容仍由 _note_missing_reasoned_verdict 软 note 留痕。"""
+    base = dict(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="中性偏谨慎",
+        confidence=Confidence.MEDIUM,
+        must_preserve_risks=["估值压缩风险"],
+        adjudicator_notes="保留风险边界。",
+    )
+    long_verdict = "判" * 3500
+    assert FinalAdjudication(**base, reasoned_verdict=long_verdict).reasoned_verdict == long_verdict
+    assert FinalAdjudication(**base, reasoned_verdict="过短").reasoned_verdict == "过短"
 
 
 def test_decision_semantics_fields_roundtrip():

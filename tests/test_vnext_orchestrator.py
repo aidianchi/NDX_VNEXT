@@ -2259,6 +2259,50 @@ def test_event_section_summary_payload_hands_model_a_ready_made_citation(tmp_pat
     assert "不要删改 id" in captured["payload"]["boundary"]["citation_rule"]
 
 
+def test_event_section_summary_boundary_sentence_is_code_assembled_t69_p0(tmp_path: Path):
+    """T69 P0-3④（2026-08-31）：固定边界句从"模型必须写、漏写就拒"改为代码代劳。
+
+    机械字段不出答卷：模型写了就不重复加，没写就在产物落盘时由代码追加，保证
+    `section_summary.summary_text` 一定以"以上事件材料不构成主证据，判断以数据层为准。"
+    收尾；漏写不再触发重试。"""
+    boundary = "以上事件材料不构成主证据，判断以数据层为准。"
+    ids = ["event:aaa111", "event:bbb222"]
+    cards = [_event_interpretation_card_for_summary(eid) for eid in ids]
+    prose = f"据报道，本轮两则材料互相印证 [card:{ids[0]}] [card:{ids[1]}]，仍需正式数据确认。"
+
+    # 情形一：模型没写边界句 —— 不拒收、不重试，代码补上。
+    engine = SequencedFakeLLMEngine({
+        "event_section_summary": [json.dumps({"summary_text": prose}, ensure_ascii=False)],
+    })
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+    )
+    summary_dict, failure = orchestrator._build_event_section_summary(
+        cards, events_by_id={}, effective_date="2026-07-31",
+    )
+    assert not failure
+    assert engine.calls["event_section_summary"] == 1, "漏写边界句不得再触发重试"
+    assert summary_dict["summary_text"].endswith(boundary), "模型没写时代码必须追加"
+    assert summary_dict["summary_text"].startswith(prose), "代码只补尾句，不得改动模型正文"
+
+    # 情形二：模型自己写了 —— 不重复加。
+    engine2 = SequencedFakeLLMEngine({
+        "event_section_summary": [json.dumps({"summary_text": prose + boundary}, ensure_ascii=False)],
+    })
+    orchestrator2 = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path / "second"),
+        llm_engine=engine2,
+    )
+    written, failure2 = orchestrator2._build_event_section_summary(
+        cards, events_by_id={}, effective_date="2026-07-31",
+    )
+    assert not failure2
+    assert written["summary_text"].count(boundary) == 1, "模型写了就不重复加"
+
+
 def test_event_section_summary_payload_includes_needs_data_confirmation(tmp_path: Path):
     """T47 红灯：同一批事件卡，integrated_adjudicator 材料里每张都带
     needs_data_confirmation（契约 contracts.EventInterpretationCard 本就有此字段），
@@ -5025,7 +5069,10 @@ def test_canonical_metric_name_falls_back_when_canon_unknown(tmp_path: Path):
     assert VNextOrchestrator._canonical_metric_name("no_such_indicator", {"name": "别名"}) == "别名"
 
 
-def test_final_stage_retries_after_overlong_reasoned_verdict(tmp_path: Path):
+def test_final_stage_accepts_overlong_reasoned_verdict_without_retry(tmp_path: Path):
+    """T69 P0-1（2026-08-31）：终审正文 300-3000 字硬闸门删除（字数代理"有料"=形状代理
+    语义；先例为 20260827 run 的 IA 1515 字冤案，本闸门是其 final 侧同形物）。
+    超过旧上限的正文第一次尝试即被接受，不再触发 schema_validation_error 重试。"""
     base = {
         "approval_status": "approved_with_reservations",
         "final_stance": "中性偏谨慎",
@@ -5034,9 +5081,10 @@ def test_final_stage_retries_after_overlong_reasoned_verdict(tmp_path: Path):
         "blocking_issues": [],
         "adjudicator_notes": "保留风险边界。",
     }
+    overlong_verdict = "过长" * 1751  # 3502 字，在旧 300-3000 字硬闸门之外
     engine = SequencedFakeLLMEngine({
         "final_adjudicator": [
-            json.dumps({**base, "reasoned_verdict": "过长" * 1501}, ensure_ascii=False),  # 上限已放宽至 3000（2026-07-26）
+            json.dumps({**base, "reasoned_verdict": overlong_verdict}, ensure_ascii=False),
             json.dumps({**base, "reasoned_verdict": _VALID_REASONED_VERDICT}, ensure_ascii=False),
         ]
     })
@@ -5055,10 +5103,9 @@ def test_final_stage_retries_after_overlong_reasoned_verdict(tmp_path: Path):
     )
     diagnostics = json.loads((tmp_path / "llm_stage_diagnostics.json").read_text(encoding="utf-8"))
 
-    assert result.reasoned_verdict == _VALID_REASONED_VERDICT
-    assert engine.calls["final_adjudicator"] == 2
-    assert diagnostics["stages"]["final_adjudicator"]["errors"][0]["kind"] == "schema_validation_error"
-    assert "reasoned_verdict" in diagnostics["stages"]["final_adjudicator"]["errors"][0]["message"]
+    assert result.reasoned_verdict == overlong_verdict
+    assert engine.calls["final_adjudicator"] == 1, "超长正文不再被拒，不得发生重试"
+    assert not diagnostics["stages"]["final_adjudicator"].get("errors")
 
 
 def test_final_stage_retries_when_reasoned_verdict_has_zero_citations(tmp_path: Path):
@@ -5119,13 +5166,13 @@ def test_final_stage_retries_when_reasoned_verdict_has_zero_citations(tmp_path: 
     assert "found zero citations" in diagnostics["stages"]["final_adjudicator"]["errors"][0]["message"]
 
 
-def test_reasoned_verdict_requires_three_distinct_citations_for_three_reasons(tmp_path: Path):
-    """只查"至少一条引用"会放过真实事故形态：单段连续文字 + 一条引用即可蒙混过关。
+def test_reasoned_verdict_citation_count_gate_removed_t69_p0(tmp_path: Path):
+    """T69 P0-4（2026-08-31）：删除"≥3 方括号组且 ≥3 条不同引用"计数子条。
 
-    final_adjudicator.md:243-245 要求总-分-总结构、中间按"最有分量的三条理由"展开，
-    且"三条主要理由每条必须至少带一个方括号标注的 evidence_ref"。三条理由各至少
-    一条 ⇒ 至少三条不同引用。这不是新拍的数字，是把说明书里已写死的结构提到强制等级。
-    """
+    括号组数代理"总-分-总"结构是形状代理语义（闸门宪法 v2），且 2026-07-28 的
+    收紧曾把模型推向"一个方括号塞多条"的写法、并在真实 run 20260728_110702 整跑
+    硬崩。保留的机械检查一条不破：零引用拦截、引用身份比对、数字 token 在本战
+    payload 的存在性比对。"""
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
         output_dir=str(tmp_path),
@@ -5140,52 +5187,50 @@ def test_reasoned_verdict_requires_three_distinct_citations_for_three_reasons(tm
     class _V:
         def __init__(self, verdict): self.reasoned_verdict = verdict
 
-    # 单段连续文字、只挂一条引用 —— 正是 20260725_232410 的失败形态，必须被拦下。
+    # 只有一个方括号引用、引用真实合法 —— 计数子条删除后必须通过（红灯核心）。
     single = orchestrator._validate_reasoned_verdict_refs(
         _V("宏观与微观拉锯，风险面占优，赔率偏不利 [L1.get_fed_funds_rate]。"), allowed
     )
-    assert single and "at least 3 distinct citations" in single[0]
+    assert single == []
 
-    # 两条也不够：说明书要的是三条理由。
+    # 两条引用、同一引用重复出现，同样不再因计数被拦。
     two = orchestrator._validate_reasoned_verdict_refs(
         _V("理由一 [L1.get_fed_funds_rate]；理由二 [L4.get_ndx_pe_and_earnings_yield]。"), allowed
     )
-    assert two and "at least 3 distinct citations" in two[0]
-
-    # 同一条引用重复三次不算三条理由（去重后仍是 1）。
+    assert two == []
     dup = orchestrator._validate_reasoned_verdict_refs(
         _V("一 [L1.get_fed_funds_rate] 二 [L1.get_fed_funds_rate] 三 [L1.get_fed_funds_rate]。"),
         allowed,
     )
-    assert dup and "at least 3 distinct citations" in dup[0]
+    assert dup == []
 
-    # 三条不同引用 —— 通过。
-    ok = orchestrator._validate_reasoned_verdict_refs(
-        _V(
-            "第一，利率压制估值 [L1.get_fed_funds_rate]；"
-            "第二，估值安全垫薄 [L4.get_ndx_pe_and_earnings_yield]；"
-            "第三，趋势质量差 [L5.get_qqq_technical_indicators]。"
-        ),
-        allowed,
-    )
-    assert ok == []
-
-    # 引用越界仍然优先拦下（既有语义不得被新规则削弱）。
+    # 引用越界仍拦（身份比对不破）。
     illegal = orchestrator._validate_reasoned_verdict_refs(
         _V("一 [L1.get_fed_funds_rate] 二 [L4.get_ndx_pe_and_earnings_yield] 三 [L9.fake_ref]。"),
         allowed,
     )
     assert illegal and "outside evidence_index" in illegal[0]
 
+    # 数字存在性比对不破：一个方括号 + 逐字存在于 payload 的数字通过；编造数字仍拦。
+    source_text = json.dumps(
+        {"governance_input": {"key_evidence_refs": {"L1.get_fed_funds_rate": {"current_reading": "实际利率 2.3%"}}}},
+        ensure_ascii=False,
+    )
+    verdict_one_ref = "实际利率 2.3% 仍压制估值 [L1.get_fed_funds_rate]。"
+    assert orchestrator._validate_reasoned_verdict_refs(_V(verdict_one_ref), allowed, source_text=source_text) == []
+    fabricated = orchestrator._validate_reasoned_verdict_refs(
+        _V(verdict_one_ref.replace("2.3%", "9.9%")), allowed, source_text=source_text
+    )
+    assert fabricated and "9.9%" in fabricated[0]
+
 
 def test_reasoned_verdict_tolerates_comma_joined_refs_inside_one_bracket(tmp_path: Path):
     """红灯：真实事故 run 20260728_110702——两条合法 ref 被逗号合并进同一个方括号，
     旧解析把整段当成一个 ref，两条都合法却被判"引用不在索引内"，终审两次尝试后整跑硬崩。
 
-    这是 2026-07-27 把"至少一条引用"收紧为"至少三条不同引用"之后的第一次真实 run，
-    收紧恰好把模型推向了"一个方括号塞多条"的写法。修法是解析容忍逗号合并（每一段仍要
-    逐字合法），同时把计数改成"方括号组数 ≥ 3 且不同引用 ≥ 3"——后者比单纯数引用条数
-    更贴近 final_adjudicator.md 原文，防止"一段文字里一个方括号塞三条"重新蒙混过关。
+    修法是解析容忍逗号合并（每一段仍要逐字合法）。2026-08-31 T69 P0-4：当初的配套
+    计数子条（方括号组数 ≥3 且不同引用 ≥3）已删除——括号组数代理"总-分-总"结构是
+    形状代理语义；守住的是每段 ref 逐字合法，不是括号数量。
     """
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
@@ -5224,8 +5269,8 @@ def test_reasoned_verdict_tolerates_comma_joined_refs_inside_one_bracket(tmp_pat
     )
     assert illegal and "outside evidence_index" in illegal[0] and "L9.fake_ref" in illegal[0]
 
-    # 反向防线：一段连续文字、只有一个方括号却塞满三条合法 ref —— 正是收紧要堵的洞，
-    # 不能因为"拆开后有三条不同引用"就放行。
+    # T69 P0-4（2026-08-31）：计数子条已删——单个方括号里逗号合并三条合法 ref 也放行；
+    # 守住的是每段逐字合法（上面的 illegal 用例），不是括号组数。
     one_bracket = orchestrator._validate_reasoned_verdict_refs(
         _V(
             "宏观、广度与量能同时走弱，赔率不利 "
@@ -5233,7 +5278,7 @@ def test_reasoned_verdict_tolerates_comma_joined_refs_inside_one_bracket(tmp_pat
         ),
         allowed,
     )
-    assert one_bracket and "3 separate [bracket] groups" in one_bracket[0]
+    assert one_bracket == []
 
 
 def test_reasoned_verdict_flags_numbers_absent_from_stage_payload(tmp_path: Path):
@@ -7881,7 +7926,12 @@ def test_profile_adapter_whitelists_reader_exit_and_drops_private_amounts(tmp_pa
     assert "987654" not in json.dumps(dumped)
 
 
-def test_event_section_summary_validator_enforces_citation_and_boundary_contract():
+def test_event_section_summary_validator_enforces_identity_isolation_and_time_contract():
+    """T69 P0-3（2026-08-31）后本 validator 只保留机械检查：①citation 清单与正文引用
+    一致（身份）、②引用⊆本轮卡（存在性）、⑤禁 L1-L5 ref（隔离）、⑧日期≤effective_date
+    （时点）。③引用 2-5 张计数、④固定尾句、⑥100-1500 字长度带三条形状代理语义子条
+    已删除（尾句改由代码落盘时保证，见
+    test_event_section_summary_boundary_sentence_is_code_assembled_t69_p0）。"""
     from agent_analysis.contracts import EventSectionSummary
     from agent_analysis.orchestrator import VNextOrchestrator
 
@@ -7907,12 +7957,29 @@ def test_event_section_summary_validator_enforces_citation_and_boundary_contract
     )
     assert any("outside this run" in err for err in validate(foreign, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=True))
 
-    # 缺结尾边界句
+    # T69 P0-3③（2026-08-31）：引用计数子条删除——引六张卡（超旧上限 5）不再报
+    # "数量"错误；只引一张（低于旧下限 2）同样不拦。计数不代理质量。
+    six_ids = {f"event_six{i:04d}" for i in range(6)}
+    six = EventSectionSummary(
+        summary_text=f"{body} " + " ".join(f"[card:{eid}]" for eid in sorted(six_ids)) + "以上事件材料不构成主证据，判断以数据层为准。",
+        cited_event_ids=sorted(six_ids),
+    )
+    assert validate(six, allowed_ids=six_ids, effective_date="2026-07-19", title_only_majority=True) == []
+
+    one = EventSectionSummary(
+        summary_text=f"{body} [card:event_aaa11111]以上事件材料不构成主证据，判断以数据层为准。",
+        cited_event_ids=["event_aaa11111"],
+    )
+    assert validate(one, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=True) == []
+
+    # T69 P0-3④（2026-08-31）：缺固定尾句不再报错——边界句改由代码在落盘时保证
+    # （见 test_event_section_summary_boundary_sentence_is_code_assembled_t69_p0）。
+    # T69 P0-3⑥：长度带同步删除，正文长短都不再是拒收理由。
     unbounded = EventSectionSummary(
         summary_text=f"{body} [card:event_aaa11111] [card:event_bbb22222]",
         cited_event_ids=["event_aaa11111", "event_bbb22222"],
     )
-    assert any("boundary sentence" in err for err in validate(unbounded, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=True))
+    assert validate(unbounded, allowed_ids=allowed, effective_date="2026-07-19", title_only_majority=True) == []
 
     # 越权引用 L1-L5 数据 ref
     leaking = EventSectionSummary(
@@ -7958,7 +8025,8 @@ def test_event_section_summary_validator_enforces_citation_and_boundary_contract
         cited_event_ids=["event_aaa11111", "event_bbb22222"],
     )
     # 弱来源卡不带任何降级措辞，也不再产生降级类报错——保证已移交报告渲染。
-    # （该夹具正文短且含"必然改变市场定价"，仍会触发长度与禁止型规则，那两条是保留的。）
+    # （该夹具正文含"必然改变市场定价"，仍会触发事后/确定因果词表规则，那条是保留的；
+    # 长度带已随 T69 P0-3 删除。）
     assert not [
         err
         for err in validate(

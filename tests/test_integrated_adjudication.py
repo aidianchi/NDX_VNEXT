@@ -367,8 +367,9 @@ def test_verdict_length_band():
     """T68/W1（2026-08-28）：判决正文长度不再设硬闸门。
 
     20260827 run 实测两份内容完整的裁决正文（1515 / 1906 字）被旧的 400-1500
-    硬窗口整包打回——第一次只超 15 字，两连败导致整个 IA 对质降级为空。长度
-    超窗现在只由解析层软提示记 note，不再判死；本测试锁定"长不拒、短不拒"。"""
+    硬窗口整包打回——第一次只超 15 字，两连败导致整个 IA 对质降级为空。本测试
+    锁定"长不拒、短不拒"。T69 P0-2（2026-08-31）进一步删掉了残留的 600-1200
+    字软窗 note（软窗也是字数代理，见 test_verdict_length_soft_window_removed_t69_p0）。"""
     # 20260827 attempt_1 的实际长度：1515 字，旧闸门下超长 15 字即整包打回。
     IntegratedAdjudication.model_validate(
         {"integrated_verdict": "裁" * 1515}
@@ -380,6 +381,17 @@ def test_verdict_length_band():
     # 短正文同样放行（旧闸门 <400 字拒收），缺内容由软提示与补采机制兜底。
     IntegratedAdjudication.model_validate({"integrated_verdict": "太短"})
     IntegratedAdjudication.model_validate({"integrated_verdict": ""})
+
+
+def test_verdict_length_soft_window_removed_t69_p0():
+    """T69 P0-2（2026-08-31）：IA 正文 600-1200 字软窗（verdict_length_out_of_norm
+    note）整条删除——软窗也是字数代理"有料"（形状代理语义）。长度越界但其余合法的
+    输入不再产生该 note；未知 ref 的 verdict_unresolved_ref note 保留。"""
+    long_verdict = ("综合判决正文。" * 200)[:1300] + "[L1.get_10y_real_rate][card:event_abc12345][L9.ghost_ref]"
+    payload, _ = _build(_valid_response(integrated_verdict=long_verdict))
+    notes = payload["integrated_adjudication"]["notes"]
+    assert not any(str(n).startswith("verdict_length_out_of_norm") for n in notes), notes
+    assert any("verdict_unresolved_ref:L9.ghost_ref" in str(n) for n in notes), notes
 
 
 def test_adjudication_retry_feeds_error_back_to_model():

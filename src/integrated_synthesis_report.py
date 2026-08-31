@@ -804,8 +804,9 @@ class IntegratedSynthesisReportBuilder:
                 verdict_notes.append(f"verdict_uses_audit_only_ref:{token}")
         if cards and "[card:" not in model.integrated_verdict:
             verdict_notes.append("verdict_missing_card_annotations")
-        if not 600 <= len(model.integrated_verdict) <= 1200:
-            verdict_notes.append(f"verdict_length_out_of_norm:{len(model.integrated_verdict)}")
+        # 2026-08-31 T69 P0-2：删除 integrated_verdict 600-1200 字软窗 note——软窗同样是
+        # 字数代理"有料"（形状代理语义，闸门宪法 v2）。先例：20260827 run IA 1515 字冤案
+        # （硬闸门先撤，见 contracts.py IntegratedAdjudication 的 T68/W1 注释；本批清软窗残留）。
 
         result = model.model_copy(update={
             "notes": verdict_notes,
