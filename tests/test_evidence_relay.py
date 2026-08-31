@@ -176,6 +176,35 @@ def test_task1_extract_readable_text_default_limit_keeps_long_body():
     assert body == LONG_BODY
 
 
+# T68-W4：Yahoo 文章页会在侧边/模块里嵌一块 "Oops, something went wrong" 错误模块，
+# 页面其余部分是完整正文（2026-08-31 实测）。否决守卫只应杀"纯错误页"，
+# 不得把带真正文的文章页一并误杀。
+OOPS_MODULE_WITH_ARTICLE = (
+    "<html><body>"
+    "<div class='error-module'>Oops, something went wrong</div>"
+    "<div class='links'>Skip to navigation Skip to main content</div>"
+    "<article><p>" + ("Broad-market exchange-traded funds were lower. " * 40) + "</p></article>"
+    "</body></html>"
+)
+
+PURE_OOPS_ERROR_PAGE = (
+    "<html><body>"
+    "<div>Oops, something went wrong</div>"
+    "<div>Skip to navigation</div>"
+    "</body></html>"
+)
+
+
+def test_extract_readable_text_keeps_article_with_embedded_oops_module():
+    body = news_event_ledger._extract_readable_text(OOPS_MODULE_WITH_ARTICLE)
+    assert "Broad-market exchange-traded funds" in body
+
+
+def test_extract_readable_text_still_vetoes_pure_oops_error_page():
+    # 纯错误页（无实质正文）仍须判空——守卫防的是错误页进正文链，不是防这个词
+    assert news_event_ledger._extract_readable_text(PURE_OOPS_ERROR_PAGE) == ""
+
+
 # ---------------------------------------------------------------------------
 # 任务 2：卡落盘注入证据字段（逐字一致；契约零改动）
 # ---------------------------------------------------------------------------

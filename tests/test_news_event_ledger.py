@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -11,18 +11,23 @@ from news_event_ledger import NewsEventLedgerBuilder
 
 
 def test_news_event_ledger_builds_official_sidecar_without_layer_injection(tmp_path: Path):
-    rss = """<?xml version="1.0"?>
+    # 窗口相对当前时间取（45 天回看）：原先硬编码 2026-07-17 在 2026-08-31 越过
+    # 回看窗口边界导致误红——夹具日期必须跟着时钟走。
+    now = datetime.now(timezone.utc)
+    recent_day = now - timedelta(days=2)
+    prev_day = now - timedelta(days=3)
+    rss = f"""<?xml version="1.0"?>
 <rss><channel><item>
   <title>Federal Reserve issues FOMC statement</title>
   <link>https://www.federalreserve.gov/example.htm</link>
-  <pubDate>Fri, 17 Jul 2026 18:00:00 GMT</pubDate>
+  <pubDate>{recent_day.strftime("%a, %d %b %Y %H:%M:%S GMT")}</pubDate>
 </item></channel></rss>"""
     sec = {
         "filings": {
             "recent": {
                 "form": ["8-K", "4"],
                 "accessionNumber": ["0000320193-26-000001", "0000320193-26-000002"],
-                "filingDate": ["2026-07-17", "2026-07-16"],
+                "filingDate": [recent_day.date().isoformat(), prev_day.date().isoformat()],
                 "primaryDocument": ["aapl-20260508.htm", "xslF345X05/doc4.xml"],
             }
         }

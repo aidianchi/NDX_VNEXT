@@ -48,9 +48,18 @@
 4. 次要发现：`_should_fetch_article_body`（`src/news_event_ledger.py:1088`）有关键词闸——标题/URL 不含 "ai" 或指定词就不尝试抓正文（那晚 3 条因此未尝试）。这是相关性过滤设计，但见正文率目标可复议口径。
 5. 其余无正文条目大头是**设计如此**：24 条官方日历（bea/bls/fomc，本来就只有日程）、16 条 SEC  filings 索引（只有元数据，未抓 filing 正文）、7 条 Reddit（social 默认不抓正文）。
 
-**修复选项**（待老板拍板，均有先例/边界考量）：
+**修复落地（2026-08-31，老板批 B+D 组合）**：
+- D 实测成功：老板本机代理（规则模式，127.0.0.1:7897）已配入系统代理配置（`api_config` proxy 段），requests 直取 Yahoo 正文页 200 通过——那晚的旧文与今天的新文都取到 3-4KB 正文。规则模式已够，无需全局模式。
+- 连带修一个解析器误杀：`_extract_readable_text` 的 "Oops, something went wrong" 否决守卫把带真正文的 Yahoo 页面也毙了（Yahoo 文章页嵌着一块错误模块），改为"纯错误页（无实质正文 <600 字符可读文本）才否决"；红灯测试双锁定（带错误模块的文章页放行 / 纯错误页仍判空）。
+- 顺手修一个与本次无关的日期炸弹测试：`test_news_event_ledger` 的 SEC 夹具硬编码 2026-07-17，在 08-31 越过 45 天回看窗口边界误红，改相对日期。
+- B 侧留观：`_should_fetch_article_body` 关键词闸维持现状，下轮真实 run 观察正文率后再议是否放宽。
+- sidecar 环境修复留档：6 月残留的僵尸 bb-browser daemon（pid 50473，占 19824 端口）已清，daemon 与 CDP 恢复健康——A 方案虽物理出局，sidecar 管道本身已可用。
 
 - A. **走浏览器 sidecar 抓 Yahoo 正文**：项目已有 `src/browser_sidecar.py`；但常驻边界"浏览器采集默认隔离观察、未升级不得成 evidence_ref"——Yahoo 已是白名单可靠主流源，换运输方式不换来源层级，需明确这不触发弱来源降级。
+  **2026-08-31 实测（老板选 A 后验证）：跑不通**。修通 sidecar 环境（清掉 6 月残留的僵尸 daemon 占用 19824 端口，daemon 与 CDP 恢复健康）后，真实 Chrome 打开 Yahoo 正文页同样只得 105 字符的 "sad panda" 封锁页（标题只剩 "Yahoo"）——换运输工具无效，**封锁在 IP/地区层面**（Yahoo 退出中国大陆后对大陆 IP 的地理封锁：RSS 订阅源 feeds.finance.yahoo.com 能通，正文站 finance.yahoo.com 封死）。对照：RSS 里第三方站链接（247wallst/fool.com）requests 直取正文正常（实测 fool.com 200 + 正文 3752 字符）。A 物理出局后剩余选项：
+  - B. **接受 Yahoo 自家链接无正文**：Yahoo 条目只当标题级催化剂；正文靠 RSS 里第三方链接（当晚已有 4 条走通）。可顺带复议 `_should_fetch_article_body` 关键词闸（那晚 3 条因标题不含关键词连试都没试）。
+  - D（新）. **挂代理抓 Yahoo**：若老板有可用的海外代理，给 `get_requests_proxies` 配上即可，requests 直取就能通——但这要老板提供代理配置。
+  - C. **换源**：用可抓正文的同源新闻源替代 Yahoo RSS（涉及 T67/O6 数据源去留名单，等老板复核）。
 - B. **接受 Yahoo 自家链接无正文**：RSS 里第三方链接能抓多少算多少；Yahoo 条目只当标题级催化剂。
 - C. **换源**：用可抓正文的同源新闻源替代 Yahoo RSS（涉及 T67/O6 数据源去留名单，等老板复核）。
 

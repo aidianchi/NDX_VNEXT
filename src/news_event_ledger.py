@@ -300,7 +300,11 @@ def _extract_readable_text(raw: str, limit: int = RAW_TEXT_EXCERPT_LIMIT) -> str
         return ""
     if "enable javascript" in lower and "subscribe" in lower:
         return ""
-    if "oops, something went wrong" in lower and "skip to navigation" in lower:
+    # T68-W4（2026-08-31 实测）：Yahoo 文章页会在页面模块里嵌一块
+    # "Oops, something went wrong"（导航/推荐位渲染失败），页面其余部分是完整正文。
+    # 该守卫的本职是杀"纯错误页"，故补一条"且无实质正文"的约束——
+    # 带真正文（≥600 字符可读文本）的页面不得被这个词误杀。
+    if "oops, something went wrong" in lower and "skip to navigation" in lower and len(readable) < 600:
         return ""
     return readable
 
