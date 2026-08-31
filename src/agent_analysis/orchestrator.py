@@ -817,6 +817,11 @@ class VNextOrchestrator:
         )
         reviser_payload = {"governance_input": _model_dump(gov_input_reviser)}
         conflict_id_candidates = self._collect_thesis_conflict_id_candidates(synthesis_packet)
+        # T69 P2c：reviser 假说回应的序号基准 = 输入 thesis_hypothesis_responses 的顺序
+        # （即 thesis.hypothesis_responses，模型实见清单同一份顺序，不去重）。
+        reviser_hypothesis_id_candidates = [
+            response.hypothesis_id for response in getattr(thesis, "hypothesis_responses", []) or []
+        ]
         analysis_revised = self._load_reviser_checkpoint(reviser_payload)
         if analysis_revised is None:
             try:
@@ -827,11 +832,15 @@ class VNextOrchestrator:
                     payload=reviser_payload,
                     # T58/O15（接替 T42④ 的 conflict_id enum）：reviser 与 thesis 同款
                     # 序号机制——模型报 conflict_ordinal，代码映射回编号，抄写笔误物理关闭。
+                    # T69 P2c：hypothesis_responses 同款——报 hypothesis_ordinal。
                     strict_tool_schema=self._strict_tool_schema_for_stage(
                         "reviser",
                         AnalysisRevised,
-                        schema_postprocess=lambda schema: self._enforce_reviser_conflict_ordinal(
-                            schema, conflict_id_candidates
+                        schema_postprocess=lambda schema: self._enforce_reviser_hypothesis_ordinal(
+                            self._enforce_reviser_conflict_ordinal(
+                                schema, conflict_id_candidates
+                            ),
+                            reviser_hypothesis_id_candidates,
                         ),
                     ),
                     strict_tool_name="emit_analysis_revised",
@@ -852,7 +861,13 @@ class VNextOrchestrator:
                         thesis,
                     ),
                     validator=lambda candidate: (
-                        self._map_conflict_ordinals_to_ids(
+                        # T69 P2c：先按序号展开 hypothesis_id，再走既有逐一回应校验。
+                        self._map_hypothesis_ordinals_to_ids(
+                            candidate.revised_thesis.hypothesis_responses,
+                            reviser_hypothesis_id_candidates,
+                            "reviser.revised_thesis.hypothesis_responses",
+                        )
+                        + self._map_conflict_ordinals_to_ids(
                             [
                                 *candidate.revised_thesis.retained_conflicts,
                                 *candidate.remaining_conflicts,
@@ -4732,6 +4747,11 @@ class VNextOrchestrator:
         ):
             return checkpoint
         conflict_id_candidates = self._collect_thesis_conflict_id_candidates(synthesis_packet)
+        # T69 P2c：假说回应编号回声代码化——序号基准 = competing_hypotheses 原始顺序
+        # （模型实见清单同一份顺序，不去重，否则序号错位）。
+        thesis_hypothesis_id_candidates = [
+            hypothesis.hypothesis_id for hypothesis in synthesis_packet.competing_hypotheses
+        ]
         thesis = self._run_stage(
             stage_key="thesis",
             stage_name="thesis",
@@ -4740,8 +4760,9 @@ class VNextOrchestrator:
             strict_tool_schema=self._strict_tool_schema_for_stage(
                 "thesis",
                 ThesisDraft,
-                schema_postprocess=lambda schema: self._enforce_thesis_conflict_ordinal(
-                    schema, conflict_id_candidates
+                schema_postprocess=lambda schema: self._enforce_thesis_hypothesis_ordinal(
+                    self._enforce_thesis_conflict_ordinal(schema, conflict_id_candidates),
+                    thesis_hypothesis_id_candidates,
                 ),
             ),
             strict_tool_name="emit_thesis_draft",
@@ -4749,7 +4770,13 @@ class VNextOrchestrator:
             # 代码在合约校验阶段映射回 conflict_id；清单与映射共用同一份候选、同一顺序。
             prompt_appendix=self._render_conflict_ordinal_menu(conflict_id_candidates),
             validator=lambda candidate: (
-                self._map_conflict_ordinals_to_ids(
+                # T69 P2c：先按序号展开 hypothesis_id，再走既有逐一回应校验。
+                self._map_hypothesis_ordinals_to_ids(
+                    candidate.hypothesis_responses,
+                    thesis_hypothesis_id_candidates,
+                    "thesis.hypothesis_responses",
+                )
+                + self._map_conflict_ordinals_to_ids(
                     candidate.retained_conflicts,
                     conflict_id_candidates,
                     "thesis.retained_conflicts",
@@ -5007,6 +5034,121 @@ class VNextOrchestrator:
                 continue
             conflict.conflict_id = candidate_conflict_ids[ordinal - 1]
         return errors
+
+    @staticmethod
+    def _map_hypothesis_ordinals_to_ids(
+        responses: List[Any],
+        candidate_hypothesis_ids: List[str],
+        label: str,
+    ) -> List[str]:
+        """T69 P2c（同 T58/O15 conflict_ordinal 模式）：把模型报的 `hypothesis_ordinal`
+        （1-based）展开成清单对应条目的 `hypothesis_id` 写回产物，供下游
+        （`_validate_thesis_hypothesis_responses`、governance input、报告渲染）不变地使用。
+        序号基准 = 该站输入清单的顺序：thesis 站对 `synthesis_packet.competing_hypotheses`
+        数位置，reviser 站对 `thesis_hypothesis_responses` 数位置——调用方必须传入与模型
+        实见清单同一份顺序，不得各自重建或去重（去重会让序号错位）。
+
+        ordinal 在场时模型自填的任何 hypothesis_id 一律不采信（抄写笔误的最后一条
+        残留路径，一并关闭）；ordinal 缺失（None）= 旧档案/兼容路径，模型自填的
+        hypothesis_id 原样保留（checkpoint 复验不破）。序号越界/非整数返回校验错误，
+        走既有"带错误反馈重试"通道，反馈里写明合法范围。"""
+        errors: List[str] = []
+        total = len(candidate_hypothesis_ids)
+        for index, response in enumerate(responses or []):
+            ordinal = getattr(response, "hypothesis_ordinal", None)
+            if ordinal is None:
+                continue
+            if isinstance(ordinal, bool) or not isinstance(ordinal, int) or not 1 <= ordinal <= total:
+                if total:
+                    errors.append(
+                        f"{label}[{index}].hypothesis_ordinal={ordinal!r} 越界：本轮假说清单共 "
+                        f"{total} 条，合法取值是 1..{total} 的整数（按输入清单顺序数，第 1 条填 1）。"
+                    )
+                else:
+                    errors.append(
+                        f"{label}[{index}].hypothesis_ordinal={ordinal!r} 非法：本轮没有需要回应的"
+                        "假说，清单为空，hypothesis_ordinal 无处可指。"
+                    )
+                continue
+            response.hypothesis_id = candidate_hypothesis_ids[ordinal - 1]
+        return errors
+
+    def _enforce_hypothesis_ordinal_for_paths(
+        self,
+        schema: Dict[str, Any],
+        candidate_hypothesis_ids: List[str],
+        paths: tuple,
+    ) -> Dict[str, Any]:
+        """T69 P2c：把模型面向的 strict schema 里 `HypothesisResponse.hypothesis_id`
+        摘除，改用 `hypothesis_ordinal`（1-based 序号）承接回应意图——模型报"第几条"，
+        解析后由代码映射回编号（`_map_hypothesis_ordinals_to_ids`），抄写笔误物理不可能。
+        路径解析与 `_enforce_conflict_ordinal_for_paths` 同一套机制。
+
+        与 conflict 版的差异：每条假说回应都必须指向一个真实假说，不存在"留空"语义，
+        所以候选非空时 enum 是 [1..N]（不含 null），且确保 hypothesis_ordinal 在
+        required 里；候选为空（本轮无假说要回应，responses 应为空数组）时连
+        hypothesis_ordinal 一并摘除。"""
+        ordinal_enum: List[int] = [*range(1, len(candidate_hypothesis_ids) + 1)]
+
+        for path in paths:
+            node: Any = schema
+            for part in path:
+                node = self._resolve_strict_schema_object_node(node, schema)
+                if not isinstance(node, dict):
+                    node = None
+                    break
+                node = node.get("properties", {}).get(part)
+            if not isinstance(node, dict):
+                continue
+            items_node = self._find_strict_schema_array_items_node(node)
+            response_object_schema = self._resolve_strict_schema_object_node(items_node, schema)
+            if response_object_schema is None:
+                continue
+            properties = response_object_schema.get("properties")
+            if not isinstance(properties, dict):
+                continue
+            required = response_object_schema.get("required")
+            removed = ["hypothesis_id"]
+            properties.pop("hypothesis_id", None)
+            if ordinal_enum:
+                ordinal_node = properties.get("hypothesis_ordinal")
+                if isinstance(ordinal_node, dict):
+                    ordinal_node["enum"] = ordinal_enum
+            else:
+                properties.pop("hypothesis_ordinal", None)
+                removed.append("hypothesis_ordinal")
+            if isinstance(required, list):
+                required = [name for name in required if name not in removed]
+                if ordinal_enum and "hypothesis_ordinal" in properties and "hypothesis_ordinal" not in required:
+                    required.append("hypothesis_ordinal")
+                response_object_schema["required"] = required
+        return schema
+
+    def _enforce_thesis_hypothesis_ordinal(
+        self,
+        schema: Dict[str, Any],
+        candidate_hypothesis_ids: List[str],
+    ) -> Dict[str, Any]:
+        """T69 P2c：thesis 站 `hypothesis_responses` 改报 `hypothesis_ordinal` 序号
+        （基准 = synthesis_packet.competing_hypotheses 顺序）。"""
+        return self._enforce_hypothesis_ordinal_for_paths(
+            schema,
+            candidate_hypothesis_ids,
+            (("hypothesis_responses",),),
+        )
+
+    def _enforce_reviser_hypothesis_ordinal(
+        self,
+        schema: Dict[str, Any],
+        candidate_hypothesis_ids: List[str],
+    ) -> Dict[str, Any]:
+        """T69 P2c：reviser 站 `revised_thesis.hypothesis_responses` 改报
+        `hypothesis_ordinal` 序号（基准 = 输入 thesis_hypothesis_responses 顺序）。"""
+        return self._enforce_hypothesis_ordinal_for_paths(
+            schema,
+            candidate_hypothesis_ids,
+            (("revised_thesis", "hypothesis_responses"),),
+        )
 
 
     def _validate_thesis_hypothesis_responses(
@@ -5489,7 +5631,13 @@ class VNextOrchestrator:
             risk_evidence_refs.update(indicator_refs[:12])  # 最多 12 个/层
 
         thesis_key_support_chains = [_model_dump(chain) for chain in thesis.key_support_chains]
-        thesis_hypothesis_responses = list(getattr(thesis, "hypothesis_responses", []) or [])
+        # T69 P2c：hypothesis_ordinal 是站点局部作答坐标（thesis 站按 competing_hypotheses
+        # 数位置），序号基准随站切换——不得随 governance input 流进 critic/reviser/final 的
+        # payload 诱导下游抄写错位，移交时一律归零；hypothesis_id（代码已回填的真编号）保留。
+        thesis_hypothesis_responses = [
+            response.model_copy(update={"hypothesis_ordinal": None})
+            for response in (getattr(thesis, "hypothesis_responses", []) or [])
+        ]
         for chain in thesis.key_support_chains:
             all_evidence_refs.update(chain.evidence_refs)
             all_event_refs.update(getattr(chain, "event_refs", []) or [])
@@ -6494,6 +6642,11 @@ class VNextOrchestrator:
                 dumped = _model_dump(item)
                 if not isinstance(dumped, dict):
                     continue
+                # T69 P2c：hypothesis_ordinal 是 thesis 站局部序号（按 competing_hypotheses
+                # 数位置），继承进 reviser 产物必须剥除——否则会被按 reviser 站清单顺序
+                # （thesis_hypothesis_responses）误映射或误判越界；hypothesis_id 是代码
+                # 已回填的真编号，原样保留。
+                dumped.pop("hypothesis_ordinal", None)
                 dumped["carried_forward_from_thesis"] = True
                 carried.append(dumped)
             if not carried:

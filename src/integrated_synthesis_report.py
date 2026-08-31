@@ -869,19 +869,39 @@ class IntegratedSynthesisReportBuilder:
                 data[key] = _to_text_list(data[key])
 
         question_text = {q["question_id"]: q["question"] for q in questions}
+        question_ids_in_order = [q["question_id"] for q in questions]
         id_by_text = {q["question"].strip(): q["question_id"] for q in questions}
         answers = []
         for answer in data.get("question_answers") or []:
             if not isinstance(answer, dict):
                 continue
             answer = dict(answer)
-            qid = str(answer.get("question_id") or answer.get("id") or answer.get("qid") or "").strip()
-            if qid not in question_text:
-                text_key = str(answer.get("question") or "").strip()
-                if text_key in id_by_text:
-                    qid = id_by_text[text_key]
-                elif qid and any(qid in known or known.endswith(qid) for known in question_text):
-                    qid = next(known for known in question_text if qid in known or known.endswith(qid))
+            # T69 P2c ⑤a（同 T58/O15 conflict_ordinal 模式）：模型只报 question_ordinal
+            # （第几问，1-based，按输入 cross_layer_questions 顺序数），question_id 由代码
+            # 按序号回填——ordinal 在场时模型自填的 id 一律不采信，抄写笔误物理关闭；
+            # ordinal 越界按存在性处理（留痕 + 该回答作废，目标问题走 cannot_answer_yet
+            # 降级通道）；ordinal 缺失时退回模型自填的 id/原文匹配（旧档案兼容路径）。
+            ordinal = answer.get("question_ordinal")
+            if isinstance(ordinal, str) and ordinal.strip().isdigit():
+                ordinal = int(ordinal.strip())
+            ordinal_present = isinstance(ordinal, int) and not isinstance(ordinal, bool)
+            qid = ""
+            if ordinal_present:
+                if 1 <= ordinal <= len(question_ids_in_order):
+                    qid = question_ids_in_order[ordinal - 1]
+                else:
+                    data.setdefault("notes", []).append(
+                        f"invalid_question_ordinal:{ordinal}:本轮共 "
+                        f"{len(question_ids_in_order)} 问，合法序号 1..{len(question_ids_in_order)}"
+                    )
+            if not qid and not ordinal_present:
+                qid = str(answer.get("question_id") or answer.get("id") or answer.get("qid") or "").strip()
+                if qid not in question_text:
+                    text_key = str(answer.get("question") or "").strip()
+                    if text_key in id_by_text:
+                        qid = id_by_text[text_key]
+                    elif qid and any(qid in known or known.endswith(qid) for known in question_text):
+                        qid = next(known for known in question_text if qid in known or known.endswith(qid))
             answer["question_id"] = qid
             if not str(answer.get("question") or "").strip():
                 answer["question"] = question_text.get(qid, qid or "未知问题")

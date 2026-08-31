@@ -35,6 +35,7 @@ from agent_analysis.contracts import (
     FinalAdjudication,
     GoldenPitChecklist,
     HypothesisCompetition,
+    HypothesisResponse,
     InquiryMessage,
     InquiryMessageType,
     InvestigationReport,
@@ -3919,6 +3920,353 @@ def test_map_conflict_ordinals_to_ids_unit_cases(tmp_path: Path):
     assert errors_empty and "清单为空" in errors_empty[0]
 
 
+# ── T69 P2c ⑤b：假说回应编号回声代码化（hypothesis_ordinal → 代码回填 hypothesis_id）──
+#
+# 与 T58/O15 conflict_ordinal 同一模式：模型只报"第几条"（hypothesis_ordinal，1-based，
+# 序号基准 = 该站输入清单的顺序——thesis 站对 competing_hypotheses 数位置，reviser 站对
+# thesis_hypothesis_responses 数位置），hypothesis_id 由代码展开回填，抄写笔误物理关闭。
+# checkpoint 兼容：ordinal 缺失（None）= 旧档案路径，保留模型自填的 hypothesis_id 不碰。
+
+def test_map_hypothesis_ordinals_to_ids_unit_cases(tmp_path: Path):
+    """序号映射的单元级钉住：合法展开、ordinal 在场时模型自填 id 不采信、
+    ordinal 缺失走旧档案兼容路径、越界报错带合法范围、零候选时非空序号非法。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    candidates = ["hyp_a", "hyp_b"]
+    responses = [
+        HypothesisResponse(
+            hypothesis_ordinal=2,
+            hypothesis_id="模型乱填的",  # ordinal 在场 → 自填 id 被代码展开覆盖
+            verdict="absorb_partially",
+            reasoning="部分吸收。",
+        ),
+        HypothesisResponse(  # ordinal 缺失 → 旧档案路径，保留模型自填 id
+            hypothesis_id="hyp_a",
+            verdict="reject",
+            reasoning="正式反证。",
+            evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+        ),
+    ]
+    assert orchestrator._map_hypothesis_ordinals_to_ids(responses, candidates, "thesis") == []
+    assert responses[0].hypothesis_id == "hyp_b"
+    assert responses[1].hypothesis_id == "hyp_a"
+
+    bad = [
+        HypothesisResponse(
+            hypothesis_ordinal=99,  # 越界：清单只有 2 条
+            verdict="absorb_partially",
+            reasoning="部分吸收。",
+        )
+    ]
+    errors = orchestrator._map_hypothesis_ordinals_to_ids(bad, candidates, "thesis")
+    assert errors and "1..2" in errors[0]
+
+    errors_empty = orchestrator._map_hypothesis_ordinals_to_ids(bad, [], "thesis")
+    assert errors_empty and "无处可指" in errors_empty[0]
+
+
+def test_enforce_thesis_hypothesis_ordinal_injects_enum_and_removes_id(tmp_path: Path):
+    """模型面向 strict schema：hypothesis_id 物理摘除，hypothesis_ordinal 注入
+    [1..N] enum（每条回应必须指向一个假说，无 null 分支）；零候选时序号字段一并摘除。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+
+    def _schema():
+        return {
+            "type": "object",
+            "properties": {
+                "hypothesis_responses": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "hypothesis_id": {"type": "string"},
+                            "hypothesis_ordinal": {"type": ["integer", "null"]},
+                            "verdict": {"type": "string"},
+                        },
+                        "required": ["hypothesis_id", "hypothesis_ordinal", "verdict"],
+                    },
+                }
+            },
+        }
+
+    result = orchestrator._enforce_thesis_hypothesis_ordinal(_schema(), ["hyp_a", "hyp_b"])
+    item_schema = result["properties"]["hypothesis_responses"]["items"]
+    assert "hypothesis_id" not in item_schema["properties"]
+    assert item_schema["properties"]["hypothesis_ordinal"]["enum"] == [1, 2]
+    assert "hypothesis_id" not in item_schema["required"]
+    assert "hypothesis_ordinal" in item_schema["required"]
+
+    empty = orchestrator._enforce_thesis_hypothesis_ordinal(_schema(), [])
+    empty_item = empty["properties"]["hypothesis_responses"]["items"]
+    assert "hypothesis_id" not in empty_item["properties"]
+    assert "hypothesis_ordinal" not in empty_item["properties"]
+    assert empty_item["required"] == ["verdict"]
+
+
+def test_enforce_reviser_hypothesis_ordinal_targets_revised_thesis_path(tmp_path: Path):
+    """reviser 站：hypothesis_responses 嵌在 revised_thesis 里，序号基准换成
+    thesis_hypothesis_responses（reviser 输入清单）的顺序。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    schema = {
+        "type": "object",
+        "properties": {
+            "revised_thesis": {
+                "type": "object",
+                "properties": {
+                    "hypothesis_responses": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "hypothesis_id": {"type": "string"},
+                                "hypothesis_ordinal": {"type": ["integer", "null"]},
+                                "verdict": {"type": "string"},
+                            },
+                            "required": ["hypothesis_id", "hypothesis_ordinal", "verdict"],
+                        },
+                    }
+                },
+            }
+        },
+    }
+    result = orchestrator._enforce_reviser_hypothesis_ordinal(schema, ["hyp_x"])
+    item_schema = result["properties"]["revised_thesis"]["properties"]["hypothesis_responses"]["items"]
+    assert "hypothesis_id" not in item_schema["properties"]
+    assert item_schema["properties"]["hypothesis_ordinal"]["enum"] == [1]
+
+
+def test_thesis_maps_hypothesis_ordinal_to_id_and_retries_out_of_range(tmp_path: Path):
+    """T69 P2c 端到端：thesis 模型报 hypothesis_ordinal 序号，产物里的 hypothesis_id
+    由代码按 competing_hypotheses 顺序展开；序号越界走带合法范围的重试反馈。"""
+    invalid = {
+        "environment_assessment": "环境偏紧。",
+        "valuation_assessment": "估值偏高。",
+        "timing_assessment": "趋势仍在但质量存疑。",
+        "main_thesis": "主线仍成立，但必须回应竞争解释。",
+        "hypothesis_responses": [
+            {
+                "hypothesis_ordinal": 99,  # 越界：本轮共 3 条假说
+                "verdict": "reject",
+                "reasoning": "正式估值证据构成反证。",
+                "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+            }
+        ],
+        "overall_confidence": "medium",
+    }
+    valid = {
+        **invalid,
+        "hypothesis_responses": [
+            {
+                "hypothesis_ordinal": 1,
+                "verdict": "reject",
+                "reasoning": "正式估值证据构成反证。",
+                "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+            },
+            {
+                "hypothesis_ordinal": 2,
+                "verdict": "absorb_partially",
+                "reasoning": "部分吸收趋势解释，但仍缺少广度确认。",
+                "evidence_refs": ["L5.get_qqq_technical_indicators"],
+            },
+            {
+                "hypothesis_ordinal": 3,
+                "verdict": "accept_and_revise",
+                "reasoning": "主线解释在当前证据下仍然成立，予以采纳并保留监测项。",
+                "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+            },
+        ],
+    }
+    engine = SequencedFakeLLMEngine(
+        {"thesis": [json.dumps(invalid, ensure_ascii=False), json.dumps(valid, ensure_ascii=False)]}
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+    )
+    synthesis = SynthesisPacket(
+        packet_meta={"data_date": "2026-04-24"},
+        evidence_index={
+            "L4.get_ndx_pe_and_earnings_yield": {"layer": "L4"},
+            "L5.get_qqq_technical_indicators": {"layer": "L5"},
+        },
+        competing_hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_counter_1",
+                hypothesis_text="估值压力可能仍未反映。",
+                source="counter_thesis",
+                status="candidate",
+            ),
+            CompetingHypothesis(
+                hypothesis_id="hyp_counter_2",
+                hypothesis_text="趋势可能已经吸收部分压力。",
+                source="counter_thesis",
+                status="candidate",
+            ),
+            CompetingHypothesis(
+                hypothesis_id="hyp_leading",
+                hypothesis_text="当前主线解释。",
+                source="bridge_v2",
+                status="leading",
+            ),
+        ],
+    )
+
+    thesis = orchestrator._run_thesis(synthesis)
+
+    assert engine.calls["thesis"] == 2
+    assert [response.hypothesis_id for response in thesis.hypothesis_responses] == [
+        "hyp_counter_1",
+        "hyp_counter_2",
+        "hyp_leading",
+    ]
+    assert [response.hypothesis_ordinal for response in thesis.hypothesis_responses] == [1, 2, 3]
+    retry_prompt = (tmp_path / "prompt_audit" / "thesis" / "attempt_2.prompt.txt").read_text(encoding="utf-8")
+    assert "hypothesis_ordinal" in retry_prompt
+    assert "1..3" in retry_prompt
+
+
+def test_reviser_maps_hypothesis_ordinal_against_thesis_response_order(tmp_path: Path):
+    """reviser 站序号基准 = 输入 thesis_hypothesis_responses 的顺序（不是
+    competing_hypotheses）。模型报 ordinal=1 → 代码回填该清单第 1 条的 hypothesis_id。"""
+    synthesis, thesis, reviser_payload = _reviser_carry_forward_fixture()
+    reviser_payload["revised_thesis"]["hypothesis_responses"] = [
+        {
+            "hypothesis_ordinal": 1,
+            "verdict": "absorb_partially",
+            "reasoning": "修订后部分吸收反方，承认盈利数据缺口。",
+            "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+        }
+    ]
+    engine = SequencedFakeLLMEngine(
+        {"reviser": [json.dumps(reviser_payload, ensure_ascii=False)]}
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    result = _run_reviser_stage(orchestrator, synthesis, thesis, "")
+
+    response = result.revised_thesis.hypothesis_responses[0]
+    assert response.hypothesis_id == "hyp_counter_33b7f68546"
+    assert response.hypothesis_ordinal == 1
+    assert response.verdict == "absorb_partially"
+
+
+def test_reviser_hypothesis_ordinal_out_of_range_retries_with_legal_range(tmp_path: Path):
+    """reviser 报越界序号 → 校验错误带合法范围（1..N）进重试反馈，修正后通过。"""
+    synthesis, thesis, reviser_payload = _reviser_carry_forward_fixture()
+    bad_payload = dict(reviser_payload)
+    bad_payload["revised_thesis"] = {**reviser_payload["revised_thesis"]}
+    bad_payload["revised_thesis"]["hypothesis_responses"] = [
+        {
+            "hypothesis_ordinal": 5,  # 越界：thesis 只交来 1 条假说回应
+            "verdict": "absorb_partially",
+            "reasoning": "部分吸收。",
+            "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+        }
+    ]
+    good_payload = dict(reviser_payload)
+    good_payload["revised_thesis"] = {**reviser_payload["revised_thesis"]}
+    good_payload["revised_thesis"]["hypothesis_responses"] = [
+        {
+            "hypothesis_ordinal": 1,
+            "verdict": "absorb_partially",
+            "reasoning": "修订后部分吸收反方，承认盈利数据缺口。",
+            "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
+        }
+    ]
+    engine = SequencedFakeLLMEngine(
+        {"reviser": [json.dumps(bad_payload, ensure_ascii=False), json.dumps(good_payload, ensure_ascii=False)]}
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    result = _run_reviser_stage(orchestrator, synthesis, thesis, "")
+
+    assert engine.calls["reviser"] == 2
+    assert result.revised_thesis.hypothesis_responses[0].hypothesis_id == "hyp_counter_33b7f68546"
+    retry_prompt = (tmp_path / "prompt_audit" / "reviser" / "attempt_2.prompt.txt").read_text(encoding="utf-8")
+    assert "hypothesis_ordinal" in retry_prompt
+    assert "1..1" in retry_prompt
+
+
+def test_reviser_carry_forward_strips_thesis_stage_ordinal(tmp_path: Path):
+    """序号是站点局部坐标：thesis 产物的 hypothesis_ordinal 按 competing_hypotheses
+    数位置，继承进 reviser 产物时必须剥除——否则会被按 reviser 站清单顺序误映射
+    （这里 thesis 站序号 3 在 reviser 清单里越界，不剥就会误判打回）。"""
+    synthesis, thesis, reviser_payload = _reviser_carry_forward_fixture()
+    thesis.hypothesis_responses[0].hypothesis_ordinal = 3  # thesis 站局部序号残留
+    engine = SequencedFakeLLMEngine(
+        {"reviser": [json.dumps(reviser_payload, ensure_ascii=False)]}
+    )
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+        max_node_retries=2,
+    )
+
+    result = _run_reviser_stage(orchestrator, synthesis, thesis, "")
+
+    carried = result.revised_thesis.hypothesis_responses[0]
+    assert carried.hypothesis_id == "hyp_counter_33b7f68546"  # id 原样继承
+    assert carried.hypothesis_ordinal is None  # thesis 站局部序号已剥除
+
+
+def test_governance_input_strips_thesis_stage_hypothesis_ordinal(tmp_path: Path):
+    """thesis 站局部序号不得随 governance input 流进 critic/reviser/final 的 payload——
+    序号基准随站切换，残留旧序号会诱导下游抄写错位。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    synthesis = SynthesisPacket(
+        packet_meta={"data_date": "2026-04-24"},
+        evidence_index={"L4.get_ndx_pe_and_earnings_yield": {"layer": "L4"}},
+        competing_hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_counter_1",
+                hypothesis_text="估值压力可能仍未反映。",
+                source="counter_thesis",
+                status="candidate",
+            )
+        ],
+    )
+    thesis = ThesisDraft(
+        environment_assessment="环境偏紧。",
+        valuation_assessment="估值偏高。",
+        timing_assessment="趋势待确认。",
+        main_thesis="保留竞争解释。",
+        overall_confidence=Confidence.MEDIUM,
+        hypothesis_responses=[
+            HypothesisResponse(
+                hypothesis_id="hyp_counter_1",
+                hypothesis_ordinal=1,
+                verdict="reject",
+                reasoning="正式估值证据构成反证。",
+                evidence_refs=["L4.get_ndx_pe_and_earnings_yield"],
+            )
+        ],
+    )
+
+    governance = orchestrator._build_governance_input_packet(synthesis, thesis)
+
+    assert governance.thesis_hypothesis_responses[0].hypothesis_id == "hyp_counter_1"
+    assert governance.thesis_hypothesis_responses[0].hypothesis_ordinal is None
+
+
 def test_thesis_retries_until_every_candidate_hypothesis_has_auditable_response(tmp_path: Path):
     invalid = {
         "environment_assessment": "环境偏紧。",
@@ -4632,7 +4980,13 @@ def _run_reviser_stage(orchestrator, synthesis, thesis, raw_response: str):
             synthesis.evidence_index,
         ),
         validator=lambda candidate: (
-            orchestrator._validate_stage_evidence_refs(
+            # T69 P2c：先按序号展开 hypothesis_id，再走既有校验（同生产接线顺序）。
+            orchestrator._map_hypothesis_ordinals_to_ids(
+                candidate.revised_thesis.hypothesis_responses,
+                [r.hypothesis_id for r in thesis.hypothesis_responses],
+                "reviser.revised_thesis.hypothesis_responses",
+            )
+            + orchestrator._validate_stage_evidence_refs(
                 candidate, set(synthesis.evidence_index.keys()), "reviser"
             )
             + orchestrator._validate_thesis_hypothesis_responses(

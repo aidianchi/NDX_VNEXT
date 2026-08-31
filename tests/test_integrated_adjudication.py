@@ -355,6 +355,82 @@ def test_unknown_question_and_card_are_dropped_with_notes():
     assert any("dropped_unknown_card:event_ghost" in n for n in adj["notes"])
 
 
+# ── T69 P2c ⑤a：question_id 编号回声代码化（模型报 question_ordinal，代码回填）──
+
+def test_question_ordinal_is_expanded_to_question_id_by_code():
+    """模型只报 question_ordinal（第几问，1-based，按输入 cross_layer_questions 顺序数），
+    question_id 由代码回填——编号不再经过模型的手（同 T58/O15 conflict_ordinal 模式）。
+    question 原文同样由代码按序号回填，模型可以不写。"""
+    data = json.loads(_valid_response())
+    data["question_answers"] = [
+        {
+            "question_ordinal": 2,
+            "answer_status": "partially_answered",
+            "answer": "信用利差未同步走阔 [L1.get_10y_real_rate]。",
+            "data_refs": ["L1.get_10y_real_rate"],
+            "investigation_refs": [],
+            "missing_evidence": ["HY OAS 具体读数"],
+        }
+    ]
+    payload, _ = _build(json.dumps(data, ensure_ascii=False))
+    answers = {a["question_id"]: a for a in payload["integrated_adjudication"]["question_answers"]}
+    # ordinal=2 → 第二问 q2 被作答，question/question_id 均由代码按序号展开。
+    assert answers["q2"]["answer_status"] == "partially_answered"
+    assert answers["q2"]["answer"].startswith("信用利差未同步走阔")
+    assert answers["q2"]["question"] == "利率叙事是否有信用利差支持？"
+    assert answers["q2"]["question_ordinal"] == 2
+    # q1 无人作答 → 既有 cannot_answer_yet 降级通道。
+    assert answers["q1"]["answer_status"] == "cannot_answer_yet"
+
+
+def test_question_ordinal_overrides_model_supplied_question_id():
+    """ordinal 在场时模型自填的 question_id 一律不采信，以代码展开为准——
+    抄错编号这条残留路径物理关闭。"""
+    data = json.loads(_valid_response())
+    data["question_answers"] = [
+        {
+            "question_ordinal": 2,
+            "question_id": "q1",  # 模型抄错/乱填：应被 ordinal=2 覆盖成 q2
+            "answer_status": "partially_answered",
+            "answer": "信用利差未同步走阔 [L1.get_10y_real_rate]。",
+            "data_refs": ["L1.get_10y_real_rate"],
+            "missing_evidence": ["HY OAS 具体读数"],
+        }
+    ]
+    payload, _ = _build(json.dumps(data, ensure_ascii=False))
+    answers = {a["question_id"]: a for a in payload["integrated_adjudication"]["question_answers"]}
+    assert answers["q2"]["answer_status"] == "partially_answered"
+    assert answers["q1"]["answer_status"] == "cannot_answer_yet"
+
+
+def test_question_ordinal_out_of_range_degrades_with_note():
+    """ordinal 越界按存在性处理：该回答作废留痕，涉及的问题走 cannot_answer_yet
+    降级通道，不炸、不静默。"""
+    data = json.loads(_valid_response())
+    data["question_answers"] = [
+        {
+            "question_ordinal": 99,
+            "answer_status": "answered_by_data",
+            "answer": "无处可指的回答 [L1.get_10y_real_rate]。",
+            "data_refs": ["L1.get_10y_real_rate"],
+        }
+    ]
+    payload, _ = _build(json.dumps(data, ensure_ascii=False))
+    adj = payload["integrated_adjudication"]
+    assert {a["question_id"] for a in adj["question_answers"]} == {"q1", "q2"}
+    assert all(a["answer_status"] == "cannot_answer_yet" for a in adj["question_answers"])
+    assert any("invalid_question_ordinal:99" in n for n in adj["notes"])
+
+
+def test_question_id_legacy_echo_still_accepted_for_checkpoint_compat():
+    """checkpoint 兼容：旧格式（模型直接带 question_id 字符串、无 ordinal）照常受理——
+    旧档案复验路径不破。既有 `_valid_response` 全家测试同在此路径上。"""
+    payload, _ = _build(_valid_response())
+    answers = {a["question_id"]: a for a in payload["integrated_adjudication"]["question_answers"]}
+    assert answers["q1"]["answer_status"] == "partially_answered"
+    assert answers["q1"]["question_ordinal"] is None
+
+
 def test_env_disable_skips_llm(monkeypatch):
     monkeypatch.setenv("INTEGRATED_ADJUDICATION_LLM_ENABLED", "0")
     payload, calls = _build(_valid_response())

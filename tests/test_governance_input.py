@@ -1118,6 +1118,30 @@ def test_prompts_no_longer_carry_dead_format_clauses_t69_p2b():
             assert clause not in text, f"{name} 仍残留已清除的死条款：{clause!r}"
 
 
+def test_prompts_no_longer_carry_id_echo_clauses_t69_p2c():
+    """T69 P2c（2026-08-31）编号回声代码化的反向锁定：question_id / hypothesis_id 的
+    "逐字回声"条款不得回流——模型只报序号（question_ordinal / hypothesis_ordinal），
+    真编号由代码按输入清单顺序展开（同 T58/O15 conflict_ordinal 模式）。
+    同族连清：l1 的 layer_synthesis 180 字下限（l2-l5 已于 P2b 清除）。"""
+    prompt_dir = Path(__file__).resolve().parents[1] / "src" / "agent_analysis" / "prompts"
+
+    ia = (prompt_dir / "integrated_adjudicator.md").read_text(encoding="utf-8")
+    assert "逐字复制" not in ia, "integrated_adjudicator.md 仍残留 question_id 逐字回声条款"
+    assert "question_ordinal" in ia, "integrated_adjudicator.md 未告知模型报 question_ordinal"
+
+    reviser = (prompt_dir / "reviser.md").read_text(encoding="utf-8")
+    assert "逐字照抄" not in reviser, "reviser.md 仍残留 hypothesis_id 逐字照抄条款"
+    assert "hypothesis_ordinal" in reviser, "reviser.md 未告知模型报 hypothesis_ordinal"
+
+    thesis = (prompt_dir / "thesis_builder.md").read_text(encoding="utf-8")
+    assert "hypothesis_ordinal" in thesis, "thesis_builder.md 未告知模型报 hypothesis_ordinal"
+    assert "<candidate 假说的 hypothesis_id>" not in thesis, "thesis_builder.md 示例仍让模型回声 hypothesis_id"
+
+    l1 = (prompt_dir / "l1_analyst.md").read_text(encoding="utf-8")
+    assert "稳定超过 180" not in l1, "l1_analyst.md 仍残留 layer_synthesis 180 字下限"
+    assert "归纳本层指标的方向与张力" in l1, "l1_analyst.md 未与 l2-l5 新措辞对齐"
+
+
 # ── 辅助函数 ──
 
 def _empty_layer_cards(*layers: str) -> list:

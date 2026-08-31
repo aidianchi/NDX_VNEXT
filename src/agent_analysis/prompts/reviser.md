@@ -14,7 +14,7 @@
 
 ## 竞争假说回应纪律（硬合约）
 
-`thesis_hypothesis_responses` 里每一个假说，你都**必须**在 `revised_thesis.hypothesis_responses` 里留下恰好一条回应——不多不少，`hypothesis_id` 逐字照抄，不得改写、合并或漏掉。这份列表覆盖 Thesis 阶段所有非 `downgraded` 状态的竞争假说（`candidate`、`leading`、`kept_unresolved`、`split`），不是只有 candidate。
+`thesis_hypothesis_responses` 里每一个假说，你都**必须**在 `revised_thesis.hypothesis_responses` 里留下恰好一条回应——不多不少，每条用 `hypothesis_ordinal` 报该假说在输入 `thesis_hypothesis_responses` 清单里的序号（第 1 条填 1），`hypothesis_id` 由系统按序号回填、不要自己填写；不得合并或漏掉任何一个。这份列表覆盖 Thesis 阶段所有非 `downgraded` 状态的竞争假说（`candidate`、`leading`、`kept_unresolved`、`split`），不是只有 candidate。
 
 - 你可以**修订**某条回应（改 verdict、改理由、换证据），这正是你的职责；
 - 你**不可以**因为"这一段我没改"就把整个字段省略掉。省略等于让候选假说在最终判断书里消失，属于抹平冲突。
@@ -79,7 +79,7 @@
     "retained_conflicts": [...],
     "hypothesis_responses": [
       {
-        "hypothesis_id": "必须与 thesis_hypothesis_responses 中的 id 一一对应，不得改写或漏掉任何一个",
+        "hypothesis_ordinal": 1,
         "verdict": "accept_and_revise | absorb_partially | reject",
         "reasoning": "修订后的回应理由",
         "evidence_refs": ["reject 时必须给出至少一条来自索引的反证 ref"]
@@ -242,7 +242,7 @@ revision_summary 应包含：
 - [ ] revision_claimed_fields 是否只列确实改动过、且能在 revised_thesis 实物中找到的字段名？
 - [ ] accepted_critiques 是否列出所有采纳的批评？
 - [ ] rejected_critiques 是否有充分理由？
-- [ ] revised_thesis.hypothesis_responses 是否对每个非 downgraded 竞争假说恰有一条回应、id 逐字对应、无遗漏无重复？
+- [ ] revised_thesis.hypothesis_responses 是否对每个非 downgraded 竞争假说恰有一条回应、序号一一对应、无遗漏无重复？
 - [ ] 所有 evidence_refs 是否存在于证据索引中（没有自行拼接的 `parent#field`）？
 - [ ] revised_thesis 是否修复了数据引用错误？
 - [ ] revised_thesis 是否整合了风险警示？

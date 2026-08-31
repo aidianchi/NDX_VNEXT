@@ -468,7 +468,12 @@ class IntegratedQuestionAnswer(BaseModel):
     """第三层对一道跨层问题（新闻给数据层出的题）的正式回答。"""
     model_config = {"extra": "forbid"}
 
-    question_id: str = Field(..., min_length=1, description="cross_layer_questions 中的问题 id")
+    question_ordinal: Optional[int] = Field(
+        None,
+        description="模型作答通道（2026-08-31 T69 P2c）：该回答对应输入 cross_layer_questions "
+        "里的第几问（1-based，第 1 问填 1）；question_id 由代码按序号回填，模型不要自填",
+    )
+    question_id: str = Field(..., min_length=1, description="cross_layer_questions 中的问题 id——代码按 question_ordinal 回填（T69 P2c）；旧档案里模型自填的 id 仍作兼容输入受理")
     question: str = Field(..., min_length=1, description="问题原文或紧凑转述")
     answer_status: Literal["answered_by_data", "partially_answered", "cannot_answer_yet"] = Field(
         ..., description="数据/调查能否回答该问题"
@@ -1190,7 +1195,19 @@ class HypothesisResponse(BaseModel):
     """Thesis 对一个竞争假说（非 downgraded 状态均要求作答）的显式裁决。"""
     model_config = {"extra": "allow"}
 
-    hypothesis_id: str = Field(..., min_length=1, description="被回应的竞争假说 ID")
+    hypothesis_ordinal: Optional[int] = Field(
+        None,
+        description="模型作答通道（2026-08-31 T69 P2c，同 T58/O15 conflict_ordinal 模式）："
+        "该回应的假说在本站输入清单里的序号（1-based，第 1 条填 1）——thesis 站对 "
+        "synthesis_packet.competing_hypotheses 数位置，reviser 站对 thesis_hypothesis_responses "
+        "数位置；hypothesis_id 由代码按序号回填，模型不要自填",
+    )
+    hypothesis_id: str = Field(
+        "",
+        description="被回应的竞争假说 ID——内部字段，由代码按 hypothesis_ordinal 回填"
+        "（2026-08-31 T69 P2c），模型不要自填；旧档案（无 ordinal）里模型自填的 id "
+        "仍作兼容输入受理",
+    )
     verdict: Literal["accept_and_revise", "absorb_partially", "reject"] = Field(
         ...,
         description="接受并修正、部分吸收或驳回",
