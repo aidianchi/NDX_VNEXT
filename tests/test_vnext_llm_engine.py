@@ -1,4 +1,4 @@
-﻿# tests/test_vnext_llm_engine.py
+# tests/test_vnext_llm_engine.py
 import sys
 import os
 from typing import Any, Dict, List
@@ -138,6 +138,23 @@ def test_deepseek_client_respects_self_hosted_base_url(monkeypatch):
     # through a proxy or a self-hosted gateway.
     assert engine.clients["deepseek"].base_url == "https://internal.example.com/deepseek"
     assert engine.service_beta_features["deepseek"] is False
+
+
+def test_openai_compatible_client_timeout_default_1800_and_env_override(monkeypatch):
+    """2026-09-01（run 20260831_213827 教训）：SDK 默认 600 秒读超时对大桥段不够——
+    bridge 提示词 15-23 万字符，glm-5.3-flash 推理要 9 分钟上下，三次撞线空响应失败。
+    客户端必须带 1800 秒超时，且 NDX_LLM_TIMEOUT 可覆盖。"""
+    from agent_analysis.llm_engine import LLMEngine
+
+    captured = _patch_engine_dependencies(monkeypatch, "https://open.bigmodel.cn/api/paas/v4")
+    monkeypatch.delenv("NDX_LLM_TIMEOUT", raising=False)
+    LLMEngine(available_models=["glm-5.3-flash"])
+    assert captured and captured[0].get("timeout") == 1800.0
+
+    captured = _patch_engine_dependencies(monkeypatch, "https://open.bigmodel.cn/api/paas/v4")
+    monkeypatch.setenv("NDX_LLM_TIMEOUT", "2400")
+    LLMEngine(available_models=["glm-5.3-flash"])
+    assert captured and captured[0].get("timeout") == 2400.0
 
 
 def test_call_ai_uses_json_output_without_prefix_for_deepseek(monkeypatch):

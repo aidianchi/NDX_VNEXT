@@ -434,6 +434,11 @@ class LLMEngine:
                 client_kwargs = {
                     "api_key": api_key,
                     "base_url": base_url,
+                    # 2026-09-01（run 20260831_213827 教训）：SDK 默认 600 秒读超时对大桥段
+                    # 不够用——bridge 提示词 15-23 万字符，glm-5.3-flash 服务端推理要 9 分钟
+                    # 上下（08-27 编码套餐线 540 秒侥幸过关；08-31 开放平台线三次撞 600 秒线
+                    # 空响应失败）。超时放宽到 1800 秒，`NDX_LLM_TIMEOUT` 可调。
+                    "timeout": float(os.environ.get("NDX_LLM_TIMEOUT", "1800")),
                 }
                 extra_headers = get_extra_headers(service_name)
                 if extra_headers:
