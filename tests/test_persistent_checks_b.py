@@ -576,7 +576,9 @@ def test_pc20_rule_path_localization_passes(tmp_path: Path) -> None:
             "stage_key": "event_card_interpreter",
             "attempt": 2,
             "payload": {},
-            "retry_feedback": "event_card.direction_overreach: must not claim mandatory market direction",
+            # 2026-08-31 T69 P1-1：示例串从已删除的 event_card.direction_overreach
+            # 换成现役规则名；这里只验证"dotted.rule.path: 消息"形状，规则名是样例数据。
+            "retry_feedback": "event_section_summary.citation_ids: cited_event_ids contain ids outside this run's cards",
         },
     )
     repo = tmp_path / "repo"

@@ -57,7 +57,8 @@ _STALE_DAYS = 365
 # 契约/模式校验错误的真实定位是字段路径（形如 L1.get_vix.metric）或 pydantic
 # 的 "validation error" 反馈——JSON 行/列号只有解析错误才有，两类都算数。
 # 内容规则违例（禁句、数字锚定等）的真实定位是规则身份——统一以
-# "dotted.rule.path: 消息" 前缀发放（形如 event_card.direction_overreach: ...）。
+# "dotted.rule.path: 消息" 前缀发放（形如 event_section_summary.citation_ids: ...；
+# 2026-08-31 T69 P1-1 前示例写作已删除的 event_card.direction_overreach）。
 _LOCALIZATION_RE = re.compile(
     r"JSONDecodeError"
     r"|第\s*\d+\s*行第\s*\d+\s*列"

@@ -411,6 +411,9 @@ def test_event_card_validator_accepts_equivalent_downgrade_and_translated_month_
 
 
 def test_event_card_validator_rejects_signed_number_reversal(tmp_path: Path):
+    """2026-08-31 T69 P1-3：符号反向从校验错误降级为留痕不拦（测试名保留原样，
+    语义已反转）。反向锁定：不再进 errors；检测保留在 _event_card_semantic_warnings，
+    命中返回 sign_reversal_suspect 留痕（防"涨写成跌"的真实风险故事后审计）。"""
     orchestrator = VNextOrchestrator(
         available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
     )
@@ -422,25 +425,34 @@ def test_event_card_validator_rejects_signed_number_reversal(tmp_path: Path):
             "interpretation": "该事件可能影响盈利预期，据报道仍需确认。",
         }
     )
+    event = {
+        "source_tier": "reliable_mainstream_report",
+        "title": "Company shares rose +10%",
+        "published_at": "2026-07-18",
+        "event_date": "2026-07-18",
+        "raw_text_available": True,
+        "raw_text_excerpt": "Company shares rose +10% after the update.",
+    }
 
     errors = orchestrator._event_card_validation_errors(
         card,
-        event={
-            "source_tier": "reliable_mainstream_report",
-            "title": "Company shares rose +10%",
-            "published_at": "2026-07-18",
-            "event_date": "2026-07-18",
-            "raw_text_available": True,
-            "raw_text_excerpt": "Company shares rose +10% after the update.",
-        },
+        event=event,
         allowed_hypothesis_ids={"hyp_rates"},
     )
 
-    # 2026-07-30：归因措辞检查已删（措辞由代码渲染保证），本用例只守带符号数字方向。
-    assert any("signed number direction" in error for error in errors)
+    assert not any("signed number direction" in error for error in errors), (
+        "符号反向不再进校验错误（不触发重试/废卡）"
+    )
+    warnings = orchestrator._event_card_semantic_warnings(card, event=event)
+    assert any("event_card.sign_reversal_suspect" in note for note in warnings), (
+        "命中必须留痕"
+    )
 
 
 def test_event_card_validator_rejects_material_absent_alternative_in_fact_summary(tmp_path: Path):
+    """2026-08-31 T69 P1-2：alternative_classification 子条删除（测试名保留原样，
+    语义已反转）。"fact_summary 不得添加原材料没有的'或'分类"要读懂材料与产出
+    两边内容才能判，是语义比对，超出闸门职权。反向锁定：不再产生任何校验错误。"""
     orchestrator = VNextOrchestrator(
         available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
     )
@@ -466,7 +478,7 @@ def test_event_card_validator_rejects_material_absent_alternative_in_fact_summar
         allowed_hypothesis_ids={"hyp_rates"},
     )
 
-    assert any("alternative classification absent from material" in error for error in errors)
+    assert not any("alternative classification" in error for error in errors)
 
 
 class RoutingFakeLLMEngine(FakeLLMEngine):
@@ -2301,6 +2313,58 @@ def test_event_section_summary_boundary_sentence_is_code_assembled_t69_p0(tmp_pa
     )
     assert not failure2
     assert written["summary_text"].count(boundary) == 1, "模型写了就不重复加"
+
+
+def test_event_section_summary_hindsight_language_traced_not_blocked_t69_p1(tmp_path: Path):
+    """2026-08-31 T69 P1-4：事后/确定因果词表从校验错误降级为留痕不拦。
+
+    词表命中不再进 errors（不重试、不判失败），命中记进落盘产物的
+    semantic_warnings（event_section_summary.hindsight_causal_suspect）并打
+    logger.warning，供事后审计；机械检查（引用身份/越界/日期）照旧。"""
+    ids = ["event:aaa111", "event:bbb222"]
+    cards = [_event_interpretation_card_for_summary(eid) for eid in ids]
+    prose = (
+        f"据报道，事件甲后来已得到确认并直接导致指数上涨 [card:{ids[0]}]，"
+        f"另一事件提供补充线索 [card:{ids[1]}]，仍需正式数据确认。"
+    )
+    engine = SequencedFakeLLMEngine({
+        "event_section_summary": [json.dumps({"summary_text": prose}, ensure_ascii=False)],
+    })
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=engine,
+    )
+
+    summary_dict, failure = orchestrator._build_event_section_summary(
+        cards, events_by_id={}, effective_date="2026-07-31",
+    )
+
+    assert not failure
+    assert engine.calls["event_section_summary"] == 1, "词表命中不得再触发重试"
+    assert any(
+        "event_section_summary.hindsight_causal_suspect" in note
+        for note in summary_dict.get("semantic_warnings") or []
+    ), "命中必须留痕在落盘产物的 semantic_warnings"
+
+    # 反向：不含词表措辞的正文不产生留痕。
+    clean_prose = (
+        f"据报道，两则材料指向同一问题 [card:{ids[0]}]，"
+        f"另一则提供补充线索 [card:{ids[1]}]，均需正式数据确认。"
+    )
+    engine2 = SequencedFakeLLMEngine({
+        "event_section_summary": [json.dumps({"summary_text": clean_prose}, ensure_ascii=False)],
+    })
+    orchestrator2 = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path / "clean"),
+        llm_engine=engine2,
+    )
+    clean_dict, clean_failure = orchestrator2._build_event_section_summary(
+        cards, events_by_id={}, effective_date="2026-07-31",
+    )
+    assert not clean_failure
+    assert not clean_dict.get("semantic_warnings"), "不含词表措辞不得误留痕"
 
 
 def test_event_section_summary_payload_includes_needs_data_confirmation(tmp_path: Path):
@@ -7931,7 +7995,9 @@ def test_event_section_summary_validator_enforces_identity_isolation_and_time_co
     一致（身份）、②引用⊆本轮卡（存在性）、⑤禁 L1-L5 ref（隔离）、⑧日期≤effective_date
     （时点）。③引用 2-5 张计数、④固定尾句、⑥100-1500 字长度带三条形状代理语义子条
     已删除（尾句改由代码落盘时保证，见
-    test_event_section_summary_boundary_sentence_is_code_assembled_t69_p0）。"""
+    test_event_section_summary_boundary_sentence_is_code_assembled_t69_p0）；
+    ⑦事后/确定因果词表随 T69 P1-4（2026-08-31）降级为留痕不拦（见
+    test_event_section_summary_hindsight_language_traced_not_blocked_t69_p1）。"""
     from agent_analysis.contracts import EventSectionSummary
     from agent_analysis.orchestrator import VNextOrchestrator
 
@@ -8025,8 +8091,8 @@ def test_event_section_summary_validator_enforces_identity_isolation_and_time_co
         cited_event_ids=["event_aaa11111", "event_bbb22222"],
     )
     # 弱来源卡不带任何降级措辞，也不再产生降级类报错——保证已移交报告渲染。
-    # （该夹具正文含"必然改变市场定价"，仍会触发事后/确定因果词表规则，那条是保留的；
-    # 长度带已随 T69 P0-3 删除。）
+    # （该夹具正文含"必然改变市场定价"，命中事后/确定因果词表——2026-08-31 T69 P1-4
+    # 起该词表降级为留痕不拦，也不再产生校验错误；长度带已随 T69 P0-3 删除。）
     assert not [
         err
         for err in validate(
@@ -8059,7 +8125,9 @@ def test_event_section_summary_validator_enforces_identity_isolation_and_time_co
     hindsight = attributed.model_copy(update={
         "summary_text": attributed.summary_text.replace("可能改变", "后来已得到确认并直接导致指数上涨，改变")
     })
-    assert any(
+    # 2026-08-31 T69 P1-4：事后/确定因果词表降级为留痕不拦——命中不再产生校验错误
+    # （留痕通道见 test_event_section_summary_hindsight_language_traced_not_blocked_t69_p1）。
+    assert not any(
         "hindsight or deterministic" in err
         for err in validate(
             hindsight,
@@ -8108,7 +8176,8 @@ def test_event_section_summary_validator_enforces_identity_isolation_and_time_co
                 "以上事件材料不构成主证据，判断以数据层为准。"
             )
         })
-        assert any(
+        # T69 P1-4：确定性因果措辞同样只留痕不拦。
+        assert not any(
             "hindsight or deterministic" in err
             for err in validate(
                 candidate,
@@ -8126,7 +8195,7 @@ def test_event_section_summary_validator_enforces_identity_isolation_and_time_co
                 "以上事件材料不构成主证据，判断以数据层为准。"
             )
         })
-        assert any(
+        assert not any(
             "hindsight or deterministic" in err
             for err in validate(
                 cross_line,
@@ -8144,7 +8213,7 @@ def test_event_section_summary_validator_enforces_identity_isolation_and_time_co
                 "以上事件材料不构成主证据，判断以数据层为准。"
             )
         })
-        assert any(
+        assert not any(
             "hindsight or deterministic" in err
             for err in validate(
                 hindsight_market_move,
@@ -8859,65 +8928,135 @@ def test_layer_card_validator_rejects_unknown_function_ids(tmp_path: Path):
     assert any("get_invented_indicator" in error and "not an input function_id" in error for error in errors)
 
 
-def test_direction_overreach_allows_negated_statements(tmp_path: Path):
-    """T68/W1（2026-08-28）：方向越权检查加否定语境感知。
+def test_direction_overreach_gate_removed_t69_p1(tmp_path: Path):
+    """2026-08-31 T69 P1-1：direction_overreach 运行时拦截整条删除（含 T68/W1 的
+    12 字否定窗口过渡补丁——过渡态随本条整体退役）。
 
-    20260827 run 实测误伤：event_8e58b8bd 的解读原文写"本卡不构成对市场必须上涨
-    或下跌的任何支持"——是在**否认**强制方向，旧裸子串匹配把"必须上涨"照样判
-    违规、整卡打空（重试两次全灭）。本测试用那次被拦的原句锁定：否认句不触发。"""
+    关键词代理"是否断言必涨必跌"是语义判断，超出闸门职权（闸门宪法 v2：闸门只管
+    机械事实）；老板 08-28 定性其终审归宿为"删除或代码代劳"。反向锁定：检查器
+    不复存在，且否认句与真断言都**不再产生任何校验错误**——真断言的质量把关走
+    提示词原则条款（event_card_interpreter.md"必须涨或必须跌"）+事后审计，
+    不走运行时拦截。"""
+    import agent_analysis.orchestrator as orchestrator_module
+
+    assert not hasattr(orchestrator_module, "_directional_overreach_hits"), (
+        "检查器必须整体删除，不允许留一个不再挂载的死函数"
+    )
+
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
+    )
+    event = {
+        "source_tier": "official",
+        "title": "Inflation Data Release",
+        "published_at": "2026-08-26",
+        "event_date": "2026-08-26",
+        "raw_text_available": True,
+        "raw_text_excerpt": "Equity futures mixed pre-bell amid inflation data release.",
+    }
+    for text in (
+        # 20260827 run 被旧裸子串匹配误伤的否认句原句（event_8e58b8bd）
+        "分寸限定：据报道、且仅凭标题，无法确认纳指100相关合约的具体方向与幅度；"
+        "期货涨跌不一本身不含单一方向信息，本卡不构成对市场必须上涨或下跌的任何支持。",
+        # 真断言强制方向——同样不再拦（质量把关走提示词原则+事后审计）
+        "该事件落地后纳指100必然上涨，无悬念。",
+    ):
+        card = EventInterpretationCard.model_validate(
+            json.loads(_event_card_response(tier="official"))
+        ).model_copy(update={"interpretation": text})
+
+        errors = orchestrator._event_card_validation_errors(
+            card,
+            event=event,
+            allowed_hypothesis_ids={"hyp_rates"},
+        )
+
+        assert not any("direction_overreach" in error for error in errors)
+
+
+def test_event_card_alternative_classification_gate_removed_t69_p1(tmp_path: Path):
+    """2026-08-31 T69 P1-2：alternative_classification 子条删除——"fact_summary
+    不得添加原材料没有的'或'分类"要读懂材料与产出两边内容才能判，是语义比对，
+    超出闸门职权。反向锁定：产出加了原材料没有的'或'分类也不再产生校验错误。"""
     orchestrator = VNextOrchestrator(
         available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
     )
     card = EventInterpretationCard.model_validate(
         json.loads(_event_card_response(tier="official"))
-    ).model_copy(
-        update={
-            "interpretation": (
-                "分寸限定：据报道、且仅凭标题，无法确认纳指100相关合约的具体方向与幅度；"
-                "期货涨跌不一本身不含单一方向信息，本卡不构成对市场必须上涨或下跌的任何支持。"
-            ),
-        }
-    )
+    ).model_copy(update={"fact_summary": "材料称公司营收增长（或持平）。"})
 
     errors = orchestrator._event_card_validation_errors(
         card,
         event={
             "source_tier": "official",
-            "title": "Inflation Data Release",
-            "published_at": "2026-08-26",
-            "event_date": "2026-08-26",
-            "raw_text_available": True,
-            "raw_text_excerpt": "Equity futures mixed pre-bell amid inflation data release.",
-        },
-        allowed_hypothesis_ids={"hyp_rates"},
-    )
-
-    assert not any("direction_overreach" in error for error in errors)
-
-
-def test_direction_overreach_still_rejects_bare_assertions(tmp_path: Path):
-    """T68/W1：否定感知只豁免否认句——真断言强制方向仍然拦截（禁止型规则保留）。"""
-    orchestrator = VNextOrchestrator(
-        available_models=["fake"], output_dir=str(tmp_path), llm_engine=FakeLLMEngine({})
-    )
-    card = EventInterpretationCard.model_validate(
-        json.loads(_event_card_response(tier="official"))
-    ).model_copy(update={"interpretation": "该事件落地后纳指100必然上涨，无悬念。"})
-
-    errors = orchestrator._event_card_validation_errors(
-        card,
-        event={
-            "source_tier": "official",
-            "title": "Update",
+            "title": "Company update",
             "published_at": "2026-07-18",
             "event_date": "2026-07-18",
             "raw_text_available": True,
-            "raw_text_excerpt": "Company update.",
+            # 原材料里没有任何"或/or"分类
+            "raw_text_excerpt": "Company released an update.",
         },
         allowed_hypothesis_ids={"hyp_rates"},
     )
 
-    assert any("direction_overreach" in error and "必然上涨" in error for error in errors)
+    assert not any("alternative_classification" in error for error in errors)
+
+
+def test_event_card_sign_reversal_traced_not_blocked_t69_p1(tmp_path: Path):
+    """2026-08-31 T69 P1-3：数字符号反向（防"涨写成跌"的真实风险）从校验错误
+    降级为留痕不拦——不再进 errors（不触发重试/废卡），命中记进落盘产物的
+    semantic_warnings（event_card.sign_reversal_suspect）并打 logger.warning。"""
+    event = {
+        "event_id": "event:abc",
+        "title": "Company update",
+        "source_name": "Mainstream Media",
+        "source_tier": "reliable_mainstream_report",
+        "event_type": "company_news",
+        "published_at": "2026-07-18T09:00:00Z",
+        "event_date": "2026-07-18",
+        "symbols": ["NVDA"],
+        "raw_text_available": True,
+        "raw_text_excerpt": "公司营收环比 -5%。",
+    }
+    response = json.loads(_event_card_response(event_id="event:abc", tier="reliable_mainstream_report"))
+    response["fact_summary"] = "材料称公司营收环比 +5%。"
+    _write_event_card_inputs(tmp_path, [event], ["news:abc"])
+    engine = UniformEventCardFakeLLMEngine(json.dumps(response, ensure_ascii=False))
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine
+    )
+    competition = HypothesisCompetition(
+        hypotheses=[
+            CompetingHypothesis(
+                hypothesis_id="hyp_rates",
+                hypothesis_text="利率约束仍是主线。",
+                support_evidence_refs=["L1.rate"],
+                diagnostic_evidence_refs=["L1.rate"],
+                falsification_conditions=["利率回落"],
+            )
+        ]
+    )
+
+    artifact = orchestrator._build_event_interpretation_cards(
+        effective_date="2026-07-18",
+        feedback_messages=[],
+        hypothesis_competition=competition,
+    )
+
+    assert not artifact["failures"], "符号反向不得再废卡"
+    assert len(engine.calls) == 1, "符号反向不得再触发重试"
+    saved_card = json.loads(
+        (tmp_path / "event_interpretation_cards" / "event_abc.json").read_text(encoding="utf-8")
+    )
+    assert any(
+        "event_card.sign_reversal_suspect" in note
+        for note in saved_card.get("semantic_warnings") or []
+    ), "命中必须留痕在落盘产物的 semantic_warnings"
+    aggregate = json.loads((tmp_path / "event_interpretation_cards.json").read_text(encoding="utf-8"))
+    assert any(
+        "event_card.sign_reversal_suspect" in note
+        for note in (aggregate["cards"][0].get("semantic_warnings") or [])
+    ), "汇总落盘件同样要带留痕（IA 从文件读卡）"
 
 
 def test_extra_contract_fields_are_stripped_not_fatal():

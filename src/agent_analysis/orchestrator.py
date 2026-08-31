@@ -219,11 +219,14 @@ STAGE_CONTRACT_PROMPT_REQUIREMENTS: Dict[str, tuple] = {
     # 里这两个词各出现 0 次，真实 run 20260728_110702 的 bridge 就为此重试了一次
     # （`resonance_chains[resonance_chain].confirming_indicators must not be empty`）。
     "bridge": ("confirming_indicators", "falsifiers", "path_id"),
-    # _event_card_validation_errors：机制假设前缀 + 不得断言市场必然方向
+    # _event_card_validation_errors：supports/refutes 引用的 hypothesis_id 必须 ⊆ 本轮
+    # 竞争假说清单（存在性检查，该站唯一剩余的运行时校验子条）。
     # 2026-07-30：删除 attribution_quote 与"该事件可能通过"前缀两条登记——对应闸门已按
     # 用户裁决删除（措辞由代码渲染保证，见 _event_card_validation_errors 的说明）。
-    # 仅保留方向越权这条禁止型规则。
-    "event_card_interpreter": ("必须涨或必须跌",),
+    # 2026-08-31 T69 P1-1：方向越权关键词拦截整条删除（语义越权，老板 08-28 定终审
+    # 归宿），登记词从"必须涨或必须跌"换成剩余机械检查对应的字段名；"必须涨或必须跌"
+    # 作为提示词原则条款保留在 event_card_interpreter.md，不再由代码闸门背书。
+    "event_card_interpreter": ("supports/refutes",),
     # _event_section_summary_validation_errors：卡片引用格式（[card:] 标记）与身份合法性。
     # T36（2026-07-31）：cited_event_ids 已改为代码从正文 [card:...] 标记里提取，
     # 不再要求模型自报这份清单，故从登记里摘下——它不再是"模型必须被告知的字段名"。
@@ -382,6 +385,50 @@ def _inject_evidence_fields(card_dict: Dict[str, Any], event: Dict[str, Any]) ->
     card_dict["raw_text_available"] = available
 
 
+def _signed_number_map(text: str) -> Dict[str, str]:
+    """提取文本里带显式正负号的数字：幅度（去前导零）→ 符号。纯形状提取，不读语义。"""
+    values: Dict[str, str] = {}
+    for match in re.finditer(r"(?<!\d)([+-])\s*(\d+(?:[.,]\d+)*)\s*[%％]?", text):
+        magnitude = re.sub(r"[^0-9]", "", match.group(2)).lstrip("0") or "0"
+        values[magnitude] = match.group(1)
+    return values
+
+
+def _event_card_semantic_notes(
+    fact_summary: str,
+    interpretation: str,
+    material_text: str,
+) -> List[str]:
+    """事件卡语义留痕明细（2026-08-31 T69 P1-3/P1-7）：只记不拦。
+
+    - event_card.sign_reversal_suspect：fact_summary 里带符号数字与原材料同幅度
+      反号（防"涨写成跌"的真实风险，故检测保留；但符号比对只是语义的形状代理，
+      按处置阶梯降级为留痕，不进校验错误）。
+    - event_card.fact_interpretation_identical_suspect：两字段逐字相同（合约侧
+      原 raise 同步降级，见 contracts.py 的 T69 P1-7 注释）。
+
+    命中明细由调用方写进落盘 dict 的 semantic_warnings 字段并打 logger.warning。"""
+    notes: List[str] = []
+    material_signed = _signed_number_map(material_text)
+    fact_signed = _signed_number_map(fact_summary)
+    reversed_magnitudes = sorted(
+        magnitude
+        for magnitude, sign in fact_signed.items()
+        if magnitude in material_signed and material_signed[magnitude] != sign
+    )
+    if reversed_magnitudes:
+        notes.append(
+            "event_card.sign_reversal_suspect: fact_summary reverses signed number direction: "
+            + ", ".join(reversed_magnitudes)
+        )
+    if str(fact_summary).strip().casefold() == str(interpretation).strip().casefold():
+        notes.append(
+            "event_card.fact_interpretation_identical_suspect: "
+            "fact_summary and interpretation are verbatim identical"
+        )
+    return notes
+
+
 def _with_evidence_injected_artifact(
     artifact: Dict[str, Any],
     events_by_id: Dict[str, Dict[str, Any]],
@@ -390,7 +437,18 @@ def _with_evidence_injected_artifact(
     injected = copy.deepcopy(artifact)
     for card in injected.get("cards") or []:
         if isinstance(card, dict):
-            _inject_evidence_fields(card, events_by_id.get(str(card.get("event_id") or ""), {}))
+            event = events_by_id.get(str(card.get("event_id") or ""), {})
+            _inject_evidence_fields(card, event)
+            # T69 P1-3/P1-7：汇总落盘件同样带语义留痕（IA 从文件读卡），
+            # 与 event_interpretation_cards/<id>.json 单卡落盘件保持一致。
+            material_text = f"{event.get('title') or ''} {event.get('raw_text_excerpt') or ''}"
+            notes = _event_card_semantic_notes(
+                str(card.get("fact_summary") or ""),
+                str(card.get("interpretation") or ""),
+                material_text,
+            )
+            if notes:
+                card["semantic_warnings"] = notes
     return injected
 
 
@@ -402,33 +460,12 @@ def _as_list(value: Any) -> List[Any]:
     return value if isinstance(value, list) else []
 
 
-_DIRECTIONAL_OVERREACH_TOKENS = ("必然上涨", "必然下跌", "必须上涨", "必须下跌", "一定上涨", "一定下跌")
-_DIRECTIONAL_OVERREACH_NEGATION = re.compile(r"不|未|无|没|非|别|勿|难以|无法")
-_DIRECTIONAL_OVERREACH_NEGATION_WINDOW = 12
-
-
-def _directional_overreach_hits(text: str) -> List[str]:
-    """文本中"不在否定语境里"的强制方向词（T68/W1，2026-08-28）。
-
-    20260827 run 实测误伤：模型写"本卡不构成对市场必须上涨或下跌的任何支持"——
-    是在**否认**强制方向，旧裸子串匹配照样把"必须上涨"判违规、整卡打空。现在对
-    每个命中词回看 12 字窗口，出现否定词即视为否认、不判；同词后续出现位置继续查。
-    取舍：宁可放过"如果不涨就必跌"这类嵌套表达的误放，也不误杀合格产出（与
-    2026-07-30 撤三条措辞闸门同一取向：闸门宁松勿冤）。
-    """
-    hits: List[str] = []
-    for token in _DIRECTIONAL_OVERREACH_TOKENS:
-        start = 0
-        while True:
-            pos = text.find(token, start)
-            if pos < 0:
-                break
-            window = text[max(0, pos - _DIRECTIONAL_OVERREACH_NEGATION_WINDOW) : pos]
-            if not _DIRECTIONAL_OVERREACH_NEGATION.search(window):
-                hits.append(token)
-                break
-            start = pos + len(token)
-    return hits
+# 2026-08-31 T69 P1-1：direction_overreach 运行时拦截整条删除（含 T68/W1 的 12 字
+# 否定窗口过渡补丁——过渡态随本条整体退役）。关键词代理"是否断言必涨必跌"是语义
+# 判断，超出闸门职权（闸门宪法 v2：闸门只管机械事实）；老板 08-28 定性其终审归宿
+# 为"删除或代码代劳"。真断言的质量把关走提示词原则条款
+# （event_card_interpreter.md"必须涨或必须跌"）+事后审计，不走运行时拦截。
+# 先例：2026-07-30 撤三条措辞闸门（同文件 _event_card_validation_errors 注释）。
 
 
 def _strip_extra_forbidden_fields(data: Dict[str, Any], exc: ValidationError) -> List[str]:
@@ -1688,8 +1725,6 @@ class VNextOrchestrator:
         if invalid_hypotheses:
             errors.append(f"unknown hypothesis_id: {', '.join(sorted(invalid_hypotheses))}")
 
-        hypothesis_text = card.mechanism_hypothesis.hypothesis.strip()
-
         # 2026-07-30 用户裁决：删除三条"必须怎么说"的闸门——机制假设必须以"该事件可能通过"
         # 开头、非官方来源必须含"据报道/该媒体称"、仅标题材料必须在 limitations 写
         # "未读全文，降级阅读"。
@@ -1704,45 +1739,27 @@ class VNextOrchestrator:
         # 它从 source_tier 与 raw_text_excerpt 算出，与模型措辞无关，且一条不漏——
         # 比"靠模型记得写某个词"更强。删规则不降低保证，反而去掉了误伤。
         #
-        # 保留下面的方向越权检查：它是**禁止型**规则，代码无法替代（渲染标不出
-        # "这句话有没有断言必涨必跌"），且在那 28 条里一次都没触发过，成本为零。
-        # 保留方向越权检查（禁止型规则，代码无法替代），但 T68/W1 起带否定语境
-        # 感知——20260827 run 的否认句误伤见 _directional_overreach_hits docstring。
-        overreach = _directional_overreach_hits(f"{card.interpretation} {hypothesis_text}")
-        if overreach:
-            errors.append(
-                "event_card.direction_overreach: must not claim mandatory market direction"
-                f" ({', '.join(sorted(set(overreach)))})"
-            )
-
-        material_text = f"{event.get('title') or ''} {event.get('raw_text_excerpt') or ''}"
-        material_declares_alternative = bool(re.search(r"(?:\bor\b|或)", material_text, flags=re.IGNORECASE))
-        fact_adds_alternative = bool(re.search(r"[（(]\s*或", card.fact_summary))
-        if fact_adds_alternative and not material_declares_alternative:
-            errors.append("event_card.alternative_classification: fact_summary contains alternative classification absent from material")
-
-        def signed_numbers(text: str) -> Dict[str, str]:
-            values: Dict[str, str] = {}
-            for match in re.finditer(r"(?<!\d)([+-])\s*(\d+(?:[.,]\d+)*)\s*[%％]?", text):
-                magnitude = re.sub(r"[^0-9]", "", match.group(2)).lstrip("0") or "0"
-                values[magnitude] = match.group(1)
-            return values
-
-        material_signed = signed_numbers(
-            f"{event.get('title') or ''} {event.get('raw_text_excerpt') or ''}"
-        )
-        fact_signed = signed_numbers(card.fact_summary)
-        reversed_magnitudes = sorted(
-            magnitude
-            for magnitude, sign in fact_signed.items()
-            if magnitude in material_signed and material_signed[magnitude] != sign
-        )
-        if reversed_magnitudes:
-            errors.append(
-                "event_card.sign_reversal: fact_summary reverses signed number direction: " + ", ".join(reversed_magnitudes)
-            )
-
+        # 2026-08-31 T69 P1-1/P1-2/P1-3（闸门宪法 v2）：本函数剩余三条语义/语义边界
+        # 子条全部撤出运行时拦截——direction_overreach（P1-1，关键词代理态度，整条删除，
+        # 含 T68/W1 否定窗口过渡补丁；老板 08-28 定终审归宿"删除或代码代劳"）；
+        # alternative_classification（P1-2，材料↔产出语义比对，删除）；sign_reversal
+        # （P1-3，防"涨写成跌"的真实风险，检测保留但降级为留痕不拦，见
+        # _event_card_semantic_warnings）。本函数只剩上面的 unknown hypothesis_id
+        # 存在性检查。
         return errors
+
+    @staticmethod
+    def _event_card_semantic_warnings(
+        card: EventInterpretationCard,
+        *,
+        event: Dict[str, Any],
+    ) -> List[str]:
+        """事件卡语义留痕（2026-08-31 T69 P1-3/P1-7）：只记不拦，不触发重试/废卡。
+
+        检测逻辑见模块级 _event_card_semantic_notes（单卡落盘与汇总落盘共用同一
+        入口，避免两份实现漂移）。"""
+        material_text = f"{event.get('title') or ''} {event.get('raw_text_excerpt') or ''}"
+        return _event_card_semantic_notes(card.fact_summary, card.interpretation, material_text)
 
     def _build_event_interpretation_cards(
         self,
@@ -1835,6 +1852,13 @@ class VNextOrchestrator:
             # 内存/模型对象保持契约纯净（EventInterpretationCard extra="forbid"）。
             card_dict = _model_dump(finalized_card)
             _inject_evidence_fields(card_dict, event)
+            # 2026-08-31 T69 P1-3/P1-7：语义留痕只记不拦——命中写进落盘副本的
+            # semantic_warnings 并打 logger.warning，不再触发重试/废卡。
+            semantic_warnings = self._event_card_semantic_warnings(finalized_card, event=event)
+            if semantic_warnings:
+                card_dict["semantic_warnings"] = semantic_warnings
+                for note in semantic_warnings:
+                    logger.warning("event card %s: %s", event_id, note)
             # T68-W3：落盘留在 worker 内——每张卡独立文件，并行写无冲突。
             self._save_json(
                 self.output_dir / "event_interpretation_cards" / f"{stage_token}.json",
@@ -2007,6 +2031,16 @@ class VNextOrchestrator:
         summary_dict["summary_text"] = self._ensure_event_section_boundary_sentence(
             str(summary_dict.get("summary_text") or "")
         )
+        # 2026-08-31 T69 P1-4：事后/确定因果词表降级留痕——命中不重试、不拒收，
+        # 记进落盘产物的 semantic_warnings 并打 logger.warning，供事后审计。
+        hindsight_hits = self._hindsight_causal_suspects(str(summary_dict.get("summary_text") or ""))
+        if hindsight_hits:
+            note = (
+                "event_section_summary.hindsight_causal_suspect: summary_text contains "
+                f"hindsight or deterministic causal language ({len(hindsight_hits)} pattern(s) matched)"
+            )
+            summary_dict.setdefault("semantic_warnings", []).append(note)
+            logger.warning("%s", note)
         stage_record = self.stage_diagnostics.get("stages", {}).get("event_section_summary", {})
         degraded_kind = (
             stage_record.get("degraded_fallback_kind")
@@ -2111,6 +2145,17 @@ class VNextOrchestrator:
     )
 
     @staticmethod
+    def _hindsight_causal_suspects(text: str) -> List[str]:
+        """事后/确定因果词表命中清单（2026-08-31 T69 P1-4 起只留痕不拦，决策理由见
+        _event_section_summary_validation_errors 的 T69 P1-4 注释）。"""
+        semantic_text = re.sub(r"\s+", " ", str(text or ""))
+        return [
+            pattern
+            for pattern in VNextOrchestrator._HINDSIGHT_OR_CAUSAL_PATTERNS
+            if re.search(pattern, semantic_text)
+        ]
+
+    @staticmethod
     def _event_section_summary_validation_errors(
         candidate: "EventSectionSummary",
         *,
@@ -2146,7 +2191,7 @@ class VNextOrchestrator:
         # ③引用 2-5 张计数（计数不代理质量）、⑥正文 100-1500 字长度带（同 W1-A 先例）、
         # ④固定边界句结尾检查（改为代码代劳，见 _ensure_event_section_boundary_sentence）。
         # 保留的 ①清单一致、②引用⊆本轮卡、⑤禁 L1-L5 ref、⑧日期≤effective_date 全是
-        # 身份/存在性/隔离/时点类机械检查；⑦事后/确定因果词表留待 P1 处置，本批不动。
+        # 身份/存在性/隔离/时点类机械检查。
         if re.search(r"L[1-5]\.get_", text):
             errors.append("event_section_summary.data_layer_isolation: summary_text must not reference L1-L5 data refs")
         # 2026-07-30 用户裁决：删除"被引弱来源卡必须在同句带降级措辞"这条闸门。
@@ -2162,12 +2207,11 @@ class VNextOrchestrator:
         #
         # `downgrade_required_ids` 参数予以保留：调用方仍在计算它，且它是"哪些卡属于弱
         # 来源"的唯一真源，将来若要做离线抽样复核仍需它。
-        # 无日期的“后来已证实”和确定性因果同样属于事后信息/新闻越权，不能靠避开 ISO 日期绕过。
-        semantic_text = re.sub(r"\s+", " ", text)
-        for pattern in VNextOrchestrator._HINDSIGHT_OR_CAUSAL_PATTERNS:
-            if re.search(pattern, semantic_text):
-                errors.append("event_section_summary.hindsight_causal: summary_text contains hindsight or deterministic causal language")
-                break
+        # 2026-08-31 T69 P1-4：⑦事后/确定因果词表从校验错误降级为留痕不拦——
+        # 关键词词表代理"事后信息/确定因果"是语义判断，超出闸门职权。检测保留在
+        # _hindsight_causal_suspects，命中由 _build_event_section_summary 记进落盘
+        # summary_dict["semantic_warnings"] + logger.warning，不再进 errors、
+        # 不再触发重试。
         # codex P1：禁止把 effective_date 之后的日期写进历史总结（防止事后信息回流）。
         if effective_date:
             try:

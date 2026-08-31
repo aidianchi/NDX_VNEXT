@@ -28,9 +28,10 @@ _ARCHIVE_PATH = (
 )
 # Note: the 20260719_130534 archive (previously used here) predates stance_label
 # too, but its final_stance is the exact "盈利证据缺失放大下行风险" claim-gate
-# violation fixed under E1 (see test_final_stance_claim_gate.py) — it now
-# correctly fails replay, so it is no longer a valid fixture for "legacy
-# archives replay cleanly".
+# violation from E1 (see test_final_stance_claim_gate.py). Since 2026-08-31
+# T69 P1-6 the claim gate no longer raises (downgraded to a trace note), so the
+# archive replays again — it is kept out of this fixture anyway to stay focused
+# on pre-stance_label legacy shape.
 
 
 def _final(**overrides):
@@ -128,15 +129,19 @@ def test_serialization_roundtrip_preserves_stance_label():
     assert restored.stance_label == "偏进攻"
 
 
-def test_stance_label_cleared_when_it_contradicts_verdict_direction():
-    """codex P2 修复：徽章不能和判决正文方向相反（"进攻"标签配全篇防守正文）。
-    这只是粗粒度关键词校验，不是语义证明——目的是拦住最危险的两端矛盾，
-    不对"中性观察"这类本就宽松的标签做二次揣测。"""
+def test_stance_label_kept_and_traced_when_it_contradicts_verdict_direction():
+    """2026-08-31 T69 P1-5：方向冲突共现子条从"字段级清空"降级为留痕不拦。
+
+    旧实现（codex P2）：徽章与判决正文方向相反时清空 stance_label。但"防守词/
+    进攻词共现"是语义关键词判断——要判"标签与正文是否真矛盾"得读懂内容，
+    超出闸门职权（闸门宪法 v2），清空字段等于抹掉模型答案。现保留原值、
+    冲突记进 quality_gate.notes 供事后审计；枚举映射（非法值 fail-closed）
+    是身份检查，不受影响。"""
     final = _final(
         stance_label="进攻",
         final_stance="市场应全面防守，建议大幅减仓、保持谨慎。",
     )
-    assert final.stance_label is None
+    assert final.stance_label == "进攻"
     assert final.quality_gate is not None
     assert "与判决正文方向冲突" in final.quality_gate.notes
 
@@ -144,7 +149,7 @@ def test_stance_label_cleared_when_it_contradicts_verdict_direction():
         stance_label="防守等待",
         final_stance="风险出清，建议积极进攻、大举加仓。",
     )
-    assert final2.stance_label is None
+    assert final2.stance_label == "防守等待"
     assert "与判决正文方向冲突" in final2.quality_gate.notes
 
 
@@ -165,18 +170,19 @@ def test_stance_label_kept_when_direction_matches_or_is_neutral():
 
 
 def test_stance_direction_check_understands_common_negations():
+    """否定感知的冲突检测仍驱动留痕（T69 P1-5 后只记 note、不再清空字段）。"""
     final = _final(
         stance_label="进攻",
         final_stance="市场应全面防守，不宜加仓，保持谨慎。",
     )
-    assert final.stance_label is None
+    assert final.stance_label == "进攻"
     assert "与判决正文方向冲突" in final.quality_gate.notes
 
     final2 = _final(
         stance_label="防守等待",
         final_stance="风险出清，可以加仓，而非继续防守。",
     )
-    assert final2.stance_label is None
+    assert final2.stance_label == "防守等待"
     assert "与判决正文方向冲突" in final2.quality_gate.notes
 
 

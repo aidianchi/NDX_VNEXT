@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from datetime import datetime, timezone
@@ -68,7 +69,7 @@ def test_permission_type_enum_values():
     assert PermissionType.PROXY.value == "proxy"
 
 
-def test_event_interpretation_card_separates_fact_and_interpretation_and_validates_channel():
+def test_event_interpretation_card_separates_fact_and_interpretation_and_validates_channel(caplog):
     payload = {
         "event_id": "event:fed",
         "fact_summary": "Federal Reserve published an FOMC statement.",
@@ -103,9 +104,18 @@ def test_event_interpretation_card_separates_fact_and_interpretation_and_validat
     with pytest.raises(ValueError):
         EventInterpretationCard.model_validate(invalid_channel)
 
+    # 2026-08-31 T69 P1-7：fact/interpretation 逐字相同从 raise 降级为留痕不拦——
+    # "逐字相同"只是"没分离"的形状代理（判"事实与解读是否混写"要读懂内容，超出
+    # 闸门职权；闸门宪法 v2）。反向锁定：不再 raise、字段原样保留、logger 留痕；
+    # 落盘侧另由 orchestrator._event_card_semantic_warnings 记 semantic_warnings。
     duplicated_layers = {**payload, "interpretation": payload["fact_summary"]}
-    with pytest.raises(ValueError, match="fact_summary.*interpretation"):
-        EventInterpretationCard.model_validate(duplicated_layers)
+    with caplog.at_level(logging.WARNING, logger="agent_analysis.contracts"):
+        duplicated_card = EventInterpretationCard.model_validate(duplicated_layers)
+    assert duplicated_card.interpretation == duplicated_card.fact_summary
+    assert any(
+        "fact_interpretation_identical_suspect" in record.message
+        for record in caplog.records
+    )
 
 
 def test_feedback_message_types_are_strongly_typed_and_serializable():

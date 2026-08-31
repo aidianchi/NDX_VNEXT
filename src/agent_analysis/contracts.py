@@ -17,10 +17,13 @@ NDX Agent vNext SubAgent 架构 - 数据契约模块
 
 from datetime import datetime, timezone
 from enum import Enum
+import logging
 import re
 import unicodedata
 from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 try:
     from pydantic import BaseModel, Field, field_validator, model_validator
@@ -427,8 +430,17 @@ class EventInterpretationCard(BaseModel):
 
     @model_validator(mode="after")
     def _validate_fact_interpretation_separation(self):
+        # 2026-08-31 T69 P1-7：两字段逐字相同从 raise 降级为留痕不拦——"逐字相同"
+        # 只是"没分离"的形状代理（判"事实与解读是否混写"要读懂内容，超出闸门职权，
+        # 闸门宪法 v2：形状代理语义一律出局）。命中打 logger.warning，落盘侧由
+        # orchestrator._event_card_semantic_warnings 记 semantic_warnings；
+        # 质量把关走提示词原则+事后审计（先例：2026-07-30 撤三条措辞闸门）。
         if self.fact_summary.strip().casefold() == self.interpretation.strip().casefold():
-            raise ValueError("fact_summary and interpretation must be separate")
+            logger.warning(
+                "event_card.fact_interpretation_identical_suspect: "
+                "fact_summary and interpretation are verbatim identical (event_id=%s)",
+                self.event_id,
+            )
         return self
 
 
@@ -2359,14 +2371,18 @@ class FinalAdjudication(BaseModel):
             self._clear_stance_label("stance_label 非法值已清空（原文见 prompt_audit）")
             return self
         corpus = " ".join(str(value or "") for value in (self.final_stance, self.reasoned_verdict, self.payoff_assessment))
-        if _stance_label_direction_conflict(candidate, corpus):
-            self._clear_stance_label(f"stance_label（{candidate}）与判决正文方向冲突，已清空（原文见 prompt_audit）")
-            return self
         self.stance_label = candidate
+        if _stance_label_direction_conflict(candidate, corpus):
+            # 2026-08-31 T69 P1-5：方向冲突共现子条从"字段级清空"降级为留痕不拦——
+            # "防守词/进攻词共现"是语义关键词判断（形状代理语义），清空字段等于抹掉
+            # 模型答案。保留 stance_label 原值，冲突记进 quality_gate.notes 供事后
+            # 审计；上面的枚举映射/非法值 fail-closed 是身份检查，照旧保留。
+            self._append_quality_gate_note(
+                f"stance_label（{candidate}）与判决正文方向冲突，已保留原值并留痕（原文见 prompt_audit）"
+            )
         return self
 
-    def _clear_stance_label(self, note: str) -> None:
-        self.stance_label = None
+    def _append_quality_gate_note(self, note: str) -> None:
         if self.quality_gate is None:
             self.quality_gate = QualityGate(
                 approval_status=self.approval_status,
@@ -2378,27 +2394,33 @@ class FinalAdjudication(BaseModel):
                 item for item in (self.quality_gate.notes.strip(), note) if item
             )
 
+    def _clear_stance_label(self, note: str) -> None:
+        self.stance_label = None
+        self._append_quality_gate_note(note)
+
     @model_validator(mode="after")
-    def _reject_missing_evidence_as_direction_claim(self) -> "FinalAdjudication":
-        """E1 P0 claim gate. 证据缺失/不可用只能映射为置信度折减与数据边界记录，
-        永远不能映射为方向（利多或利空）——真实事故句子"盈利证据缺失放大下行
-        风险"必须被拦截。这里不能像 stance_label 冲突那样"清空字段、留痕继续
-        放行"：违规内容就是 final_stance/reasoned_verdict/payoff_assessment 本身
-        的自然语言论证，没有安全的字段可清空，清空会留空必填字段，改写会等于
-        代系统编造措辞。因此选择 fail-closed：raise 触发 _run_stage 的校验失败
-        重试循环（把这条错误原文喂回给模型，要求换一种不违反 claim gate 的写法
-        重新生成），且 _load_stage_checkpoint 对已落盘 artifact 重新 model_validate
-        时同样会因此失败并判定 checkpoint 不可复用，不会让旧的违规产物绕过重跑
-        直接进入下一阶段。"""
+    def _note_missing_evidence_as_direction_claim(self) -> "FinalAdjudication":
+        """E1 P0 claim gate（2026-08-31 T69 P1-6 起从 raise 降级为留痕不拦）。
+
+        证据缺失/不可用只能映射为置信度折减与数据边界记录，永远不能映射为方向
+        （利多或利空）——真实事故句子"盈利证据缺失放大下行风险"。该原则条款保留在
+        提示词侧（final_adjudicator.md"缺失证据不得定方向"），检测器
+        _missing_evidence_as_direction_claim 保留作事后审计探针。
+
+        降级理由（闸门宪法 v2）："缺失"与"放大…风险"的同从句共现是句法/语义判断，
+        超出闸门"只管机械事实"的职权；且旧实现的 raise 会连带 checkpoint 复验
+        （_load_stage_checkpoint 对已落盘 artifact 重新 model_validate）把旧产物
+        整份作废重跑。现命中只记 quality_gate.notes 留痕，不 raise、不触发重试、
+        不拦截 checkpoint 复用。同名旧方法 _reject_missing_evidence_as_direction_claim
+        随之更名——它不再 reject 任何东西。"""
         corpus = " ".join(
             str(value or "") for value in (self.final_stance, self.reasoned_verdict, self.payoff_assessment)
         )
         offending_sentence = _missing_evidence_as_direction_claim(corpus)
         if offending_sentence:
-            raise ValueError(
-                "final_stance_claim_gate violation: 证据缺失/不可用只能映射为置信度折减"
-                "与数据边界记录，不得作为方向性理由（利多或利空）。命中句子："
-                f"{offending_sentence}"
+            self._append_quality_gate_note(
+                "final_stance_claim_gate suspect：疑似把证据缺失/不可用当作方向性理由"
+                f"（命中句子：{offending_sentence}）。留痕不拦，走事后审计。"
             )
         return self
 

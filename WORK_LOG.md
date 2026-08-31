@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-08-31
+
+### 六原则入宪 + T68-W3 并行落地 + W4 Yahoo 正文打通 + T69 P0/P1 语义拦截清零
+
+- **六原则入宪**：老板 08-31 点头六原则（架构一致/注意力优先/不埋没人才/仆从/报刊/第一性判定）并指示升为常驻边界——按规程先改 CLAUDE.md 再整份同步 AGENTS.md，文档闸门 11 项绿。
+- **W3 并行改造（方案 A 落地）**：五层卡与事件卡两处串行循环换 ThreadPoolExecutor（默认并发 3，`NDX_STAGE_PARALLELISM` 可调，≤1 退化串行）；stage_manifest 与 llm_stage_diagnostics 两条 read-modify-write 路径各加一把锁。6 条新红灯测试（resume 零 LLM 调用、双线程 50 次写账不丢、串行退化哨兵）。GLM 冒烟 19 次调用零 429：并发 3 是甜点位，5 有软性排队尾延迟。
+- **W4 Yahoo 根因与修复**：根因=Yahoo 对大陆 IP 地区封锁（requests 与真实 Chrome 同得 403 封锁页，浏览器 sidecar 路线物理出局；顺手清掉 6 月僵尸 daemon 修复 sidecar 管道）。老板批 B+D 组合：本机代理（规则模式 127.0.0.1:7897）配入 api_config proxy 段，实测新旧两文取到 3-4KB 正文。连带修解析器误杀："Oops, something went wrong"否决守卫把嵌错误模块的真文章页也毙了，改为纯错误页（<600 字符可读文本）才否决。另拆一颗日期炸弹测试（SEC 夹具硬编码 2026-07-17 越过 45 天回看窗误红，改相对日期）。
+- **T69 P0（冤案前科四条）**：final 300-3000 字硬闸门删除；IA 600-1200 软窗子条删除（总账原写"加软 note"与删软窗矛盾，按宪法统一为删除不加 note）；事件总结"引用 2-5 张/100-1500 字"删除、固定尾句改代码装配（`_ensure_event_section_boundary_sentence`）；reasoned_verdict"≥3 方括号组"子条删除（引用可解析+数字存在性比对保留）。
+- **T69 P1（运行时语义拦截清零）**：direction_overreach 整条删除（含 W1-D1 否定窗口补丁退役，老板已定终审归宿）；alternative_classification 删除；sign_reversal、事件总结⑦因果词表、stance 方向共现、E1 claim gate、fact/interpretation 逐字相同——五条降级为留痕不拦（新落盘字段 `semantic_warnings` / quality_gate note，与 T49 注入先例同法）。E1 降级后 20260719 真实事故归档带留痕复演成功。残留 grep 清零。
+- **红灯测试**：P0/P1 全部先红后绿（改前 13+ 个测试红）；全量 1489 项通过。
+- **未做（下批）**：P2 提示词脏活六件、P3 执法姿势改造；提示词侧"必须涨或必须跌""缺失证据不得定方向"等原则条款有意留任（质量把关走提示词+事后审计）。
+
+---
+
 ## 2026-08-30
 
 ### 总纲沟通章新条文（第一性原理重写）+ 同步规程归位 + 交接 prompt v2
