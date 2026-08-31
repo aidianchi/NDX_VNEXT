@@ -129,12 +129,14 @@ def test_news_event_ledger_writes_source_records_and_excludes_undated_history(tm
 
 
 def test_news_event_ledger_classifies_reddit_rumor_as_unverified_signal(tmp_path: Path):
-    reddit = """<?xml version="1.0"?>
+    # 夹具日期必须跟着时钟走（45 天回看窗口）；硬编码旧日期越过窗口会被滤成空列表。
+    recent_iso = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    reddit = f"""<?xml version="1.0"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <entry>
     <title>Rumor about QQQ mega cap guidance</title>
     <link href="https://www.reddit.com/r/stocks/example"/>
-  <updated>2026-07-17T18:00:00Z</updated>
+  <updated>{recent_iso}</updated>
   </entry>
 </feed>"""
 
@@ -156,11 +158,13 @@ def test_news_event_ledger_classifies_reddit_rumor_as_unverified_signal(tmp_path
 
 
 def test_news_event_ledger_fetches_body_for_high_relevance_market_news(tmp_path: Path):
-    rss = """<?xml version="1.0"?>
+    # 夹具日期跟着时钟走（45 天回看窗口），防日期炸弹
+    recent_rfc = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    rss = f"""<?xml version="1.0"?>
 <rss><channel><item>
   <title>Micron guidance lifts AI chip outlook for Nasdaq</title>
   <link>https://finance.yahoo.com/news/micron-ai-chip-outlook.html</link>
-  <pubDate>Fri, 17 Jul 2026 18:00:00 GMT</pubDate>
+  <pubDate>{recent_rfc}</pubDate>
 </item></channel></rss>"""
     article = """<!doctype html><html><body><article>
 <p>Micron raised its outlook as demand for AI memory chips improved.</p>
@@ -189,11 +193,13 @@ def test_news_event_ledger_fetches_body_for_high_relevance_market_news(tmp_path:
 
 
 def test_news_event_ledger_does_not_treat_error_shell_as_article_body(tmp_path: Path):
-    rss = """<?xml version="1.0"?>
+    # 夹具日期跟着时钟走（45 天回看窗口），防日期炸弹
+    recent_rfc = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    rss = f"""<?xml version="1.0"?>
 <rss><channel><item>
   <title>AI Funds Were Unstoppable in the Second Quarter</title>
   <link>https://finance.yahoo.com/news/ai-funds.html</link>
-  <pubDate>Fri, 17 Jul 2026 18:00:00 GMT</pubDate>
+  <pubDate>{recent_rfc}</pubDate>
 </item></channel></rss>"""
     shell = """<!doctype html><html><body>
 <p>AI Funds Were Unstoppable in the Second Quarter Oops, something went wrong Skip to navigation Skip to main content</p>
