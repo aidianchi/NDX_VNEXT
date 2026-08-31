@@ -1039,14 +1039,18 @@ def test_governance_prompts_ban_fabricated_subfield_refs():
     真实事故（同一 run 的 thesis attempt 1）：模型引用了 `L4.get_m7_buyback_flow#m7_quarterly_total`
     ——`m7_quarterly_total` 确实是该工具 value 里的真实字段名，但 evidence_index 的合法子引用
     用的是 authority 条目名（`m7_aggregate_and_yoy`）。模型"照实抄"反而违规。
-    每个会拼 `parent#field` 的 stage 都必须被明确告知：只能逐字使用索引里已存在的 ref。
+    每个会拼 `parent#field` 的 stage 都必须被明确告知：只能使用索引里已存在的 ref。
+    2026-08-31 T69 P2b：保留"从清单里选"的存在性义务，删除"逐字"吓阻修辞——
+    refs 存在性由 _validate_stage_evidence_refs 守，不需要靠措辞恐吓。
     """
     prompt_dir = Path(__file__).resolve().parents[1] / "src" / "agent_analysis" / "prompts"
 
     for name in ("thesis_builder.md", "reviser.md", "final_adjudicator.md"):
         text = (prompt_dir / name).read_text(encoding="utf-8")
-        assert "逐字" in text, f"{name} 未要求 evidence_ref 必须逐字来自索引"
         assert "不得自行拼接" in text, f"{name} 未禁止自行拼接 parent#field 子引用"
+        assert "evidence_index" in text, f"{name} 未要求 evidence_ref 来自索引"
+        # refs 纪律段的"逐字"吓阻已删（T69 P2b）；存在性义务保留。
+        assert "逐字来自" not in text and "逐字存在" not in text, f"{name} 仍残留 refs 逐字吓阻修辞"
 
     # 确认 risk 和 final 仍明确禁止编造统计
     for name in ["risk_sentinel.md", "final_adjudicator.md"]:
@@ -1077,6 +1081,36 @@ def test_prompts_no_longer_carry_dead_format_clauses_t69_p2a():
         "critic.md": ["500 字符", "打回重写"],
         "l1_analyst.md": ["稳定超过 160"],
         "context_loader.md": ["300 字符"],
+    }
+    for name, clauses in dead_clauses.items():
+        text = (prompt_dir / name).read_text(encoding="utf-8")
+        for clause in clauses:
+            assert clause not in text, f"{name} 仍残留已清除的死条款：{clause!r}"
+
+
+def test_prompts_no_longer_carry_dead_format_clauses_t69_p2b():
+    """T69 P2b（2026-08-31）反向锁定：③失效条件方向标签代码化 + P2a 施工新扫出的
+    同族残留（五层分析师字数下限、reviser 300/500 字符、refs 逐字吓阻、bridge 注入段
+    吓阻）不得回流。
+
+    清除依据同 P2a：方向前缀由 InvalidationItem.direction 枚举 + 代码渲染接管
+    （contracts.py InvalidationItem / FinalAdjudication._render_invalidation_conditions_from_items）；
+    字数下限无对应代码闸门（层卡校验只查非空），是形状代理语义；refs 存在性义务保留、
+    吓阻修辞删除。"""
+    prompt_dir = Path(__file__).resolve().parents[1] / "src" / "agent_analysis" / "prompts"
+    dead_clauses = {
+        # ③ 失效条件【转多】【转空】前缀条款删除——模型填 invalidation_items(direction
+        # 枚举 + text)，标签由代码渲染（见 test_contracts.py 的 t69_p2b 测试组）。
+        "final_adjudicator.md": ["每条必须以方向标签开头", "每条以【转多】或【转空】开头"],
+        # 五层分析师字数下限（代码侧无对应 min_length，层卡校验只查非空）。
+        "l2_analyst.md": ["稳定超过 180", "稳定超过 150"],
+        "l3_analyst.md": ["稳定超过 180", "稳定超过 160"],
+        "l4_analyst.md": ["稳定超过 180", "稳定超过 160"],
+        "l5_analyst.md": ["稳定超过 180", "稳定超过 160"],
+        # reviser 300/500 字符残留（代码侧上限 2026-07-26 已删，contracts.py 留有注释）。
+        "reviser.md": ["最多300字符", "最多500字符"],
+        # refs 逐字吓阻：保留"从清单里选"义务，删吓阻修辞。
+        "counter_thesis.md": ["逐字来自 `allowed_evidence_refs`"],
     }
     for name, clauses in dead_clauses.items():
         text = (prompt_dir / name).read_text(encoding="utf-8")

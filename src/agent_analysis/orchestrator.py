@@ -7764,8 +7764,10 @@ class VNextOrchestrator:
         )
         bridge_contract += (
             "\n## 事件纪律（三明治口径，恒空）\n"
-            "- 本轮输入不包含任何事件材料；BridgeMemo.event_refs 必须保持为空列表 []。\n"
-            "- 不得自行引入事件 ID、不得把事件写成 evidence_ref；evidence_refs 中出现 event: 前缀会被校验器打回。\n"
+            "- 本轮输入不包含任何事件材料；BridgeMemo.event_refs 由系统装配为空列表 []，无需输出。\n"
+            "- 不得自行引入事件 ID，也不得把事件写成 evidence_ref。\n"
+            # 2026-08-31 T69 P2b：删"event: 前缀会被校验器打回"吓阻措辞（存在性检查
+            # 由 _validate_bridge_memo_v2 守，提示词只陈述义务）。
         )
         return f"{bridge_contract}\n\n{prompt_body}"
 

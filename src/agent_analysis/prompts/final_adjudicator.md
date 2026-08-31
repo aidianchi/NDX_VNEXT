@@ -28,7 +28,7 @@
 
 如果治理输入中的证据来自 mixed-field payload，函数级 `L4.function_id` 父引用只能表示混合容器，不能支持强估值、盈利或风险补偿结论。Final 必须保留并使用显式 `L4.function_id#FieldName` 子引用；`core_allowed` 可强支持，`supporting_only` / `validation_only` / `audit_only` 必须降级，`rejected` 在没有另一条同字段强证据时必须阻断。不得从结论文字猜测字段权限。
 
-所有 `evidence_refs` / `counterevidence_refs` 必须**逐字**来自治理输入提供的证据索引（`key_evidence_refs`，即 `synthesis_packet.evidence_index` 的子集）。**不得自行拼接 `parent#field`**：合法子引用的名字由索引给定，它不等于你在叙述文字里看到的数据字段名——看到 `m7_quarterly_total` 不代表 `L4.get_m7_buyback_flow#m7_quarterly_total` 是合法 ref。需要的子引用不在索引里时，只能退回索引中存在的非 mixed 父引用，或放弃该论断，绝不编造。
+所有 `evidence_refs` / `counterevidence_refs` 必须来自治理输入提供的证据索引（`key_evidence_refs`，即 `synthesis_packet.evidence_index` 的子集）。不得自行拼接 `parent#field`：合法子引用的名字由索引给定，它不等于你在叙述文字里看到的数据字段名——看到 `m7_quarterly_total` 不代表 `L4.get_m7_buyback_flow#m7_quarterly_total` 是合法 ref。需要的子引用不在索引里时，只能退回索引中存在的非 mixed 父引用，或放弃该论断，绝不编造。
 
 【姿态校准】
 
@@ -144,7 +144,7 @@
     }
   ],
   "confirmation_cost": "<等待确认降低什么错误、牺牲什么机会，两面都要写>",
-  "invalidation_conditions": ["<最重要的可观察失效条件。每条必须以方向标签开头：【转多】表示该情况发生时判断应向机会侧修正，【转空】表示应向风险侧修正。两个方向都要覆盖，不得只列单侧>"],
+  "invalidation_items": [{"direction": "转多 | 转空", "text": "<最重要的可观察失效条件正文，不含方向前缀。direction 标明该条件成立时判断应向机会侧（转多）还是风险侧（转空）修正；两个方向都要覆盖，不得只列单侧>"}],
   "principal_contradiction": {
     "contradiction_id": "<当日主导矛盾的短代号，由矛盾内容生成，不得照抄历史代号>",
     "summary": "<主要矛盾>",
@@ -221,7 +221,7 @@
     "three_reasons": ["<支撑最终立场的三个理由，由当日证据生成>"],
     "time_horizon_summary": [],
     "action_summary": [],
-    "invalidation_summary": ["<什么情况下这个判断就错了，每条以【转多】或【转空】开头标明改判方向>"],
+    "invalidation_items": [{"direction": "转多 | 转空", "text": "<什么情况下这个判断就错了；direction 标明改判方向，不含方向前缀>"}],
     "evidence_refs": ["<ref>"]
   },
   "quality_gate": {
@@ -309,7 +309,7 @@
 - `price_reflection_map` 必须覆盖 `credit`、`rates`、`valuation`、`technical_panic`、`liquidity` 五类；每类必须有反证和动作影响。缺证据就写 `unclear`，不能省略。
 - `reader_final.one_liner` 或 three_reasons 必须用人话体现主要矛盾，不能只写"批准/保留/完整"。
 - `confirmation_cost` 必须说明等待确认的收益和代价。
-- `invalidation_conditions` 必须可观察，并覆盖立场反方向。
+- `invalidation_items` 每条必须可观察，标明它成立时该往多还是往空修正，两个方向都要覆盖。
 - `must_preserve_risks` 必须非空，除非 blocking_issues 明确说明为什么无法发布。
 - `priced_narrative` 必须包含一句明确的**分歧声明**：本判断与市场当前定价共识的分歧点是什么。若判断与定价方向一致，如实写"本判断与市场定价方向一致，超额观点为零"；无法判断定价状态时写 unclear 并说明缺哪条证据。分歧声明只能引用输入 refs（利率路径、盈利预期、波动溢价、预期-兑现台账），禁止凭空断言"市场认为"。
 

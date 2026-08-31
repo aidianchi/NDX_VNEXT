@@ -501,6 +501,8 @@ def test_bridge_prompt_anchors_event_refs_must_stay_empty(tmp_path: Path):
     prompt = orchestrator._compose_bridge_prompt("body")
 
     # C6 三明治口径：Bridge 不消费事件，提示词必须锚定 event_refs 恒空并禁止自引事件 ID。
-    assert "BridgeMemo.event_refs 必须保持为空列表 []" in prompt
+    # 2026-08-31 T69 P2b：吓阻措辞（"会被校验器打回"）删除，义务表述保留——
+    # 存在性检查由 _validate_bridge_memo_v2 守，提示词只陈述义务。
+    assert "BridgeMemo.event_refs 由系统装配为空列表 []，无需输出" in prompt
     assert "不得自行引入事件 ID" in prompt
-    assert "event: 前缀会被校验器打回" in prompt
+    assert "会被校验器打回" not in prompt

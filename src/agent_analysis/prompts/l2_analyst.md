@@ -87,8 +87,8 @@ L2 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 
 - `indicator_analyses[].narrative` 要适合风险情绪指标卡片。
 - `reasoning_process` 必须说明为什么同一个读数可能是顺周期信号或反向信号。
-- `layer_synthesis` 应稳定超过 180 个中文字符。
-- `internal_conflict_analysis` 应稳定超过 150 个中文字符，并明确主信号和确认信号。
+- `layer_synthesis` 要归纳本层指标的方向与张力，不写空泛套话。
+- `internal_conflict_analysis` 要写清冲突双方与各自依据，并明确主信号和确认信号。
 
 ## Output Discipline
 

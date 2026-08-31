@@ -38,7 +38,7 @@
 
 ## 证据纪律
 
-所有 `support_evidence_refs`、`counter_evidence_refs` 和 `diagnostic_evidence_refs` 必须逐字来自 `allowed_evidence_refs`。不要输出 artifact 路径作为 evidence ref，也不要自行拼接不在该列表中的 `parent#field` 子引用。
+所有 `support_evidence_refs`、`counter_evidence_refs` 和 `diagnostic_evidence_refs` 必须来自 `allowed_evidence_refs`。不要输出 artifact 路径作为 evidence ref，也不要自行拼接不在该列表中的 `parent#field` 子引用。
 
 每个反方假说必须包含：
 

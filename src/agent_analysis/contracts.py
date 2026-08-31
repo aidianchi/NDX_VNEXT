@@ -1700,6 +1700,26 @@ class LongTermAssessment(BaseModel):
         return self
 
 
+class InvalidationItem(BaseModel):
+    """一条带方向标签的失效条件（2026-08-31 T69 P2b-③）。
+
+    【转多】【转空】前缀是机械排版，不再让模型在自由文本里逐字打标签；模型只选
+    direction 枚举、写正文，前缀由代码渲染回字符串字段（见 FinalAdjudication /
+    ReaderFinal 的 after-validator）。渲染层（vnext_reporter._split_invalidation_item）
+    与审计消费方因此零改动。"""
+    model_config = {"extra": "allow"}
+
+    direction: Literal["转多", "转空"] = Field(
+        ..., description="该条件成立时判断应修正的方向：转多=向机会侧，转空=向风险侧"
+    )
+    text: str = Field(..., min_length=1, description="可观察失效条件正文，不含【转多】【转空】前缀")
+
+
+def _render_invalidation_tags(items: List["InvalidationItem"]) -> List[str]:
+    """把 invalidation_items 渲染成带【转多】【转空】前缀的字符串列表。"""
+    return [f"【{item.direction}】{item.text.strip()}" for item in items if item.text.strip()]
+
+
 class ReaderFinal(BaseModel):
     """Reader-facing final answer, separated from internal quality gate notes."""
     model_config = {"extra": "allow"}
@@ -1709,7 +1729,17 @@ class ReaderFinal(BaseModel):
     time_horizon_summary: List[TimeHorizonView] = Field(default_factory=list, description="分时间尺度判断")
     action_summary: List[PortfolioAction] = Field(default_factory=list, description="核心仓/战术仓/等待者动作")
     invalidation_summary: List[str] = Field(default_factory=list, description="最重要失效条件")
+    invalidation_items: List[InvalidationItem] = Field(
+        default_factory=list,
+        description="带方向的失效条件；非空时由代码渲染出 invalidation_summary 的【转多】【转空】前缀",
+    )
     evidence_refs: List[str] = Field(default_factory=list, description="读者结论引用的关键证据")
+
+    @model_validator(mode="after")
+    def _render_invalidation_summary_from_items(self) -> "ReaderFinal":
+        if self.invalidation_items:
+            self.invalidation_summary = _render_invalidation_tags(self.invalidation_items)
+        return self
 
 
 class QualityGate(BaseModel):
@@ -2250,6 +2280,13 @@ class FinalAdjudication(BaseModel):
     )
     confirmation_cost: str = Field("", description="最终确认成本")
     invalidation_conditions: List[str] = Field(default_factory=list, description="最终失效条件")
+    # 2026-08-31 T69 P2b-③：【转多】【转空】前缀是机械排版（脏活③），模型改填
+    # invalidation_items（direction 枚举 + text），非空时由代码渲染回
+    # invalidation_conditions；模型直写的旧式字符串原样兼容。
+    invalidation_items: List[InvalidationItem] = Field(
+        default_factory=list,
+        description="带方向的最终失效条件；非空时由代码渲染出 invalidation_conditions 的【转多】【转空】前缀",
+    )
     principal_contradiction: Optional[PrincipalContradiction] = Field(
         None,
         description="最终保留给读者的主要矛盾；用于说明当前真正决定收益风险的关键张力",
@@ -2272,6 +2309,12 @@ class FinalAdjudication(BaseModel):
     # IntegratedAdjudication 的 T68/W1 注释），本闸门是它的 final 侧同形物。内容缺失
     # 由 _note_missing_reasoned_verdict 软 note 留痕，引用与数字的真实性由
     # orchestrator._validate_reasoned_verdict_refs 的存在性比对守，不需要长度裁判。
+
+    @model_validator(mode="after")
+    def _render_invalidation_conditions_from_items(self) -> "FinalAdjudication":
+        if self.invalidation_items:
+            self.invalidation_conditions = _render_invalidation_tags(self.invalidation_items)
+        return self
 
     @field_validator("long_term_assessment", mode="before")
     @classmethod

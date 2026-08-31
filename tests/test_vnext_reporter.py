@@ -518,6 +518,30 @@ def test_invalidation_item_direction_badges_and_legacy_text():
     assert "实际利率回落" == _render_invalidation_item("实际利率回落")
 
 
+def test_invalidation_items_flow_from_contract_to_rendered_pill_t69_p2b():
+    """T69 P2b-③（2026-08-31）端到端：模型只填 invalidation_items（direction 枚举），
+    合约渲染出带【转多】前缀的 invalidation_conditions，渲染层照旧拆出方向 pill。"""
+    from agent_analysis.contracts import (
+        ApprovalStatus,
+        Confidence,
+        FinalAdjudication,
+    )
+
+    final = FinalAdjudication(
+        approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+        final_stance="中性偏谨慎",
+        confidence=Confidence.MEDIUM,
+        must_preserve_risks=["估值压缩风险"],
+        adjudicator_notes="保留风险边界。",
+        invalidation_items=[{"direction": "转多", "text": "盈利预期上修"}],
+    )
+    dumped = final.model_dump()
+    assert dumped["invalidation_conditions"] == ["【转多】盈利预期上修"]
+    assert '<span class="pill good">转多</span> 盈利预期上修' == _render_invalidation_item(
+        dumped["invalidation_conditions"][0]
+    )
+
+
 def test_brief_hero_labels_primary_break_condition():
     reporter = VNextReportGenerator()
     html = reporter._hero(

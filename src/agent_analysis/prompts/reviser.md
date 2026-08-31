@@ -19,13 +19,13 @@
 - 你可以**修订**某条回应（改 verdict、改理由、换证据），这正是你的职责；
 - 你**不可以**因为"这一段我没改"就把整个字段省略掉。省略等于让候选假说在最终判断书里消失，属于抹平冲突。
 - verdict 三选一：`accept_and_revise`、`absorb_partially`、`reject`。对应 `kept_unresolved` 假说的回应允许是 `absorb_partially`（承认张力未解决），不强求改成确定的 `accept_and_revise` 或 `reject`。
-- `reject` 必须给出至少一条来自索引的反证 `evidence_ref`（必须逐字存在于 `key_evidence_refs` / evidence_index 中）；证据不足时诚实选项是 `absorb_partially` 并写明缺哪条证据，不许用"证据不足"一笔带过。
+- `reject` 必须给出至少一条来自索引的反证 `evidence_ref`（须来自 `key_evidence_refs` / evidence_index）；证据不足时诚实选项是 `absorb_partially` 并写明缺哪条证据，不许用"证据不足"一笔带过。
 
 ## 证据引用纪律（硬合约）
 
-所有 `evidence_refs` / `counterevidence_refs` 必须**逐字**来自治理输入提供的证据索引（`key_evidence_refs`，即 `synthesis_packet.evidence_index` 的子集）。
+所有 `evidence_refs` / `counterevidence_refs` 必须来自治理输入提供的证据索引（`key_evidence_refs`，即 `synthesis_packet.evidence_index` 的子集）。
 
-- **不得自行拼接 `parent#field`**。合法子引用的名字由证据索引给定，它**不等于**你在叙述文字里看到的数据字段名——看到 `m7_quarterly_total` 不代表 `L4.get_m7_buyback_flow#m7_quarterly_total` 是合法 ref。只有索引里逐字存在的 key 才是合法 ref。
+- 不得自行拼接 `parent#field`。合法子引用的名字由证据索引给定，它**不等于**你在叙述文字里看到的数据字段名——看到 `m7_quarterly_total` 不代表 `L4.get_m7_buyback_flow#m7_quarterly_total` 是合法 ref。只有索引里存在的 key 才是合法 ref。
 - 需要的子引用不在索引里时，两个诚实选项：退回索引中存在的函数级父引用（该父引用**未**标记 `mixed_field_authority` 时），或者放弃这条论断。绝不编造。
 - 父条目标记 `mixed_field_authority=true` 时，它只表示混合容器，不能支撑强估值、盈利或风险补偿结论，也不能被当作子引用的替身。
 - `event_refs` 只能作催化剂、背景或观察事项，不能替代 `evidence_refs`。
@@ -71,10 +71,10 @@
     }
   ],
   "revised_thesis": {
-    "environment_assessment": "最多300字符，说明宏观环境对估值、盈利和风险偏好的支撑或约束。",
-    "valuation_assessment": "最多300字符，估值安全边际评估：贵不贵？",
-    "timing_assessment": "最多300字符，择时催化剂评估：为什么是现在？",
-    "main_thesis": "最多500字符，主论点",
+    "environment_assessment": "<宏观环境对估值、盈利和风险偏好的支撑或约束>",
+    "valuation_assessment": "<估值安全边际评估：贵不贵？>",
+    "timing_assessment": "<择时催化剂评估：为什么是现在？>",
+    "main_thesis": "<主论点>",
     "key_support_chains": [...],
     "retained_conflicts": [...],
     "hypothesis_responses": [
@@ -233,8 +233,6 @@ revision_summary 应包含：
 - ✅ 显式说明拒绝了哪些批评及理由
 - ✅ 保留所有 high severity 冲突
 - ✅ 修订说明必须诚实（不夸大修订程度）
-- ✅ environment_assessment / valuation_assessment / timing_assessment 各最多300字符
-- ✅ main_thesis 最多500字符
 - ✅ Decision Semantics 字段保留状态、价格、赔率、时间尺度、动作、确认成本和失效条件
 - ✅ 核心仓、战术仓、等待者不能共用同一句模糊动作
 
@@ -245,7 +243,7 @@ revision_summary 应包含：
 - [ ] accepted_critiques 是否列出所有采纳的批评？
 - [ ] rejected_critiques 是否有充分理由？
 - [ ] revised_thesis.hypothesis_responses 是否对每个非 downgraded 竞争假说恰有一条回应、id 逐字对应、无遗漏无重复？
-- [ ] 所有 evidence_refs 是否逐字存在于证据索引中（没有自行拼接的 `parent#field`）？
+- [ ] 所有 evidence_refs 是否存在于证据索引中（没有自行拼接的 `parent#field`）？
 - [ ] revised_thesis 是否修复了数据引用错误？
 - [ ] revised_thesis 是否整合了风险警示？
 - [ ] revised_thesis 是否保留了确认成本、机会成本和假安全风险？

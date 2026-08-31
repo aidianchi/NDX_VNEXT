@@ -540,6 +540,59 @@ def test_reasoned_verdict_length_gate_removed_t69_p0():
     assert FinalAdjudication(**base, reasoned_verdict="过短").reasoned_verdict == "过短"
 
 
+_T69_P2B_FINAL_BASE = dict(
+    approval_status=ApprovalStatus.APPROVED_WITH_RESERVATIONS,
+    final_stance="中性偏谨慎",
+    confidence=Confidence.MEDIUM,
+    must_preserve_risks=["估值压缩风险"],
+    adjudicator_notes="保留风险边界。",
+)
+
+
+def test_invalidation_items_render_direction_tags_t69_p2b():
+    """T69 P2b-③（2026-08-31）：失效条件的【转多】【转空】前缀从模型自由文本里撤出
+    （混在字符串里让模型管标点=脏活）。模型只填 invalidation_items（direction 枚举
+    + text），标签由代码渲染回 invalidation_conditions 字符串——渲染层
+    （vnext_reporter._split_invalidation_item）与审计消费方全部不变。"""
+    final = FinalAdjudication(
+        **_T69_P2B_FINAL_BASE,
+        invalidation_items=[
+            {"direction": "转多", "text": "盈利预期上修并广度改善"},
+            {"direction": "转空", "text": "信用利差扩大"},
+        ],
+    )
+    assert final.invalidation_conditions == ["【转多】盈利预期上修并广度改善", "【转空】信用利差扩大"]
+
+
+def test_invalidation_item_direction_rejects_invalid_enum_t69_p2b():
+    """direction 是枚举身份字段：非法值必须被 pydantic 拒（形状检查合法留任），
+    由 _run_stage 重试反馈纠正，而不是混进字符串靠下游正则碰运气。"""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        FinalAdjudication(
+            **_T69_P2B_FINAL_BASE,
+            invalidation_items=[{"direction": "转向", "text": "盈利预期上修"}],
+        )
+
+
+def test_invalidation_conditions_legacy_strings_pass_through_t69_p2b():
+    """兼容：模型直写 invalidation_conditions 字符串（含或不含前缀的旧式输出）原样保留，
+    渲染层本就消化两种形态；invalidation_items 缺省时不覆盖。"""
+    final = FinalAdjudication(
+        **_T69_P2B_FINAL_BASE,
+        invalidation_conditions=["【转多】盈利预期上修", "裸文本条件"],
+    )
+    assert final.invalidation_conditions == ["【转多】盈利预期上修", "裸文本条件"]
+
+
+def test_reader_final_invalidation_items_render_summary_t69_p2b():
+    """reader_final.invalidation_summary 同族：模型填 invalidation_items，
+    代码渲染【转多】【转空】前缀。"""
+    reader = ReaderFinal(invalidation_items=[{"direction": "转空", "text": "信用利差扩大"}])
+    assert reader.invalidation_summary == ["【转空】信用利差扩大"]
+
+
 def test_decision_semantics_fields_roundtrip():
     thesis = ThesisDraft(
         environment_assessment="风险偏高。",

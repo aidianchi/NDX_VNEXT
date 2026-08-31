@@ -90,8 +90,8 @@ L5 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 
 - `indicator_analyses[].narrative` 要能作为技术指标卡片展示。
 - `reasoning_process` 必须说明指标如何影响趋势延续、过热或失效触发。
-- `layer_synthesis` 应稳定超过 180 个中文字符。
-- `internal_conflict_analysis` 应稳定超过 160 个中文字符，并明确趋势有效性与短期风险的区别。
+- `layer_synthesis` 要归纳本层指标的方向与张力，不写空泛套话。
+- `internal_conflict_analysis` 要写清冲突双方与各自依据，并明确趋势有效性与短期风险的区别。
 
 ## Output Discipline
 

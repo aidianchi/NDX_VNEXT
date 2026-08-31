@@ -141,8 +141,8 @@ L4 是长期判断的硬地基，所有估值结论必须服从数据发言权�
 
 - `indicator_analyses[].narrative` 要能作为估值指标卡片展示。
 - `reasoning_process` 必须说明估值相对于什么基准昂贵或便宜。
-- `layer_synthesis` 应稳定超过 180 个中文字符。
-- `internal_conflict_analysis` 应稳定超过 160 个中文字符，并明确安全边际和依赖假设。
+- `layer_synthesis` 要归纳本层指标的方向与张力，不写空泛套话。
+- `internal_conflict_analysis` 要写清冲突双方与各自依据，并明确安全边际和依赖假设。
 
 ## Output Discipline
 

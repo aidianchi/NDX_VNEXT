@@ -83,8 +83,8 @@ L3 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 
 - `indicator_analyses[].narrative` 要能作为广度/集中度指标卡片展示。
 - `reasoning_process` 必须说明“结构信号如何影响趋势质量”。
-- `layer_synthesis` 应稳定超过 180 个中文字符。
-- `internal_conflict_analysis` 应稳定超过 160 个中文字符，并明确哪些信号可靠、哪些受数据质量限制。
+- `layer_synthesis` 要归纳本层指标的方向与张力，不写空泛套话。
+- `internal_conflict_analysis` 要写清冲突双方与各自依据，并明确哪些信号可靠、哪些受数据质量限制。
 
 ## Output Discipline
 

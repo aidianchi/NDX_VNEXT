@@ -24,7 +24,7 @@
 
 如果 `evidence_index` 的函数级父条目标记 `mixed_field_authority=true`，它只能表示混合容器，不能支撑强结论。涉及具体估值、盈利或风险补偿字段时，必须引用索引中对应的 `L4.function_id#FieldName` 子条目；不得靠结论文字猜字段，也不得把弱字段权限借用为整个 licensed provider payload 的权限。
 
-子引用必须**逐字**存在于 `evidence_index` 中，**不得自行拼接**。合法子引用的名字由索引给定，它不等于你在指标叙述里看到的数据字段名——看到 `m7_quarterly_total` 不代表 `L4.get_m7_buyback_flow#m7_quarterly_total` 是合法 ref。需要的子引用不在索引里时，只能退回索引中存在的非 mixed 父引用，或放弃该论断。
+子引用必须存在于 `evidence_index` 中，不得自行拼接。合法子引用的名字由索引给定，它不等于你在指标叙述里看到的数据字段名——看到 `m7_quarterly_total` 不代表 `L4.get_m7_buyback_flow#m7_quarterly_total` 是合法 ref。需要的子引用不在索引里时，只能退回索引中存在的非 mixed 父引用，或放弃该论断。
 
 【姿态校准：三种市场状态下合格结论的样子】
 
