@@ -551,6 +551,12 @@ def _clean_reader_prose(text: Any) -> str:
     return fragment
 
 
+def _inline_emphasis_html(html: str) -> str:
+    """终审叙事用 markdown 加粗（**理由一…**）做强调——渲染层负责转成 <strong>，
+    星号不得原样上页面（09-06 老板实测：三个理由全带裸星号）。"""
+    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html or "")
+
+
 def _source_tier_label(value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -6916,7 +6922,8 @@ class VNextReportGenerator:
             ]
             if len(fragments) > len(paragraphs):
                 paragraphs = fragments
-        return "".join(f"<p>{self._inline_ref_html(paragraph)}</p>" for paragraph in paragraphs)
+        html = "".join(f"<p>{self._inline_ref_html(paragraph)}</p>" for paragraph in paragraphs)
+        return _inline_emphasis_html(html)
 
     def _css(self, style: str = "slate_v2") -> str:
         css_path = STYLES_DIR / f"{style}.css"

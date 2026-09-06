@@ -265,3 +265,11 @@ def test_sanitize_keeps_non_governance_payloads_untouched():
     payload = {"layer": "L2", "layer_raw_data": {}, "other": {"empty_list": []}}
     out = orch._sanitize_prompt_payload("l2_analyst", payload)
     assert out["other"] == {"empty_list": []}, "剪枝只作用于 governance_input，别处不越界"
+
+
+def test_reasoned_verdict_renders_markdown_bold():
+    """09-06 老板实测：终审叙事的 **理由一…** 星号原样上页面。渲染层必须转 <strong>。"""
+    from agent_analysis.vnext_reporter import _inline_emphasis_html
+    html = _inline_emphasis_html('<p>**理由一：钱贵。** 实际利率处十年 99 分位。</p>')
+    assert "<strong>理由一：钱贵。</strong>" in html
+    assert "**" not in html
