@@ -2116,6 +2116,13 @@ class GovernanceInputPacket(BaseModel):
         description="与高严重度冲突和 Thesis 支撑链相关的 event_index 子集；不能作为数值证据"
     )
 
+    fact_card: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="T70 P-B 事实卡（构造即忠实）：本段允许出现的数字菜单，"
+        "每条 = ref + 指标名 + 读数原值 + 权限档，由代码从 key_evidence_refs 装配；"
+        "仅 consumer=reviser/final 携带，risk 论证盲恒空",
+    )
+
     evidence_registry_summary: Dict[str, Any] = Field(
         default_factory=dict,
         description="阶段 4：统一证据注册摘要，用于治理阶段检查证据权限和降级规则",
@@ -2375,6 +2382,12 @@ class FinalAdjudication(BaseModel):
         这里归一为句子；含百分比却无 refs 的估值隐含回报做字段级 fail-closed（清空并
         留痕），违规数字进不了报告，但可选辅助字段不再让整次裁决失败。"""
         normalized = dict(value)
+        # T70 P-E（2026-09-03，run t70_glm_check_20260902 终审降级事故）：GLM 把
+        # uncertainty_notes 输出成整段字符串而非列表，缺宽容校验会让整份裁决硬失败。
+        # 与 permanent_loss_hypotheses 同法：字符串归一为单元素列表。
+        notes_raw = normalized.get("uncertainty_notes")
+        if isinstance(notes_raw, str) and notes_raw.strip():
+            normalized["uncertainty_notes"] = [notes_raw.strip()]
         hypotheses = normalized.get("permanent_loss_hypotheses")
         if isinstance(hypotheses, list):
             coerced: List[str] = []

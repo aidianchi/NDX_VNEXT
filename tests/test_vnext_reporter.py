@@ -14,6 +14,8 @@ from agent_analysis.vnext_reporter import (
     REF_DIGEST_JS,
     REF_DIGEST_FIELDS,
     VNextReportGenerator,
+    _clean_reader_prose,
+    _display_label,
     _drawer_reading_parts,
     _glossary_term,
     _label,
@@ -736,7 +738,8 @@ def test_reasoned_verdict_mutes_pseudo_refs():
     html = reporter._reasoned_verdict_html("调查仍在继续 [investigation]，伪造层级 [L9.fake_ref]。")
 
     # investigation 伪 ref 以人读标签降级展示，不可点击；伪造层级保持原文降级。
-    assert '<span class="ref-chip muted">受控调查</span>' in html
+    # T70 P-E 起降级芯片带 title 属性保留原始 id 供审计 hover 查证。
+    assert '<span class="ref-chip muted" title="investigation">受控调查</span>' in html
     assert '<span class="ref-chip muted">L9.fake_ref</span>' in html
     assert 'data-ref="investigation"' not in html
 
@@ -807,7 +810,9 @@ def test_world_section_renders_governed_summary_only_when_present():
     without_summary = reporter._event_mechanism_report_section(mechanism, {})
 
     assert 'class="prose event-summary"' in with_summary
-    assert "事件卡·abc" in with_summary
+    # T70 P-A：事件卡芯片渲染成中文序数（与外部世界区卡片顺序一致），hash 不上脸。
+    assert "事件卡一" in with_summary
+    assert "事件卡·abc" not in with_summary
     assert "以上事件材料不构成主证据" in with_summary
     assert "今天最值得盯的是" not in with_summary
     assert 'class="prose event-summary"' not in without_summary
@@ -2916,3 +2921,319 @@ def test_reasoned_verdict_fallback_splits_enumeration_anchors():
     # 句中位置不切：锚点前没有句末标点（"其中第一条"）
     html_mid = reporter._reasoned_verdict_html("其中第一条理由是A，第二条是B，构成一个整体论断。")
     assert html_mid.count("<p>") == 1
+
+
+# ---------------------------------------------------------------------------
+# T70 P-A（2026-09-02 人话工程·装配层）：机器语言不得泼到读者面。
+# 枚举走翻译层；编号渲染成人话序数；证据芯片挪到句群边界、不在句子中间；
+# [L4.xxx] 方括号引用与裸 L 引用一律转芯片，不裸奔。
+# 工单：investigation_reports/20260902_研报语言第一性/WORK_ORDERS.md P-A
+# 验收 run 20260831_2138 实测泄漏：absorb partially、TC_01–TC_06、
+# hyp_base_41616f34bb、事件卡·2b7744ab、partially_reflected、[L4.xxx]。
+# ---------------------------------------------------------------------------
+
+
+def test_t70_display_labels_cover_hypothesis_verdicts_and_statuses():
+    # 红：验收 run 假说卡标签原样显示 "absorb partially"（_display_label 兜底 replace("_"," ")）。
+    assert _display_label("absorb_partially") == "部分吸收"
+    assert _display_label("accept_and_revise") == "接受并修订"
+    assert _display_label("reject") == "否决"
+    assert _display_label("kept_unresolved") == "保留未决"
+    assert _display_label("split") == "已拆分"
+
+
+def test_t70_hypothesis_card_label_is_human_ordinal_and_translated_verdict():
+    # 红：卡标签曾是「竞争假说 1 · absorb partially」。
+    html = VNextReportGenerator()._brief_stress_section(
+        {
+            "hypothesis_competition": {
+                "hypotheses": [
+                    {
+                        "hypothesis_id": "hyp_counter",
+                        "hypothesis_text": "增长可以消化估值。",
+                        "status": "candidate",
+                        "support_evidence_refs": [],
+                        "falsification_conditions": [],
+                    }
+                ]
+            },
+            "thesis_draft": {
+                "hypothesis_responses": [
+                    {
+                        "hypothesis_id": "hyp_counter",
+                        "verdict": "absorb_partially",
+                        "reasoning": "资本开支提供支撑，但盈利证据仍缺失。",
+                        "evidence_refs": [],
+                    }
+                ]
+            },
+            "counter_thesis": {},
+        }
+    )
+    assert "假说甲" in html
+    assert "竞争假说 1" not in html
+    assert "部分吸收" in html
+    assert "absorb" not in html
+
+
+def test_t70_event_card_chip_uses_ordinal_and_hides_hash():
+    # 红：芯片文本曾是「事件卡·2b7744ab」——hash 直接上脸。
+    reporter = VNextReportGenerator()
+    reporter._brief_card_labels = {"abda3f112b7744ab": ("事件卡三", "AI 景气报告")}
+    html = reporter._render_single_ref("card:event:abda3f112b7744ab")
+    assert ">事件卡三</a>" in html
+    assert "事件卡·" not in html
+    # 审计锚不丢：完整 id 留在 title 属性，hover 可查。
+    assert "event:abda3f112b7744ab" in html
+    assert "AI 景气报告" in html
+
+
+def test_t70_event_card_chip_unknown_card_shows_no_hash():
+    reporter = VNextReportGenerator()
+    html = reporter._render_single_ref("card:event:deadbeef12345678")
+    assert ">事件卡</a>" in html
+    assert "事件卡·" not in html
+    assert "12345678</a>" not in html
+
+
+def test_t70_event_card_label_index_matches_world_section_order():
+    # 序数必须与「03 · 外部世界」区的卡片顺序一致：主线顺序优先、有解读的排前。
+    reporter = VNextReportGenerator()
+    artifacts = {
+        "event_mechanism_report": {
+            "news_cards": [
+                {"news_id": "news:aaa111", "title": "第一件事"},
+                {"news_id": "news:bbb222", "title": "第二件事"},
+                {"news_id": "news:ccc333", "title": "第三件事"},
+            ],
+            "mainlines": [
+                {"news_card_ids": ["news:ccc333", "news:aaa111"]},
+            ],
+        },
+        "event_interpretation_cards": {"cards": [{"event_id": "event:bbb222"}]},
+    }
+    labels = reporter._brief_event_card_labels(artifacts)
+    # mainlines 顺序先行（ccc→aaa），其余补尾（bbb）；有解读的（bbb）再整体提前。
+    assert labels["bbb222"][0] == "事件卡一"
+    assert labels["ccc333"][0] == "事件卡二"
+    assert labels["aaa111"][0] == "事件卡三"
+    assert labels["aaa111"][1] == "第一件事"
+
+
+def test_t70_inline_refs_render_at_citation_position():
+    # 老板 2026-09-04 裁决：芯片钉在原引用位置（原排版没有问题），回退"挪到句尾"手术；
+    # 保留的是翻译层（方括号/裸 token 不裸奔），不是位置。
+    reporter = VNextReportGenerator()
+    reporter._brief_ref_labels = {"L1.get_10y_real_rate": "L1·10年实际利率"}
+    html = reporter._inline_ref_html("实际利率仍构成压力 [L1.get_10y_real_rate]，但趋势尚未破坏。")
+    assert "[L1.get_10y_real_rate]" not in html
+    assert 'data-ref="L1.get_10y_real_rate"' in html
+    assert html.index("实际利率仍构成压力") < html.index('class="ref-chip"') < html.index("，但趋势尚未破坏。")
+
+
+def test_t70_reasoned_verdict_chips_at_citation_position():
+    reporter = VNextReportGenerator()
+    reporter._brief_ref_labels = {
+        "L1.get_10y_real_rate": "L1·10年实际利率",
+        "L4.get_ndx_wind_valuation_snapshot": "L4·NDX估值快照",
+    }
+    html = reporter._reasoned_verdict_html(
+        "安全边际极薄 [L1.get_10y_real_rate, L4.get_ndx_wind_valuation_snapshot#PE]，利率是主约束。\n\n调查仍在继续。"
+    )
+    assert html.count('class="ref-chip"') == 2
+    assert 'data-ref="L4.get_ndx_wind_valuation_snapshot#PE"' in html
+    assert html.index("安全边际极薄") < html.index('class="ref-chip"') < html.index("，利率是主约束。")
+    assert html.count("<p>") == 2
+
+
+def test_t70_bare_ref_tokens_and_ref_only_parens_convert_to_chips():
+    # 红：must_preserve_risks 里模型写的是裸引用「（L1.xxx, L2.xxx）」，方括号正则吃不到，
+    # 曾原样透传上脸（验收 run「不能忽视的风险」区）。
+    reporter = VNextReportGenerator()
+    reporter._brief_ref_labels = {
+        "L1.get_10y_real_rate": "L1·10年实际利率",
+        "L2.get_hy_oas_bp": "L2·高收益债利差",
+    }
+    html = reporter._inline_ref_html(
+        "价格反映程度不确定（L1.get_10y_real_rate, L2.get_hy_oas_bp），双向误判风险并存。"
+    )
+    assert "（L1.get_10y_real_rate" not in html
+    assert html.count('class="ref-chip"') == 2
+    # 纯引用括号组整体换成芯片，钉在原位置（老板 09-04：原排版保留）
+    assert html.index("不确定") < html.index('class="ref-chip"') < html.index("，双向误判风险并存。")
+
+
+def test_t70_machine_tokens_in_prose_translate_to_human_labels():
+    # 红：验收 run 正文散落枚举值与内部 id——翻译/序数化是纯代码活，不该等模型自觉。
+    reporter = VNextReportGenerator()
+    reporter._brief_ref_labels = {}
+    html = reporter._inline_ref_html(
+        "价格反映程度不确定（partially_reflected，双向误判并存）；"
+        "本矛盾显式映射TC_01–TC_06全部六条保留冲突，缺口在TC_04；"
+        "与主线假说hyp_base_41616f34bb所述结构同向；"
+        "PC_earnings_digestion_vs_zero_cushion仅映射TC_01/02/03/05；"
+        "SC_concentration_earnings_test 已登记为主要矛盾代号。"
+    )
+    assert "partially_reflected" not in html
+    assert "部分反映" in html
+    assert "TC_01" not in html and "TC_04" not in html and "TC_06" not in html
+    assert "冲突一" in html and "冲突四" in html and "冲突六" in html
+    assert "冲突一/二/三/五" in html
+    assert "hyp_base_41616f34bb" not in html
+    assert "与主线假说所述结构同向" in html
+    assert "PC_earnings_digestion_vs_zero_cushion" not in html
+    assert "候选主要矛盾" in html
+    assert "SC_concentration_earnings_test" not in html
+    assert "本轮主要矛盾" in html
+
+
+def test_t70_long_term_assessment_converts_bracket_refs():
+    # 红：长期资产评估三段曾 _escape 透传，[L3.xxx] 裸奔（验收 run L640-642）。
+    reporter = VNextReportGenerator()
+    reporter._brief_ref_labels = {"L3.get_qqq_top10_concentration": "L3·前十大权重集中度"}
+    html = reporter._long_term_assessment_section(
+        {
+            "long_term_assessment": {
+                "object_quality": "盈利复利依赖集中度 [L3.get_qqq_top10_concentration]。",
+            }
+        }
+    )
+    assert "[L3.get_qqq_top10_concentration]" not in html
+    assert 'data-ref="L3.get_qqq_top10_concentration"' in html
+    # 芯片钉在原引用位置（老板 09-04：原排版保留）
+    assert html.index("盈利复利依赖集中度") < html.index('class="ref-chip"') < html.index("。")
+
+
+def test_t70_must_preserve_risks_do_not_show_raw_refs():
+    reporter = VNextReportGenerator()
+    reporter._brief_ref_labels = {"L1.get_10y_real_rate": "L1·10年实际利率"}
+    html = reporter._risks_section(
+        {
+            "final_adjudication": {},
+            "risk_boundary_report": {
+                "must_preserve_risks": ["价格反映不确定（L1.get_10y_real_rate），双向误判并存"],
+            },
+        },
+        section_kicker="05 · 改判条件",
+    )
+    assert "（L1.get_10y_real_rate" not in html
+    assert 'data-ref="L1.get_10y_real_rate"' in html
+
+
+def test_t70_thesis_heading_has_no_keyword_gamble():
+    # 红：summary 不同时含「估值」「利率」时，标题拼装成「为什么主要矛盾是"本轮主要矛盾"」。
+    html = VNextReportGenerator()._brief_thesis_section(
+        {
+            "final_adjudication": {
+                "principal_contradiction": {
+                    "summary": "信用利差处于极端水平，而盈利上修仍在继续。",
+                    "why_principal": "因为它同时决定赔率与仓位。",
+                    "evidence_refs": [],
+                }
+            },
+            "thesis_draft": {},
+        }
+    )
+    assert "<h2>本轮的主要矛盾</h2>" in html
+    assert "本轮主要矛盾”" not in html
+    # 矛盾代号不上脸：summary 里的 SC_ 代号渲染成人话。
+    html_with_id = VNextReportGenerator()._brief_thesis_section(
+        {
+            "final_adjudication": {
+                "principal_contradiction": {
+                    "summary": "SC_concentration_test：集中度与盈利兑现的张力。",
+                    "why_principal": "因为它决定赔率。",
+                    "evidence_refs": [],
+                }
+            },
+            "thesis_draft": {},
+        }
+    )
+    assert "SC_concentration_test" not in html_with_id
+
+
+def test_t70_verification_grade_tokens_translate_in_prose():
+    # 红：验证等级黑话曾直接上脸（"全部字段supporting_only""90日斜率pending_validation"）。
+    reporter = VNextReportGenerator()
+    reporter._brief_ref_labels = {}
+    html = reporter._inline_ref_html(
+        "全部字段supporting_only，90日斜率依赖supplier_lookback且pending_validation；"
+        "材料属reliable_mainstream_report档，HoM读数仅validation_only；状态=tightening_priced。"
+    )
+    for token in ("supporting_only", "supplier_lookback", "pending_validation",
+                  "reliable_mainstream_report", "validation_only", "tightening_priced"):
+        assert token not in html, token
+    for label in ("仅作旁证", "供应商回看值", "待验证", "可靠媒体转述", "仅作校验", "市场定价偏收紧"):
+        assert label in html, label
+
+
+def test_t70_reader_sentence_strips_refs_before_truncation():
+    # 红：先 _sentence 截断再转芯片会把 [L4.xxx] 切成半截裸奔（"[L4.get_equity_risk_premi…"）。
+    reporter = VNextReportGenerator()
+    reporter._brief_ref_labels = {"L4.get_equity_risk_premium": "L4·简式收益差距"}
+    text = "指数级零当期安全垫读数[L4.get_equity_risk_premium#level]仅与该叙事方向相容，" + "不构成核对。" * 40
+    html = reporter._reader_sentence_html(text, 60)
+    assert "[L4" not in html
+    visible = re.sub(r"<[^>]+>", " ", html)
+    assert "get_equity_risk_premi" not in visible  # 可见文本里没有截断的半截 token
+    assert 'data-ref="L4.get_equity_risk_premium#level"' in html
+    assert "仅与该叙事方向相容" in html
+
+
+def test_t70_recollection_candidates_render_as_human_labels():
+    # 红：补采清单「候选函数：L4.get_m7_capex_cycle」把函数名泼在读者面。
+    reporter = VNextReportGenerator()
+    reporter._brief_ref_labels = {"L4.get_m7_capex_cycle": "L4·M7资本开支周期"}
+    html = reporter._recollection_fold(
+        {
+            "integrated_synthesis_report": {
+                "recollection_requests": {
+                    "requests": [
+                        {
+                            "missing": "缺 AMZN 官方季报核对",
+                            "quality": "specific_gap",
+                            "trigger_reason": "cannot_answer_yet",
+                            "candidate_function_ids": ["L4.get_m7_capex_cycle"],
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    assert "L4.get_m7_capex_cycle" not in html
+    assert "L4·M7资本开支周期" in html
+
+
+def test_t70_investigation_ids_render_as_human_chip():
+    """红（验收 run t70_glm_check）：对质区「依据」行把调查编号 inv_480530965a5d 原样泼出来。"""
+    reporter = VNextReportGenerator()
+    reporter._brief_ref_labels = {}
+    chips = reporter._ref_chips(["inv_480530965a5d"])
+    assert "受控调查" in chips
+    assert "inv_480530965a5d</span>" not in chips
+    assert "inv_480530965a5d" in chips  # 完整 id 留在 title 属性供审计
+    html = reporter._inline_ref_html("两类利差均未确认传导，详见 inv_480530965a5d 的结论。")
+    assert "受控调查" in html
+    assert "详见" in html and "的结论" in html
+    assert html.index("详见") < html.index("受控调查") < html.index("的结论")
+
+
+def test_t70_key_value_field_dumps_translate_known_keys():
+    """红：层摘要散文里的 key=value 机器对（change_20d_pct=-20.84%、price_vs_vwap_20=below）。"""
+    cleaned = _clean_reader_prose("20日净增减股数=-132,603,539（净流出），change_20d_pct=-20.84%，trend=distribution")
+    assert "change_20d_pct" not in cleaned
+    assert "20日变化率=-20.84%" in cleaned
+    assert "趋势=派发" in cleaned
+    cleaned2 = _clean_reader_prose("price_vs_vwap_20=below（偏离-1.42%）；bb_compression_ratio=0.0397(high_compression)")
+    assert "价格相对VWAP20=下方" in cleaned2
+    assert "bb_compression_ratio" not in cleaned2
+    assert "高压缩" in cleaned2
+    # 未知 key 原样保留，不瞎翻
+    assert _clean_reader_prose("foo_bar=1") == "foo_bar=1"
+
+
+def test_t70_cjk_adjacent_status_words_translate():
+    """红：'短期广度deteriorating' 类中英混排状态词；纯英文语境（事件标题）不碰。"""
+    assert _clean_reader_prose("短期广度deteriorating") == "短期广度恶化中"
+    assert _clean_reader_prose("结构extreme_concentration叠加") == "结构极端集中叠加"
+    assert _clean_reader_prose("Market deteriorating rapidly") == "Market deteriorating rapidly"

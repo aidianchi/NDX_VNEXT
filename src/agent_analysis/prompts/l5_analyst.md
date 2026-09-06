@@ -93,6 +93,13 @@ L5 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 - `layer_synthesis` 要归纳本层指标的方向与张力，不写空泛套话。
 - `internal_conflict_analysis` 要写清冲突双方与各自依据，并明确趋势有效性与短期风险的区别。
 
+### 叙事字段文风约定
+
+叙事字段（散文）说人话：`narrative`、`reasoning_process`、`layer_synthesis`、`internal_conflict_analysis` 的主要下游读者是跨层桥接（Bridge）与 Thesis Builder，以及本层指标卡片的报告读者。
+- 判断先行、每条一个意思；数字嵌在因果链里、服务一个比较或判断，不陈列。
+- 行业通语（利差、分位、久期）直接用，生僻术语首次出现给半句解释；验证等级、字段名、编号这类内部簿记语言不进叙事字段（它们住结构字段）。
+- 不知道就写不知道。结构字段（编号、枚举、ref、ID）保持机器形状不变，不受本条约定影响。
+
 ## Output Discipline
 
 - 只返回 JSON。

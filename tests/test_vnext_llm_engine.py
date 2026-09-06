@@ -785,3 +785,19 @@ def test_call_ai_prompt_cache_hit_tokens_is_none_when_provider_omits_it(monkeypa
 
     assert "prompt_cache_hit_tokens" in usage
     assert usage["prompt_cache_hit_tokens"] is None
+
+
+def test_t70_extract_json_takes_first_object_when_model_emits_concatenated_duplicates():
+    """红灯（2026-09-03，run t70_glm_check_20260902 终审 attempt_1）：GLM flash 在
+    response_format=json_object 下偶发把同一份 JSON 对象首尾串联输出两遍，
+    json.loads 报 Extra data → 整次尝试作废。取第一个完整对象是安全的收窄修复：
+    下游 schema 校验照样把守内容，截断/残缺的首对象依然会在 raw_decode 报错。"""
+    from agent_analysis.llm_engine import LLMEngine
+
+    engine = LLMEngine(available_models=[])
+    obj = '{"approval_status": "approved", "final_stance": "中性观察"}'
+    parsed = engine.extract_json(obj + "\n\n" + obj, stage="final")
+    assert parsed == {"approval_status": "approved", "final_stance": "中性观察"}
+
+    # 首个对象残缺时不得 salvage：照常返回 None 走重试
+    assert engine.extract_json('{"a": 1,\n{"b": 2}', stage="final") is None

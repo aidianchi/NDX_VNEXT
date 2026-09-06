@@ -256,19 +256,23 @@ def _merged_body_fetch_terms() -> set:
 
 
 class _ReadableTextParser(HTMLParser):
+    # 体检 #3（run t70_glm_check_20260902：事件卡摘录 24-62% 是导航/广告/行情挂件）：
+    # 商业站把行情组件、推广位、相关阅读装在 <aside> 里——不跳过它，摘录头部全是噪音。
+    _SKIP_TAGS = frozenset({"script", "style", "noscript", "svg", "nav", "header", "footer", "form", "aside"})
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: List[str] = []
         self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
-        if tag.lower() in {"script", "style", "noscript", "svg", "nav", "header", "footer", "form"}:
+        if tag.lower() in self._SKIP_TAGS:
             self._skip_depth += 1
         if tag.lower() in {"p", "br", "div", "section", "article", "li", "h1", "h2", "h3"}:
             self.parts.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.lower() in {"script", "style", "noscript", "svg", "nav", "header", "footer", "form"} and self._skip_depth:
+        if tag.lower() in self._SKIP_TAGS and self._skip_depth:
             self._skip_depth -= 1
         if tag.lower() in {"p", "div", "section", "article", "li"}:
             self.parts.append("\n")
@@ -289,6 +293,20 @@ def _extract_readable_text(raw: str, limit: int = RAW_TEXT_EXCERPT_LIMIT) -> str
     if "<html" not in lower_start and "<body" not in lower_start and "<p" not in lower_start and "<article" not in lower_start:
         return _clean_text(text, limit)
     text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
+    # 体检 #3：商业站把导航/广告/行情挂件放页头，摘录取头部 8000 字符恰好全落在噪音区
+    # （Yahoo 聚合站 24-62% 是噪音、两张卡躺着两个互相矛盾的比特币报价）。
+    # 正文容器优先：页面有 <article> 时只取容器内文本；容器太薄（<500 字符）再回退整页。
+    article_blocks = re.findall(r"<article[^>]*>(.*?)</article>", text, flags=re.DOTALL | re.IGNORECASE)
+    if article_blocks:
+        article_parser = _ReadableTextParser()
+        try:
+            for block in article_blocks:
+                article_parser.feed(block)
+            article_text = _clean_text(" ".join(article_parser.parts), limit)
+        except Exception:
+            article_text = ""
+        if len(article_text) >= 500:
+            return article_text
     parser = _ReadableTextParser()
     try:
         parser.feed(text)

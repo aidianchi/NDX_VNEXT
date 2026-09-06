@@ -96,6 +96,41 @@ DISPLAY_LABELS = {
     "not_reflected": "尚未反映",
     "largely_reflected": "大体反映",
     "unclear": "不明朗",
+    # T70 P-A（2026-09-02）：假说裁决 verdict / status 三枚举曾原样上脸
+    # （"竞争假说 1 · absorb partially"），翻译是渲染层职责，不推给模型。
+    "absorb_partially": "部分吸收",
+    "accept_and_revise": "接受并修订",
+    "reject": "否决",
+    "kept_unresolved": "保留未决",
+    "split": "已拆分",
+    # T70 P-A：验证等级 / 数据来源口径是后厨语言（法典第 3、6 条），进正文前一律翻人话。
+    "supporting_only": "仅作旁证",
+    "pending_validation": "待验证",
+    "validation_only": "仅作校验",
+    "self_archive": "自有存档",
+    "supplier_lookback": "供应商回看值",
+    "supplier_reported_counts": "供应商报告计数",
+    "reliable_mainstream_report": "可靠媒体转述",
+    "tightening_priced": "市场定价偏收紧",
+    "easing_priced": "市场定价偏宽松",
+    "cuts_priced_bps": "隐含降息bp",
+    "slope_12m": "12个月斜率",
+    "low_liquidity_far_month": "远端合约流动性低",
+    "avg_volume_10d": "10日均量",
+    "position_vs_ma50": "相对MA50位置",
+    "eps_trend": "EPS趋势",
+    "fcf_yield": "自由现金流收益率",
+    "earnings_yield": "盈利收益率",
+    "earnings_path": "盈利路径",
+    "price_reflection": "价格反映",
+    "credit_tail_stress": "信用尾部压力",
+    "mixed_official_and_third_party": "官方与第三方混合",
+    "weak_or_range": "弱趋势/区间震荡",
+    "no_cross": "无金叉死叉",
+    "policy_or_financial_conditions": "政策或金融条件",
+    "official_filing": "官方申报文件",
+    "insufficient_history": "历史样本不足",
+    "third_party_estimate": "第三方估算",
     "macro_valuation": "宏观与估值",
     "feedback_bridge_v2": "反馈复核（第二轮）",
     "small_position_dca_waiting_for_golden_pit": "小仓位定投，等待黄金坑",
@@ -111,7 +146,69 @@ DISPLAY_LABELS = {
     "merged": "已合并",
     "downgraded": "已降级",
     "2-5 decisions per year": "每年 2-5 次关键决策",
+    "extreme_concentration": "极端集中",
 }
+
+# T70 P-A：层摘要散文里模型偶发倒出 key=value 机器对（L5 快照口径）。只翻已核实的
+# key 与状态 value，未知 key 原样保留——宁可漏，不瞎翻。
+_PROSE_KV_KEY_LABELS = {
+    "change_20d_pct": "20日变化率",
+    "price_vs_vwap_20": "价格相对VWAP20",
+    "vwap_20": "VWAP20",
+    "mfi_14": "MFI(14)",
+    "cmf_20": "CMF(20)",
+    "cmf_status": "CMF状态",
+    "macd_status": "MACD状态",
+    "bb_lower": "布林带下轨",
+    "bb_middle": "布林带中轨",
+    "bb_upper": "布林带上轨",
+    "bb_compression_ratio": "布林带压缩比",
+    "adx_trend_strength": "ADX趋势强度",
+    "trend": "趋势",
+}
+_PROSE_KV_VALUE_LABELS = {
+    "below": "下方",
+    "above": "上方",
+    "distribution": "派发",
+    "accumulation": "吸筹",
+    "neutral": "中性",
+    "high_compression": "高压缩",
+    "low_compression": "低压缩",
+    "weak_or_range": "弱趋势/区间震荡",
+    "bearish": "偏空",
+    "bullish": "偏多",
+}
+_PROSE_KV_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])([a-z][a-z0-9_]*)=([A-Za-z_][A-Za-z0-9_]*|[-+]?\d[\d.,%]*)(?:\(([A-Za-z_][A-Za-z0-9_]*)\))?"
+)
+# 中英接缝处的状态词（"短期广度deteriorating"）：只在一侧贴中文字符时翻译，
+# 纯英文语境（事件标题等）一个字不碰。
+_PROSE_CJK_STATUS_WORDS = {
+    "deteriorating": "恶化中",
+    "improving": "改善中",
+    "distribution": "派发",
+    "accumulation": "吸筹",
+    "sideways": "区间震荡",
+    "uptrend": "上升趋势",
+    "downtrend": "下降趋势",
+}
+_PROSE_CJK_STATUS_PATTERN = re.compile(
+    "|".join(
+        rf"(?<=[一-鿿]){word}(?![a-z])|(?<![a-z]){word}(?=[一-鿿])"
+        for word in sorted(_PROSE_CJK_STATUS_WORDS, key=len, reverse=True)
+    )
+)
+
+
+def _replace_kv_dump(match: "re.Match[str]") -> str:
+    key, value, inner = match.group(1), match.group(2), match.group(3)
+    label = _PROSE_KV_KEY_LABELS.get(key)
+    if label is None:
+        return match.group(0)  # 未知 key 原样保留
+    rendered = f"{label}={_PROSE_KV_VALUE_LABELS.get(value, value)}"
+    if inner:
+        rendered += f"（{_PROSE_KV_VALUE_LABELS.get(inner, inner)}）"
+    return rendered
 
 # Short, local explanations keep the report readable without requiring an
 # external glossary or network request.  Definitions describe what a metric
@@ -341,6 +438,8 @@ LABELS: Dict[str, Dict[str, str]] = {
         "breadth_deterioration": "广度恶化",
         "sentiment_reversal": "情绪反转",
         "trend_breakdown": "趋势破坏",
+        # T70 P-A：验收 run 实测上脸的边界名（"credit_tail_stress · 已突破"）。
+        "credit_tail_stress": "信用尾部压力",
     },
     "risk_flag": {
         "valuation_compression": "估值压缩",
@@ -375,6 +474,81 @@ def _label(value: Any, kind: str) -> str:
 def _display_label(value: Any) -> str:
     raw = str(value or "")
     return DISPLAY_LABELS.get(raw, raw.replace("_", " "))
+
+
+# --- T70 P-A（2026-09-02 人话工程·装配层）---------------------------------
+# 读者面散文的机器词清洗：枚举值翻成人话、内部编号渲染成中文序数/人话名。
+# 只动 snake_case 机器 token 与刻版 id 模式，中文散文一个字不碰。
+
+_ZH_DIGITS = "零一二三四五六七八九"
+
+
+def _zh_ordinal(value: Any) -> str:
+    """1 → 一，10 → 十，11 → 十一，21 → 二十一；超出范围退回阿拉伯数字。"""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if n <= 0:
+        return str(n)
+    if n < 10:
+        return _ZH_DIGITS[n]
+    if n == 10:
+        return "十"
+    if n < 20:
+        return "十" + _ZH_DIGITS[n % 10]
+    if n < 100:
+        return _ZH_DIGITS[n // 10] + "十" + (_ZH_DIGITS[n % 10] if n % 10 else "")
+    return str(n)
+
+
+def _event_card_token(raw: Any) -> str:
+    """card:event:ab12… / event:ab12… / news:ab12… / event_ab12… 统一归一到末段 token。"""
+    token = str(raw or "").split(":")[-1].strip()
+    return token[6:] if token.startswith("event_") else token
+
+
+# 只收含下划线的 snake_case 键——单词键（credit/rates/leading…）可能是合法英文散文，不动。
+_PROSE_ENUM_LABELS = {
+    key: value
+    for key, value in DISPLAY_LABELS.items()
+    if re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)+", key)
+}
+_PROSE_ENUM_PATTERN = re.compile(
+    r"(?<![a-z0-9_])("
+    + "|".join(sorted((re.escape(key) for key in _PROSE_ENUM_LABELS), key=len, reverse=True))
+    + r")(?![a-z0-9_])"
+    r"(?!\.[A-Za-z])"  # 后接点号的是字段路径（eps_trend.30daysAgo），不是词，别半翻
+)
+# TC_01 / TC_01/02/03 / TC_01–TC_06 → 冲突一 / 冲突一/二/三 / 冲突一–冲突六。
+# 注意不能用 \b：中文字符在 re 里算 \w，"映射TC_01" 的 射→T 之间没有 \b 边界。
+_PROSE_TC_PATTERN = re.compile(r"(?<![A-Za-z0-9_])TC_(\d+(?:\s*[/,、]\s*\d+)*)")
+# 假说 id 只做删除：真实语料里它总是贴在「主线假说」「反方假说」后面当同位语
+# （"与主线假说hyp_base_41616f34bb所述…"），删掉读起来正好；单独出现时留空也最干净。
+_PROSE_HYP_ID_PATTERN = re.compile(r"(?<![A-Za-z0-9_])hyp_(?:base|counter)_[0-9a-f]+")
+_PROSE_PC_ID_PATTERN = re.compile(r"(?<![A-Za-z0-9_])PC_[a-z0-9_]+")
+_PROSE_SC_ID_PATTERN = re.compile(r"(?<![A-Za-z0-9_])SC_[a-z0-9_]+")
+
+
+def _replace_tc_id(match: "re.Match[str]") -> str:
+    ordinals = re.sub(r"\d+", lambda d: _zh_ordinal(d.group(0)), match.group(1))
+    return "冲突" + ordinals
+
+
+def _clean_reader_prose(text: Any) -> str:
+    """散文里的机器 token 翻成人话；纯文本进、纯文本出，不碰 HTML。"""
+    fragment = str(text or "")
+    if not fragment:
+        return fragment
+    fragment = _PROSE_ENUM_PATTERN.sub(lambda m: _PROSE_ENUM_LABELS[m.group(1)], fragment)
+    fragment = _PROSE_TC_PATTERN.sub(_replace_tc_id, fragment)
+    fragment = _PROSE_HYP_ID_PATTERN.sub("", fragment)
+    fragment = _PROSE_PC_ID_PATTERN.sub("候选主要矛盾", fragment)
+    fragment = _PROSE_SC_ID_PATTERN.sub("本轮主要矛盾", fragment)
+    fragment = _PROSE_KV_PATTERN.sub(_replace_kv_dump, fragment)
+    fragment = _PROSE_CJK_STATUS_PATTERN.sub(lambda m: _PROSE_CJK_STATUS_WORDS[m.group(0)], fragment)
+    fragment = re.sub(r"[ \t]{2,}", " ", fragment)
+    return fragment
 
 
 def _source_tier_label(value: Any) -> str:
@@ -1917,6 +2091,9 @@ class VNextReportGenerator:
             if isinstance(metric, dict) and metric.get("layer") and metric.get("metric")
         } if brief else self._artifact_ref_labels(artifacts)
         self._brief_digest_metrics = dict(payload.get("metrics") or {}) if brief else {}
+        # T70 P-A：事件卡芯片要渲染成「事件卡一/二/三」，序数与「外部世界」区卡片顺序一致，
+        # 必须在各章节渲染前预建（门脸裁决正文里就可能引用事件卡）。
+        self._brief_card_labels = self._brief_event_card_labels(artifacts)
         payload_json = _json_for_script(payload)
         fonts_url = STYLE_FONTS.get(style, STYLE_FONTS["slate_v2"])
         body_classes = f"template-{_escape(template)} style-{style}" + (" style-b style-b-light micro-1" if brief else "")
@@ -2457,7 +2634,6 @@ class VNextReportGenerator:
         principal = surface.get("principal_contradiction") if isinstance(surface.get("principal_contradiction"), dict) else {}
         principal_refs = self._brief_inline_refs(principal.get("evidence_refs", []))
         principal_summary = str(principal.get("summary") or "")
-        principal_title = "估值压缩风险" if "估值" in principal_summary and "利率" in principal_summary else "本轮主要矛盾"
         chains = []
         for index, item in enumerate(_as_list(final.get("key_support_chains") or thesis.get("key_support_chains"))[:3], 1):
             if not isinstance(item, dict):
@@ -2466,20 +2642,20 @@ class VNextReportGenerator:
             chains.append(f"""
 <article class="claim">
   <div class="tag sans">支撑链 {'一二三'[index - 1]}</div>
-  <p>{_escape(item.get('chain_description') or item.get('claim') or '')}{self._brief_inline_refs(refs)}</p>
+  <p>{self._inline_ref_html(item.get('chain_description') or item.get('claim') or '')}{self._brief_inline_refs(refs)}</p>
 </article>""")
         price_rows = []
         for item in _as_list(surface.get("price_reflection_map"))[:6]:
             if not isinstance(item, dict):
                 continue
             price_rows.append(f"""
-<p><b>{_escape(_display_label(item.get('category') or item.get('target') or '定价'))}：</b>{_escape(item.get('rationale') or '')} <span class="reading">{_escape(_display_label(item.get('reflected_state') or 'unclear'))}</span>{self._brief_inline_refs(item.get('evidence_refs', []))}</p>""")
+<p><b>{_escape(_display_label(item.get('category') or item.get('target') or '定价'))}：</b>{self._inline_ref_html(item.get('rationale') or '')} <span class="reading">{_escape(_display_label(item.get('reflected_state') or 'unclear'))}</span>{self._brief_inline_refs(item.get('evidence_refs', []))}</p>""")
         horizon_rows = []
         for item in _as_list(surface.get("time_horizon_views"))[:3]:
             if not isinstance(item, dict):
                 continue
             horizon_rows.append(f"""
-<p><b>{_escape(_display_label(item.get('horizon') or '时间尺度'))}：</b>{_escape(item.get('view') or '')} {_escape(item.get('action_implication') or '')}{self._brief_inline_refs(item.get('evidence_refs', []))}</p>""")
+<p><b>{_escape(_display_label(item.get('horizon') or '时间尺度'))}：</b>{self._inline_ref_html((str(item.get('view') or '') + ' ' + str(item.get('action_implication') or '')).strip())}{self._brief_inline_refs(item.get('evidence_refs', []))}</p>""")
         aside_refs: List[str] = []
         for item in _as_list(surface.get("price_reflection_map"))[:6]:
             if isinstance(item, dict):
@@ -2492,12 +2668,12 @@ class VNextReportGenerator:
         )
         return f"""
 <section class="panel sec" id="thesis">
-  <div class="sec-head"><span class="kicker">01 · 正方主论证</span><h2>为什么主要矛盾是“{_escape(principal_title)}”</h2></div>
+  <div class="sec-head"><span class="kicker">01 · 正方主论证</span><h2>本轮的主要矛盾</h2></div>
   <div class="sec-grid"><div class="sec-main prose thesis-prose">
     <article class="claim">
       <div class="tag sans">主要矛盾</div>
-      <h3>{_escape(principal_summary or '未形成结构化主要矛盾。')}</h3>
-      <p>{_escape(principal.get('why_principal') or '')}{principal_refs}</p>
+      <h3>{self._inline_ref_html(principal_summary or '未形成结构化主要矛盾。')}</h3>
+      <p>{self._inline_ref_html(principal.get('why_principal') or '')}{principal_refs}</p>
       <p>{'<b>行动含义：</b>' + _escape(principal.get('action_implication')) if principal.get('action_implication') else ''}</p>
     </article>
     {''.join(chains) or '<p>暂无结构化支撑链。</p>'}
@@ -2551,7 +2727,7 @@ class VNextReportGenerator:
                     window_status=_escape(status(window.get("status"))),
                     count=_escape(window.get("intersection_ticker_count", 0)),
                     change=_escape(number(window.get("average_change_pct"), "%")),
-                    note=_escape(window.get("note") or ""),
+                    note=self._inline_ref_html(window.get("note") or ""),
                 )
             )
         earnings_detail = "".join(window_rows) or "<li>尚未形成 30/90 日可比窗口。</li>"
@@ -2570,12 +2746,12 @@ class VNextReportGenerator:
         return f"""
 <div class="audit-boundaries expectation-ledger" id="expectation-vs-realized">
   <h3>预期与兑现</h3>
-  <p>这是辅助对照账，只帮助检查市场预期后来兑现了多少；权威级别为 <b>{_escape(authority)}</b>，不能充当 L1-L5 核心证据。</p>
+  <p>这是辅助对照账，只帮助检查市场预期后来兑现了多少；权威级别为 <b>{_escape(_display_label(authority))}</b>，不能充当 L1-L5 核心证据。</p>
   {overall_note}
   <div class="audit-grid">
     <div><b>盈利预期</b><p>{_escape(status(earnings.get('status')))}；当前快照 {_escape(earnings.get('current_snapshot_date') or '未形成')}；覆盖 {_escape(earnings.get('current_ticker_count', 0))} 个标的。</p><ul>{earnings_detail}</ul></div>
-    <div><b>利率路径</b><p>{_escape(status(rate.get('status')))}；当前路径 {path_points} 个点；历史兑现对照 {comparisons} 条。</p><p>{_escape(rate.get('note') or '')}</p></div>
-    <div><b>波动溢价</b><p>{_escape(status(volatility.get('status')))}；有效窗口 {_escape(volatility.get('sample_count', 0))} 个；近期溢价 {number(volatility.get('recent_premium_pct_points'), ' 个百分点')}；近期分位 {number(volatility.get('recent_percentile'), '%')}。</p><p>{_escape(volatility.get('note') or '')}</p></div>
+    <div><b>利率路径</b><p>{_escape(status(rate.get('status')))}；当前路径 {path_points} 个点；历史兑现对照 {comparisons} 条。</p><p>{self._inline_ref_html(rate.get('note') or '')}</p></div>
+    <div><b>波动溢价</b><p>{_escape(status(volatility.get('status')))}；有效窗口 {_escape(volatility.get('sample_count', 0))} 个；近期溢价 {number(volatility.get('recent_premium_pct_points'), ' 个百分点')}；近期分位 {number(volatility.get('recent_percentile'), '%')}。</p><p>{self._inline_ref_html(volatility.get('note') or '')}</p></div>
   </div>
 </div>
 """
@@ -2687,18 +2863,18 @@ class VNextReportGenerator:
             "object_quality", "earnings_compounding", "valuation_implied_return"
         )) and not hypotheses:
             return ""
-        hypothesis_rows = "".join(f"<li>{_escape(item)}</li>" for item in hypotheses) or "<li>未列出。</li>"
+        hypothesis_rows = "".join(f"<li>{self._inline_ref_html(item)}</li>" for item in hypotheses) or "<li>未列出。</li>"
         uncertainty_rows = "".join(
-            f"<li>{_escape(item)}</li>" for item in _as_list(assessment.get("uncertainty_notes"))
+            f"<li>{self._inline_ref_html(item)}</li>" for item in _as_list(assessment.get("uncertainty_notes"))
         )
         refs = self._ref_chips(assessment.get("evidence_refs", []))
         return f"""
   <details class="audit-boundaries long-term-assessment">
     <summary>长期资产评估（3-5 年以上）</summary>
     <div class="governance-grid">
-      <article><h3>对象质量</h3><p>{_escape(assessment.get('object_quality') or '证据不足，未提供。')}</p></article>
-      <article><h3>盈利复利</h3><p>{_escape(assessment.get('earnings_compounding') or '证据不足，未提供。')}</p></article>
-      <article><h3>估值隐含回报</h3><p>{_escape(assessment.get('valuation_implied_return') or '证据不足，未提供。')}</p></article>
+      <article><h3>对象质量</h3><p>{self._inline_ref_html(assessment.get('object_quality') or '证据不足，未提供。')}</p></article>
+      <article><h3>盈利复利</h3><p>{self._inline_ref_html(assessment.get('earnings_compounding') or '证据不足，未提供。')}</p></article>
+      <article><h3>估值隐含回报</h3><p>{self._inline_ref_html(assessment.get('valuation_implied_return') or '证据不足，未提供。')}</p></article>
       <article><h3>永久损失假说</h3><ul>{hypothesis_rows}</ul></article>
     </div>
     {f'<div class="risk-list"><h3>不确定性</h3><ul>{uncertainty_rows}</ul></div>' if uncertainty_rows else ''}
@@ -3878,45 +4054,21 @@ class VNextReportGenerator:
 </section>
 """
 
-    def _event_mechanism_report_section(
-        self,
+    @staticmethod
+    def _ordered_event_card_ids(
         mechanism: Dict[str, Any],
-        artifacts: Optional[Dict[str, Any]] = None,
-        *,
-        section_id: str = "event-layer-summary",
-        section_kicker: str = "05 · 外部事件对照",
-        section_title: str = "外部事件事实与解读",
-        section_class: str = "panel",
-        section_append: str = "",
-    ) -> str:
-        if not isinstance(mechanism, dict) or not mechanism:
-            return ""
-        delivery = mechanism.get("delivery_to_integrated_report", {}) if isinstance(mechanism.get("delivery_to_integrated_report"), dict) else {}
+        interpretation_cards: Dict[str, Any],
+    ) -> "tuple[List[str], Dict[str, Any]]":
+        """事件卡的展示顺序：主线顺序优先，其余补尾，有解读卡的再整体提前。
+
+        T70 P-A 抽取成共享助手：本节渲染与 `_brief_event_card_labels`（事件卡芯片
+        序数「事件卡一/二/三」）必须用同一份顺序，否则芯片编号与卡片顺序对不上。
+        """
         cards = {
             str(card.get("news_id")): card
             for card in _as_list(mechanism.get("news_cards"))
             if isinstance(card, dict)
         }
-        ledger_events = _as_list(((artifacts or {}).get("news_event_ledger") or {}).get("events"))
-        interpretation_cards = {
-            str(card.get("event_id") or "").split(":", 1)[-1]: card
-            for card in _as_list(((artifacts or {}).get("event_interpretation_cards") or {}).get("cards"))
-            if isinstance(card, dict) and card.get("event_id")
-        }
-        source_tiers: Dict[str, str] = {}
-        source_tiers_by_title: Dict[tuple[str, str], str] = {}
-        for event in ledger_events:
-            if not isinstance(event, dict):
-                continue
-            tier = str(event.get("source_tier") or "未记录")
-            event_id = str(event.get("event_id") or "")
-            dedupe_id = str(event.get("dedupe_id") or "")
-            if event_id:
-                source_tiers[event_id.split(":", 1)[-1]] = tier
-            if dedupe_id:
-                source_tiers[dedupe_id] = tier
-            source_tiers_by_title[(str(event.get("title") or ""), str(event.get("source_name") or ""))] = tier
-
         ordered_card_ids: List[str] = []
         for line in _as_list(mechanism.get("mainlines"))[:4]:
             if not isinstance(line, dict):
@@ -3934,6 +4086,93 @@ class VNextReportGenerator:
         ordered_card_ids = interpreted_ids + [
             key for key in ordered_card_ids if key not in interpreted_ids
         ]
+        return ordered_card_ids, cards
+
+    def _brief_event_card_labels(self, artifacts: Dict[str, Any]) -> Dict[str, "tuple[str, str]"]:
+        """事件卡 token → (「事件卡一」序数标签, 人话标题)，供芯片渲染查用。"""
+        if not isinstance(artifacts, dict):
+            return {}
+        mechanism = self._event_mechanism(artifacts)
+        interpretation_cards = {
+            str(card.get("event_id") or "").split(":", 1)[-1]: card
+            for card in _as_list((artifacts.get("event_interpretation_cards") or {}).get("cards"))
+            if isinstance(card, dict) and card.get("event_id")
+        }
+        ordered_card_ids, cards = self._ordered_event_card_ids(mechanism, interpretation_cards)
+        labels: Dict[str, "tuple[str, str]"] = {}
+        for index, card_id in enumerate(ordered_card_ids, 1):
+            title = str((cards.get(card_id) or {}).get("title") or "")
+            labels[_event_card_token(card_id)] = (f"事件卡{_zh_ordinal(index)}", title)
+        return labels
+
+    @staticmethod
+    def _event_mechanism(artifacts: Dict[str, Any]) -> Dict[str, Any]:
+        """事件区 mechanism 的解析顺序，与 `_event_layer_summary_section` 保持一致。"""
+        mechanism = artifacts.get("event_mechanism_report", {})
+        if not isinstance(mechanism, dict) or not mechanism:
+            integrated = artifacts.get("integrated_synthesis_report", {})
+            mechanism = integrated.get("event_mechanism_report", {}) if isinstance(integrated, dict) else {}
+        if not isinstance(mechanism, dict) or not mechanism:
+            mechanism = {
+                "news_cards": [
+                    {
+                        "news_id": str(event.get("event_id") or event.get("dedupe_id") or index),
+                        "title": event.get("title"),
+                        "source_name": event.get("source_name"),
+                        "source_tier": event.get("source_tier"),
+                        "published_at": event.get("published_at"),
+                        "raw_text_excerpt": event.get("raw_text_excerpt"),
+                    }
+                    for index, event in enumerate(_as_list((artifacts.get("news_event_ledger") or {}).get("events")))
+                    if isinstance(event, dict)
+                ]
+            }
+        return mechanism if isinstance(mechanism, dict) else {}
+
+    def _event_mechanism_report_section(
+        self,
+        mechanism: Dict[str, Any],
+        artifacts: Optional[Dict[str, Any]] = None,
+        *,
+        section_id: str = "event-layer-summary",
+        section_kicker: str = "05 · 外部事件对照",
+        section_title: str = "外部事件事实与解读",
+        section_class: str = "panel",
+        section_append: str = "",
+    ) -> str:
+        if not isinstance(mechanism, dict) or not mechanism:
+            return ""
+        delivery = mechanism.get("delivery_to_integrated_report", {}) if isinstance(mechanism.get("delivery_to_integrated_report"), dict) else {}
+        ledger_events = _as_list(((artifacts or {}).get("news_event_ledger") or {}).get("events"))
+        interpretation_cards = {
+            str(card.get("event_id") or "").split(":", 1)[-1]: card
+            for card in _as_list(((artifacts or {}).get("event_interpretation_cards") or {}).get("cards"))
+            if isinstance(card, dict) and card.get("event_id")
+        }
+        ordered_card_ids, cards = self._ordered_event_card_ids(mechanism, interpretation_cards)
+        # 直接被调用（不经过 _render）时兜底建序数索引，芯片照样能显示「事件卡一」。
+        if getattr(self, "_brief_card_labels", None) is None:
+            self._brief_card_labels = {
+                _event_card_token(card_id): (
+                    f"事件卡{_zh_ordinal(index)}",
+                    str((cards.get(card_id) or {}).get("title") or ""),
+                )
+                for index, card_id in enumerate(ordered_card_ids, 1)
+            }
+        source_tiers: Dict[str, str] = {}
+        source_tiers_by_title: Dict[tuple[str, str], str] = {}
+        for event in ledger_events:
+            if not isinstance(event, dict):
+                continue
+            tier = str(event.get("source_tier") or "未记录")
+            event_id = str(event.get("event_id") or "")
+            dedupe_id = str(event.get("dedupe_id") or "")
+            if event_id:
+                source_tiers[event_id.split(":", 1)[-1]] = tier
+            if dedupe_id:
+                source_tiers[dedupe_id] = tier
+            source_tiers_by_title[(str(event.get("title") or ""), str(event.get("source_name") or ""))] = tier
+
         def event_row(card_id: str) -> str:
             card = cards[card_id]
             token = card_id.split(":", 1)[-1]
@@ -3959,20 +4198,20 @@ class VNextReportGenerator:
                     else str(mechanism_hypothesis or "")
                 )
                 confirmation_rows = "".join(
-                    f"<li>{_escape(item)}</li>"
+                    f"<li>{self._inline_ref_html(item)}</li>"
                     for item in _as_list(interpretation_card.get("needs_data_confirmation"))[:4]
                     if str(item).strip()
                 )
                 limitation_rows = "".join(
-                    f"<li>{_escape(item)}</li>"
+                    f"<li>{self._inline_ref_html(item)}</li>"
                     for item in _as_list(interpretation_card.get("limitations"))[:3]
                     if str(item).strip()
                 )
                 fold_parts = "".join(
                     part for part in (
-                        f'<p><b>事实摘要</b>{_escape(interpretation_card.get("fact_summary") or excerpt)}</p>',
-                        f'<p><b>事件解读</b>{_escape(interpretation_card.get("interpretation") or "")}</p>' if str(interpretation_card.get("interpretation") or "").strip() else "",
-                        f'<p><b>机制假设</b>{_escape(mechanism_text)}</p>' if str(mechanism_text or "").strip() else "",
+                        f'<p><b>事实摘要</b>{self._inline_ref_html(interpretation_card.get("fact_summary") or excerpt)}</p>',
+                        f'<p><b>事件解读</b>{self._inline_ref_html(interpretation_card.get("interpretation") or "")}</p>' if str(interpretation_card.get("interpretation") or "").strip() else "",
+                        f'<p><b>机制假设</b>{self._inline_ref_html(mechanism_text)}</p>' if str(mechanism_text or "").strip() else "",
                         f'<div><b>需要数据确认</b><ul>{confirmation_rows}</ul></div>' if confirmation_rows else "",
                         f'<div><b>限制</b><ul>{limitation_rows}</ul></div>' if limitation_rows else "",
                     )
@@ -3989,7 +4228,7 @@ class VNextReportGenerator:
         overflow_ids = ordered_card_ids[8:16]
         overflow_rows = "".join(event_row(card_id) for card_id in overflow_ids)
         news_rows = visible_rows + (
-            f'<details class="fold"><summary>其余 {len(overflow_ids)} 条事件底账</summary><div class="fbody">{overflow_rows}</div></details>'
+            f'<details class="fold"><summary>其余 {len(overflow_ids)} 条事件档案</summary><div class="fbody">{overflow_rows}</div></details>'
             if overflow_rows else ""
         )
         # R1 裁决：headline_judgment 是模板拼接句，不得作为章节总结正文冒充分析。
@@ -4010,7 +4249,7 @@ class VNextReportGenerator:
             if isinstance(event, dict) and "official" in str(event.get("source_tier") or ""):
                 official_count += 1
         ledger_card = (
-            f'<article class="dcard"><span class="dk">本轮事件底账</span>'
+            f'<article class="dcard"><span class="dk">本轮事件档案</span>'
             f'<strong class="dv dv-text">{total_events} 条 · 官方源 {official_count} 条</strong>'
             f'<p class="dq">事件材料不进入 L1-L5 主证据链；职责是解释与预警。</p></article>'
         )
@@ -4056,24 +4295,7 @@ class VNextReportGenerator:
         include_integrated: bool = True,
         section_append: str = "",
     ) -> str:
-        mechanism = artifacts.get("event_mechanism_report", {})
-        if not isinstance(mechanism, dict) or not mechanism:
-            integrated = artifacts.get("integrated_synthesis_report", {})
-            mechanism = integrated.get("event_mechanism_report", {}) if isinstance(integrated, dict) else {}
-        if not isinstance(mechanism, dict) or not mechanism:
-            fallback_cards = [
-                {
-                    "news_id": str(event.get("event_id") or event.get("dedupe_id") or index),
-                    "title": event.get("title"),
-                    "source_name": event.get("source_name"),
-                    "source_tier": event.get("source_tier"),
-                    "published_at": event.get("published_at"),
-                    "raw_text_excerpt": event.get("raw_text_excerpt"),
-                }
-                for index, event in enumerate(_as_list((artifacts.get("news_event_ledger") or {}).get("events")))
-                if isinstance(event, dict)
-            ]
-            mechanism = {"news_cards": fallback_cards}
+        mechanism = self._event_mechanism(artifacts)
         section = self._event_mechanism_report_section(
             mechanism,
             artifacts,
@@ -4111,10 +4333,14 @@ class VNextReportGenerator:
             if low_quality:
                 pending_manual += 1
                 continue
-            candidates = "、".join(str(item) for item in _as_list(request.get("candidate_function_ids")))
+            # T70 P-A：候选函数名不泼读者面，翻成人话指标名（审计仍可在 run 目录查原文）。
+            candidates = "、".join(
+                self._human_ref_label(item) if self._is_known_ref(item) else str(item)
+                for item in _as_list(request.get("candidate_function_ids"))
+            )
             trigger = trigger_zh.get(str(request.get("trigger_reason") or ""), str(request.get("trigger_reason") or ""))
             rows += (
-                f"<li>{_escape(missing)}"
+                f"<li>{self._inline_ref_html(missing)}"
                 f"<span class=\"section-note\">{_escape(trigger)}{('；候选函数：' + _escape(candidates)) if candidates else ''}</span></li>"
             )
         if not total:
@@ -4190,10 +4416,10 @@ class VNextReportGenerator:
             missing = "、".join(missing_items)
             qa_rows += f"""
       <li>
-        <p><b>问：</b>{_escape(_sentence(answer.get('question'), 120))} <span class="pill {tone}">{label}</span></p>
-        <p><b>答：</b>{self._inline_ref_html(_sentence(answer.get('answer'), 220))}</p>
+        <p><b>问：</b>{self._reader_sentence_html(answer.get('question'), 120)} <span class="pill {tone}">{label}</span></p>
+        <p><b>答：</b>{self._reader_sentence_html(answer.get('answer'), 220)}</p>
         {f'<p class="section-note">依据：{ref_chips}</p>' if ref_chips else ''}
-        {f'<p class="section-note">缺口：{_escape(missing)}</p>' if missing else ''}
+        {f'<p class="section-note">缺口：{self._inline_ref_html(missing)}</p>' if missing else ''}
       </li>"""
         relation_labels = {
             "confirmed_by_data": ("数据证实方向", "good"),
@@ -4209,12 +4435,12 @@ class VNextReportGenerator:
             label, tone = relation_labels.get(str(row.get("relation")), ("未分类", "watch"))
             ref_chips = self._ref_chips(_as_list(row.get("data_side_refs"))[:3]) or "—"
             matrix_rows += f"""
-      <li><span class="pill {tone}">{label}</span> {_escape(_sentence(row.get('event_side'), 110))}
-        <span class="section-note">数据侧：{ref_chips}{('；' + _escape(_sentence(row.get('note'), 80))) if str(row.get('note') or '').strip() else ''}</span></li>"""
+      <li><span class="pill {tone}">{label}</span> {self._reader_sentence_html(row.get('event_side'), 110)}
+        <span class="section-note">数据侧：{ref_chips}{('；' + self._reader_sentence_html(row.get('note'), 80)) if str(row.get('note') or '').strip() else ''}</span></li>"""
         unexplained = "".join(
-            f"<li>{self._inline_ref_html(_sentence(item, 160))}</li>" for item in _as_list(adjudication.get("unexplained"))[:6]
+            f"<li>{self._reader_sentence_html(item, 160)}</li>" for item in _as_list(adjudication.get("unexplained"))[:6]
         )
-        counter = _sentence(adjudication.get("strongest_counterevidence"), 160)
+        counter_html = self._reader_sentence_html(adjudication.get("strongest_counterevidence"), 160)
         return f"""
 <section class="panel sec" id="{_escape(section_id)}">
   <div class="sec-head">
@@ -4227,7 +4453,7 @@ class VNextReportGenerator:
   {f'<div class="audit-boundaries"><h3>新闻事件出的题，数据的回答</h3><ul class="qlist qlist-plain">{qa_rows}</ul></div>' if qa_rows else ''}
   {f'<details class="fold"><summary>事件叙事 × 数据检验（{matrix_total} 条逐项核对）</summary><div class="fbody"><ul class="risk-list">{matrix_rows}</ul></div></details>' if matrix_rows else ''}
   {f'<div class="audit-boundaries"><h3>当前解释不了的</h3><ul class="risk-list">{unexplained}</ul></div>' if unexplained else ''}
-  {f'<p class="dissent"><b>最强反证</b>：{_escape(counter)}</p>' if counter else ''}
+  {f'<p class="dissent"><b>最强反证</b>：{counter_html}</p>' if counter_html else ''}
   {recollection_section}
 </section>
 """
@@ -4316,7 +4542,7 @@ class VNextReportGenerator:
             for item in source_errors[:6]
         )
         empty = """
-<p class="chart-empty">本次 run 没有生成新闻事件底账。控制台可单独采集官方新闻数据；事件只作背景，不进入 L1-L5 数值证据。</p>
+<p class="chart-empty">本次 run 没有生成新闻事件档案。控制台可单独采集官方新闻数据；事件只作背景，不进入 L1-L5 数值证据。</p>
 """
         error_html = f"<details><summary>来源异常</summary><ul>{errors}</ul></details>" if errors else ""
         aggregate_html = ""
@@ -4342,7 +4568,7 @@ class VNextReportGenerator:
 <section class="panel news-panel" id="news">
   <div class="section-kicker">03 · 新闻源</div>
   <h2>新闻中文概要、股市影响与市场连接观察</h2>
-  <p class="section-note">本节展示的是第二层候选材料，带认识论标签，未经第三层综合裁决；判断以数据层为准。这里只展示官方事件底账、官方宏观 RSS、M7 SEC filings、中文概要、可能影响通道，以及事件日前后市场序列的轻量观察。事件可以解释触发背景，但不能替代任何指标证据。</p>
+  <p class="section-note">本节展示的是第二层候选材料，带认识论标签，未经第三层综合裁决；判断以数据层为准。这里只展示官方事件档案、官方宏观 RSS、M7 SEC filings、中文概要、可能影响通道，以及事件日前后市场序列的轻量观察。事件可以解释触发背景，但不能替代任何指标证据。</p>
   {aggregate_html}
   <div class="news-grid">{''.join(rows) if rows else empty}</div>
   {boundary}
@@ -4529,8 +4755,8 @@ class VNextReportGenerator:
                     f"""
 <article class="trigger-card">
   <h3>{_escape(short_label)}</h3>
-  <p>{_escape(condition)}</p>
-  <p>{_escape(item.get('impact', ''))}</p>
+  <p>{self._inline_ref_html(condition)}</p>
+  <p>{self._inline_ref_html(item.get('impact', ''))}</p>
   <span class="pill {_confidence_class(item.get('probability'))}">概率 {_escape(_label(item.get('probability', ''), 'confidence'))}</span>
 </article>
 """
@@ -4538,7 +4764,7 @@ class VNextReportGenerator:
             else:
                 failures.append(f'<article class="trigger-card"><h3>压力条件 {index}</h3><p>{_escape(item)}</p></article>')
         must = "".join(
-            f"<li>{_escape(_label(item, 'risk_flag'))}</li>"
+            f"<li>{self._inline_ref_html(_label(item, 'risk_flag'))}</li>"
             for item in _as_list(risk.get("must_preserve_risks"))
         )
         kicker_html = _escape(section_kicker)
@@ -4595,7 +4821,7 @@ class VNextReportGenerator:
                 cards += f"""
     <article class="chain-card chain-card--plain hyp hypothesis-card hypothesis-card--leading">
       <span class="hlabel">主线解释 · 暂时领先</span>
-      <p>{_escape(leading.get('hypothesis_text') or '')}</p>
+      <p>{self._inline_ref_html(leading.get('hypothesis_text') or '')}</p>
       <small>领先仅表示当前证据权重，非确定结论。</small>
     </article>
 """
@@ -4618,30 +4844,30 @@ class VNextReportGenerator:
             # verdict 已经写在卡片标签上，这里只需中性地说明"主线怎么答的"。
             reason_label = "主线怎么回应" if response else "暂不采纳"
             falsifiers = "".join(
-                f"<li>{_escape(_sentence(value, 180))}</li>"
+                f"<li>{self._reader_sentence_html(value, 180)}</li>"
                 for value in _as_list(item.get("falsification_conditions"))[:4]
             )
             verdict = _display_label(response.get("verdict") or "candidate")
             cards += f"""
     <article class="chain-card chain-card--plain hyp hypothesis-card">
-      <span class="hlabel">竞争假说 {index} · {_escape(verdict)}</span>
-      <div class="hrow"><b>它的主张</b><p>{_escape(item.get('hypothesis_text') or '')}</p></div>
+      <span class="hlabel">假说{'甲乙丙丁'[index - 1]} · {_escape(verdict)}</span>
+      <div class="hrow"><b>它的主张</b><p>{self._inline_ref_html(item.get('hypothesis_text') or '')}</p></div>
       <div class="hrow"><b>最强证据</b><div class="ref-row">{self._ref_chips(strongest)}</div></div>
-      <div class="hrow"><b>{_escape(reason_label)}</b><p>{_escape(reason)}</p></div>
+      <div class="hrow"><b>{_escape(reason_label)}</b><p>{self._inline_ref_html(reason)}</p></div>
       <div class="hrow"><b>什么会让它赢</b><ul>{falsifiers or '<li>未记录结构化胜出条件。</li>'}</ul></div>
     </article>
 """
         counter_block = ""
         if principal_counter:
             cannot_rows = "".join(
-                f"<li>{_escape(_sentence(item, 110))}</li>" for item in _as_list(counter.get("cannot_establish"))[:4]
+                f"<li>{self._reader_sentence_html(item, 110)}</li>" for item in _as_list(counter.get("cannot_establish"))[:4]
             )
             counter_block = f"""
     <article class="chain-card chain-card--plain hyp hypothesis-card hypothesis-card--counter">
       <div class="conflict-head">
         <span>反方最强论证（独立生成，未读主线）</span>
       </div>
-      <p>{_escape(principal_counter)}</p>
+      <p>{self._inline_ref_html(principal_counter)}</p>
       <details>
         <summary>反方自己也承认无法确立的点</summary>
         <ul>{cannot_rows or '<li>未记录</li>'}</ul>
@@ -4649,7 +4875,7 @@ class VNextReportGenerator:
     </article>
 """
         disputes = "".join(
-            f"<li>{_escape(_sentence(item, 110))}</li>" for item in _as_list(competition.get("retained_disputes"))[:4]
+            f"<li>{self._reader_sentence_html(item, 110)}</li>" for item in _as_list(competition.get("retained_disputes"))[:4]
         )
         disputes_block = f"""
     <div class="audit-boundaries">
@@ -4928,7 +5154,7 @@ class VNextReportGenerator:
     <div class="sec-main prose">
       <article class="claim">
         <div class="tag sans">{_escape(layer)} · {_escape(LAYER_TITLES_ZH.get(layer, ''))} · 层级摘要</div>
-        <p>{_escape(full_conclusion or '本层没有形成摘要。')}</p>
+        <p>{self._inline_ref_html(full_conclusion or '本层没有形成摘要。')}</p>
         {full_fold}
       </article>
     </div>
@@ -4948,7 +5174,7 @@ class VNextReportGenerator:
         gauge = self._brief_quantile_gauge(function_id, quantile)
         digest_item = (getattr(self, "_brief_digest_metrics", {}) or {}).get(ref, {})
         display_value = str(digest_item.get("display_value") or "").strip()
-        detail = _sentence(digest_item.get("detail"), 72) or _sentence(item.get("current_reading"), 72)
+        detail = _sentence(_clean_reader_prose(digest_item.get("detail")), 72) or _sentence(_clean_reader_prose(item.get("current_reading")), 72)
         if not display_value:
             display_value = self._fallback_display_value(detail)
         if display_value:
@@ -6498,7 +6724,7 @@ class VNextReportGenerator:
             function_id = base.split(".", 1)[-1]
             label = BRIEF_METRIC_LABELS.get(function_id) or str(item.get("metric") or function_id)
             display_value = str(item.get("display_value") or "").strip()
-            detail = _sentence(item.get("detail"), 64)
+            detail = _sentence(_clean_reader_prose(item.get("detail")), 64)
             quantile = item.get("quantile")
             tone = ""
             if isinstance(quantile, (int, float)):
@@ -6544,6 +6770,7 @@ class VNextReportGenerator:
             "official": "官方源",
             "official_macro": "官方源",
             "official_release_calendar": "官方日历",
+            "official_filing": "官方申报文件",
             "reliable_mainstream_report": "可靠媒体转述",
             "market_narrative": "市场叙事·低可靠",
         }
@@ -6564,6 +6791,8 @@ class VNextReportGenerator:
                     f'<button class="ref-chip" data-ref="{_escape(canonical)}" '
                     f'data-label="{_escape(label)}">{_escape(label)}</button>'
                 )
+            elif re.fullmatch(r"inv_[0-9a-f]+", text.strip().lower()):
+                chips.append(f'<span class="ref-chip muted" title="{_escape(text)}">受控调查</span>')
             else:
                 chips.append(f'<span class="ref-chip muted">{_escape(text)}</span>')
         return "".join(chips)
@@ -6572,12 +6801,16 @@ class VNextReportGenerator:
         raw_ref = str(raw_ref).strip()
         low = raw_ref.lower()
         if low.startswith("card:"):
+            # T70 P-A：hash 不上脸，渲染成「事件卡一/二/三」（序数与外部世界区卡片
+            # 顺序一致）；完整 id 与人话标题留在 title 属性，审计锚一处不丢。
             card_id = raw_ref.split(":", 1)[-1].strip()
-            stem = card_id[6:] if card_id.startswith("event_") else card_id
-            short = stem[-8:] if len(stem) > 8 else stem
-            return f'<a class="ref-chip card-chip" href="#world" title="{_escape(card_id)}">事件卡·{_escape(short)}</a>'
-        if low.startswith("investigation"):
-            return '<span class="ref-chip muted">受控调查</span>'
+            labels = getattr(self, "_brief_card_labels", None) or {}
+            label, title = labels.get(_event_card_token(card_id), ("事件卡", ""))
+            tip = f"{title}（{card_id}）" if title else card_id
+            return f'<a class="ref-chip card-chip" href="#world" title="{_escape(tip)}">{_escape(label)}</a>'
+        if low.startswith("investigation") or re.fullmatch(r"inv_[0-9a-f]+", low):
+            # T70 P-E：调查编号 inv_xxx 同样不上脸，完整 id 留 title 供审计。
+            return f'<span class="ref-chip muted" title="{_escape(raw_ref)}">受控调查</span>'
         canonical = _canonical_ref(raw_ref)
         if not self._is_known_ref(canonical):
             return f'<span class="ref-chip muted">{_escape(raw_ref)}</span>'
@@ -6587,18 +6820,82 @@ class VNextReportGenerator:
             f'data-label="{_escape(label)}">{_escape(label)}</button>'
         )
 
+    # T70 P-A：正文里的引用有三种写法——[L4.xxx] 方括号、（L1.xxx, L2.xxx）纯引用
+    # 括号组、以及散落裸 token。三种一律从句子里摘除、转成芯片集中到片段末尾
+    # （句群边界，恢复 6 月版"芯片独立成行"的阅读节奏），审计映射靠芯片 data-ref 保留。
+    _PROSE_BRACKET_REFS_PATTERN = re.compile(r"\[([^\[\]]+)\]")
+    _PROSE_PAREN_REFS_PATTERN = re.compile(
+        r"[（(]\s*(?:L[1-5]\.[a-zA-Z0-9_]+(?:#[a-zA-Z0-9_]+)?\s*[,、;；]?\s*)+[)）]"
+    )
+    _PROSE_BARE_REF_PATTERN = re.compile(r"(?<![\w.])L[1-5]\.[a-zA-Z0-9_]+(?:#[a-zA-Z0-9_]+)?|(?<![\w.])inv_[0-9a-f]{6,}")
+    _PROSE_INLINE_REF_PATTERN = re.compile(
+        _PROSE_BRACKET_REFS_PATTERN.pattern
+        + "|" + _PROSE_PAREN_REFS_PATTERN.pattern
+        + "|" + _PROSE_BARE_REF_PATTERN.pattern
+    )
+
+    def _strip_prose_refs(self, fragment: str) -> "tuple[str, List[str]]":
+        """摘掉片段里的全部引用写法，返回 (净文本, 去重后保持顺序的 ref 列表)。"""
+        refs: List[str] = []
+        seen: set = set()
+
+        def _keep(ref: str) -> None:
+            ref = ref.strip()
+            if not ref:
+                return
+            key = ref if ref.lower().startswith(("card:", "investigation")) else _canonical_ref(ref)
+            if key not in seen:
+                seen.add(key)
+                refs.append(ref)
+
+        def _collect_bracket(match: "re.Match[str]") -> str:
+            for ref in re.split(r"[,、;；]", match.group(1)):
+                _keep(ref)
+            return ""
+
+        def _collect_bare(match: "re.Match[str]") -> str:
+            for token in self._PROSE_BARE_REF_PATTERN.findall(match.group(0)):
+                _keep(token)
+            return ""
+
+        clean = self._PROSE_BRACKET_REFS_PATTERN.sub(_collect_bracket, fragment)
+        clean = self._PROSE_PAREN_REFS_PATTERN.sub(_collect_bare, clean)
+        clean = self._PROSE_BARE_REF_PATTERN.sub(_collect_bare, clean)
+        return clean, refs
+
+    def _prose_chips_html(self, refs: List[str]) -> str:
+        chips = "".join(self._render_single_ref(ref) for ref in refs)
+        return f'<span class="prose-ref">{chips}</span>' if chips else ""
+
+    @staticmethod
+    def _tidy_prose_spacing(body: str) -> str:
+        # 摘掉引用后可能留下的"标点前的空格"与"叠空格"顺手收掉，不碰文字本身。
+        body = re.sub(r"\s+([，。；：、！？）】』」])", r"\1", body)
+        return re.sub(r" {2,}", " ", body)
+
     def _inline_ref_html(self, text: Any) -> str:
-        """Render one text fragment, converting [ref] citations into inline chips."""
-        fragment = str(text or "")
+        """Render one text fragment for readers: machine tokens become human labels;
+        citations become chips pinned at their original position（老板 2026-09-04：
+        句中芯片原排版保留，T70 只移除了"挪到句尾"那次位置手术）。"""
+        fragment = _clean_reader_prose(str(text or ""))
         parts = []
         cursor = 0
-        for match in re.finditer(r"\[([^\[\]]+)\]", fragment):
+        for match in self._PROSE_INLINE_REF_PATTERN.finditer(fragment):
             parts.append(_escape(fragment[cursor:match.start()]))
-            refs = [ref.strip() for ref in re.split(r"[,、]", match.group(1)) if ref.strip()]
-            parts.extend(self._render_single_ref(ref) for ref in refs)
+            if match.group(1) is not None:
+                refs = [ref.strip() for ref in re.split(r"[,、;；]", match.group(1)) if ref.strip()]
+            else:
+                refs = self._PROSE_BARE_REF_PATTERN.findall(match.group(0))
+            parts.append("".join(self._render_single_ref(ref) for ref in refs))
             cursor = match.end()
         parts.append(_escape(fragment[cursor:]))
-        return "".join(parts)
+        return self._tidy_prose_spacing("".join(parts))
+
+    def _reader_sentence_html(self, text: Any, limit: int) -> str:
+        """先摘引用再截断：截断不得把 [L4.xxx] 切成半截裸奔（"[L4.get_equity_risk_premi…"）。"""
+        fragment, refs = self._strip_prose_refs(_clean_reader_prose(str(text or "")))
+        body = self._tidy_prose_spacing(_escape(_sentence(fragment, limit)))
+        return body + self._prose_chips_html(refs)
 
     # T68/W2（2026-08-28）：分段不再赌模型自觉给空行——07-28 那版（DeepSeek）输出
     # 自带空行显示成 3 段，08-27 这版（GLM）1398 字一整段。模型不给空行时按中文
@@ -6636,8 +6933,7 @@ class VNextReportGenerator:
   padding: .55rem .7rem; border: 1px solid var(--rule-strong, #999); border-radius: .35rem;
   background: var(--paper, #fff); color: var(--ink, #111); box-shadow: 0 5px 18px rgba(0,0,0,.15); font-size: .78em; font-weight: 400; text-align: left; }
 .metric-glossary:focus-visible .metric-glossary__tooltip, .metric-glossary:hover .metric-glossary__tooltip,
-.metric-glossary.is-open .metric-glossary__tooltip, .ref-chip:focus-visible .metric-glossary__tooltip { display: block; }
-"""
+.metric-glossary.is-open .metric-glossary__tooltip, .ref-chip:focus-visible .metric-glossary__tooltip { display: block; }"""
 
     def _js(self) -> str:
         return JS_TEMPLATE

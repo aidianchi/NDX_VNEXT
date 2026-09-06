@@ -96,6 +96,7 @@ def build_layer_few_shot_prompt(
     return (
         "## Layer-Local 4C Few-Shot Examples\n"
         "这些范例只用于本层认知校准：语境化、精炼化、典范化、因果化。"
-        "不要复制具体数值，只学习推理结构与叙事密度。\n\n"
+        "不要复制具体数值，只学习推理结构与叙事密度。"
+        "叙事字段说人话：判断先行、数字嵌因果链、不用内部簿记语言。\n\n"
         + "\n\n".join(rendered_examples)
     )

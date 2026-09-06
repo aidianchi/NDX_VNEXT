@@ -858,7 +858,18 @@ class LLMEngine:
                 if index > 0:
                     logger.warning(f"  ! [Stage: {stage}] AI JSON contained minor syntax issues; light repair succeeded.")
                 return parsed if isinstance(parsed, dict) else None
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
+                # T70 P-E（2026-09-03，run t70_glm_check_20260902 终审 attempt_1）：
+                # GLM flash 偶发把同一份 JSON 对象首尾串联输出两遍（Extra data）。
+                # 取第一个完整对象是安全的收窄——内容仍由下游 schema 校验把守；
+                # 首对象残缺时 raw_decode 同样报错，不会 salvage 半截 JSON。
+                if e.msg == "Extra data":
+                    try:
+                        parsed, _ = json.JSONDecoder().raw_decode(candidate)
+                        logger.warning(f"  ! [Stage: {stage}] AI emitted concatenated JSON objects; kept the first complete one.")
+                        return parsed if isinstance(parsed, dict) else None
+                    except json.JSONDecodeError:
+                        continue
                 continue
         return None
 

@@ -978,9 +978,15 @@ def test_governance_input_reviser_final_drop_noise_fields_and_slim_key_evidence(
         assert field_value["raw_series"]["_prompt_summary"] is True
         assert field_value["raw_series"]["count"] == 10
 
-    # critic 不瘦身，完整明细仍在
+    # critic 证据瘦身与 reviser/final 同管道（体检 #1-②，2026-09-05 老板批准施工；
+    # run t70_glm_check_20260902 实测 critic/risk 证据包比 thesis 菜单还肥）：
+    # ref key 集合不动、聚合字段逐字节不变、超长明细压成 _prompt_summary。
+    # 去噪音字段（synthesis_guidance / evidence_registry_summary 清空）仍仅 reviser/final。
+    assert set(gov_critic.key_evidence_refs.keys()) == {"L1.long_ref"}
     critic_field_value = gov_critic.key_evidence_refs["L1.long_ref"]["field_value"]
-    assert critic_field_value["raw_series"] == long_series
+    assert critic_field_value["value"] == {"aggregate": 1.5, "coverage": "full"}
+    assert critic_field_value["raw_series"]["_prompt_summary"] is True
+    assert critic_field_value["raw_series"]["count"] == 10
 
 
 # ── 护栏测试：governance prompt 中继续禁止编造历史概率 ──
@@ -1622,3 +1628,69 @@ def test_price_reflection_category_list_has_exactly_one_source():
     # 富字典每一类都要写全 target/label/hint，否则代码补齐时会拼出空文案。
     for name, meta in PRICE_REFLECTION_CATEGORIES.items():
         assert meta.get("target") and meta.get("label") and meta.get("hint"), name
+
+
+# ── T70 P-B（2026-09-02 人话工程）：事实卡输入（构造即忠实）──
+
+def test_t70_governance_input_carries_fact_card_for_final(tmp_path: Path):
+    """事实卡=本段允许出现的数字菜单（指标名+读数+ref+权限档），由代码装配。
+
+    写作层只从卡里选用数字，数字写错=装配 bug（自检响了修管道，不打回模型）。
+    risk 是论证盲分料，不带事实卡。"""
+    orchestrator = _orchestrator(tmp_path)
+    synthesis = SynthesisPacket(
+        evidence_index={
+            "L1.get_10y_real_rate": {
+                "layer": "L1",
+                "function_id": "get_10y_real_rate",
+                "metric": "10Y Real Rate",
+                "current_reading": "2.35%，10年分位99.3%",
+                "permission_type": "core_allowed",
+            },
+            "L4.get_m7_capex_cycle#m7_quarterly_total": {
+                "layer": "L4",
+                "function_id": "get_m7_capex_cycle",
+                "metric": "M7 Capex",
+                "parent_evidence_ref": "L4.get_m7_capex_cycle",
+                "field_name": "m7_quarterly_total",
+                "field_value": "542.1亿美元",
+                "field_authority": {"usage": "supporting_only"},
+            },
+        },
+    )
+    thesis = ThesisDraft(
+        main_thesis="中性。",
+        environment_assessment="宏观中性。",
+        valuation_assessment="估值中性。",
+        timing_assessment="趋势中性。",
+        overall_confidence=Confidence.MEDIUM,
+        dependencies=[],
+        key_support_chains=[
+            KeySupportChain(
+                chain_description="利率压制估值。",
+                evidence_refs=["L1.get_10y_real_rate", "L4.get_m7_capex_cycle#m7_quarterly_total"],
+                weight=0.6,
+            )
+        ],
+    )
+
+    gov_input = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+        consumer="final",
+    )
+    card = getattr(gov_input, "fact_card", None)
+    assert card, "final 的 governance input 必须带事实卡"
+    by_ref = {entry["ref"]: entry for entry in card}
+    assert by_ref["L1.get_10y_real_rate"]["reading"] == "2.35%，10年分位99.3%"
+    assert by_ref["L1.get_10y_real_rate"]["label"] == "10Y Real Rate"
+    child = by_ref["L4.get_m7_capex_cycle#m7_quarterly_total"]
+    assert child["reading"] == "542.1亿美元"
+    assert child["authority"] == "supporting_only"  # 权限档跟着数字走，不得冒充强证据
+
+    gov_risk = orchestrator._build_governance_input_packet(
+        synthesis_packet=synthesis,
+        thesis=thesis,
+        consumer="risk",
+    )
+    assert not getattr(gov_risk, "fact_card", []), "risk 论证盲不带事实卡"

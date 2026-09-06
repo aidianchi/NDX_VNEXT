@@ -158,3 +158,17 @@ def test_reporter_omits_long_term_section_when_absent(tmp_path: Path):
         "brief", tmp_path, {"final_adjudication": final, "thesis_draft": {}}, final, "{}"
     )
     assert "长期资产评估（3-5 年以上）" not in brief_html
+
+
+def test_t70_uncertainty_notes_string_coerced_to_list():
+    """红灯（2026-09-03，run t70_glm_check_20260902 终审降级事故）：GLM 把
+    long_term_assessment.uncertainty_notes 输出成整段字符串而非列表，契约缺
+    _coerce_llm_string_to_list 宽容校验 → pydantic 硬错 → 两次尝试耗尽 → 整份裁决
+    降级 rejected、判决正文全空。permanent_loss_hypotheses 早有同款宽容，本字段补齐。"""
+    final = _final(long_term_assessment={
+        "object_quality": "结构质量待观察",
+        "uncertainty_notes": "等权口径盈利与估值数据缺口仍需注意。",
+    })
+    assessment = final.long_term_assessment
+    assert assessment is not None
+    assert assessment.uncertainty_notes == ["等权口径盈利与估值数据缺口仍需注意。"]

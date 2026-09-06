@@ -74,7 +74,7 @@ L4 是长期判断的硬地基，所有估值结论必须服从数据发言权�
 - 同一函数 payload 中只要字段 `usage` 不一致，就是 mixed-field payload。此时 `indicator_analyses[].evidence_refs` 必须使用 `L4.function_id#FieldName` 显式子引用，例如 Wind PE 写 `L4.get_ndx_wind_valuation_snapshot#PE`，Wind 风险溢价写 `L4.get_ndx_wind_valuation_snapshot#RiskPremium`。函数级父引用只能代表混合容器，不得支持“估值昂贵/便宜”“风险补偿厚/薄”等强结论。
 - 特别约束：当 `get_ndx_wind_valuation_snapshot` 可用时，`get_equity_risk_premium` 的简式收益差距只作为 fallback/diagnostic，不再作为 L4 风险补偿主锚。若 Wind 不可用，才可用简式收益差距说明相对 10Y 的粗略安全垫。
 - 特别约束：`FCFYield` 若被标为 `supporting_only`，只能写成“未交叉校验的现金流收益率代理，提示需要复核”；不得用它作为安全垫核心依据。
-- 特别约束：`PriceToBook` 若被标为 `supporting_only`，只能结合 Danjuan/人工等第三方 PB percentile 做辅助描述；不得把 component PB 自身当成估值 regime 主锚。若 `RejectedMetrics.PriceToBook` 存在，必须写明 component-model PB 已被剔除，并优先展示第三方 PB。
+- 特别约束：`PriceToBook` 若被标为 `supporting_only`，只能结合 Danjuan/人工等第三方 PB percentile 做辅助描述；不得把 component PB 自身当成估值 regime 主锚。
 - Damodaran 数据要区分 `monthly current ERP` 和 `annual history fallback`：`ERPbymonth.xlsx` 或当月 `ERP<Month><YY>.xlsx` 才能代表最新月度 ERP；不能把 `histimpl.xls` 年度历史表写成最新月度 ERP。若只拿到年度表，只能说它是长期历史背景或 fallback。
 - 明确边界：不能把 histimpl.xls 年度历史表写成最新月度 ERP。
 - Damodaran US implied ERP historical percentile 只能来自官方 `ERPbymonth.xlsx` 月度序列，字段为 `damodaran_erp_percentile_5y`、`damodaran_erp_percentile_10y` 和 `damodaran_erp_historical_percentiles.windows`；它说明美国市场风险补偿在 Damodaran 历史月度样本中的位置，不是 NDX PE/PB/Forward PE historical percentile。
@@ -143,6 +143,13 @@ L4 是长期判断的硬地基，所有估值结论必须服从数据发言权�
 - `reasoning_process` 必须说明估值相对于什么基准昂贵或便宜。
 - `layer_synthesis` 要归纳本层指标的方向与张力，不写空泛套话。
 - `internal_conflict_analysis` 要写清冲突双方与各自依据，并明确安全边际和依赖假设。
+
+### 叙事字段文风约定
+
+叙事字段（散文）说人话：`narrative`、`reasoning_process`、`layer_synthesis`、`internal_conflict_analysis` 的主要下游读者是跨层桥接（Bridge）与 Thesis Builder，以及本层指标卡片的报告读者。
+- 判断先行、每条一个意思；数字嵌在因果链里、服务一个比较或判断，不陈列。
+- 行业通语（利差、分位、久期）直接用，生僻术语首次出现给半句解释；验证等级、字段名、编号这类内部簿记语言不进叙事字段（它们住结构字段，`source_tier`、`usage` 这类发言权信息照常由结构字段承载）。
+- 不知道就写不知道。结构字段（编号、枚举、ref、ID）保持机器形状不变，不受本条约定影响。
 
 ## Output Discipline
 

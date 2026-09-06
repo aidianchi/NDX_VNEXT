@@ -238,3 +238,68 @@ def test_event_section_summary_prompt_documents_insufficient_cards_skip():
     assert "口径说明" in text
     assert "有效事件卡少于 2 张" in text
     assert "insufficient_cards" in text and "no_cards" in text
+
+
+def test_t70_final_prompt_verdict_section_follows_style_canon():
+    """T70 P-B：终审判决正文从合规清单改成文风契约（2026-09-02 老板批准）。
+
+    红：旧版「不用列表、不用小标题」把高密度的唯一合规出路堵死，
+    「must_preserve 一条都不许漏」逼模型把台账缝进散文。"""
+    text = (PROMPT_DIR / "final_adjudicator.md").read_text(encoding="utf-8")
+    # 反人类条款删除：密度由结构承载，不再禁列表禁小标题
+    assert "不用列表" not in text
+    # must_preserve 正文逐条点名义务删除（结构化字段已承载，报告单独展示）
+    assert "一条都不许漏" not in text
+    # 文风契约落地（法典第一/二/八条）
+    assert "判断先行" in text
+    assert "密度由结构承载" in text
+    # 构造即忠实：数字从事实卡选用
+    assert "fact_card" in text
+    # 硬闸门背书的条款与登记词一个字不能少
+    for keep in ("evidence_index", "三条主要理由", "conflict_refs", "不得编造历史胜率"):
+        assert keep in text
+
+
+def test_t70_integrated_adjudicator_prompt_follows_style_canon():
+    """T70 P-B：第三层综合裁决正文与第一层同一份文风契约。"""
+    text = (PROMPT_DIR / "integrated_adjudicator.md").read_text(encoding="utf-8")
+    assert "不用列表" not in text
+    assert "一条不许漏" not in text
+    assert "密度由结构承载" in text
+    # 对质本职与引用纪律保留
+    assert "question_ordinal" in text
+    assert "最强反对解释" in text
+
+
+def test_t70_narrative_fields_speak_plain_language():
+    """T70 P-C：中间产物提示词的叙事字段统一挂人话契约锚句（2026-09-02）。
+
+    两个读者两种语言：叙事字段（散文）给下游模型当上下文，必须说人话；
+    结构字段（编号/枚举/ref）保持机器形状。15 份提示词的锚句逐字一致，
+    便于机器自查。"""
+    prompt_files = [
+        "l1_analyst.md",
+        "l2_analyst.md",
+        "l3_analyst.md",
+        "l4_analyst.md",
+        "l5_analyst.md",
+        "cross_layer_bridge.md",
+        "thesis_builder.md",
+        "counter_thesis.md",
+        "critic.md",
+        "reviser.md",
+        "risk_sentinel.md",
+        "event_card_interpreter.md",
+        "event_section_summary.md",
+        "controlled_investigator.md",
+        "integrated_adjudicator_critic.md",
+    ]
+    anchor = "叙事字段（散文）说人话："
+    for name in prompt_files:
+        text = (PROMPT_DIR / name).read_text(encoding="utf-8")
+        assert anchor in text, f"{name} 缺叙事字段人话契约锚句"
+        assert "说人话" in text, f"{name} 缺「说人话」约定"
+
+    # event_card_interpreter 额外条款：卡尾不复读免责声明（分寸由代码装配的卡级标签承载）
+    text = (PROMPT_DIR / "event_card_interpreter.md").read_text(encoding="utf-8")
+    assert "不要复读" in text

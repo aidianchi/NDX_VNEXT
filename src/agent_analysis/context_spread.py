@@ -55,6 +55,23 @@ _INSPECTOR_RULED_STAGES = {
 
 _LONG_STRING = 240          # 超过此长度的字符串做头尾截断
 _STRING_HEAD = 120
+_NUMERIC_CHARS = frozenset("0123456789.+-")
+
+
+def _numeric_span_at(text: str, cut: int, cap: int = 32):
+    """体检 #6：投影截断器把数字从中间劈开（22.92→残留 .92、155.18→残留 5.18），
+    残留「合法形状的错误文本」比纯丢失更危险。切点落在数字中间时返回该数字的
+    (start, end)；切点不在数字上返回 None。数字串超过 cap 字符则放弃（维持原切点）。"""
+    i = min(max(cut, 0), len(text))
+    if i >= len(text) or text[i] not in _NUMERIC_CHARS:
+        return None
+    lo = i
+    while lo > 0 and text[lo - 1] in _NUMERIC_CHARS and i - lo < cap:
+        lo -= 1
+    hi = i
+    while hi < len(text) and text[hi] in _NUMERIC_CHARS and hi - i < cap:
+        hi += 1
+    return (lo, hi)
 _STRING_TAIL = 60
 _LIST_KEEP_ALL = 6          # 短列表全保留
 _LIST_SCALAR_KEEP_ALL = 20  # 纯标量列表放宽
@@ -236,7 +253,17 @@ def _project_value(value: Any) -> Any:
         return projected[:10] + [marker] + projected[-5:]
     if isinstance(value, str) and len(value) > _LONG_STRING:
         omitted = len(value) - _STRING_HEAD - _STRING_TAIL
-        return f"{value[:_STRING_HEAD]}«…省略 {omitted} 字符…»{value[-_STRING_TAIL:]}"
+        # 头窗切点落在数字中间→右移把数字完整包含；尾窗切点落在数字中间→左移。
+        # 两个方向都保证数字不被劈半、也不被整段丢进省略区。
+        head = _STRING_HEAD
+        span = _numeric_span_at(value, _STRING_HEAD)
+        if span and span[1] - _STRING_HEAD <= 32:
+            head = span[1]
+        tail_start = len(value) - _STRING_TAIL
+        span = _numeric_span_at(value, tail_start)
+        if span and tail_start - span[0] <= 32:
+            tail_start = span[0]
+        return f"{value[:head]}«…省略 {omitted} 字符…»{value[tail_start:]}"
     return value
 
 

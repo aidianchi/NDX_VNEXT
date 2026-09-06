@@ -117,7 +117,7 @@ def _earnings_book(vintage_root: Path, effective_date: date) -> Dict[str, Any]:
                 "available_days": available_days,
                 "shortfall_days": max(0, days - available_days),
                 "ticker_changes": [],
-                "note": "live 修正指标按档案优先、供应商回看值补未覆盖窗口并带 supplier_lookback 标签；本台账与回测仍只用自建档案。",
+                "note": "live 修正指标按档案优先、供应商回看值补未覆盖窗口并标注为供应商回看值；本台账与回测仍只用自建档案。",
             })
             continue
         prior_date, prior_snapshot = eligible[-1]
@@ -147,7 +147,7 @@ def _earnings_book(vintage_root: Path, effective_date: date) -> Dict[str, Any]:
             "intersection_ticker_count": len(rows),
             "ticker_changes": rows,
             "average_change_pct": round(statistics.fmean(row["change_pct"] for row in rows), 6) if rows else None,
-            "note": "仅比较两个 PIT 快照的 +1y current；不使用 eps_trend.30daysAgo/90daysAgo。",
+            "note": "仅比较两个 PIT 快照的 +1y current 口径；不使用 30/90 天前的旧快照字段。",
         })
     return {
         "status": "available" if any(item["status"] == "available" for item in windows) else "insufficient_coverage",

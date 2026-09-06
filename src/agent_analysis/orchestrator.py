@@ -357,6 +357,20 @@ def _model_dump(value: Any) -> Any:
     return value
 
 
+def _response_is_json_object(text: str) -> bool:
+    """体检 #5：增量重试的门槛——上次响应本身能解析成 JSON 对象（形状类校验失败）
+    才走「只发上次输出+错误」的增量重试；解析失败走全量。容忍 ```json 围栏。"""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.DOTALL).strip()
+    if not t.startswith("{"):
+        return False
+    try:
+        return isinstance(json.loads(t), dict)
+    except Exception:
+        return False
+
+
 def _dump_governance_input(packet: Any, consumer: str) -> Dict[str, Any]:
     """序列化 GovernanceInputPacket 进治理站 payload。
 
@@ -1562,15 +1576,42 @@ class VNextOrchestrator:
         messages: List[InquiryMessage] = []
 
         for question in list(dict.fromkeys(getattr(bridge_v1, "unresolved_questions", []) or []))[:2]:
+            # 体检 #7 自指修复（run t70_glm_check_20260902 五例中四例零信息增量）：
+            # 旧菜单只给 bridge memo 自己——问题摘自 memo、材料又是同一份 memo，调查员
+            # 只能把 memo 已写的「当前数据无法区分」复述一遍。现按问题关键词匹配层卡，
+            # 材料只给命中的数据面；零命中 = 该问题 memo 自查已覆盖，不再派单。
+            question_text = str(question)
+            keywords = set(self._investigation_question_keywords(question_text))
+            matched_refs: List[str] = []
+            for card in layer_cards:
+                # layer 是枚举：str() 出来是 "Layer.L1"，必须走 _enum_value 取 "L1"
+                # （live run 20260905_171025 实测：拼成 layer_cards/LAYER.L1.json 文件不存在，
+                # 两单调查拿空材料被 [M#] 引用校验打回）。
+                card_label = str(_enum_value(getattr(card, "layer", "")) or "").strip().upper()
+                if not card_label:
+                    continue
+                card_text = json.dumps(_model_dump(card), ensure_ascii=False, default=str).lower()
+                named_layer = card_label.lower() in keywords
+                # 只认含中文或数字的题词：纯英文 token（risk/thesis/critic 等）大多是
+                # 站名与字段名，每张卡的 JSON 里都有，拿它匹配等于全层命中（live run
+                # 20260905_171025 实测两单问题五层全中）。
+                topic_hit = any(
+                    len(k) >= 3 and re.search(r"[\u4e00-\u9fff0-9]", k) and k in card_text
+                    for k in keywords
+                )
+                if named_layer or topic_hit:
+                    matched_refs.append(f"layer_cards/{card_label}.json")
+            if not matched_refs:
+                continue
             messages.append(
                 InquiryMessage(
                     message_id=self._stable_inquiry_id(InquiryMessageType.ADJUDICATION_GAP, ["bridge_unresolved", question]),
                     message_type=InquiryMessageType.ADJUDICATION_GAP,
                     sender_stage="bridge",
                     target_stage="inquiry_router",
-                    trigger="Bridge V1 unresolved_questions 暴露仍需二次核查的问题。",
-                    question=str(question),
-                    allowed_context_refs=["bridge_memos/bridge_0.json", "synthesis_packet.pending"],
+                    trigger="Bridge V1 unresolved_questions 命中层卡数据面，派调查员对数核查。",
+                    question=question_text,
+                    allowed_context_refs=matched_refs,
                     forbidden_context_refs=forbidden_refs,
                     effective_date=effective_date,
                 )
@@ -1698,7 +1739,13 @@ class VNextOrchestrator:
             tokens = {token for token in (event_token, dedupe_token) if token}
             reasons: List[str] = []
             if tokens & mainline_tokens:
-                reasons.append("mainline")
+                # 体检 #9（91736ca4 实测：零正文事件被 mainline 送进主链，输出近半是
+                # 「不能确认」的元讨论）——弱来源不进主链：仅标题（raw_text_available
+                # 为 false）事件不给 mainline 席位；inquiry_reference 路径不受影响。
+                if event.get("raw_text_available") is False:
+                    pass
+                else:
+                    reasons.append("mainline")
             if tokens & inquiry_tokens:
                 reasons.append("inquiry_reference")
             if (
@@ -2355,6 +2402,16 @@ class VNextOrchestrator:
                 investigation_id=investigation_id,
                 context_notes=context_notes,
             )
+        if not context_notes:
+            # 体检 #7 同族守卫（live run 20260905_171025 实测）：允许材料全部不可读时，
+            # 提示词却要求每条发现带 [M#] 材料引用——模型无从引用，两次尝试必然被
+            # 校验打回，纯烧调用。没材料就不出题，按缺口调查登记，判断不受影响。
+            return self._build_stub_investigation_report(
+                spec,
+                message,
+                investigation_id=investigation_id,
+                context_notes=["（允许材料全部不可读，未派调查）"],
+            )
 
         base_prompt = self._load_prompt("controlled_investigation")
         materials_text = "\n\n".join(context_notes) if context_notes else "（无可读材料）"
@@ -2628,20 +2685,25 @@ class VNextOrchestrator:
                     excerpt = json.dumps(stripped_payload, ensure_ascii=False, indent=2, default=str)
 
             remaining = 12000 - total_chars
-            if remaining <= 0:
+            # 总预算与单块预算都是上限不是配额：剩余空间装不下「信封开销+原文」时直接收工，
+            # 不产出被 material[:remaining] 腰斩的半截块（体检 #7：旧实现垫「甲」凑满 4000，
+            # 既浪费字符又诱导模型把垫字符当材料）。
+            if remaining <= 480:
                 break
             material_index = len(notes) + 1
             prefix = f"[M{material_index}] artifact={ref}\n"
             suffix = f"\n[/M{material_index}]"
-            max_excerpt_len = max(0, 4000 - len(prefix) - len(suffix))
+            max_excerpt_len = max(0, min(4000, remaining) - len(prefix) - len(suffix))
             if len(excerpt) > max_excerpt_len:
                 # 截断时发“合法的截断信封”，不发半截 JSON：preview 是字符串，
                 # 信封本身可解析，模型被明确禁止据此补全未显示内容。
-                # 先算信封固定开销，再定 preview 预算，使整块材料仍恰好贴住 4000 上限。
                 envelope = {
                     "_material_truncated": True,
                     "artifact": ref,
-                    "note": "材料 JSON 超过调查预算，已截断；完整内容在磁盘 artifact，禁止据此补全未显示内容。",
+                    "note": (
+                        f"材料 JSON 超过调查预算，已截断（原文约 {len(excerpt)} 字符，此处只保留前部）；"
+                        "完整内容在磁盘 artifact，禁止据此补全未显示内容。"
+                    ),
                     "preview": "",
                 }
                 if stripped_keys:
@@ -2649,24 +2711,24 @@ class VNextOrchestrator:
                     envelope["_stance_fields_stripped_count"] = len(stripped_keys)
                 overhead = len(json.dumps(envelope, ensure_ascii=False, indent=2, default=str))
                 preview_budget = max(0, max_excerpt_len - overhead)
-                # preview 里的引号/反斜杠会被 JSON 转义、实际长度膨胀，迭代收缩到
-                # 信封序列化后确定 ≤ max_excerpt_len，绝不用切片切断 JSON。
-                for _ in range(6):
-                    envelope["preview"] = excerpt[:preview_budget]
+                serialized = json.dumps(envelope, ensure_ascii=False, indent=2, default=str)
+                for _ in range(8):
+                    preview = excerpt[:preview_budget]
+                    # 体检 #7（run t70_glm_check_20260902 实测 5/5 实例）：任意字符切片会把
+                    # 词/值切成「counte…」半截。切点优先回退到原文行边界；但巨行（单行超过
+                    # 半个预算）退到行首会把 preview 塌缩成只剩前几行，此时保持字符切点——
+                    # 截断本身有明示信封，诚实不欺。预算是上限不是配额，块允许短于预算。
+                    line_cut = preview.rfind("\n")
+                    if line_cut >= preview_budget // 2:
+                        preview = preview[: line_cut + 1]
+                    envelope["preview"] = preview
                     serialized = json.dumps(envelope, ensure_ascii=False, indent=2, default=str)
                     if len(serialized) <= max_excerpt_len:
                         break
-                    preview_budget = max(0, preview_budget - (len(serialized) - max_excerpt_len) - 10)
-                # 用无转义安全字符把信封补齐到上限，保持每块材料恰好 4000、总额恰好 12000。
-                while len(serialized) < max_excerpt_len:
-                    padded = json.dumps(
-                        {**envelope, "preview": envelope["preview"] + "甲"},
-                        ensure_ascii=False, indent=2, default=str,
-                    )
-                    if len(padded) > max_excerpt_len:
-                        break
-                    envelope["preview"] += "甲"
-                    serialized = padded
+                    # preview 里的引号/反斜杠会被 JSON 转义、实际长度膨胀；按膨胀比例收缩，
+                    # 避免一步跨过头（旧实现跨过头后靠垫「甲」把块补齐到 4000，掩盖了
+                    # preview 有时只剩一两个字符的事实）。
+                    preview_budget = max(0, int(preview_budget * max_excerpt_len / len(serialized)) - 8)
                 excerpt_trimmed = serialized
             else:
                 excerpt_trimmed = excerpt
@@ -5580,7 +5642,8 @@ class VNextOrchestrator:
         - Key evidence refs (subset related to high-severity conflicts and thesis support chains)
         - Known data gaps (especially L3 breadth)
 
-        consumer="critic" 保持既有行为不变。
+        consumer="critic"：证据索引瘦身与 reviser/final 同管道（体检 #1-②，2026-09-05）；
+        去噪音字段（synthesis_guidance 等清空）仍仅 reviser/final。
         consumer="reviser"/"final" = 基础同 critic（含 counter 原文与反证引用），
         但去噪音：synthesis_guidance/pricing_expectation_ledger/
         evidence_registry_summary 清空，key_evidence_refs 的 field_value 超长明细
@@ -5707,6 +5770,14 @@ class VNextOrchestrator:
         for ref in sorted(evidence_refs_for_packet):
             if ref in synthesis_packet.evidence_index:
                 key_evidence_refs[ref] = synthesis_packet.evidence_index[ref]
+        # 体检 #1-②（run t70_glm_check_20260902：critic/risk 证据包各 ~21 万字符、比 thesis
+        # 菜单还肥，5 个 L4 ref 逐股全量变体合计 ≈24.5 万字符）：证据瘦身从 reviser/final
+        # 扩到 critic/risk——thesis 渲染前本就走 _slim_evidence_index_for_prompt，四站统一
+        # 同一管道；ref key 集合不动，引用合法性校验不受影响（原「critic 保持既有行为不变」
+        # 由本条取代，依据 2026-09-05 老板批准的体检顺位）。放在装配完成点：risk 的
+        # 论证盲提前返回分支与主路径共用这一份，瘦一次两头生效。
+        if consumer in {"reviser", "final", "critic", "risk"}:
+            key_evidence_refs = self._slim_governance_key_evidence_refs(key_evidence_refs)
 
         key_event_refs: Dict[str, Dict[str, Any]] = {}
         if consumer != "risk":
@@ -5830,7 +5901,6 @@ class VNextOrchestrator:
             # 只压 field_value 里 >8 条且 >800 字符的超长明细列表。
             evidence_registry_summary_packet: Dict[str, Any] = {}
             synthesis_guidance_packet: List[str] = []
-            key_evidence_refs = self._slim_governance_key_evidence_refs(key_evidence_refs)
         else:
             evidence_registry_summary_packet = dict(getattr(synthesis_packet, "evidence_registry_summary", {}) or {})
             synthesis_guidance_packet = list(synthesis_packet.synthesis_guidance) if synthesis_packet.synthesis_guidance else []
@@ -5869,6 +5939,7 @@ class VNextOrchestrator:
             false_safety_risks=false_safety_risks,
             key_evidence_refs=key_evidence_refs,
             key_event_refs=key_event_refs,
+            fact_card=self._build_fact_card(key_evidence_refs) if consumer in {"reviser", "final"} else [],
             evidence_registry_summary=evidence_registry_summary_packet,
             pricing_expectation_ledger=pricing_expectation_ledger,
             known_data_gaps=list(dict.fromkeys(known_data_gaps)),  # 去重
@@ -6140,10 +6211,22 @@ class VNextOrchestrator:
             stage_record["attempts"] = attempt
             active_prompt = prompt
             if last_error:
-                active_prompt = (
-                    f"{prompt}\n\n上一次返回未通过结构校验，错误如下：\n{last_error}\n"
-                    "请仅输出修正后的 JSON 对象，不要附加任何解释。"
-                )
+                if _response_is_json_object(last_raw_response) and "missing" not in last_error.lower():
+                    # 体检 #5（run t70 实测：校验重试整套重发 29.2 万字符、有效反馈仅 1K）：
+                    # 上次输出本身是完整 JSON（形状类错误，如列表字段给了字符串）时，
+                    # 只发「上次输出 + 校验错误」即可修复——材料无需重读，重发成本 -80%+。
+                    # 解析失败（连 JSON 都没有）或缺字段（需重读材料补内容）仍走全量重发。
+                    active_prompt = (
+                        "你上一次针对本任务的输出未通过结构校验。上一次输出原文如下：\n"
+                        f"{last_raw_response}\n\n"
+                        f"校验错误如下：\n{last_error}\n"
+                        "请仅输出修正后的 JSON 对象，不要附加任何解释。"
+                    )
+                else:
+                    active_prompt = (
+                        f"{prompt}\n\n上一次返回未通过结构校验，错误如下：\n{last_error}\n"
+                        "请仅输出修正后的 JSON 对象，不要附加任何解释。"
+                    )
             attempt_record = self._capture_prompt_attempt(
                 stage_key=stage_key,
                 stage_name=stage_name,
@@ -6397,14 +6480,28 @@ class VNextOrchestrator:
             "retry_feedback": bool(retry_feedback),
         }
 
+    def _archive_existing_audit_file(self, stage_dir: Path, filename: str) -> None:
+        """体检 #5 留痕修复：续跑/重跑会从 attempt_1 重新编号并覆盖上一轮的失败留档
+        （t70 终审第一次失败的原始响应因此丢失、真实调用数不可考）。写前先归档既有
+        文件到 archived/ 子目录，审计链不再断。"""
+        target = stage_dir / filename
+        if not target.exists():
+            return
+        archive_dir = stage_dir / "archived"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        stamp = _utc_now().strftime("%Y%m%dT%H%M%S%fZ")
+        target.rename(archive_dir / f"{stamp}_{filename}")
+
     def _save_prompt_audit_text(self, stage_name: str, filename: str, text: str) -> None:
         stage_dir = self._prompt_audit_stage_dir(stage_name)
         stage_dir.mkdir(parents=True, exist_ok=True)
+        self._archive_existing_audit_file(stage_dir, filename)
         (stage_dir / filename).write_text(text, encoding="utf-8")
 
     def _save_prompt_audit_json(self, stage_name: str, filename: str, payload: Any) -> None:
         stage_dir = self._prompt_audit_stage_dir(stage_name)
         stage_dir.mkdir(parents=True, exist_ok=True)
+        self._archive_existing_audit_file(stage_dir, filename)
         (stage_dir / filename).write_text(
             json.dumps(payload, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8",
@@ -7746,6 +7843,15 @@ class VNextOrchestrator:
             )
             slimmed = self._slim_evidence_index_for_prompt(slimmed, "synthesis_packet_without_self_reference")
             return self._strip_empty_event_prompt_fields(slimmed)
+        governance_input = payload.get("governance_input")
+        if isinstance(governance_input, dict):
+            # 体检 #2（四站 payload 8-16 个恒空占位键、每站 ~2K schema 噪音）：空列表/
+            # 空字典/空串键对模型零信息，prompt 侧剪掉；artifact 原样保留。非空键
+            # （如 reviser/final 的 fact_card、must_preserve_risks）一律不动。
+            pruned = {k: v for k, v in governance_input.items() if v not in ([], {}, None, "")}
+            if len(pruned) != len(governance_input):
+                payload = dict(payload)
+                payload["governance_input"] = pruned
         if not (stage_key.startswith("l") and stage_key.endswith("_analyst")):
             return payload
         sanitized = dict(payload)
@@ -7754,8 +7860,17 @@ class VNextOrchestrator:
             layer,
             sanitized.get("layer_raw_data", {}),
         )
-        if layer.upper() == "L4":
+        if layer.upper() in {"L1", "L2", "L4", "L5"}:
+            # 体检 #1（run t70_glm_check_20260902：L2 prompt 的 84.6% 是十年日线 dump）：
+            # L4 统计摘要路由推广到 L1/L2/L5；L3 是瘦样本（26.9K 覆盖 6/6 指标），
+            # 与其余层共用下方的递归瘦身刀，低于阈值时零改动。
             raw_data = self._summarize_l4_raw_data_for_prompt(raw_data)
+        # 一层统计摘要够不着深嵌套长列表（L2 raw_series、L4 逐股明细在 value 之下更深）——
+        # 再过证据索引同一把递归瘦身刀（>8 条且 >800 字符才动手），原始序列留 artifact 不删。
+        raw_data = self._slim_long_list_for_prompt(
+            raw_data,
+            note="完整序列保留在 run 产物 chart_time_series.json / 层 payload artifact 供审计与独立重算；判读量（分位/斜率/趋势）已在同级字段预计算。",
+        )
         sanitized["layer_raw_data"] = raw_data
         sanitized.pop("runtime_boundary_policy_id", None)
         return sanitized
@@ -7839,7 +7954,7 @@ class VNextOrchestrator:
         return sanitized
 
     @classmethod
-    def _slim_long_list_for_prompt(cls, value: Any) -> Any:
+    def _slim_long_list_for_prompt(cls, value: Any, note: Optional[str] = None) -> Any:
         """Recursively replace oversized nested lists with a count+sample summary.
 
         阈值见 EVIDENCE_FIELD_LIST_PROMPT_COUNT_THRESHOLD /
@@ -7855,15 +7970,16 @@ class VNextOrchestrator:
                     return {
                         "_prompt_summary": True,
                         "count": len(value),
-                        "sample": [cls._slim_long_list_for_prompt(item) for item in sample_items],
-                        "note": (
+                        "sample": [cls._slim_long_list_for_prompt(item, note) for item in sample_items],
+                        "note": note
+                        or (
                             "完整明细保留在 synthesis_packet.json / evidence_registry.json 供审计与"
                             "独立重算；聚合统计见同级 value/coverage/windows 等字段。"
                         ),
                     }
-            return [cls._slim_long_list_for_prompt(item) for item in value]
+            return [cls._slim_long_list_for_prompt(item, note) for item in value]
         if isinstance(value, dict):
-            return {key: cls._slim_long_list_for_prompt(item) for key, item in value.items()}
+            return {key: cls._slim_long_list_for_prompt(item, note) for key, item in value.items()}
         return value
 
     def _slim_governance_key_evidence_refs(
@@ -7872,9 +7988,8 @@ class VNextOrchestrator:
     ) -> Dict[str, Dict[str, Any]]:
         """A 档证据索引瘦身：只压 field_value，ref key 集合不动、聚合字段逐字节不变。
 
-        供 reviser/final 的 governance_input.key_evidence_refs 使用；critic 默认行为
-        不回退（仍拿完整 evidence_index 子集）。完整明细继续留在落盘的
-        synthesis_packet.json / evidence_registry.json 中。
+        供 reviser/final/critic/risk 四个治理站共用（体检 #1-②，2026-09-05 起 critic/risk
+        接入同一管道）。完整明细继续留在落盘的 synthesis_packet.json / evidence_registry.json 中。
         """
         slimmed: Dict[str, Dict[str, Any]] = {}
         for ref, entry in key_evidence_refs.items():
@@ -7885,6 +8000,41 @@ class VNextOrchestrator:
             entry_copy["field_value"] = self._slim_long_list_for_prompt(entry_copy["field_value"])
             slimmed[ref] = entry_copy
         return slimmed
+
+    @staticmethod
+    def _build_fact_card(key_evidence_refs: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """T70 P-B 事实卡（构造即忠实）：从 key_evidence_refs 装配"本段允许出现的数字"菜单。
+
+        父条目取 `current_reading`（现成"数字+含义"一句话），子条目取 `field_value`；
+        权限档（field_authority.usage / permission_type）跟着数字走——supporting_only /
+        validation_only / audit_only 不得冒充强证据。写作层只从卡里选用数字；数字写错
+        是装配 bug（装配自检，响了修管道，不打回模型）。
+        """
+        card: List[Dict[str, Any]] = []
+        for ref in sorted(key_evidence_refs):
+            item = key_evidence_refs.get(ref)
+            if not isinstance(item, dict):
+                continue
+            if "#" in ref:
+                label = f"{item.get('metric') or item.get('function_id') or ''}·{item.get('field_name') or ''}".strip("·")
+                reading = item.get("field_value")
+                authority = item.get("field_authority")
+                if isinstance(authority, dict):
+                    authority = authority.get("usage") or ""
+            else:
+                label = str(item.get("metric") or item.get("function_id") or "")
+                reading = item.get("current_reading")
+                authority = str(item.get("permission_type") or "")
+            text = str(reading if reading is not None else "").strip()
+            if not text:
+                continue
+            card.append({
+                "ref": ref,
+                "label": label,
+                "reading": text[:160],
+                "authority": str(authority or ""),
+            })
+        return card
 
     def _strip_empty_event_prompt_fields(self, payload: Any) -> Any:
         if isinstance(payload, dict):
@@ -8005,7 +8155,7 @@ class VNextOrchestrator:
             "旧字段 conflicts 仍要填写，用于兼容；typed_conflicts 是更高优先级的 Bridge v2 产物。\n"
         )
         bridge_contract += (
-            "\n## 事件纪律（三明治口径，恒空）\n"
+            "\n## 事件纪律（新闻事件按宪法不进数据分析层，以下字段恒为空）\n"
             "- 本轮输入不包含任何事件材料；BridgeMemo.event_refs 由系统装配为空列表 []，无需输出。\n"
             "- 不得自行引入事件 ID，也不得把事件写成 evidence_ref。\n"
             # 2026-08-31 T69 P2b：删"event: 前缀会被校验器打回"吓阻措辞（存在性检查

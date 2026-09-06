@@ -27,3 +27,7 @@
   {"category": "logical_leap|event_causality|conflict_smoothing|ref_or_number", "severity": "high|medium|low", "target": "草稿里哪个字段或哪句话", "issue": "问题是什么", "suggested_fix": "怎么改（给方向，不给新事实）"}
 ]}
 ```
+
+## 叙事字段文风约定
+
+叙事字段（散文）说人话：`issue`、`suggested_fix` 的主要下游读者是第三层裁决人（IA）。判断先行、每条一个意思；数字嵌在因果链里、服务一个比较或判断，不陈列；行业通语直接用，生僻术语首次出现给半句解释；验证等级、字段名、编号这类内部簿记语言不进叙事字段（它们住结构字段）；不知道就写不知道。`category`、`severity`、`target` 等结构字段保持机器形状不变，不受本条约定影响。

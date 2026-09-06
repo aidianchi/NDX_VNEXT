@@ -16,3 +16,5 @@
 - `cannot_establish`：无法确认的事项列表（含"缺什么才能确认"）。
 - `confidence`：low / medium / high，以材料的直接程度为准，不以措辞气势为准。
 - `limits`：本次调查的边界（材料范围、时效、你没有做什么）。
+
+叙事字段（散文）说人话：`finding`、`claims_supported`、`claims_challenged`、`cannot_establish` 的主要下游读者是 Thesis Builder 与 Bridge。判断先行、每条一个意思；数字嵌在因果链里、服务一个比较或判断，不陈列；行业通语直接用，生僻术语首次出现给半句解释；验证等级、字段名、内部代号这类簿记语言不进叙事字段；不知道就写不知道——那正是 `cannot_establish` 的本职。结构字段（编号、枚举、ref、ID）保持机器形状不变，不受本条约定影响。

@@ -278,7 +278,7 @@ body.style-b-light .position-ruler { background: var(--chip); }
 .risk-list li { padding: 8px 0; border-top: 1px solid var(--rule); }
 .risk-list li:first-child { border-top: none; }
 
-/* ---------- 外部事件事实底账 ---------- */
+/* ---------- 外部事件事实档案 ---------- */
 .news-list { list-style: none; padding: 0; margin: 0; }
 .news-item, .evrow {
   font-family: var(--sans); font-size: 13.5px; line-height: 1.75;

@@ -161,7 +161,9 @@ def test_reporter_renders_all_three_supporting_books_and_escapes_content(tmp_pat
     )
     assert "预期与兑现" in html
     assert "盈利预期" in html and "利率路径" in html and "波动溢价" in html
-    assert "supporting_only" in html
+    # T70 P-A：权威级别枚举翻译成人话标签，验证等级黑话不上读者面（台账原值仍可查 json）。
+    assert "仅作旁证" in html
+    assert "supporting_only" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
     assert "<script>alert(1)</script>" not in html
 

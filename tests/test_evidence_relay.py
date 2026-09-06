@@ -15,9 +15,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import news_event_ledger
 from agent_analysis.contracts import (
     CompetingHypothesis,
+    InquiryMessageType,
     EventInterpretationCard,
     HypothesisCompetition,
 )
+from types import SimpleNamespace
+
 from integrated_synthesis_report import IntegratedSynthesisReportBuilder
 from agent_analysis.orchestrator import VNextOrchestrator
 
@@ -241,7 +244,9 @@ def test_task2_injected_evidence_excerpt_verbatim_on_disk(tmp_path: Path):
     assert per["raw_text_available"] is True
 
 
-def test_task2_title_only_event_gets_empty_evidence_excerpt(tmp_path: Path):
+def test_task2_title_only_event_rejected_from_mainline(tmp_path: Path):
+    # 体检 #9（91736ca4 实测：零正文事件进主链，输出近半是「不能确认」元讨论）——
+    # 仅标题事件不给 mainline 席位，弱来源不进主链。
     event = _event(available=False, excerpt="")
     _write_event_card_inputs(tmp_path, [event], ["news:abc"])
     engine = UniformEventCardFakeLLMEngine(_event_card_response())
@@ -251,6 +256,28 @@ def test_task2_title_only_event_gets_empty_evidence_excerpt(tmp_path: Path):
     artifact = orchestrator._build_event_interpretation_cards(
         effective_date="2026-07-18",
         feedback_messages=[],
+        hypothesis_competition=_competition(),
+    )
+    assert artifact["cards"] == []
+    disk = json.loads((tmp_path / "event_interpretation_cards.json").read_text(encoding="utf-8"))
+    assert disk["cards"] == []
+
+
+def test_task2_title_only_event_via_inquiry_still_gets_empty_excerpt_card(tmp_path: Path):
+    # inquiry_reference 路径（观察岗点名核对）不受 #9 影响：仍发卡，且空正文纪律不变
+    event = _event(available=False, excerpt="")
+    _write_event_card_inputs(tmp_path, [event], ["news:abc"])
+    engine = UniformEventCardFakeLLMEngine(_event_card_response())
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"], output_dir=str(tmp_path), llm_engine=engine
+    )
+    inquiry = SimpleNamespace(
+        message_type=InquiryMessageType.OBSERVATION_INQUIRY,
+        event_refs=["news:abc"],
+    )
+    artifact = orchestrator._build_event_interpretation_cards(
+        effective_date="2026-07-18",
+        feedback_messages=[inquiry],
         hypothesis_competition=_competition(),
     )
     assert len(artifact["cards"]) == 1
