@@ -141,6 +141,7 @@ def test_console_run_all_supplies_resume_default_to_pipeline(tmp_path, monkeypat
             skip_legacy_report=True,
             enable_legacy_charts=False,
             enable_news=False,
+            news_ledger_seed="/tmp/seed_run",
         ),
     )
     monkeypatch.setattr(console_run_all, "setup_logging", lambda: None)
@@ -148,6 +149,7 @@ def test_console_run_all_supplies_resume_default_to_pipeline(tmp_path, monkeypat
 
     def fake_run_pipeline(args):
         captured["resume_from_existing"] = getattr(args, "resume_from_existing", None)
+        captured["news_ledger_seed"] = getattr(args, "news_ledger_seed", None)
         return {"run_dir": str(run_dir), "report_path": ""}
 
     monkeypatch.setattr(console_run_all, "run_pipeline", fake_run_pipeline)
@@ -158,6 +160,8 @@ def test_console_run_all_supplies_resume_default_to_pipeline(tmp_path, monkeypat
 
     assert console_run_all.main() == 0
     assert captured["resume_from_existing"] is False
+    # 锁定新闻底账的口子必须一路透传到底，否则 A/B 时静默变回现场采集。
+    assert captured["news_ledger_seed"] == "/tmp/seed_run"
 
 
 def test_resolve_resume_source_verifies_snapshot_fingerprint(tmp_path):

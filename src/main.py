@@ -117,6 +117,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--collect-only", action="store_true", help="Only collect market data JSON, then exit before any LLM calls.")
     parser.add_argument("--enable-news", action="store_true", help="Write an independent official news/event sidecar artifact.")
+    parser.add_argument(
+        "--news-ledger-seed",
+        type=str,
+        default="",
+        help=(
+            "Freeze the news/event input: copy news_event_ledger.json (and event_source_raw.jsonl) from this "
+            "existing run directory instead of collecting news fresh. Used for A/B runs where only the prompt "
+            "corpus may change and news content must stay identical."
+        ),
+    )
     parser.add_argument("--enable-component-model", action="store_true", help="Enable yfinance component-model PE computation (default OFF; use Wind + History of Market instead).")
     parser.add_argument("--official", action="store_true", help="Mark this run as an official daily entry in the cross-run state ledger.")
     parser.add_argument("--event-only", action="store_true", help="Only build the independent event/news report artifacts; do not run L1-L5 or LLM synthesis.")
@@ -512,6 +522,30 @@ def _write_expectation_ledger_non_blocking(run_dir: str, effective_date: Optiona
             return ""
 
 
+def _seed_news_ledger(seed_dir: str, target_path: str) -> None:
+    """把基准 run 的新闻/事件底账拷进本次 run，用作锁定的输入快照。
+
+    存在的理由：A/B 对比要控制变量。新闻内容是每天都在变的活数据，若两次 run
+    各自现场采集，报告差异就分不清是"语料改动"还是"新闻变了"。锁定后新闻输入
+    逐字一致，差异只可能来自提示词语料。
+
+    锁到的东西：`news_event_ledger.json`（事件底账）与 `event_source_raw.jsonl`
+    （来源留档，无下游读取方，复制是为了留档完整）。
+    seed 目录缺底账时直接报错，绝不静默回退到现场采集——静默回退会让锁定失效
+    却看不出来，比直接失败更危险。
+    """
+    seed = Path(seed_dir)
+    source_ledger = seed / "news_event_ledger.json"
+    if not source_ledger.is_file():
+        raise SystemExit(f"新闻底账锁定失败：{seed_dir} 下找不到 news_event_ledger.json，请指向一个含底账的 run 目录。")
+    target = Path(target_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(source_ledger.read_bytes())
+    source_raw = seed / "event_source_raw.jsonl"
+    if source_raw.is_file():
+        (target.parent / "event_source_raw.jsonl").write_bytes(source_raw.read_bytes())
+
+
 def run_collect_only(args: argparse.Namespace) -> Dict[str, Any]:
     backtest_date = validate_date(args.date)
     if args.data_json:
@@ -655,7 +689,13 @@ def run_pipeline(args: argparse.Namespace) -> Dict[str, Any]:
     news_event_ledger_payload = None
     if args.enable_news:
         news_event_ledger_path = os.path.join(run_dir, "news_event_ledger.json")
-        if resume_from_existing and os.path.exists(news_event_ledger_path):
+        seed_dir = str(getattr(args, "news_ledger_seed", "") or "").strip()
+        if seed_dir:
+            _seed_news_ledger(seed_dir, news_event_ledger_path)
+            with open(news_event_ledger_path, "r", encoding="utf-8") as handle:
+                news_event_ledger_payload = json.load(handle)
+            logging.info("新闻/事件底账已锁定复用：%s（本次不重新采集，用于 A/B 输入冻结）", seed_dir)
+        elif resume_from_existing and os.path.exists(news_event_ledger_path):
             with open(news_event_ledger_path, "r", encoding="utf-8") as handle:
                 news_event_ledger_payload = json.load(handle)
             logging.info("断点续跑：复用既有新闻事件底账，不重新采集（保持阶段指纹一致）。")

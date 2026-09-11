@@ -1,9 +1,11 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from main import _schema_guard_summary, build_run_dir, parse_args
+from main import _schema_guard_summary, _seed_news_ledger, build_run_dir, parse_args
 
 
 def test_main_disables_legacy_charts_by_default(monkeypatch):
@@ -107,3 +109,46 @@ def test_schema_guard_summary_surfaces_review_required_issues():
     assert summary["quality_status"] == "review_required"
     assert summary["issue_count"] == 1
     assert summary["consistency_issues"] == ["Bridge supporting_facts invalid"]
+
+
+def test_main_accepts_news_ledger_seed_flag(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--news-ledger-seed", "/tmp/some_run"])
+
+    args = parse_args()
+
+    assert args.news_ledger_seed == "/tmp/some_run"
+
+
+def test_news_ledger_seed_defaults_to_empty_so_live_collection_stays_default(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["main.py", "--enable-news"])
+
+    args = parse_args()
+
+    assert args.news_ledger_seed == ""
+
+
+def test_seed_news_ledger_copies_ledger_and_source_raw(tmp_path):
+    seed_dir = tmp_path / "baseline_run"
+    seed_dir.mkdir()
+    ledger_text = '{"events": [{"event_id": "e1"}]}\n'
+    (seed_dir / "news_event_ledger.json").write_text(ledger_text, encoding="utf-8")
+    (seed_dir / "event_source_raw.jsonl").write_text('{"title": "x"}\n', encoding="utf-8")
+    target = tmp_path / "new_run" / "news_event_ledger.json"
+
+    _seed_news_ledger(str(seed_dir), str(target))
+
+    # 逐字一致：锁定输入必须是同一个字节序列，否则 A/B 的差异就说不清来源。
+    assert target.read_text(encoding="utf-8") == ledger_text
+    assert (target.parent / "event_source_raw.jsonl").read_text(encoding="utf-8") == '{"title": "x"}\n'
+
+
+def test_seed_news_ledger_fails_loud_when_seed_has_no_ledger(tmp_path):
+    seed_dir = tmp_path / "baseline_run_without_ledger"
+    seed_dir.mkdir()
+    target = tmp_path / "new_run" / "news_event_ledger.json"
+
+    # 缺底账必须直接失败：静默回退到现场采集会让"锁定"悄悄失效却看不出来。
+    with pytest.raises(SystemExit):
+        _seed_news_ledger(str(seed_dir), str(target))
+
+    assert not target.exists()

@@ -56,6 +56,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--enable-legacy-charts", action="store_true")
     parser.add_argument("--enable-news", action="store_true")
     parser.add_argument(
+        "--news-ledger-seed",
+        default="",
+        help=(
+            "Freeze the news/event input: copy news_event_ledger.json from this existing run directory "
+            "instead of collecting news fresh. Used for A/B runs where only the prompt corpus may change."
+        ),
+    )
+    parser.add_argument(
         "--resume-run-dir",
         help="Resume an interrupted run from this existing run directory; verified stage checkpoints are reused.",
     )
@@ -186,6 +194,7 @@ def main() -> int:
         models=args.models,
         model_mode=args.model_mode,
         enable_news=args.enable_news,
+        news_ledger_seed=getattr(args, "news_ledger_seed", "") or "",
         skip_report=args.skip_legacy_report,
         disable_charts=not args.enable_legacy_charts,
         resume_from_existing=bool(resume_run_dir),
