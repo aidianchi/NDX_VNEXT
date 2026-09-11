@@ -27,7 +27,7 @@
 - **thesis_reader_conclusion**: 面向读者的结论草稿
 - **high_severity_typed_conflicts**: 必须在最终报告中保留的高严重度跨层冲突
 - **retained_conflict_types**: 被保留冲突的类型名列表（只有类型名，无解释正文）
-- **thesis_price_reflection_map**: 价格反映地图（五类证据的方向读数）
+- **thesis_price_reflection_map**: 价格反映地图（五类证据的方向数值）
 - **key_evidence_refs**: 与高严重度冲突和 Thesis 支撑链相关的证据索引（按 function_id 组织）
 - **known_data_gaps**: 已知数据缺口（尤其是 L3 广度数据）
 - **synthesis_guidance**: 给下游的约束指令
@@ -85,7 +85,7 @@
 - 是否抹平了 high severity 冲突？
 - 是否对冲突轻描淡写？
 - 是否未充分展开冲突的含义？
-- 反向失真也要查：是否把弱张力硬升格成 high 冲突来给骑墙结论找理由？
+- 反向失真也要查：是否把弱分歧硬升格成 high 冲突来给骑墙结论找理由？
 
 ### 4. 过度自信
 - confidence 是否为 high 但证据薄弱？
@@ -147,7 +147,7 @@ Critic 必须对称攻击：不仅攻击乐观跳跃，也要攻击"为了不犯
 检查 retained_conflict_types（注意：你只有冲突类型名列表，没有保留解释的正文）：
 - high severity 冲突是否被充分讨论？
 - 是否有冲突被轻描淡写？
-- 是否有弱张力被硬升格？
+- 是否有弱分歧被硬升格？
 - 被保留的冲突类型是否都在主论点或风险段落中有对应着墨？（正文未提供的解释是否充分，不是你的检查项——不要评你看不到的东西）
 
 ### 策略 4: 立场一致性检查

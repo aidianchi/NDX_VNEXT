@@ -96,7 +96,7 @@ class PermissionType(str, Enum):
     每个指标都有自己能说明的范围。技术指标不能证明估值便宜；
     代理指标不能被当成官方真理；结构指标主要说明成分和广度。
     """
-    FACT = "fact"             # 事实型：较直接的市场/经济读数
+    FACT = "fact"             # 事实型：较直接的市场/经济数据
     PROXY = "proxy"           # 代理型：用来近似观察无法直接观测的状态
     COMPOSITE = "composite"   # 合成型：由多个输入组合而来
     TECHNICAL = "technical"   # 技术型：价格、动量、波动和交易节奏
@@ -561,7 +561,7 @@ class IntegratedAdjudication(BaseModel):
     )
     integrated_verdict: str = Field(
         ...,
-        description="综合判决正文（长度不设硬闸门；2026-08-31 T69 P0-2 起也不设软窗 note）",
+        description="综合判决正文（长度不设硬性字数限制；2026-08-31 T69 P0-2 起也不设软窗 note）",
     )
     current_phenomena: List[str] = Field(default_factory=list)
     possible_mechanisms: List[str] = Field(default_factory=list)
@@ -736,7 +736,7 @@ class ObjectiveFirewallSummary(BaseModel):
     timing_clear: bool = Field(False, description="数据时间和频率是否大体匹配")
     cross_layer_verified: bool = Field(False, description="是否已有跨层验证")
     strongest_falsifier: str = Field("", description="最强反证条件")
-    unresolved_tensions: List[str] = Field(default_factory=list, description="仍未解决的张力")
+    unresolved_tensions: List[str] = Field(default_factory=list, description="仍未解决的分歧")
     warnings: List[str] = Field(default_factory=list, description="需要下游保留的警示")
 
 
@@ -797,7 +797,7 @@ class IndicatorAnalysis(BaseModel):
     metric: str = Field(..., description="报告展示用指标名，优先使用输入中的 metric_name")
     current_reading: Optional[str] = Field(
         None,
-        description="对当前读数的简明描述，包含关键数值、分位或状态"
+        description="对当前数值的简明描述，包含关键数值、分位或状态"
     )
     normalized_state: Optional[str] = Field(
         None,
@@ -815,7 +815,7 @@ class IndicatorAnalysis(BaseModel):
     )
     cross_layer_implications: List[str] = Field(
         default_factory=list,
-        description="该指标对其他层可能产生的约束、共振或冲突"
+        description="该指标对其他层可能产生的约束、印证或冲突"
     )
     risk_flags: List[str] = Field(default_factory=list, description="该指标暴露的局部风险")
     permission_type: Optional[PermissionType] = Field(
@@ -865,7 +865,7 @@ class QualitySelfCheck(BaseModel):
         description="缺失、数据异常或推理较弱的指标"
     )
     weak_reasoning_points: List[str] = Field(default_factory=list, description="推理链较弱的位置")
-    unresolved_internal_tensions: List[str] = Field(default_factory=list, description="本层内部尚未化解的张力")
+    unresolved_internal_tensions: List[str] = Field(default_factory=list, description="本层内部尚未化解的分歧")
     confidence_limitations: List[str] = Field(default_factory=list, description="置信度边界")
 
 
@@ -939,7 +939,7 @@ class LayerCard(BaseModel):
 
     internal_conflict_analysis: Optional[str] = Field(
         None,
-        description="本层内部指标之间的矛盾、共振或降噪判断"
+        description="本层内部指标之间是互相矛盾、互相印证，还是只是日常噪声"
     )
 
     quality_self_check: Optional[QualitySelfCheck] = Field(
@@ -1049,15 +1049,15 @@ class ResonanceChain(BaseModel):
     """Bridge v2 resonance chain - 跨层共振链。"""
     model_config = {"extra": "allow"}
 
-    chain_id: str = Field(..., description="稳定共振链 ID")
-    description: str = Field(..., description="共振描述")
+    chain_id: str = Field(..., description="稳定印证链 ID")
+    description: str = Field(..., description="印证描述")
     involved_layers: List[Layer] = Field(default_factory=list, description="涉及层级")
     evidence_refs: List[str] = Field(default_factory=list, description="证据引用")
     event_refs: List[str] = Field(default_factory=list, description="可选事件 refs，仅作解释/触发/观察背景")
-    confirming_indicators: List[str] = Field(default_factory=list, description="确认该共振链的指标或观察点")
-    mechanism: str = Field("", description="共振成立的机制")
+    confirming_indicators: List[str] = Field(default_factory=list, description="确认该印证链的指标或观察点")
+    mechanism: str = Field("", description="印证成立的机制")
     implication: str = Field("", description="对 NDX 的含义")
-    falsifiers: List[str] = Field(default_factory=list, description="会削弱或推翻该共振链的反证条件")
+    falsifiers: List[str] = Field(default_factory=list, description="会削弱或推翻该印证链的反证条件")
     confidence: Confidence = Field(Confidence.MEDIUM, description="置信度")
 
 
@@ -1451,7 +1451,7 @@ class LayerSynthesisItem(BaseModel):
     indicator_refs: List[str] = Field(default_factory=list, description="保留到 evidence_index 的指标引用")
     key_evidence: List[str] = Field(default_factory=list, description="压缩后的关键证据")
     risk_flags: List[str] = Field(default_factory=list, description="层级风险标记")
-    internal_conflict_analysis: Optional[str] = Field(None, description="层内冲突/共振判断")
+    internal_conflict_analysis: Optional[str] = Field(None, description="层内冲突 / 印证判断")
     cross_layer_hooks: List[str] = Field(default_factory=list, description="层级主动提出的跨层问题")
     confidence: Confidence = Field(Confidence.MEDIUM, description="层级置信度")
 
@@ -1772,7 +1772,7 @@ class QualityGate(BaseModel):
     """Internal publishing gate. This is audit material, not reader copy."""
     model_config = {"extra": "allow"}
 
-    approval_status: ApprovalStatus = Field(..., description="内部质量闸门状态")
+    approval_status: ApprovalStatus = Field(..., description="内部校验状态")
     blocking_issues: List[str] = Field(default_factory=list, description="阻塞发布的问题")
     evidence_ref_issues: List[str] = Field(default_factory=list, description="证据引用问题")
     preserved_risks_check: str = Field("", description="必须保留风险是否完整")
@@ -2119,7 +2119,7 @@ class GovernanceInputPacket(BaseModel):
     fact_card: List[Dict[str, Any]] = Field(
         default_factory=list,
         description="T70 P-B 事实卡（构造即忠实）：本段允许出现的数字菜单，"
-        "每条 = ref + 指标名 + 读数原值 + 权限档，由代码从 key_evidence_refs 装配；"
+        "每条 = ref + 指标名 + 数值原值 + 权限档，由代码从 key_evidence_refs 装配；"
         "仅 consumer=reviser/final 携带，risk 论证盲恒空",
     )
 
@@ -2296,7 +2296,7 @@ class FinalAdjudication(BaseModel):
     # Decision Semantics v1：内部质量闸门与读者结论分离
     quality_gate: Optional[QualityGate] = Field(
         default=None,
-        description="内部质量闸门；供审计区展示，不进入 brief 首屏"
+        description="内部校验；供审计区展示，不进入 brief 首屏"
     )
     reader_final: ReaderFinal = Field(
         default_factory=ReaderFinal,
@@ -2322,7 +2322,7 @@ class FinalAdjudication(BaseModel):
     )
     principal_contradiction: Optional[PrincipalContradiction] = Field(
         None,
-        description="最终保留给读者的主要矛盾；用于说明当前真正决定收益风险的关键张力",
+        description="最终保留给读者的主要矛盾；用于说明当前真正决定收益风险的关键分歧",
     )
     secondary_contradictions: List[SecondaryContradiction] = Field(
         default_factory=list,

@@ -77,7 +77,7 @@
 只返回一个 JSON 对象，字段必须匹配 `ThesisDraft`。旧字段仍要填写以兼容下游；新 Decision Semantics 字段必须原生填写。
 
 ## 对竞争假说的强制回应
-`synthesis_packet.competing_hypotheses` 里除 `status` 为 `downgraded`（已被裁决出局）之外的每一个假说——`candidate`、`leading`、`kept_unresolved`、`split`——你都必须在 `hypothesis_responses` 里逐一回应，三选一：接受并修正判断（accept_and_revise）、部分吸收（absorb_partially）、驳回（reject）。`leading` 通常是你主论点所依据的主线假说，也要求显式回应，写清楚为什么接受，不能因为它是自己的主线就默认略过。`kept_unresolved` 表示这条假说还没有被单一路径裁决出胜负、张力尚未解决，合格回应可以是 absorb_partially（承认张力未解决，并写明还缺哪条证据），不强求给出确定的 accept_and_revise 或 reject——诚实保留未解决的争议，比强行下结论更符合纪律。驳回（reject）无论对方是什么状态，都必须引用具体的反证 evidence_ref，不许用"证据不足"四个字一笔带过——证据不足时的诚实选项是 absorb_partially 并写明缺哪条证据。你的主论点如果无法回应某个假说最强的那条证据，就不许假装没看见它。
+`synthesis_packet.competing_hypotheses` 里除 `status` 为 `downgraded`（已被裁决出局）之外的每一个假说——`candidate`、`leading`、`kept_unresolved`、`split`——你都必须在 `hypothesis_responses` 里逐一回应，三选一：接受并修正判断（accept_and_revise）、部分吸收（absorb_partially）、驳回（reject）。`leading` 通常是你主论点所依据的主线假说，也要求显式回应，写清楚为什么接受，不能因为它是自己的主线就默认略过。`kept_unresolved` 表示这条假说还没有被单一路径裁决出胜负、分歧尚未解决，合格回应可以是 absorb_partially（承认分歧未解决，并写明还缺哪条证据），不强求给出确定的 accept_and_revise 或 reject——诚实保留未解决的争议，比强行下结论更符合纪律。驳回（reject）无论对方是什么状态，都必须引用具体的反证 evidence_ref，不许用"证据不足"四个字一笔带过——证据不足时的诚实选项是 absorb_partially 并写明缺哪条证据。你的主论点如果无法回应某个假说最强的那条证据，就不许假装没看见它。
 每条回应用 `hypothesis_ordinal` 填该假说在 `competing_hypotheses` 数组里的序号（第 1 条填 1；`downgraded` 假说也占位置、照数但不需回应）；`hypothesis_id` 由系统按序号回填，不要自己填写。
 
 ```json
@@ -285,7 +285,7 @@
 - 风险/坏消息是否已被价格反映。
 - 它对核心仓、战术仓、等待现金的行动含义。
 
-如果 Bridge 给出的主要矛盾不充分，Thesis 可以修正，但必须说明依据，不能跳过主要矛盾判断。若各层证据方向高度一致、真实张力很弱，诚实的主要矛盾可以是"一致性环境下的过热/反转监测"，不得为了格式制造对立。
+如果 Bridge 给出的主要矛盾不充分，Thesis 可以修正，但必须说明依据，不能跳过主要矛盾判断。若各层证据方向高度一致、真实分歧很弱，诚实的主要矛盾可以是"一致性环境下的过热/反转监测"，不得为了格式制造对立。
 
 ### Step 3: 判断价格与赔率
 

@@ -1145,7 +1145,7 @@ def test_prompts_no_longer_carry_id_echo_clauses_t69_p2c():
 
     l1 = (prompt_dir / "l1_analyst.md").read_text(encoding="utf-8")
     assert "稳定超过 180" not in l1, "l1_analyst.md 仍残留 layer_synthesis 180 字下限"
-    assert "归纳本层指标的方向与张力" in l1, "l1_analyst.md 未与 l2-l5 新措辞对齐"
+    assert "归纳本层指标的方向，以及它们之间方向不一致的地方" in l1, "l1_analyst.md 未与 l2-l5 新措辞对齐"
 
 
 # ── 辅助函数 ──

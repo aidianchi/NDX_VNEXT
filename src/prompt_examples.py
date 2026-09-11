@@ -58,7 +58,7 @@ MASTERS_PERSPECTIVE_EXAMPLES = [
             "L5_data": { "get_qqq_technical_indicators": { "value": { "QQQ_vs_200MA": "Above (Strong)" } } }
         },
         "reasoning": """
-德鲁肯米勒镜头寻找流动性、情绪和价格信号的共振或背离。L5 价格强劲，但 L1 实际利率正在攀升，这是一个核心背离。L2 的 VIX 处于 12.5 的极低水平，既意味着市场自满，也意味着下行保护（如看跌期权）极其廉价。支撑市场的核心驱动力（低利率）正在撤退，但市场仍在惯性上涨——这是极其危险的信号，同时低 VIX 为建立非对称的空头头寸（廉价对冲）提供了时机。
+德鲁肯米勒镜头寻找流动性、情绪和价格信号的印证或背离。L5 价格强劲，但 L1 实际利率正在攀升，这是一个核心背离。L2 的 VIX 处于 12.5 的极低水平，既意味着市场自满，也意味着下行保护（如看跌期权）极其廉价。支撑市场的核心驱动力（低利率）正在撤退，但市场仍在惯性上涨——这是极其危险的信号，同时低 VIX 为建立非对称的空头头寸（廉价对冲）提供了时机。
 """,
         "output_narrative": " **全球宏观投机之王 (如 斯坦利·德鲁肯米勒):** 我看到了一个巨大的背离：L5的价格正在创下新高，但L1的实际利率正在攀升。这表明支撑市场的核心驱动力（流动性）正在撤退。这是一个极其危险的信号。同时，L2的VIX处于极低水平，为建立非对称的空头头寸（如廉价的看跌期权）提供了完美时机。"
     },
@@ -88,7 +88,7 @@ PROMPT_EXAMPLES: PromptExamplesRegistry = {
     # "yield_curve_spread" -> 重命名为 "get_10y2y_spread_bp"
     "get_10y2y_spread_bp": [
         {
-            "context": "【典范化解读 + 分层降噪V5.8】10Y-2Y收益率曲线是全球最重要的经济衰退领先指标。L1宏观层用 MA20 乖离率衡量趋势，替代日度动量。",
+            "context": "【典范化解读 + 剔除日常波动】10Y-2Y收益率曲线是全球最重要的经济衰退领先指标。L1宏观层用 MA20 乖离率衡量趋势，替代日度动量。",
             "input": {"function_id": "get_10y2y_spread_bp", "raw_data": {"value": {"level": -55.2, "deviation_pct": -8.5, "position_vs_ma": "below", "ma": -50.8, "relativity": {"percentile_10y": 5.2}}}},
             "reasoning": "负值水平(-55.2bp)意味着曲线处于深度倒挂状态，而 10Y-2Y 利差是历史上可靠的衰退领先指标。当前水平显著低于 MA20(-50.8bp)，乖离率 -8.5% 表明倒挂仍在趋势性加深。市场不仅发出了衰退警报，且趋势尚未见底，对未来 6-18 个月经济前景的悲观预期正在固化。",
             "output_narrative": "作为最可靠的经济衰退领先指标，10Y-2Y收益率曲线处于-55.2个基点的深度倒挂状态，且显著低于其20日均线-50.8bp（乖离率-8.5%），发出了明确且强烈的经济衰退预警。趋势尚未见底，市场的悲观预期正在强化。"
@@ -104,7 +104,7 @@ PROMPT_EXAMPLES: PromptExamplesRegistry = {
     # "real_rate" -> 重命名为 "get_10y_real_rate"
     "get_10y_real_rate": [
         {
-            "context": "【因果化解读 + 分层降噪】10年期实际利率是成长股估值的真正'地心引力'。L1宏观层使用MA20乖离率替代日度动量。",
+            "context": "【因果化解读 + 剔除日常波动】10年期实际利率是成长股估值的核心折现约束。L1宏观层使用MA20乖离率替代日度动量。",
             "input": {"function_id": "get_10y_real_rate", "raw_data": {"value": {"level": 2.5, "deviation_pct": 8.3, "position_vs_ma": "above", "ma": 2.31}}},
             "reasoning": "实际利率是无风险资产的真实回报率，代表所有风险资产的机会成本。实际利率上升时，计算未来现金流现值的贴现率随之提高，依赖遥远未来现金流的成长股（如纳斯达克100）的内在价值会被系统性地向下重估。当前水平(2.5%)显著高于 MA20(2.31%)，乖离率 +8.3% 表明利率仍在趋势性上行，这种压力正在持续增加。",
             "output_narrative": "作为成长股估值的核心驱动力，10年期实际利率已上升至2.5%的高位，显著高于其20日均线（乖离率+8.3%），表明利率在趋势上仍处于上行通道，直接提高了未来现金流的贴现率，对纳斯达克100的估值倍数构成了强大的、系统性的下行压力。"
@@ -118,7 +118,7 @@ PROMPT_EXAMPLES: PromptExamplesRegistry = {
     # "high_yield_oas" -> 重命名为 "get_hy_oas_bp"
     "get_hy_oas_bp": [
         {
-            "context": "【语境化解读 + 分层降噪V5.8】高收益信用利差(OAS)是'聪明钱'对风险的真实定价。L1宏观层用 MA5 vs MA20 趋势方向替代日度动量。注意：raw_data.value.level 与 short_ma/long_ma 单位均为 percent（FRED 原始口径），行文引用须写成 X.XX%（≈XXXbp），禁止把百分比数值直接当基点数写。",
+            "context": "【语境化解读 + 剔除日常波动】高收益信用利差(OAS)是'聪明钱'对风险的真实定价。L1宏观层用 MA5 vs MA20 趋势方向替代日度动量。注意：raw_data.value.level 与 short_ma/long_ma 单位均为 percent（FRED 原始口径），行文引用须写成 X.XX%（≈XXXbp），禁止把百分比数值直接当基点数写。",
             "input": {"function_id": "get_hy_oas_bp", "raw_data": {"value": {"level": 6.20, "trend": "short_above_long", "short_ma": 6.18, "long_ma": 5.95, "relativity": {"percentile_10y": 92.3}}}},
             "reasoning": "高收益信用利差反映金融体系中最专业资本（债券市场）对风险的态度。level=6.20%（≈620个基点）远高于历史均值，进入经济衰退或金融压力时期的危险区域，10年百分位 92.3% 确认了极端性。short_ma(6.18%)高于 long_ma(5.95%)，trend='short_above_long' 表明利差在周度趋势上仍在扩大，信贷环境正在收紧。'聪明钱'不仅在大声呼喊风险，趋势方向也支持风险正在上升，股市的乐观情绪极其脆弱。",
             "output_narrative": "作为'聪明钱'风险偏好的领先指标，高收益信用利差已飙升至6.20%（约620个基点）的危机水平（10年百分位92.3%），且短均线高于长均线，趋势方向表明利差仍在扩大。信贷市场正在对严重的经济衰退风险进行定价，金融系统压力急剧升高。"
@@ -149,7 +149,7 @@ PROMPT_EXAMPLES: PromptExamplesRegistry = {
                     }
                 }
             },
-            "reasoning": "得分 14.59 处于'极度恐惧'区间（<25），市场情绪已跌至极端悲观水平。相比一周前的 22.63，情绪在短短一周内急剧恶化；相比一个月前的 44.41（中性偏恐惧），市场情绪发生了根本性逆转。7 个子指标中多个处于 extreme fear，尤其是市场动量(1.2)和 Put/Call 比率(3.6)，确认了恐慌的广泛性。极端恐惧在历史上常对应逆向买入机会，但必须结合信用利差、广度和趋势确认，不能仅凭情绪指标做判断。VIX 子指标得分 40.7（恐惧），与整体指数形成共振，增强了信号的可靠性。",
+            "reasoning": "得分 14.59 处于'极度恐惧'区间（<25），市场情绪已跌至极端悲观水平。相比一周前的 22.63，情绪在短短一周内急剧恶化；相比一个月前的 44.41（中性偏恐惧），市场情绪发生了根本性逆转。7 个子指标中多个处于 extreme fear，尤其是市场动量(1.2)和 Put/Call 比率(3.6)，确认了恐慌的广泛性。极端恐惧在历史上常对应逆向买入机会，但必须结合信用利差、广度和趋势确认，不能仅凭情绪指标做判断。VIX 子指标得分 40.7（恐惧），与整体指数形成印证，增强了信号的可靠性。",
             "output_narrative": "CNN恐贪指数已跌至14.59的'极度恐惧'区间，在过去一周内从22.63急剧恶化，市场情绪发生了根本性逆转。7个子指标中多个确认了恐慌的广泛性。极端恐惧在历史上常对应逆向买入机会，但需结合信用、广度和趋势确认，不能仅凭情绪指标做判断。"
         },
         {
@@ -180,7 +180,7 @@ PROMPT_EXAMPLES: PromptExamplesRegistry = {
     # "consumer_risk_appetite_ratio" -> 重命名为 "get_xly_xlp_ratio"
     "get_xly_xlp_ratio": [
         {
-            "context": "【典范化解读】XLY/XLP比率是消费者风险偏好指标。分层降噪：用比值相对 MA20 的位置替代日度动量。",
+            "context": "【典范化解读】XLY/XLP比率是消费者风险偏好指标。剔除日常波动：用比值相对 MA20 的位置替代日度动量。",
             "input": {"function_id": "get_xly_xlp_ratio", "raw_data": {"value": {"level": 1.5, "position_vs_ma20": "below", "ma20": 1.58}}},
             "reasoning": "逻辑链：[因] XLY代表消费者乐观，XLP代表避险需求 -> [逻辑推导] 当比值处于MA20下方(position_vs_ma20=below)，说明消费者行为模式正从'进攻'转向'防御' -> [结果] 这种行为模式转变是消费者信心恶化的证据，通常领先于官方经济数据下滑，是经济即将放缓的可靠预警。",
             "output_narrative": "作为衡量真实世界风险偏好的关键代理，XLY/XLP（非必需/必需消费品）比率已回落至20日均线下方，典范性地表明消费者信心正在减弱，支出行为模式正转向防御，这是经济放缓的早期预警信号。"
@@ -271,7 +271,7 @@ PROMPT_EXAMPLES: PromptExamplesRegistry = {
             "reasoning": (
                 "1. `percentile_10y=99.1` 处于十年分布的极端高位，属于统计学“尾部”区域。\n"
                 "2. 在这种尾部，向上再获得同量级正向超额的概率极低；向均值回归的概率和幅度则显著放大。\n"
-                "3. Z分数>2 进一步量化了偏离均值的程度，说明当前水平与长期均衡存在显著“张力”。\n"
+                "3. Z分数>2 进一步量化了偏离均值的程度，说明当前水平与长期均衡存在显著“分歧”。\n"
                 "4. 因果结论：赔率结构严重失衡，继续追多是“赢面极小、亏损尾部极肥”的坏交易，"
                 "均值回归的引力主导未来路径。"
             ),
@@ -290,7 +290,7 @@ PROMPT_EXAMPLES: PromptExamplesRegistry = {
     # "market_breadth_ratio" -> 重命名为 "get_ndx_ndxe_ratio" (这是其对应的function_id)
     "get_ndx_ndxe_ratio": [
         {
-            "context": "【典范化解读】NDX/NDXE 比率最核心应用是识别'熊市背离'。分层降噪：用比值趋势(MA20)与价格趋势(MA60)双重过滤器。",
+            "context": "【典范化解读】NDX/NDXE 比率最核心应用是识别'熊市背离'。剔除日常波动：用比值趋势(MA20)与价格趋势(MA60)双重过滤器。",
             "input": {
                 "function_id": "get_ndx_ndxe_ratio",
                 "raw_data": {
@@ -394,8 +394,8 @@ PROMPT_EXAMPLES: PromptExamplesRegistry = {
         {
             "context": "【语境化解读】简式收益差距是 earnings_yield 或 fcf_yield 减去10年期美债收益率，只能衡量当前收益率安全垫，不能写成 Damodaran 式 implied ERP。",
             "input": {"function_id": "get_equity_risk_premium", "raw_data": {"value": {"level": -0.5, "relativity": {"percentile_1y": 5.0}}}},
-            "reasoning": "简式收益差距只比较当前盈利/现金流收益率与10年期美债收益率。-0.5% 说明当期收益率垫子为负，高估值更依赖未来增长、质量溢价或风险偏好维持。它处于 1 年期低分位，说明这一安全垫在近期样本中也偏薄。这不是完整 implied ERP，也不是单独交易信号；它要求 L1/L2/L3/L5 验证利率、情绪、广度和趋势是否足以支撑估值。",
-            "output_narrative": "NDX简式收益差距为-0.5%，说明当前盈利/现金流收益率相对10年期美债缺少正安全垫。该指标不是 Damodaran 式 implied ERP，只能作为估值脆弱性和跨层验证需求的锚点。"
+            "reasoning": "简式收益差距只比较当前盈利/现金流收益率与10年期美债收益率。-0.5% 说明当期收益率安全垫为负，高估值更依赖未来增长、质量溢价或风险偏好维持。它处于 1 年期低分位，说明这一安全垫在近期样本中也偏薄。这不是完整 implied ERP，也不是单独交易信号；它要求 L1/L2/L3/L5 验证利率、情绪、广度和趋势是否足以支撑估值。",
+            "output_narrative": "NDX简式收益差距为-0.5%，说明当前盈利/现金流收益率相对10年期美债缺少正安全垫。该指标不是 Damodaran 式 implied ERP，只能作为估值脆弱性和跨层验证需求的提示。"
         }
     ],
 
@@ -408,8 +408,8 @@ PROMPT_EXAMPLES: PromptExamplesRegistry = {
         {
             "context": "【典范化解读】ADX是一个无方向性的趋势强度指标。其唯一典范应用是判断趋势是否存在，而非判断趋势方向。",
             "input": {"function_id": "get_adx_qqq", "raw_data": {"value": {"level": {"adx": 48.0, "pdi": 12.0, "mdi": 45.0}}}},
-            "reasoning": "ADX 读数为 48.0，远高于 25 的强弱分界线，表明市场正处于一段强劲的趋势中。向下方向的 DI（45.0）远高于向上方向的 DI（12.0），指明这段强劲趋势的方向是向下的。市场并非在震荡或盘整，而是处于一段主导性的、能量十足的下跌趋势之中。",
-            "output_narrative": "ADX读数为48.0，远超25的强趋势阈值，典范性地表明市场存在强劲趋势。向下方向的DI读数（45.0）远高于向上方向（12.0），明确指示当前市场正处于一段由空头主导的、强劲的下跌趋势中。"
+            "reasoning": "ADX 数值为 48.0，远高于 25 的强弱分界线，表明市场正处于一段强劲的趋势中。向下方向的 DI（45.0）远高于向上方向的 DI（12.0），指明这段强劲趋势的方向是向下的。市场并非在震荡或盘整，而是处于一段主导性的、能量十足的下跌趋势之中。",
+            "output_narrative": "ADX数值为48.0，远超25的强趋势阈值，典范性地表明市场存在强劲趋势。向下方向的DI数值（45.0）远高于向上方向（12.0），明确指示当前市场正处于一段由空头主导的、强劲的下跌趋势中。"
         }
     ],
 
@@ -454,7 +454,7 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
         {
             "context": "【增长预期代理】铜金比衡量周期增长偏好相对避险需求。上行代表增长预期改善，下行代表增长担忧或避险升温。",
             "input": {"function_id": "get_copper_gold_ratio", "raw_data": {"value": {"level": 0.21, "position_vs_ma": "below", "trend": "falling"}}},
-            "reasoning": "1. 水平本身意义有限，关键看相对均线和方向。2. 低于均线且下行，说明铜相对黄金走弱。3. 机制：增长敏感资产弱于避险资产 -> 市场降低周期增长预期 -> 盈利和风险偏好承压。4. 结论：该指标若与期限利差或信用利差共振，会强化宏观增长压力判断。",
+            "reasoning": "1. 水平本身意义有限，关键看相对均线和方向。2. 低于均线且下行，说明铜相对黄金走弱。3. 机制：增长敏感资产弱于避险资产 -> 市场降低周期增长预期 -> 盈利和风险偏好承压。4. 结论：该指标若与期限利差或信用利差印证，会强化宏观增长压力判断。",
             "output_narrative": "铜金比低于均线并继续下行，说明增长敏感资产相对避险资产走弱。这个信号指向增长预期降温，会削弱盈利韧性叙事，并需要与信用和期限结构共同验证。"
         }
     ],
@@ -484,7 +484,7 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
     ],
     "get_ig_oas_bp": [
         {
-            "context": "【高质量信用温度计】投资级OAS反映高质量企业融资环境。它通常比高收益利差更温和，但一旦走阔说明压力开始扩散。注意：raw_data.value.level 单位为 percent（FRED 原始口径），行文引用须写成 X.XX%（≈XXXbp），禁止把百分比数值直接当基点数写。",
+            "context": "【高质量信用环境观察】投资级OAS反映高质量企业融资环境。它通常比高收益利差更温和，但一旦走阔说明压力开始扩散。注意：raw_data.value.level 单位为 percent（FRED 原始口径），行文引用须写成 X.XX%（≈XXXbp），禁止把百分比数值直接当基点数写。",
             "input": {"function_id": "get_ig_oas_bp", "raw_data": {"value": {"level": 1.45, "trend": "short_above_long", "relativity": {"percentile_10y": 72.0}}}},
             "reasoning": "1. 水平：level=1.45%（≈145bp）处于偏高分位，投资级信用补偿要求不低。2. 趋势：短均线高于长均线，利差边际走阔。3. 机制：高质量信用也要求更高补偿 -> 融资条件收紧范围扩大 -> 股权风险偏好承压。4. 结论：若与HY OAS同步扩大，风险偏好恶化置信度明显提高。",
             "output_narrative": "投资级信用利差已达1.45%（约145个基点），处于偏高分位且边际走阔，说明融资压力并非只局限在高风险债券。若这一信号与高收益利差同步恶化，股权风险偏好会面临更系统性的压力。"
@@ -492,7 +492,7 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
     ],
     "get_hyg_momentum": [
         {
-            "context": "【信用价格确认】HYG动量把信用风险从利差读数转化为可交易价格信号，用于确认信用市场是否真正risk-on。",
+            "context": "【信用价格确认】HYG动量把信用风险从利差数值转化为可交易价格信号，用于确认信用市场是否真正risk-on。",
             "input": {"function_id": "get_hyg_momentum", "raw_data": {"value": {"level": 76.2, "trend": "below_ma", "momentum_20d": -2.4}}},
             "reasoning": "1. 价格低于均线且20日动量为负，说明高收益债价格走弱。2. 机制：HYG下跌 -> 信用风险资产被卖出 -> 风险偏好从债券端降温。3. 与股市关系：如果股票仍强而HYG转弱，通常是信用先行警告。4. 结论：该指标用于检查L2是否存在股票乐观、信用谨慎的背离。",
             "output_narrative": "HYG价格低于均线且20日动量为负，说明高收益信用资产已经出现交易层面的走弱。如果同期股票指数仍维持强势，这会形成信用市场先行谨慎、股票市场滞后乐观的背离。"
@@ -542,7 +542,7 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
         {
             "context": "【广度动能】McClellan Oscillator衡量上涨/下跌家数的短中期动能，适合识别广度快速恶化或修复。",
             "input": {"function_id": "get_mcclellan_oscillator_nasdaq_or_nyse", "raw_data": {"value": {"level": -68.0, "trend": "falling", "status": "negative"}}},
-            "reasoning": "1. 读数为负且继续下行，说明广度动能偏弱。2. 机制：下跌家数动能占优 -> 更多股票参与下行 -> 指数抗跌性下降。3. 与价格关系：若价格仍在高位，这是短期结构背离；若价格也转弱，则是确认信号。4. 结论：应传递给L5检查趋势是否已进入脆弱阶段。",
+            "reasoning": "1. 数值为负且继续下行，说明广度动能偏弱。2. 机制：下跌家数动能占优 -> 更多股票参与下行 -> 指数抗跌性下降。3. 与价格关系：若价格仍在高位，这是短期结构背离；若价格也转弱，则是确认信号。4. 结论：应传递给L5检查趋势是否已进入脆弱阶段。",
             "output_narrative": "McClellan Oscillator为负且继续下行，说明广度动能正在恶化。若指数价格仍维持高位，这构成短期结构背离；若价格随后转弱，则会确认趋势质量恶化。"
         }
     ],
@@ -573,12 +573,12 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
                 },
             },
             "reasoning": "1. yfinance 成分股模型给出的是当前PE和覆盖率，不能单独承担历史估值 regime 判断。2. Trendonify 明确给出86%的估值分位，因此可以说当前估值处于历史偏高区域。3. WorldPERatio PE与当前PE接近，且10年窗口标记为相对滚动均值偏高；但它的标准差/z-score语境不是 percentile，不能用估值标签冒充分位。4. 盈利收益率约3.03%，仍需要和10年期美债以及简式收益差距一起看安全垫。5. 结论：历史分位判断来自真实 percentile，WorldPERatio 只负责当前值与相对均值辅助描述。",
-            "output_narrative": "NDX当前PE约33倍，Trendonify给出的历史分位为86%，支持“估值处于历史偏高位置”的判断。WorldPERatio的PE读数接近，且10年窗口显示相对滚动均值偏高，可辅助描述估值位置，但它没有明确历史分位，不能替代Trendonify或人工/Wind的分位锚。"
+            "output_narrative": "NDX当前PE约33倍，Trendonify给出的历史分位为86%，支持“估值处于历史偏高位置”的判断。WorldPERatio的PE数值接近，且10年窗口显示相对滚动均值偏高，可辅助描述估值位置，但它没有明确历史分位，不能替代Trendonify或人工/Wind的历史分位。"
         }
     ],
     "get_damodaran_us_implied_erp": [
         {
-            "context": "【月度优先】Damodaran 是美国市场 implied ERP 背景锚。ERPbymonth.xlsx 或当月 ERP<Month><YY>.xlsx 才能代表 monthly current ERP；histimpl.xls 只能作为 annual history fallback。ERP 分位方向不能读反：分位越高通常表示风险补偿相对历史越厚，分位越低才表示相对补偿偏薄。",
+            "context": "【月度优先】Damodaran 是美国市场 implied ERP 背景参考。ERPbymonth.xlsx 或当月 ERP<Month><YY>.xlsx 才能代表 monthly current ERP；histimpl.xls 只能作为 annual history fallback。ERP 分位方向不能读反：分位越高通常表示风险补偿相对历史越厚，分位越低才表示相对补偿偏薄。",
             "input": {
                 "function_id": "get_damodaran_us_implied_erp",
                 "raw_data": {
@@ -631,7 +631,7 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
         {
             "context": "【波动尺度】ATR不是方向指标，而是风险边界指标。payload 给 level 与 2.5 倍 ATR 止损参考；波动是否在扩张需要序列或分位证据，payload 没有就明说。",
             "input": {"function_id": "get_atr_qqq", "raw_data": {"value": {"level": 9.45, "stop_loss_2_5x": 695.34, "date": "2026-09-04"}}},
-            "reasoning": "1. level 9.45 是日间波动尺度，2.5 倍 ATR 止损参考约 695.34，直接用于风险边界定义。2. payload 没有趋势或历史分位字段，波动在扩张还是压缩无法从单点读数判断——如实说明，不编读数。3. 结论：该指标用于定义L5风险边界，不承担方向判断。",
+            "reasoning": "1. level 9.45 是日间波动尺度，2.5 倍 ATR 止损参考约 695.34，直接用于风险边界定义。2. payload 没有趋势或历史分位字段，波动在扩张还是压缩无法从单点数值判断——如实说明，不编数值。3. 结论：该指标用于定义L5风险边界，不承担方向判断。",
             "output_narrative": "QQQ 的 ATR 读到 9.45，对应约 695 的 2.5 倍止损参考位，这是仓位风险边界的直接依据。payload 没有给出趋势或历史分位，波动算不算扩张需要另外的证据，这里不下结论。"
         }
     ],
@@ -679,7 +679,7 @@ _VNEXT_CONTEXT_FIRST_EXAMPLES: PromptExamplesRegistry = {
         {
             "context": "【多周期趋势结构】多周期均线用于判断趋势是否在短、中、长期一致。短强长强最稳，短弱长强是早期降温。",
             "input": {"function_id": "get_multi_scale_ma_position", "raw_data": {"value": {"short_term": "above", "medium_term": "above", "long_term": "above", "alignment": "bullish"}}},
-            "reasoning": "1. 短中长期均线均位于价格下方，多周期结构一致偏多。2. 机制：多周期趋势共振 -> 回撤时支撑层级较多 -> 中期趋势韧性较强。3. 风险：一致多头也可能意味着趋势成熟，需结合RSI/ATR判断是否过热。4. 结论：该指标确认趋势结构，但不单独解决过热问题。",
+            "reasoning": "1. 短中长期均线均位于价格下方，多周期结构一致偏多。2. 机制：多周期趋势印证 -> 回撤时支撑层级较多 -> 中期趋势韧性较强。3. 风险：一致多头也可能意味着趋势成熟，需结合RSI/ATR判断是否过热。4. 结论：该指标确认趋势结构，但不单独解决过热问题。",
             "output_narrative": "多周期均线结构一致偏多，价格同时站在短、中、长期均线上方，说明中期趋势韧性较强、支撑层级较多。但一致多头也可能意味着趋势成熟，需要结合RSI和ATR判断过热程度。"
         }
     ],

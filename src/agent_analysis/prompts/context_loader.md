@@ -68,7 +68,7 @@
 - **L1**: 关注利率、流动性、实际利率
 - **L2**: 关注 VIX、信用利差、情绪指标
 - **L3**: 关注腾落线、集中度（NDX/NDXE）、新高新低
-- **L4**: 关注 PE、Forward PE、FCF 收益率、简式收益差距和 Damodaran 美国 implied ERP 参考锚
+- **L4**: 关注 PE、Forward PE、FCF 收益率、简式收益差距和 Damodaran 美国 implied ERP 参考基准
 - **L5**: 关注均线位置、RSI、趋势强度
 
 ### Step 3: 识别明显的跨层信号

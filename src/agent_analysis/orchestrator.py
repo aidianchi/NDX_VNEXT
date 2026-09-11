@@ -2994,7 +2994,7 @@ class VNextOrchestrator:
             "unresolved_questions": unresolved_questions[:12],
             "implication_for_ndx": (
                 "Bridge V2 已读取受控 InvestigationReport。"
-                "若调查未能建立新证据，二次综合必须保留原有张力并降低强裁决倾向。"
+                "若调查未能建立新证据，二次综合必须保留原有分歧并降低强裁决倾向。"
             ),
             "key_uncertainties": list(dict.fromkeys(
                 list(getattr(bridge_v1, "key_uncertainties", []) or [])
@@ -3365,7 +3365,7 @@ class VNextOrchestrator:
             + [ref for conflict in synthesis_packet.high_severity_typed_conflicts for ref in list(conflict.evidence_refs)]
         ))
         counter_text = (
-            "反方解释：现有证据更像是未解决张力和证据缺口，"
+            "反方解释：现有证据更像是未解决分歧和证据缺口，"
             "不足以支持把补查结果吸收到单一主线。"
         )
         if unresolved:
@@ -4454,7 +4454,7 @@ class VNextOrchestrator:
                     "configuration_status": decision_profile.configuration_status,
                     "configuration_issues": list(decision_profile.configuration_issues),
                 },
-                falsification_conditions=["用户明确确认阈值、单位与适用条件后，才可解除本闸门。"],
+                falsification_conditions=["用户明确确认阈值、单位与适用条件后，才可解除本项校验。"],
             )
             entries.append(item.model_copy(update={"changed_since_last_run": self._deferred_cross_run_change(item)}))
         for condition in profile_conditions:
@@ -5469,7 +5469,7 @@ class VNextOrchestrator:
             synthesis_guidance=[
                 "必须消费 objective_firewall_summary：若 object_clear、authority_clear、cross_layer_verified 任一为 false，主结论必须降置信度并保留警示。",
                 "Thesis 只能整合 synthesis_packet，不得重新分析原始指标。",
-                "必须保留 high_severity_conflicts，不能为了叙事流畅而抹平张力。",
+                "必须保留 high_severity_conflicts，不能为了叙事流畅而抹平分歧。",
                 "必须显式消费 principal_contradictions / Bridge principal_contradiction：先判断当前主要矛盾，再判断价格是否已经反映风险，最后才给动作。",
                 "必须显式消费 competing_hypotheses / hypothesis_competition_summary：正式综合前至少比较主线解释和反方解释；若证据不足，必须降级或保留争议。",
                 "必须尊重 evidence_registry_summary：数据、事件、调查、假说和最终 claim 使用同一种 evidence id；弱权限证据不能越权支撑强结论。",
@@ -8064,15 +8064,15 @@ class VNextOrchestrator:
         few_shot = build_layer_few_shot_prompt(layer=layer, layer_raw_data=layer_raw_data)
         v2_contract = (
             "## vNext v2 Context-Bounded Professional Layer Contract\n"
-            "你在一个隔离的本层上下文中工作：角色是专业认知镜头，context boundary 是信息隔离边界。"
+            "你在一个隔离的本层上下文中工作：角色是专业认知视角，边界就是信息隔离边界。"
             "先用本层专家视角完成指标级研究，再把结果压缩为可审计、可展示、可被 Bridge 消费的结构化产物。\n\n"
             "### 静态五层本体（只用于路由，不代表当前状态）\n"
             "- L1: 宏观流动性、利率、实际利率、期限结构、货币供应、净流动性和增长预期代理。\n"
             "- L2: 风险偏好、信用利差、波动率、情绪、仓位和拥挤度。\n"
             "- L3: 指数内部结构、广度、集中度、等权/市值权重差异和领导力质量。\n"
-            "- L4: 估值、盈利收益率、简式收益差距、Damodaran 美国 implied ERP 参考锚、安全边际和估值压缩风险。\n"
+            "- L4: 估值、盈利收益率、简式收益差距、Damodaran 美国 implied ERP 参考基准、安全边际和估值压缩风险。\n"
             "- L5: 价格趋势、动量、波动、成交量、支撑阻力和趋势失效触发。\n"
-            "- Bridge: 读取各层结构化产物，验证跨层共振、冲突和传导机制。\n"
+            "- Bridge: 读取各层结构化产物，验证跨层印证、冲突和传导机制。\n"
             "以上只是职责边界和接口协议，不是其他层的当前数据、状态或结论。"
             "你可以据此决定把验证问题路由给哪一层，但不得据此推断其他层现在是 bullish、bearish、expensive、healthy 或 uptrend。\n\n"
             "### 必须新增并认真填写的字段\n"
@@ -8085,10 +8085,10 @@ class VNextOrchestrator:
             "- indicator_analyses[].evidence_refs 必须是字符串数组，例如 [\"L2.get_vix\"]，不得输出对象/dict。\n"
             "- 若一个 payload 的 MetricAuthority 含不同 usage，它是 mixed-field payload；引用其中任何字段时必须写成 L4.function_id#FieldName。父级 L4.function_id 只能表示混合容器，不能支撑强字段结论。\n"
             "- indicator_analyses[].narrative 是可进入最终报告的典范化解读。\n"
-            "- indicator_analyses[].reasoning_process 必须展示从当前读数、分位/趋势到局部判断的因果推理。\n"
+            "- indicator_analyses[].reasoning_process 必须展示从当前数值、分位/趋势到局部判断的因果推理。\n"
             "- indicator_analyses[].first_principles_chain 用列表写出机制链，例如 利率上升 -> 折现率上升 -> 成长股估值受压。\n"
             "- layer_synthesis 必须由 indicator_analyses 归纳，不能只重复 local_conclusion，并应适合该层独立 UI 展示。\n"
-            "- internal_conflict_analysis 必须讨论本层内部指标之间的共振、背离、降噪和优先级，也应适合展开阅读。\n"
+            "- internal_conflict_analysis 必须讨论本层内部指标之间是互相印证、互相背离，还是只是噪声，以及哪个更重要，也应适合展开阅读。\n"
             "- quality_self_check 必须开放说明覆盖情况、弱推理点和置信度边界。\n\n"
             "### 隔离纪律\n"
             "- 允许知道其他层负责什么；禁止假设其他层当前看到了什么、判断了什么。\n"
@@ -8105,11 +8105,11 @@ class VNextOrchestrator:
             "    {\n"
             f'      "function_id": {json.dumps(example_function_id)},\n'
             f'      "metric": {json.dumps(example_metric)},\n'
-            '      "current_reading": "该指标当前读数（引用 payload 实际数值）",\n'
+            '      "current_reading": "该指标当前水平（引用 payload 实际数值）",\n'
             '      "normalized_state": "neutral",\n'
-            '      "narrative": "把读数、趋势与分位压缩成一句本层判断。",\n'
+            '      "narrative": "用一句话说清这个数说明了什么：先说结论，再把数值和它的历史位置嵌进因果里。",\n'
             '      "reasoning_process": "先看水平，再看趋势和分位，最后落到本层职责内的判断。",\n'
-            '      "first_principles_chain": ["读数事实", "本层机制", "本层判断"],\n'
+            '      "first_principles_chain": ["数据事实", "本层机制", "本层判断"],\n'
             f'      "evidence_refs": {json.dumps([example_ref] if example_ref else [])},\n'
             '      "cross_layer_implications": ["只写待 Bridge 验证的问题，不写跨层结论"],\n'
             '      "risk_flags": ["本层风险标签"],\n'
@@ -8133,7 +8133,7 @@ class VNextOrchestrator:
         bridge_contract = (
             "## vNext v2 Bridge Contract\n"
             "Bridge 的职责不是重新解释单个指标，而是读取各 LayerCard 的 indicator_analyses、layer_synthesis、"
-            "internal_conflict_analysis 和 cross_layer_hooks，识别跨层共振、冲突、传导机制与不确定性。\n\n"
+            "internal_conflict_analysis 和 cross_layer_hooks，识别跨层印证、冲突、传导机制与不确定性。\n\n"
             "必须优先使用 indicator_analyses[].reasoning_process 中已经完成的专业推理；"
             "如果要提出冲突，必须指出冲突来自哪些层、哪些指标或哪些机制。\n"
             "输出仍保持 BridgeMemo 结构，但 conflicts 和 cross_layer_claims 需要引用具体 function_id。\n"
@@ -8145,7 +8145,7 @@ class VNextOrchestrator:
         bridge_contract += (
             "\nBridge v2 新增字段必须尽量原生填写：\n"
             "- typed_conflicts: 结构化冲突地图，包含 conflict_id、conflict_type、severity、confidence、description、mechanism、implication、involved_layers、evidence_refs、falsifiers。\n"
-            "- resonance_chains: 跨层共振链，必须包含 involved_layers、evidence_refs、mechanism、confirming_indicators、falsifiers、implication；没有证据或确认指标时降低 confidence。\n"
+            "- resonance_chains: 跨层印证链，必须包含 involved_layers、evidence_refs、mechanism、confirming_indicators、falsifiers、implication；没有证据或确认指标时降低 confidence。\n"
             "- transmission_paths: 跨层传导路径，说明压力或支撑如何从 source_layer 传到 target_layer。\n"
             "- principal_contradiction: 主要矛盾地图，必须说明 contradiction_id、summary、why_principal、dominant_side、secondary_side、price_reflection、action_implication、conflict_refs、evidence_refs、transformation_signals。\n"
             "- secondary_contradictions: 次要矛盾列表，说明为什么当前不是主导项，以及它如何约束行动力度、节奏或置信度。\n"

@@ -7944,6 +7944,14 @@ def get_ndx_earnings_revision_metrics(end_date: str = None) -> Dict[str, Any]:
             },
         },
         "periods": breadth_periods,
+        # `value` 的键是原始的 `0y` / `+1y`（财年口径）。模型要引用它们时无真名可用，
+        # 观察到的后果是它借了「近端 / 远端」这类方位外号来指代（报告里出现过
+        # 「桥的近端宽、远端窄」）。**给真名比禁外号有效**：把口径就地写清楚，
+        # 映射放在 value 外层，不动数值容器本身的键集合（避免影响下游取值）。
+        "period_labels": {
+            "0y": "当年盈利（FY1）",
+            "+1y": "次年盈利（FY2）",
+        },
     }
 
     dispersion_rows = []

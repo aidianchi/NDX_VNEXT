@@ -44,7 +44,7 @@ def build_object_canon() -> ObjectCanon:
         analysis_boundaries=[
             "L1-L5 只能使用本层运行时数据；ObjectCanon 只提供对象定义和静态口径。",
             "最终结论必须说明判断对象是 NDX、QQQ 暴露，还是等权 Nasdaq-100 口径。",
-            "当 NDX 与等权口径明显背离时，系统必须保留集中度张力。",
+            "当 NDX 与等权口径明显背离时，系统必须保留集中度分歧。",
         ],
         falsifiers=[
             "如果输入数据实际覆盖的不是 NDX/QQQ，而是其他宽基或行业篮子，需要重新定义对象。",
@@ -95,7 +95,7 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
         "真实贴现率是否正在给 NDX 的高久期盈利估值施压？",
         [
             "看水平、方向和历史分位；高位且上行通常压制成长股估值倍数。",
-            "把它理解为未来现金流折现率的地心引力，而不是单日交易信号。",
+            "把它理解为未来现金流折现率的约束作用，而不是单日交易信号。",
             "高位回落会减轻估值折现压力，可作为估值承受力改善的证据之一；但必须区分政策转松驱动的回落与衰退恐惧驱动的回落，后者不得当作利多。",
         ],
         [
@@ -108,7 +108,7 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
             "市场广度改善且简式收益差距或估值安全垫同步修复。",
         ],
         "核心框架指标，主要约束估值承受力。",
-        "真实利率高位=估值地心引力增强；必须看盈利和广度是否能抵消。",
+        "真实利率高位=估值折现压力增强；必须看盈利和广度是否能抵消。",
         source_hint="Treasury/FRED real yield proxy",
         frequency_hint="daily",
     ),
@@ -162,7 +162,7 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
         ["get_10y_real_rate", "get_10y_breakeven", "get_equity_risk_premium"],
         ["真实利率回落或盈利增长加速吸收利率压力。"],
         "核心框架指标，需与真实利率和盈余收益率一起看。",
-        "十年期利率是资金价格温度计；要拆来源，不要只看涨跌。",
+        "十年期利率是资金价格的先行指标；要拆来源，不要只看涨跌。",
     ),
     "get_10y_breakeven": _indicator(
         "get_10y_breakeven",
@@ -261,7 +261,7 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
         Layer.L3,
         PermissionType.STRUCTURAL,
         "官方/高质量持仓显示 NDX/QQQ 到底由哪些头部公司推动？",
-        ["Top10 权重和 M7 权重是集中度硬锚；NDX/NDXE 表现差异是市值加权相对等权 Nasdaq-100 的价格代理。"],
+        ["Top10 权重和 M7 权重是集中度硬性基准；NDX/NDXE 表现差异是市值加权相对等权 Nasdaq-100 的价格代理。"],
         ["当前 Top10 权重不能证明历史恶化；历史变化若来自价格回推代理，必须标注边界。"],
         ["get_ndx_ndxe_ratio", "get_percent_above_ma", "get_ndx_forward_earnings_quality"],
         ["等权口径持续补涨、Top10 权重下降或头部盈利修正转弱/转强。"],
@@ -273,7 +273,7 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
         "NDX Valuation",
         Layer.L4,
         PermissionType.COMPOSITE,
-        "Wind 主锚之外的 NDX PE、盈利收益率和 Forward PE 校验是否同向，且足够新鲜？",
+        "Wind 主要依据之外的 NDX PE、盈利收益率和 Forward PE 校验是否同向，且足够新鲜？",
         ["只能使用口径明确、日期合格的字段校验 Wind；Forward PE 必须使用实际预测观察日，不得用接口刷新日冒充数据日。"],
         ["第三方或成分模型不是 Wind 的平级替代；高估值不是自动做空信号；过期值只能留在审计记录。"],
         [
@@ -385,8 +385,8 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
         ["自然语言返回的 RiskPremium 若缺字段代码、公式和单位，只能当 provider-labeled supporting context；不能与 Damodaran ERP 或简式收益差距比较。回测日未证明历史可见时不能使用当前 Wind 快照。"],
         ["get_ndx_pe_and_earnings_yield", "get_damodaran_us_implied_erp", "get_10y_real_rate", "get_equity_risk_premium"],
         ["Wind PE/PB/PS 分位回落、Wind 风险溢价分位上升或与 yfinance/WorldPERatio 出现重大源冲突。"],
-        "L4 当前估值主锚；风险溢价字段在定义核实前只作辅助。",
-        "Wind PE/PB/PS 是主锚；RiskPremium 的绝对含义必须等字段定义核实后再升级。",
+        "L4 当前估值主要依据；风险溢价字段在定义核实前只作辅助。",
+        "Wind PE/PB/PS 是主要依据；RiskPremium 的绝对含义必须等字段定义核实后再升级。",
     ),
     "get_equity_risk_premium": _indicator(
         "get_equity_risk_premium",
@@ -394,7 +394,7 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
         Layer.L4,
         PermissionType.COMPOSITE,
         "相对10年期美债，NDX当前盈利或现金流收益率是否留下简式安全垫？",
-        ["收益差距低说明当前现金/盈利收益率相对无风险利率的垫子薄，需要更强盈利和更低利率支持。"],
+        ["收益差距低说明当前现金/盈利收益率相对无风险利率的安全垫偏薄，需要更强盈利和更低利率支持。"],
         ["这是 earnings_yield 或 fcf_yield - 10Y 的简式差距，不是 Damodaran 式 implied ERP。"],
         [
             "get_10y_treasury",
@@ -488,13 +488,13 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
         "Damodaran US Implied ERP Reference",
         Layer.L4,
         PermissionType.PROXY,
-        "美国大盘 implied ERP 参考锚是否提示整体权益风险补偿环境？",
+        "美国大盘 implied ERP 参考基准是否提示整体权益风险补偿环境？",
         ["只作为美国市场风险补偿背景，帮助校验NDX简式收益差距所处的宏观估值语境。"],
         ["它不是NDX专属估值，也不能替代成分股加权PE、FCF yield或简式收益差距。ERP分位方向不能读反：分位越高通常表示风险补偿相对历史越厚。"],
         ["get_equity_risk_premium", "get_ndx_pe_and_earnings_yield", "get_10y_treasury"],
         ["NDX自身盈利/现金流收益率与美国大盘 implied ERP 参考方向明显背离。"],
-        "外部参考锚；用于背景校验，不直接决定NDX长期回报边界。",
-        "Damodaran implied ERP 是美国市场背景，不是 NDX 主锚；高分位不是坏事，低分位才提示相对补偿偏薄。",
+        "外部参考基准；用于背景校验，不直接决定NDX长期回报边界。",
+        "Damodaran implied ERP 是美国市场背景，不是 NDX 主要依据；高分位不是坏事，低分位才提示相对补偿偏薄。",
     ),
     "get_ndx_valuation_history_of_market": _indicator(
         "get_ndx_valuation_history_of_market",
@@ -503,7 +503,7 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
         PermissionType.PROXY,
         "History of Market 第三方 API 的 Trailing/Forward PE 是否能在日期和口径合格时校验 Wind？",
         ["Trailing PE 可作当日方向校验；Forward PE 只有在实际观测日仍新鲜且来源链可审计时才能作前瞻参考。"],
-        ["API 的 updated 日期不是 Forward PE 的数据日期；其 Bloomberg BEst 归因无法在公开接口内独立核验；不得作为与 Wind 平级的独立主锚。"],
+        ["API 的 updated 日期不是 Forward PE 的数据日期；其 Bloomberg BEst 归因无法在公开接口内独立核验；不得作为与 Wind 平级的独立主要依据。"],
         ["get_ndx_wind_valuation_snapshot", "get_ndx_pe_and_earnings_yield", "get_10y_real_rate"],
         ["History of Market API 不可用或百分位出现极端变化时回退到 Wind 和成分股模型交叉校验。"],
         "第三方估值校验源，嵌入估值校验指标，不单独计票。",
@@ -541,7 +541,7 @@ INDICATOR_CANONS: Dict[str, IndicatorCanon] = {
             "快照数据日期晚于 effective_date，或 ohlcv_sha256 / row_count 显示输入不足。",
             "L3 广度无法确认价格强势，或 L4 估值/风险补偿与价格趋势方向冲突。",
         ],
-        "L5 精确数值底稿；提高技术读数可审计性，但不改变指标发言权边界。",
+        "L5 精确数值底稿；提高技术数值可审计性，但不改变指标发言权边界。",
         "deterministic snapshot 是技术事实底稿，不是自动交易结论。",
     ),
     "get_rsi_qqq": _indicator(
@@ -612,7 +612,7 @@ INDICATOR_CANONS.update(
             ["get_10y_treasury", "get_fed_funds_rate", "get_hy_oas_bp"],
             ["信用未恶化且真实利率回落，削弱衰退式解释。"],
             "宏观框架指标，负责解释增长和政策预期，不负责短线买卖。",
-            "期限利差是增长预期温度计；先问为什么变陡/变平。",
+            "期限利差是增长预期的先行指标；先问为什么变陡/变平。",
         ),
         "get_m2_yoy": _indicator(
             "get_m2_yoy",
@@ -850,7 +850,7 @@ INDICATOR_CANONS.update(
             Layer.L3,
             PermissionType.STRUCTURAL,
             "市场广度动量是否进入短线过热或过冷？",
-            ["极端读数提示广度动量拐点，但需与 A/D 和价格确认。"],
+            ["极端数值提示广度动量拐点，但需与 A/D 和价格确认。"],
             ["它偏短线广度动量，不能独立判断长期 regime。"],
             ["get_advance_decline_line", "get_new_highs_lows", "get_rsi_qqq"],
             ["A/D 趋势不确认或价格结构相反。"],
@@ -945,7 +945,7 @@ REGIME_SCENARIO_CANONS: List[RegimeScenarioCanon] = [
         main_assumption="头部盈利与资金集中足以继续支撑指数。",
         falsifiers=["等权口径补涨", "A/D 线改善", "Top10 集中度压力缓解"],
         risk_triggers=["头部技术破位", "VXN 相对 VIX 快速上升"],
-        must_preserve_evidence=["NDX 与等权口径背离", "价格趋势与结构健康度张力"],
+        must_preserve_evidence=["NDX 与等权口径背离", "价格趋势与结构健康度分歧"],
     ),
 ]
 

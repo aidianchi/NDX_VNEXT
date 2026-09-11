@@ -6,6 +6,22 @@
 
 ---
 
+## 2026-09-11
+
+### T72 语料改造 A 档施工完毕（191 处/21 文件）+ 全量测试订正为真绿
+
+- **改了什么**：按 19 号改动稿 A 档九组，机械替换 **191 处 / 21 个文件**（`git diff --stat` 173 insertions / 173 deletions，增删对称 = 只换叫法不增删内容）。覆盖 `prompts/*.md` 十二站、`orchestrator.py`（v2_contract 三句总种子 + 张力→分歧 3 处）、`contracts.py`（字段**说明文字**层：共振→印证、读数→数值、闸门→校验）、`deep_research_canon.py`、`prompt_examples.py`、`reasoning_examples.py`、`RESEARCH_CANON.md`。
+- **执行件**：`scripts/apply_lexicon_edits.py`——默认 dry-run、`--apply` 才落盘、规则有序（长串在前）、0 命中报警、带 `KEEP_WORDS`/`KEEP_PHRASES` 例外名单。可复现、可逐条回退。
+- **A1 是补真名不是禁外号**：`tools_L4.py` 的 `breadth_block` 增 `period_labels`（`0y`→当年盈利 FY1、`+1y`→次年盈利 FY2），放在 `value` **外层**以免污染数值容器；已验唯一读 `value` 键的 `_field_authority_from_payload` 不校验键集合，契约零风险。
+- **复检抓出并修掉 4 处劣化**：机械替换把 `TGA 是财政抽水/放水的水位表` 改残成 `TGA 是财政抽水/放水；`（谓语丢失，两处），把本来是好中文的"情绪读数/周期读数/波动性读数"改坏。已还原并把例外写进脚本与注释。
+- **真回归一处，已定位修复**：`orchestrator.py:3367` 的确定性兜底反方文本被改字 → `_stable_hypothesis_id` 的散文哈希变了 → 假说 id 从 `hyp_counter_ee07162fa7` 变成 `hyp_counter_c5135fda10` → 两个 fixture 里硬编码的 mock id 对不上，报 `is missing from hypothesis_responses`。用"只还原这一处措辞即通过"验明因果唯一；保留新措辞、同步 2 处测试常量并在常量上方注明哈希基座位置。
+- **红灯测试**：同步 3 处措辞守护断言（`test_governance_input.py:1148`、`test_vnext_orchestrator.py` R7 block、假说 id ×2）。全量 **1568 条、改动前后均 0 failed**。
+- **否决/未做**：B 档（矛盾/护城河/安全垫/兑现/反证/判读/姿态/共振链/发布闸门/客观性防火墙等）一根不动；C 档（零垫子/兑现桥/承重墙/铸造厂/独木桥）维持"静态源 0 处、治不了"，不设禁用词表，靠换种子带动；`orchestrator.py` 33 处代码注释里的"闸门"未动。
+- **订正一条此前错误结论**：曾报"全量基线 1560 passed / 8 failed，属测试间污染"——**作废**。真因是 WorkBuddy 沙箱注入的 `sitecustomize.py` 拦截器把 `Path.mkdir(exist_ok=True)` 转成宿主机操作，重复创建同目录报 `PermissionError: EEXIST`，导致所有 resume/checkpoint 类测试假失败（报错一律含 `mkdir '.../layer_cards'`）。那些失败、624 个 error 全是沙箱假象，代码一直绿。**干净跑法**（覆盖 `PYTHONPATH` 使拦截器不在 `sys.path` 上）：`PYTHONPATH=$PWD .venv/bin/python -m pytest -q -p no:cacheprovider`，63 秒跑完。已写进项目记忆。
+- **发现但未动的结构性问题（报老板裁决）**：假说身份由散文哈希生成，任何人微调那段兜底文本都会静默改名、牵连测试与跨轮身份连续性。该兜底反方只有一条、角色固定，宜给与措辞无关的固定 id（"轨道 > 导出 > 规矩"里属"导出"层）。超出"换叫法"范围，本轮不碰。
+
+---
+
 ## 2026-09-06
 
 ### 材料侧收口 + 人话主战役交接（T72 立项、T73/T74/T75 登记）

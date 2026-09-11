@@ -19,18 +19,18 @@ L3 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 每个指标必须说明：
 
 1. 它衡量参与度、领导力、集中度、动能扩散还是结构脆弱性。
-2. 它与其他广度指标是共振还是背离。
+2. 它与其他广度指标是印证还是背离。
 3. 它对 L5 趋势质量和 L4 估值脆弱性提出什么验证问题。
 
 ## Indicator Semantics
 
-- 四件套优先级：第一锚是 `A/D Line` 和 `% Above MA`，因为它们直接回答多数成分股是否参与；第二批是 `New Highs/Lows`，用于确认趋势扩散或衰竭；`McClellan` 是广度动能确认指标，必须依赖稳定的每日涨跌家数序列，不能替代前两类基础广度锚。
+- 四件套优先级：首要依据是 `A/D Line` 和 `% Above MA`，因为它们直接回答多数成分股是否参与；第二批是 `New Highs/Lows`，用于确认趋势扩散或衰竭；`McClellan` 是广度动能确认指标，必须依赖稳定的每日涨跌家数序列，不能替代前两类基础广度基准。
 - 如果 `New Highs/Lows` 或 `McClellan` 因数据窗口、成分股覆盖或下载失败而不可用，必须写入 `quality_self_check` 和 `internal_conflict_analysis`。不能把缺失写成恶化，也不能把不可用指标当成支持或反对证据。
 
 - `get_advance_decline_line`: 腾落线。最直接的累计广度信号；若数据弱，也要说明可用性限制。
 - `get_percent_above_ma`: 成分股高于均线比例。衡量上涨参与度是否广泛。
 - `get_ndx_ndxe_ratio`: NDX/NDXE。市值加权 Nasdaq-100 相对等权 Nasdaq-100 的强弱，识别头部集中和“将军/士兵”背离。QQEW 只能作为旧兼容/历史代理，不能未经核对当作纯 NDXE。
-- `get_qqq_top10_concentration`: QQQ 官方 Top10 / M7 权重锚。用于回答“指数到底被谁推动”，必须读取 `effective_date`、Top10 权重、M7 权重、Top10 相对等权基准的超额权重，以及 NDX 相对 NDXE 的表现差。官方当前持仓是硬锚；历史集中度变化若标注为 proxy，不能写成官方历史权重。
+- `get_qqq_top10_concentration`: QQQ 官方 Top10 / M7 权重基准。用于回答“指数到底被谁推动”，必须读取 `effective_date`、Top10 权重、M7 权重、Top10 相对等权基准的超额权重，以及 NDX 相对 NDXE 的表现差。官方当前持仓是硬性基准；历史集中度变化若标注为 proxy，不能写成官方历史权重。
 - `get_new_highs_lows`: 新高新低。识别动能扩散、衰竭和趋势后段特征。
 - `get_mcclellan_oscillator_nasdaq_or_nyse`: McClellan Oscillator。短中期广度动能。
 
@@ -83,7 +83,7 @@ L3 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 
 - `indicator_analyses[].narrative` 要能作为广度/集中度指标卡片展示。
 - `reasoning_process` 必须说明“结构信号如何影响趋势质量”。
-- `layer_synthesis` 要归纳本层指标的方向与张力，不写空泛套话。
+- `layer_synthesis` 要归纳本层指标的方向，以及它们之间方向不一致的地方，不写空泛套话。
 - `internal_conflict_analysis` 要写清冲突双方与各自依据，并明确哪些信号可靠、哪些受数据质量限制。
 
 ### 叙事字段文风约定

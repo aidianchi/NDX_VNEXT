@@ -1360,6 +1360,10 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
                 # 见 `_build_adjudication_change_records`），扩大后的触发集合要求逐一
                 # 回应；id 由 `_stable_hypothesis_id` 对本测试固定的假说文本取哈希，
                 # 是确定性值，不是随机数。
+                # 注意：反方 id 的哈希基座是 `_build_deterministic_counter_thesis` 里那段
+                # counter_text（含 unresolved 后缀），**改那段措辞就会改这个 id**——改完必须
+                # 同步更新本常量，否则模型侧看到的 id 与这里 mock 的 id 对不上，测试会报
+                # "is missing from hypothesis_responses"。
                 "hypothesis_responses": [
                     {
                         "hypothesis_id": "hyp_base_a6e6834ec0",
@@ -1368,7 +1372,7 @@ def test_orchestrator_runs_full_chain_with_fake_llm(tmp_path: Path):
                         "evidence_refs": ["L4.get_ndx_pe_and_earnings_yield"],
                     },
                     {
-                        "hypothesis_id": "hyp_counter_ee07162fa7",
+                        "hypothesis_id": "hyp_counter_c5135fda10",
                         "verdict": "absorb_partially",
                         "reasoning": "部分吸收反方观察，但仍缺少独立验证。",
                         "evidence_refs": ["L5.get_qqq_technical_indicators"],
@@ -1767,6 +1771,8 @@ def test_layer_v2_contract_gap_retries_before_bridge_consumes_card(tmp_path: Pat
                 # T28：本测试的两条竞争假说同样以 kept_unresolved 落地（counter_thesis
                 # 走确定性兜底 → fallback_warnings 非空 → 全体降级），扩大后的触发集合
                 # 要求逐一回应。id 由假说文本哈希确定性生成，与全链条测试同值。
+                # 哈希基座是 `_build_deterministic_counter_thesis` 的 counter_text，改那段
+                # 措辞必须同步改本常量（否则见 "is missing from hypothesis_responses"）。
                 "hypothesis_responses": [
                     {
                         "hypothesis_id": "hyp_base_a6e6834ec0",
@@ -1775,7 +1781,7 @@ def test_layer_v2_contract_gap_retries_before_bridge_consumes_card(tmp_path: Pat
                         "evidence_refs": ["L1.get_fed_funds_rate"],
                     },
                     {
-                        "hypothesis_id": "hyp_counter_ee07162fa7",
+                        "hypothesis_id": "hyp_counter_c5135fda10",
                         "verdict": "absorb_partially",
                         "reasoning": "部分吸收反方观察，张力未解决。",
                         "evidence_refs": ["L1.get_fed_funds_rate"],
@@ -4710,7 +4716,7 @@ def test_thesis_builder_prompt_keeps_work_order_r7_block_exact():
     prompt = Path(orchestrator_module.__file__).with_name("prompts").joinpath("thesis_builder.md").read_text(encoding="utf-8")
     required_block = (
         "## 对竞争假说的强制回应\n"
-        "`synthesis_packet.competing_hypotheses` 里除 `status` 为 `downgraded`（已被裁决出局）之外的每一个假说——`candidate`、`leading`、`kept_unresolved`、`split`——你都必须在 `hypothesis_responses` 里逐一回应，三选一：接受并修正判断（accept_and_revise）、部分吸收（absorb_partially）、驳回（reject）。`leading` 通常是你主论点所依据的主线假说，也要求显式回应，写清楚为什么接受，不能因为它是自己的主线就默认略过。`kept_unresolved` 表示这条假说还没有被单一路径裁决出胜负、张力尚未解决，合格回应可以是 absorb_partially（承认张力未解决，并写明还缺哪条证据），不强求给出确定的 accept_and_revise 或 reject——诚实保留未解决的争议，比强行下结论更符合纪律。驳回（reject）无论对方是什么状态，都必须引用具体的反证 evidence_ref，不许用\"证据不足\"四个字一笔带过——证据不足时的诚实选项是 absorb_partially 并写明缺哪条证据。你的主论点如果无法回应某个假说最强的那条证据，就不许假装没看见它。"
+        "`synthesis_packet.competing_hypotheses` 里除 `status` 为 `downgraded`（已被裁决出局）之外的每一个假说——`candidate`、`leading`、`kept_unresolved`、`split`——你都必须在 `hypothesis_responses` 里逐一回应，三选一：接受并修正判断（accept_and_revise）、部分吸收（absorb_partially）、驳回（reject）。`leading` 通常是你主论点所依据的主线假说，也要求显式回应，写清楚为什么接受，不能因为它是自己的主线就默认略过。`kept_unresolved` 表示这条假说还没有被单一路径裁决出胜负、分歧尚未解决，合格回应可以是 absorb_partially（承认分歧未解决，并写明还缺哪条证据），不强求给出确定的 accept_and_revise 或 reject——诚实保留未解决的争议，比强行下结论更符合纪律。驳回（reject）无论对方是什么状态，都必须引用具体的反证 evidence_ref，不许用\"证据不足\"四个字一笔带过——证据不足时的诚实选项是 absorb_partially 并写明缺哪条证据。你的主论点如果无法回应某个假说最强的那条证据，就不许假装没看见它。"
     )
 
     assert prompt.count(required_block) == 1

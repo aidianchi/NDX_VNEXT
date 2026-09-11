@@ -76,7 +76,7 @@ L5 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 至少生成 2 个 hooks，且必须包含：
 
 - 对 L3：请 L3 验证本层趋势是否获得广度确认；是否可能是少数权重股支撑的空心趋势。
-- 对 L4：请 L4 验证高估值环境下，趋势失速是否会触发估值压缩和动量卖出共振。
+- 对 L4：请 L4 验证高估值环境下，趋势失速是否会触发估值压缩和动量卖出印证。
 
 如果波动率低、趋势过热或成交量不确认，必须额外生成：
 
@@ -90,7 +90,7 @@ L5 raw indicators -> indicator_analyses -> layer_synthesis -> internal_conflict_
 
 - `indicator_analyses[].narrative` 要能作为技术指标卡片展示。
 - `reasoning_process` 必须说明指标如何影响趋势延续、过热或失效触发。
-- `layer_synthesis` 要归纳本层指标的方向与张力，不写空泛套话。
+- `layer_synthesis` 要归纳本层指标的方向，以及它们之间方向不一致的地方，不写空泛套话。
 - `internal_conflict_analysis` 要写清冲突双方与各自依据，并明确趋势有效性与短期风险的区别。
 
 ### 叙事字段文风约定
