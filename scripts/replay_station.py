@@ -16,15 +16,33 @@
   下游站若依赖本站输出（终审站没有下游 LLM 站），重放结果不会自动传导。
 - 两侧对照的公平性前提是 System 段一致。脚本会逐字比对落档 System 与当前代码
   的 System，不一致时默认拒绝执行（--allow-system-drift 可放行并留痕）。
+- 站点说明书（`prompts/<stage>.md`）与「输出字段规格」都组装在 **User 段内部**，
+  不在 System 段里。所以"只换模型"用落档原样；**"改架构、不换输入"必须加
+  `--refresh-instructions`**——它把说明书与字段规格换成当前代码的版本，同时把
+  "## Runtime Input" 之后的数据 payload 逐字冻结（脚本会打印 payload 的 sha256，
+  用来证明两次跑的输入确实是同一份）。
+- `--refresh-instructions` 只支持 `--attempt 1`：attempt>=2 的 User 段里混着上一次的
+  重试反馈，无法与旧字段规格干净切开。
 - `--strict-tools` 走 DeepSeek 专属的 beta strict function calling；不传则该站
   与 GLM 走同一套 json_object 协议（公平对照）。两者语义不同，报告里要写明。
 
 用法
 ----
+只换模型（落档原样）：
+
     PYTHONPATH=$PWD .venv/bin/python scripts/replay_station.py \
         --from-run output/analysis/vnext/20260911_233648 \
         --station final_adjudicator --attempt 1 \
         --model deepseek-flash \
+        --out output/experiments/replay_20260912
+
+改架构、不换输入（冻结 payload，刷新说明书与字段规格）：
+
+    PYTHONPATH=$PWD .venv/bin/python scripts/replay_station.py \
+        --from-run output/analysis/vnext/20260911_233648 \
+        --station final_adjudicator --attempt 1 \
+        --refresh-instructions --stage-key final --contract-class FinalAdjudication \
+        --model glm-5.3-flash \
         --out output/experiments/replay_20260912
 """
 
@@ -59,6 +77,41 @@ def split_prompt(text: str) -> tuple[str, str]:
     i = text.index(SYS_MARK) + len(SYS_MARK)
     j = text.index(USR_MARK)
     return text[i:j].strip(), text[j + len(USR_MARK):].strip()
+
+
+# User 段的内部结构由 orchestrator._compose_prompt 决定：
+#   [站点说明书 md] → '## Runtime Input' → [输入 payload] → '## 输出字段规格' → [appendix] → '## Response Rules'
+# 做"改架构"实验时，说明书与字段规格必须换成当前代码的，只有 payload 冻结不变。
+INSTRUCTION_ANCHOR = "\n\n## Runtime Input\n"
+FIELD_SPEC_ANCHOR = "\n## 输出字段规格"
+RESPONSE_RULES_ANCHOR = "\n## Response Rules"
+
+
+def split_user_prompt(user_prompt: str) -> tuple[str, str, str]:
+    """把 User 段拆成（说明书正文, 冻结输入 payload, 字段规格及尾部）。"""
+    i = user_prompt.find(INSTRUCTION_ANCHOR)
+    j = user_prompt.find(FIELD_SPEC_ANCHOR, i + 1) if i >= 0 else -1
+    k = user_prompt.find(RESPONSE_RULES_ANCHOR, j + 1) if j >= 0 else -1
+    if min(i, j, k) < 0:
+        raise SystemExit(
+            "User 段缺少 '## Runtime Input' / '## 输出字段规格' / '## Response Rules' 锚点，"
+            "无法把「说明书」与「冻结输入」分开。"
+        )
+    body = user_prompt[:i]
+    payload = user_prompt[i + len(INSTRUCTION_ANCHOR):j]
+    tail = user_prompt[k:]        # 从 '## Response Rules' 起，原样保留
+    return body, payload, tail
+
+
+def recombine_user_prompt(prompt_body: str, payload: str, field_spec: str, tail: str) -> str:
+    """用当前代码的说明书与字段规格，重新组装一份 User 段（payload 逐字不变）。"""
+    return (
+        f"{prompt_body.rstrip()}"
+        f"{INSTRUCTION_ANCHOR}"
+        f"{payload}"
+        f"\n{field_spec.rstrip()}\n"
+        f"{tail.lstrip(chr(10))}"
+    )
 
 
 def extract_json(raw: str | None) -> dict | None:
@@ -96,6 +149,13 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="只打印规模与校验结果，不调模型")
     ap.add_argument("--allow-system-drift", action="store_true",
                     help="落档 System 与当前代码不一致时仍继续（会留痕）")
+    ap.add_argument("--refresh-instructions", action="store_true",
+                    help="用当前代码的「站点说明书 + 契约字段规格」替换落档的那一份（输入 payload 仍逐字冻结）。"
+                         "做「改架构、不换输入」的实验时必须加；只换模型时不要加。")
+    ap.add_argument("--stage-key", default="final",
+                    help="--refresh-instructions 用：站点 key（PROMPT_FILES 的键，如 final）")
+    ap.add_argument("--contract-class", default="FinalAdjudication",
+                    help="--refresh-instructions 用：pydantic 契约类名，用于重新渲染输出字段规格")
     args = ap.parse_args()
 
     run_dir = Path(args.from_run)
@@ -123,6 +183,38 @@ def main() -> int:
             "确认要跑请加 --allow-system-drift。"
         )
 
+    # 「改架构」实验：说明书与契约字段规格换成当前代码的，只有输入 payload 冻结。
+    instruction_note = "落档原样"
+    payload_sha = ""
+    try:
+        _, _probe_payload, _ = split_user_prompt(user_prompt)
+        payload_sha = sha256_text(_probe_payload)
+    except SystemExit:
+        pass
+    if args.refresh_instructions:
+        if args.attempt != 1:
+            raise SystemExit(
+                "--refresh-instructions 只支持 --attempt 1：attempt>=2 的 User 段里混着上一次的"
+                "重试反馈（appendix），无法与旧的字段规格干净切开。请改用 attempt 1。"
+            )
+        import agent_analysis.contracts as contracts_mod
+        import agent_analysis.orchestrator as orch_mod
+
+        orchestrator = orch_mod.VNextOrchestrator.__new__(orch_mod.VNextOrchestrator)
+        orchestrator.prompts_dir = Path(orch_mod.__file__).with_name("prompts")
+        model_cls = getattr(contracts_mod, args.contract_class, None)
+        if model_cls is None:
+            raise SystemExit(f"contracts 里没有模型：{args.contract_class}")
+        new_body = orchestrator._load_prompt(args.stage_key).strip()
+        new_spec = orchestrator._render_contract_field_spec(model_cls)
+        old_body, frozen_payload, frozen_tail = split_user_prompt(user_prompt)
+        payload_sha = sha256_text(frozen_payload)
+        instruction_note = (
+            f"说明书已刷新为当前代码（旧 {len(old_body)} 字符 → 新 {len(new_body)} 字符）；"
+            f"输入 payload 逐字冻结（sha={payload_sha[:16]}）"
+        )
+        user_prompt = recombine_user_prompt(new_body, frozen_payload, new_spec, frozen_tail)
+
     print("=" * 72)
     print(f"单站重放  station={args.station}  attempt={args.attempt}")
     print(f"  来源       : {prompt_path.relative_to(ROOT) if prompt_path.is_relative_to(ROOT) else prompt_path}")
@@ -130,6 +222,7 @@ def main() -> int:
     print(f"  输出协议   : {'strict function calling (beta)' if args.strict_tools else 'json_object'}")
     print(f"  User 段    : {len(user_prompt)} 字符")
     print(f"  System 一致: {sys_same}{'' if sys_same else '  ← 已放行，留痕'}")
+    print(f"  说明书     : {instruction_note}")
     print("=" * 72)
 
     if args.dry_run:
@@ -171,7 +264,11 @@ def main() -> int:
     out_dir = Path(args.out)
     if not out_dir.is_absolute():
         out_dir = ROOT / out_dir
-    tag = f"{args.model}_{args.station}_attempt{args.attempt}" + ("_strict" if args.strict_tools else "")
+    tag = (
+        f"{args.model}_{args.station}_attempt{args.attempt}"
+        + ("_strict" if args.strict_tools else "")
+        + ("_arch" if args.refresh_instructions else "")
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{tag}.response.raw.txt").write_text(raw, encoding="utf-8")
     if parsed is not None:
@@ -193,12 +290,18 @@ def main() -> int:
         "user_prompt_chars": len(user_prompt),
         "user_prompt_sha256": sha256_text(user_prompt),
         "system_matches_current": sys_same,
+        "instructions_refreshed": bool(args.refresh_instructions),
+        "instruction_note": instruction_note,
+        "input_payload_sha256": payload_sha,
         "elapsed_sec": round(elapsed, 1),
         "usage": usage,
         "json_parsed": parsed is not None,
         "top_level_keys": sorted(parsed.keys()) if isinstance(parsed, dict) else None,
         "has_reader_final": bool(reader),
         "reader_field_used": reader_field,
+        "reader_headline": (reader.get("headline") if reader else None),
+        "reader_headline_chars": (len(str(reader.get("headline") or "")) if reader else None),
+        "reader_one_liner_chars": (len(str(reader.get("one_liner") or "")) if reader else None),
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print()
@@ -207,8 +310,12 @@ def main() -> int:
     print()
     if reader:
         print("-" * 72)
-        print(f"门面 {reader_field}.one_liner：")
-        print(reader.get("one_liner") or "(空)")
+        print(f"门面标题 {reader_field}.headline：")
+        print(reader.get("headline") or "（缺 headline —— 该次用的是旧规格）")
+        print()
+        liner = str(reader.get("one_liner") or "")
+        print(f"门面导语 {reader_field}.one_liner（{len(liner)} 字）：")
+        print(liner or "(空)")
         print()
         reasons = reader.get("three_reasons") or reader.get("reasons") or []
         for i, r in enumerate(reasons, 1):

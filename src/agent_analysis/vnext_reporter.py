@@ -2563,13 +2563,26 @@ class VNextReportGenerator:
             if strongest_dissent else ""
         )
         objection_banner = self._data_verdict_objection_banner(artifacts)
+        # T72 门面错配修复：标题位归 headline，导语段归 one_liner，两者各占其位。
+        # 旧档案无 headline 时完全维持原渲染（h1 取 one_liner），避免历史 run 重排。
+        headline = str(reader.get("headline") or "").strip()
+        lead_source = str(reader.get("one_liner") or "").strip()
+        if headline:
+            hero_h1 = headline
+            lead_html = (
+                f'<div class="facade-lead">{self._reasoned_verdict_html(lead_source)}</div>'
+                if lead_source else ""
+            )
+        else:
+            hero_h1 = lead_source or str(final.get("final_stance") or "").strip() or "本轮判断"
+            lead_html = ""
         return f"""
 <section class="sec facade-section" id="facade">
   <div class="facade">
   <div class="sec-grid">
     <div class="brief-verdict sec-main prose">
       <p class="kicker">NDX 投资判断书 · 判断对象：{_escape(object_name)} · 数据截至 {_escape(data_date)} · 运行 {_escape(run_path.name)}</p>
-      <h1>{_escape(reader.get('one_liner') or final.get('final_stance') or '本轮判断')}</h1>
+      <h1>{_escape(hero_h1)}</h1>
       <div class="brief-meta-line badges">
         {f'<span class="badge pill">姿态 <b>{_escape(stance_short)}</b></span>' if stance_short else ''}
         <span class="badge pill">赔率 <b>{_escape(payoff)}</b></span>
@@ -2577,6 +2590,7 @@ class VNextReportGenerator:
         {publish_note if not blocked else ''}
       </div>
       {objection_banner}
+      {lead_html}
       <div class="reasoned-verdict">{self._reasoned_verdict_html(verdict)}</div>
       {f'<p class="section-note verdict-signature">{_escape(verdict_signature)}</p>' if verdict_signature else ''}
       {publish_note if blocked else ''}
@@ -2814,6 +2828,7 @@ class VNextReportGenerator:
             if isinstance(item, dict) and item.get("chain_description"):
                 reasons.append(str(item.get("chain_description")))
         return {
+            "headline": "",
             "one_liner": final.get("final_stance", ""),
             "three_reasons": reasons,
             "time_horizon_summary": final.get("time_horizon_views", []),
@@ -2910,7 +2925,8 @@ class VNextReportGenerator:
         observation_range = _observation_date_range(analysis_packet.get("raw_data", {}))
         risk_count = len(_as_list(final.get("must_preserve_risks")))
         reader = self._reader_final(final)
-        hero_title = reader.get("one_liner") or final.get("final_stance", "N/A")
+        # T72：非 brief 模板的 hero 大标题同样优先取标题字段，旧档案退回 one_liner。
+        hero_title = reader.get("headline") or reader.get("one_liner") or final.get("final_stance", "N/A")
         hero_note = self._reader_note(final)
         if template == "brief":
             checklist = artifacts.get("golden_pit_checklist", {}) if isinstance(artifacts.get("golden_pit_checklist"), dict) else {}

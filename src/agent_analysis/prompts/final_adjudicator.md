@@ -40,11 +40,20 @@
 
 【赔率语言：双向对称的举证负担】
 
-`final_stance`、`reader_final.one_liner`、`payoff_assessment` 必须方向一致，且：
+`final_stance`、`reader_final.headline`、`reader_final.one_liner`、`payoff_assessment` 必须方向一致。
+**五类举证只在 `payoff_assessment` 里展开一次**——门面标题与导语不重复枚举五类，它们只负责说结论：
 
-- 写"高赔率/赔率有利"：必须点名五类（价格反映、估值/ERP、信用、趋势、盈利/流动性）中哪些支持补偿变厚，并列出仍然反对的类别。
-- 写"赔率不利/风险收益比不利"：必须点名哪些类别支持补偿变薄，并列出仍然相反的类别。
+- `payoff_assessment` 写"高赔率/赔率有利"：必须点名五类（价格反映、估值/ERP、信用、趋势、盈利/流动性）中哪些支持补偿变厚，并列出仍然反对的类别。
+- `payoff_assessment` 写"赔率不利/风险收益比不利"：必须点名哪些类别支持补偿变薄，并列出仍然相反的类别。
 - 两个方向都不允许一票定论；若支持与反对大致相当，写"证据冲突、赔率不明"，不允许默认落到"不利"。
+
+【门面体例：标题与导语分工，不得互相冒充】
+
+报告首屏只有两个位置，写法完全不同：
+
+- `reader_final.headline`（**标题**）：一句可背诵的判断，**不超过 30 字**。像研报封面大标题——**不出现行情点位数字**（734.58 这类），**不含免责与保留**（"这一点没有保证"式的收尾属于正文，不属于标题）。**标题是判断，不是数据。**
+- `reader_final.one_liner`（**导语段**）：标题下面那一段。读者只读这一段，就该知道结论是什么、为什么、接下来看什么。**长度由你把话说清楚为准，不设上限**（一段到几段都行，需要分段就用空行分段）；先给白话结论，再上数字与条件。**每句话都要有主语**——不要写成没有主语的祈使句，也不要把决策权推给数字（"让 X 和 Y 给答案"是病句，正解是"站上 X 或跌破 Y 再动手"）。
+- 论证正文（`reasoned_verdict`）另有其位：导语只做开门见山，不承担论证，**不要为了写满而重复正文**。
 
 【置信度语义（双尾）】
 
@@ -218,7 +227,8 @@
     }
   ],
   "reader_final": {
-    "one_liner": "<用普通读者能理解的话概括状态、价格、赔率和动作，方向与 payoff_assessment 一致>",
+    "headline": "<报告标题：一句可背诵的判断，≤30 字；不出现 734.58 这类行情点位数字，不含免责条款；方向与 final_stance 一致>",
+    "one_liner": "<首屏导语段：给普通读者的开门见山总结，先一句白话结论，再上数字与条件；长度以把话说清楚为准，不设上限>",
     "three_reasons": ["<支撑最终立场的三个理由，由当日证据生成>"],
     "time_horizon_summary": [],
     "action_summary": [],
@@ -267,6 +277,10 @@
 
 ### Step 2: 读者结论
 
+先写 `headline`：把下面第 1、2、4 条压成**一句 ≤30 字的判断**（不带点位数字、不带免责）。
+再写 `one_liner` 导语段：把下面八条按重要性缩成一段读者话，先说白话结论再上数字，长度以说清楚为准。
+两个字段都不要重复 `reasoned_verdict` 的论证。
+
 读者结论必须回答：
 
 1. 现在市场处在什么状态？
@@ -299,7 +313,10 @@
 - 为了形成顺滑结论而抹平冲突。
 - 照抄本文件与历史 run 的短语、代号。
 - 把"谨慎/骑墙"当默认安全答案：证据一边倒时输出与证据方向不符的居中结论。
-- `payoff_assessment` 与 `final_stance`、`reader_final.one_liner` 方向不一致。
+- `payoff_assessment` 与 `final_stance`、`reader_final.headline`、`reader_final.one_liner` 方向不一致。
+- 把 `reader_final.headline` 写成超过 30 字的一整段，或往标题里塞多件事。
+- `reader_final.headline` 里出现行情点位数字（如 734.58），或出现免责/保留条款。
+- 把"动作"塞进 `reader_final.headline`：动作需要主体和方向，标题给不了——动作写进 `action_summary`/`portfolio_actions`。
 - 把 `adjudicator_notes` 写成读者首屏文案。
 - 把"风险完整保留"当成最终报告唯一质量标准。
 - 输出非 JSON 格式。
@@ -308,7 +325,8 @@
 
 - `approval_status` 必须明确。
 - `stance_label` 必须是五个枚举值之一，且与 `final_stance` 方向一致。
-- `reader_final.one_liner` 必须像读者结论，不像内部审批。
+- `reader_final.headline` 必须非空：一句 ≤30 字的判断，方向与 `final_stance` 一致，不含点位数字与免责。
+- `reader_final.one_liner` 是首屏导语段，允许长于一句话；必须像读者结论不像内部审批，且每句话要有主语。
 - `quality_gate` 必须保留内部发布判断。
 - `state_diagnosis`、`priced_narrative`、`payoff_assessment` 必须非空。
 - `time_horizon_views` 至少覆盖数日、1-3个月、6-12个月。
@@ -323,10 +341,12 @@
 
 ## 质量检查
 
+- headline 是否是一句 ≤30 字、不含点位数字与免责的判断？
+- one_liner 是否先说白话结论、再上数字，且每句话都有主语？
 - reader_final 是否能直接给普通读者看？
 - quality_gate 是否没有混进读者结论？
 - 是否区分状态、价格、赔率、动作和失效条件？
-- final_stance、reader_final.one_liner、payoff_assessment 是否方向一致？
+- final_stance、reader_final.headline、reader_final.one_liner、payoff_assessment 是否方向一致？
 - stance_label 是否是五个枚举值之一，且与 final_stance 方向一致？
 - payoff_assessment 是否点名五类中支持与反对的类别？
 - 是否说清楚主要矛盾，而不是把高严重度冲突机械堆成清单？

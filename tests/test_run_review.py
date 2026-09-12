@@ -48,6 +48,42 @@ def test_run_review_attributes_missing_main_chain_fields():
     assert any("reader_final" in item.recommended_rule_update for item in report.attribution_findings)
 
 
+def test_run_review_checks_headline_shape():
+    """T72：标题位单独受检——空标题 / 超长标题 / 含点位数字分别留痕，形态合格给 pass。"""
+
+    def headline_findings(reader_final):
+        report = build_run_review_report(
+            run_dir="output/analysis/vnext/test",
+            analysis_packet={"meta": {"backtest_date": "2025-04-09"}},
+            thesis_draft={"priced_narrative": "", "payoff_assessment": ""},
+            risk_boundary_report={"must_preserve_risks": ["信用恶化风险"]},
+            final_adjudication={
+                "final_stance": "中性偏谨慎",
+                "approval_status": "approved_with_reservations",
+                "reader_final": reader_final,
+            },
+            data_integrity_report={"publish_status": "publishable"},
+        )
+        return [
+            item
+            for item in report.attribution_findings
+            if any("headline" in ref for ref in item.artifact_refs)
+        ]
+
+    missing = headline_findings({"one_liner": "风险高，但赔率可能改善。"})
+    assert any(item.severity == "fail" and "为空" in item.finding for item in missing)
+
+    good = headline_findings({"headline": "估值无垫，持有不加码", "one_liner": "风险高，但赔率可能改善。"})
+    assert any(item.severity == "pass" for item in good)
+    assert not any(item.severity == "fail" for item in good)
+
+    point = headline_findings({"headline": "站上734.58再动手", "one_liner": "风险高，但赔率可能改善。"})
+    assert any(item.severity == "fail" and "点位数字" in item.finding for item in point)
+
+    too_long = headline_findings({"headline": "估值无垫" * 8, "one_liner": "风险高，但赔率可能改善。"})
+    assert any(item.severity == "observe" and "上限" in item.finding for item in too_long)
+
+
 def test_run_review_from_dir_reads_schema_guard_report(tmp_path):
     (tmp_path / "schema_guard_report.json").write_text(
         json.dumps(

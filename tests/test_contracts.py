@@ -675,6 +675,23 @@ def test_decision_semantics_fields_roundtrip():
     assert restored_final.principal_contradiction.contradiction_id == "panic_priced_vs_unconfirmed_risk"
 
 
+def test_reader_final_keeps_headline_and_lead_separate():
+    """T72：标题位（headline）与导语位（one_liner）是两个字段，且旧档案可缺 headline。"""
+    old_archive = ReaderFinal.model_validate({"one_liner": "老的读者一句话结论。"})
+    assert old_archive.headline == ""
+    assert old_archive.one_liner == "老的读者一句话结论。"
+
+    new_style = ReaderFinal.model_validate(
+        {
+            "headline": "估值无垫、盈利独撑，持有不加码",
+            "one_liner": "现在不是重仓追高的时候。\n\n方向交给确认点。",
+        }
+    )
+    restored = ReaderFinal.model_validate(new_style.model_dump())
+    assert restored.headline == "估值无垫、盈利独撑，持有不加码"
+    assert restored.one_liner == "现在不是重仓追高的时候。\n\n方向交给确认点。"
+
+
 def test_counter_thesis_draft_tolerates_observed_llm_field_variants():
     # 形状取自 2026-07-07 真实 run 中两次被 schema 拒绝的 LLM 返回。
     attempt_1_like = {

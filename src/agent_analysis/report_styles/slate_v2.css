@@ -210,6 +210,16 @@ p, li {
   .hero h1 { font-size: 30px; line-height: 1.16; }
   .template-brief .brief-verdict h1 { font-size: 28px; line-height: 1.2; }
 }
+.facade-lead {
+  border-left: 3px solid var(--accent);
+  padding: 2px 0 2px 16px;
+  margin: 16px 0 24px;
+  font-size: 16.5px;
+  line-height: 1.9;
+  color: var(--ink);
+}
+.facade-lead p { margin: 0 0 0.8em; text-align: justify; }
+.facade-lead p:last-child { margin-bottom: 0; }
 .hero-note {
   color: var(--ink-soft);
   font-size: 16px;

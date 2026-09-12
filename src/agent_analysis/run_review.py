@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -25,6 +26,13 @@ INTERNAL_READER_PHRASES = [
     "quality_gate",
     "adjudicator",
 ]
+
+# T72 门面体例：标题不写行情点位（范本标题零点位数字）。这是个粗启发式——只认
+# 「整数.小数」形态（734.58 / 2.42），用来给审计留痕，不做发布闸门。
+POINT_LEVEL_RE = re.compile(r"\d+\.\d+")
+
+# 标题位字数上限，与 prompts/final_adjudicator.md 的【门面体例】一致。
+HEADLINE_MAX_CHARS = 30
 
 REQUIRED_PRICE_REFLECTION_CATEGORIES = set(PRICE_REFLECTION_CATEGORY_KEYS)
 HIGH_PAYOFF_TERMS = ["高赔率", "赔率改善", "赔率变厚", "风险补偿变厚"]
@@ -911,6 +919,50 @@ def build_run_review_report(
                 recommended_rule_update="Final 的最终立场、读者一句话和 payoff_assessment 必须方向一致；赔率不利时不得写成高赔率候选。",
             )
         )
+
+    # T72 门面体例：标题位必须真是一句标题。旧档案无此字段，所以先判空再判形态。
+    headline_text = str(reader.get("headline") or "").strip()
+    if not headline_text:
+        findings.append(
+            _finding(
+                "expression",
+                "fail",
+                "reader_final.headline 为空：报告首屏没有标题（T72 修复前，标题位被 100+ 字摘要占着）。",
+                ["final_adjudication.json:reader_final.headline"],
+                recommended_rule_update="Final 必须在 reader_final.headline 给出一句 ≤30 字的判断标题，标题位与导语位不得互相冒充。",
+            )
+        )
+    else:
+        if len(headline_text) > HEADLINE_MAX_CHARS:
+            findings.append(
+                _finding(
+                    "expression",
+                    "observe",
+                    f"reader_final.headline 有 {len(headline_text)} 字，超过标题位 {HEADLINE_MAX_CHARS} 字上限，已接近一段话而非标题。",
+                    ["final_adjudication.json:reader_final.headline"],
+                    recommended_rule_update="标题是一句判断；超长的内容应移入 one_liner 导语段。",
+                )
+            )
+        point_hits = POINT_LEVEL_RE.findall(headline_text)
+        if point_hits:
+            findings.append(
+                _finding(
+                    "expression",
+                    "fail",
+                    "reader_final.headline 出现行情点位数字（" + "、".join(point_hits[:3]) + "）：标题应是判断而不是数据。",
+                    ["final_adjudication.json:reader_final.headline"],
+                    recommended_rule_update="标题不写点位数字；点位放进 one_liner 或执行字段（启发式识别，仅认整数.小数形态）。",
+                )
+            )
+        if not point_hits and len(headline_text) <= HEADLINE_MAX_CHARS:
+            findings.append(
+                _finding(
+                    "expression",
+                    "pass",
+                    "reader_final.headline 形态合格：短标题、不含点位数字。",
+                    ["final_adjudication.json:reader_final.headline"],
+                )
+            )
 
     if not reader.get("one_liner"):
         findings.append(

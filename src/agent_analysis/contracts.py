@@ -1747,10 +1747,29 @@ def _render_invalidation_tags(items: List["InvalidationItem"]) -> List[str]:
 
 
 class ReaderFinal(BaseModel):
-    """Reader-facing final answer, separated from internal quality gate notes."""
+    """Reader-facing final answer, separated from internal quality gate notes.
+
+    2026-09-12 T72 门面错配修复：原设计把「标题位」和「摘要位」压在一个字段上——
+    `one_liner` 被要求同时交代状态/价格/赔率/动作并点名五类证据，又被渲染层
+    （`vnext_reporter._brief_facade_section`）当作 `<h1>` 整段排出，实测两家中外模型
+    都写出 121~135 字 / 9 分句、没有主语的怪物大标题。范本（卖方研报/备忘录）的体例是
+    「短判断标题 + 多段导语」，标题里不出现行情点位。
+
+    故拆成两个字段、各归其位：
+    - `headline`：标题位，一句可背诵的判断，禁点位数字与免责条款。
+    - `one_liner`：摘要位（首屏导语段），长度交模型判断——沿用 2026-08-31 T69 P0-1
+      对 `reasoned_verdict` 的判决（字数代理"有料"是形状代理语义，不设长度裁判）。
+    """
     model_config = {"extra": "allow"}
 
-    one_liner: str = Field("", description="给普通读者的一句话结论")
+    headline: str = Field(
+        "",
+        description="报告标题：一句可背诵的判断，≤30 字，不出现行情点位数字、不含免责条款；方向与 final_stance 一致",
+    )
+    one_liner: str = Field(
+        "",
+        description="首屏导语段：给普通读者的开门见山总结，先说白话结论再上数字；长度以把话说清楚为准，不设上限",
+    )
     three_reasons: List[str] = Field(default_factory=list, description="三条最重要理由")
     time_horizon_summary: List[TimeHorizonView] = Field(default_factory=list, description="分时间尺度判断")
     action_summary: List[PortfolioAction] = Field(default_factory=list, description="核心仓/战术仓/等待者动作")
