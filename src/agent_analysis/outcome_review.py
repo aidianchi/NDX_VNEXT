@@ -433,7 +433,7 @@ def build_outcome_review_report(
             final_adjudication.get("final_stance", ""),
             final_adjudication.get("state_diagnosis", ""),
             final_adjudication.get("payoff_assessment", ""),
-            (final_adjudication.get("reader_final") or {}).get("one_liner", "")
+            (final_adjudication.get("reader_final") or {}).get("headline", "") or (final_adjudication.get("reader_final") or {}).get("one_liner", "")
             if isinstance(final_adjudication.get("reader_final"), dict)
             else "",
         ]

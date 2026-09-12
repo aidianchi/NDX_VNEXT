@@ -375,26 +375,35 @@ def test_brief_stress_section_shows_kept_unresolved_hypotheses_and_their_respons
     assert "已被裁定出局的解释。" not in html
 
 
-def test_facade_h1_prefers_reader_one_liner_over_final_stance(tmp_path: Path):
-    """T67/W1：Brief 门面大标题用给人看的 one_liner，final_stance 留在正文，深度不减。"""
+def test_facade_h1_uses_headline_and_never_renders_lead(tmp_path: Path):
+    """T72 方案 D：首屏只有「标题 + 判决正文」。标题取 headline，导语字段不再渲染。"""
     reporter = VNextReportGenerator()
     artifacts = {
         "final_adjudication": {
             "final_stance": "主要矛盾仍是贴现率与盈利上修之间的拉锯，维持中性仓位等待确认。",
-            "reader_final": {"one_liner": "现在不是重仓追高的时候，等财报出方向。"},
+            "reader_final": {
+                "headline": "估值无垫、盈利独撑，核心仓持有不加码",
+                "one_liner": "这段导语已经废弃，不应该出现在页面上。",
+            },
+            "reasoned_verdict": "判断先行：拉锯未决。\n\n理由一：约束处在十年极端。",
             "confidence": "medium",
         },
         "analysis_packet": {"meta": {"data_date": "2026-08-26"}},
         "synthesis_packet": {"packet_meta": {}},
     }
     html = reporter._brief_facade_section(tmp_path, artifacts)
-    assert "<h1>现在不是重仓追高的时候，等财报出方向。</h1>" in html
-    # final_stance 不丢弃：判决正文仍承载系统面表述
-    assert "主要矛盾仍是贴现率与盈利上修之间的拉锯" in html
+    assert "<h1>估值无垫、盈利独撑，核心仓持有不加码</h1>" in html
+    # 中间那层导语已随 one_liner 一起删除：钩子和文本都不该出现
+    assert 'class="facade-lead"' not in html
+    assert "这段导语已经废弃" not in html
+    # 判决正文才是读者主文，且天然支持空行分段
+    assert "<p>判断先行：拉锯未决。</p>" in html
+    assert "<p>理由一：约束处在十年极端。</p>" in html
+    assert 'class="reasoned-verdict"' in html
 
 
-def test_facade_h1_falls_back_to_final_stance_without_one_liner(tmp_path: Path):
-    """T67/W1：one_liner 缺失时回退 final_stance，再回退兜底文案。"""
+def test_facade_h1_falls_back_to_final_stance_without_headline(tmp_path: Path):
+    """T67/W1：headline 缺失时回退 final_stance，再回退兜底文案。"""
     reporter = VNextReportGenerator()
     stance_only = {
         "final_adjudication": {"final_stance": "证据一边倒，姿态转向进攻。", "confidence": "medium"},
@@ -404,43 +413,17 @@ def test_facade_h1_falls_back_to_final_stance_without_one_liner(tmp_path: Path):
     html = reporter._brief_facade_section(tmp_path, stance_only)
     assert "<h1>证据一边倒，姿态转向进攻。</h1>" in html
 
-    empty_liner = {
-        "final_adjudication": {"final_stance": "", "reader_final": {"one_liner": ""}, "confidence": "medium"},
+    empty_headline = {
+        "final_adjudication": {"final_stance": "", "reader_final": {"headline": ""}, "confidence": "medium"},
         "analysis_packet": {"meta": {"data_date": "2026-08-26"}},
         "synthesis_packet": {"packet_meta": {}},
     }
-    html = reporter._brief_facade_section(tmp_path, empty_liner)
+    html = reporter._brief_facade_section(tmp_path, empty_headline)
     assert "<h1>本轮判断</h1>" in html
 
 
-def test_facade_h1_uses_headline_and_demotes_one_liner_to_lead(tmp_path: Path):
-    """T72：标题位取 headline；one_liner 降为标题下方的导语段，不再冒充大标题。"""
-    reporter = VNextReportGenerator()
-    artifacts = {
-        "final_adjudication": {
-            "final_stance": "主要矛盾仍是贴现率与盈利上修之间的拉锯，维持中性仓位等待确认。",
-            "reader_final": {
-                "headline": "估值无垫、盈利独撑，持有不加码",
-                "one_liner": "现在不是重仓追高的时候，等财报出方向。仓位不加，方向交给确认点。",
-            },
-            "confidence": "medium",
-        },
-        "analysis_packet": {"meta": {"data_date": "2026-08-26"}},
-        "synthesis_packet": {"packet_meta": {}},
-    }
-    html = reporter._brief_facade_section(tmp_path, artifacts)
-    assert "<h1>估值无垫、盈利独撑，持有不加码</h1>" in html
-    # 导语段落在标题下方，带 facade-lead 钩子（样式与论证正文区分）
-    assert 'class="facade-lead"' in html
-    assert "现在不是重仓追高的时候" in html
-    # one_liner 不再出现在 h1 里
-    assert "<h1>现在不是重仓追高的时候" not in html
-    # final_stance 不丢弃：判决正文仍承载系统面表述
-    assert "主要矛盾仍是贴现率与盈利上修之间的拉锯" in html
-
-
-def test_facade_h1_without_headline_keeps_legacy_rendering(tmp_path: Path):
-    """T72：旧档案无 headline 时维持原渲染（h1 取 one_liner、不产出导语段），历史 run 不重排。"""
+def test_facade_h1_reads_legacy_one_liner_only_when_headline_missing(tmp_path: Path):
+    """方案 D 的旧档案退路：老 run 没有 headline，仍用 one_liner 当 h1，但不产出导语层。"""
     reporter = VNextReportGenerator()
     legacy = {
         "final_adjudication": {
@@ -455,25 +438,6 @@ def test_facade_h1_without_headline_keeps_legacy_rendering(tmp_path: Path):
     assert "<h1>现在不是重仓追高的时候，等财报出方向。</h1>" in html
     assert 'class="facade-lead"' not in html
 
-
-def test_facade_lead_splits_blank_line_into_paragraphs(tmp_path: Path):
-    """T72：导语段允许不止一段——空行分段，长度交给模型判断。"""
-    reporter = VNextReportGenerator()
-    artifacts = {
-        "final_adjudication": {
-            "final_stance": "中性。",
-            "reader_final": {
-                "headline": "持有不加码",
-                "one_liner": "第一段结论。\n\n第二段条件与代价。",
-            },
-            "confidence": "medium",
-        },
-        "analysis_packet": {"meta": {"data_date": "2026-08-26"}},
-        "synthesis_packet": {"packet_meta": {}},
-    }
-    html = reporter._brief_facade_section(tmp_path, artifacts)
-    assert "<p>第一段结论。</p>" in html
-    assert "<p>第二段条件与代价。</p>" in html
 
 
 def test_facade_renders_objection_banner_on_verified_material_objection(tmp_path: Path):

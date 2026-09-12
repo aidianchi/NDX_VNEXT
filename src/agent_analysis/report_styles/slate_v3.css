@@ -155,19 +155,9 @@ button { font-family: var(--sans); }
 .sec.facade-section { margin-top: 6px; }
 .facade-section > .facade { margin-top: 0; }
 .brief-verdict h1 { font-size: 24px; }
-/* T72 门面体例修复：标题以下是「一段话」（导语），不是加长标题。用文章排版 + 左引线，
-   字号介于标题(24px)与正文之间，与 .reasoned-verdict 的论证正文区分开。 */
-.facade-lead {
-  font-family: var(--serif);
-  font-size: 16.5px;
-  line-height: 1.9;
-  color: var(--ink);
-  border-left: 3px solid var(--accent);
-  padding: 2px 0 2px 16px;
-  margin: 16px 0 24px;
-}
-.facade-lead p { margin: 0 0 0.8em; text-align: justify; }
-.facade-lead p:last-child { margin-bottom: 0; }
+/* T72 门面体例定案（方案 D）：首屏只有「标题 + 判决正文」。
+   中间那层导语（.facade-lead）已随 one_liner 字段一起删除——它与判决正文第一段
+   是同一段话的两种长度，渲染出来只是复述。 */
 .reasoned-verdict p, .prose p, .brief-verdict p { text-align: justify; }
 body.style-b-light .brief-verdict,
 body.style-b-light .prose,

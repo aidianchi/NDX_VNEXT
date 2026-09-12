@@ -4003,7 +4003,7 @@ class VNextOrchestrator:
         add("thesis", "timing", thesis.timing_assessment, common_refs, [thesis.timing_assessment], list(getattr(thesis, "invalidation_conditions", []) or []))
         add("thesis", "price_reflection", getattr(thesis, "priced_narrative", ""), common_refs, [getattr(thesis, "payoff_assessment", "")], list(getattr(thesis, "invalidation_conditions", []) or []))
         add("final", "market_state", final_adjudication.final_stance, common_refs, [final_adjudication.adjudicator_notes], list(final_adjudication.invalidation_conditions or []))
-        add("final", "market_state", getattr(final_adjudication.reader_final, "one_liner", ""), list(getattr(final_adjudication.reader_final, "evidence_refs", []) or []) + common_refs, list(getattr(final_adjudication.reader_final, "three_reasons", []) or []), list(getattr(final_adjudication.reader_final, "invalidation_summary", []) or []))
+        add("final", "market_state", getattr(final_adjudication, "state_diagnosis", "") or getattr(final_adjudication.reader_final, "headline", ""), list(getattr(final_adjudication.reader_final, "evidence_refs", []) or []) + common_refs, list(getattr(final_adjudication.reader_final, "three_reasons", []) or []), list(getattr(final_adjudication.reader_final, "invalidation_summary", []) or []))
         add("final", "risk_boundary", "；".join(str(item) for item in list(final_adjudication.must_preserve_risks or [])[:6]), common_refs, ["Final 必须保留 Risk Sentinel 和主要矛盾中的风险边界。"], list(final_adjudication.invalidation_conditions or []))
         add("final", "action_translation", "；".join(str(getattr(action, "action", "")) for action in list(getattr(final_adjudication, "portfolio_actions", []) or [])[:4]), common_refs, [str(getattr(action, "rationale", "")) for action in list(getattr(final_adjudication, "portfolio_actions", []) or [])[:4]], list(final_adjudication.invalidation_conditions or []))
 
@@ -4512,7 +4512,7 @@ class VNextOrchestrator:
         return GoldenPitChecklist(
             effective_date=effective_date,
             previous_checklist_ref="",
-            current_state=getattr(final_adjudication, "state_diagnosis", "") or getattr(final_adjudication.reader_final, "one_liner", "") or final_adjudication.final_stance,
+            current_state=getattr(final_adjudication, "state_diagnosis", "") or final_adjudication.final_stance,
             changed_since_last_run_summary=changed_summary,
             entries=entries,
         )

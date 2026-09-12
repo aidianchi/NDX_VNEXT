@@ -7485,11 +7485,12 @@ def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path:
         evidence_refs=["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield", "L5.get_ta_indicators"],
         adjudicator_notes="Final 保留主要反证和失效条件。",
         reader_final=ReaderFinal(
-            one_liner="NDX 不是无条件看多，仍要看利率和盈利是否配合。",
+            headline="NDX 不是无条件看多",
             three_reasons=["利率仍有压力", "估值不便宜", "反证未消失"],
             invalidation_summary=["利率快速下行且盈利上修。"],
             evidence_refs=["L1.get_fed_funds_rate", "L4.get_ndx_pe_and_earnings_yield"],
         ),
+        state_diagnosis="NDX 处在利率与盈利的张力里，没有价格缓冲。",
         invalidation_conditions=["利率快速下行且盈利上修。"],
     )
 
@@ -7512,6 +7513,13 @@ def test_stage4_evidence_registry_and_final_claim_ledger_are_auditable(tmp_path:
     assert all(entry.counter_evidence_refs for entry in ledger.entries)
     assert all(entry.falsification_conditions for entry in ledger.entries)
     market_entry = next(entry for entry in ledger.entries if entry.claim_type == "market_state")
+    # T72 方案 D：final 的第二条 market_state 断言取自 state_diagnosis（导语字段已删），
+    # 不再退到已废弃的 reader_final.one_liner。注意 final 下有两条 market_state。
+    final_market_texts = [
+        entry.claim_text for entry in ledger.entries
+        if entry.claim_type == "market_state" and entry.source_stage == "final"
+    ]
+    assert any(text.startswith("NDX 处在利率与盈利的张力里") for text in final_market_texts)
     risk_entry = next(entry for entry in ledger.entries if entry.claim_type == "risk_boundary")
     assert set(market_entry.counter_evidence_refs) != set(risk_entry.counter_evidence_refs)
     assert market_entry.counter_evidence_method == "opposing_hypothesis_support_plus_typed_conflicts"

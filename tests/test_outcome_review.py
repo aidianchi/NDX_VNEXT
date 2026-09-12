@@ -21,7 +21,7 @@ def test_outcome_review_flags_caution_after_strong_follow_through_rally():
         backtest_date="2025-04-09",
         final_adjudication={
             "final_stance": "中性偏谨慎",
-            "reader_final": {"one_liner": "风险仍高，等待确认。"},
+            "reader_final": {"headline": "风险仍高，等待确认"},
         },
         price_rows=_price_rows(daily_step=0.3),
     )
@@ -39,7 +39,7 @@ def test_outcome_review_flags_aggression_after_selloff():
         backtest_date="2025-04-09",
         final_adjudication={
             "final_stance": "高赔率进攻",
-            "reader_final": {"one_liner": "可以加大进攻。"},
+            "reader_final": {"headline": "可以加大进攻"},
         },
         price_rows=_price_rows(daily_step=-0.25),
     )

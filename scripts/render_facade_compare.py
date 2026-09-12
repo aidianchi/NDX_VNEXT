@@ -120,15 +120,16 @@ def main() -> int:
     # 字段表：版面对照之外，把"哪个字段被渲染"也摊开（这才是可复核的部分）
     print(f"对照页：{out_path}（{out_path.stat().st_size} 字节）")
     print()
-    print(f"{'变体':24s} {'标题字数':>8s} {'含点位':>6s} {'导语字数':>8s}  标题")
+    print(f"{'变体':24s} {'标题字数':>8s} {'含点位':>6s} {'正文段数':>8s}  标题")
     for label, _, final in rendered:
         reader = (final.get("reader_final") or {})
         head = str(reader.get("headline") or "")
-        liner = str(reader.get("one_liner") or "")
+        verdict = str(final.get("reasoned_verdict") or "")
+        paras = [s for s in re.split(r"\n\s*\n+", verdict) if s.strip()]
         print(
             f"{label:24s} {len(head) if head else '—':>8} "
             f"{('有' if POINT_LEVEL_RE.search(head) else '无'):>6s} "
-            f"{len(liner):>8}  {head or '（无 headline，走旧渲染）'}"
+            f"{len(paras) if paras else '—':>8}  {head or '（无 headline，走旧渲染）'}"
         )
     return 0
 

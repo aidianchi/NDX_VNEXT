@@ -665,31 +665,31 @@ def test_decision_semantics_fields_roundtrip():
         blocking_issues=[],
         evidence_refs=[],
         adjudicator_notes="内部质量说明。",
-        reader_final=ReaderFinal(one_liner="读者结论。"),
+        reader_final=ReaderFinal(headline="估值无垫，持有不加码"),
         payoff_assessment="高风险高赔率候选。",
         principal_contradiction=thesis.principal_contradiction,
         price_reflection_map=thesis.price_reflection_map,
     )
     restored_final = FinalAdjudication.model_validate(final.model_dump())
-    assert restored_final.reader_final.one_liner == "读者结论。"
+    assert restored_final.reader_final.headline == "估值无垫，持有不加码"
     assert restored_final.principal_contradiction.contradiction_id == "panic_priced_vs_unconfirmed_risk"
 
 
-def test_reader_final_keeps_headline_and_lead_separate():
-    """T72：标题位（headline）与导语位（one_liner）是两个字段，且旧档案可缺 headline。"""
-    old_archive = ReaderFinal.model_validate({"one_liner": "老的读者一句话结论。"})
-    assert old_archive.headline == ""
-    assert old_archive.one_liner == "老的读者一句话结论。"
+def test_reader_final_drops_one_liner_but_tolerates_legacy_archives():
+    """T72 方案 D：导语字段已删；旧档案里的 one_liner 由 extra=allow 容纳，读得出来但不参与契约。"""
+    import pydantic
 
-    new_style = ReaderFinal.model_validate(
-        {
-            "headline": "估值无垫、盈利独撑，持有不加码",
-            "one_liner": "现在不是重仓追高的时候。\n\n方向交给确认点。",
-        }
+    reader = ReaderFinal.model_validate(
+        {"headline": "估值无垫，持有不加码", "one_liner": "老的读者导语段。"}
     )
-    restored = ReaderFinal.model_validate(new_style.model_dump())
-    assert restored.headline == "估值无垫、盈利独撑，持有不加码"
-    assert restored.one_liner == "现在不是重仓追高的时候。\n\n方向交给确认点。"
+    # 新契约里没有 one_liner 这个字段
+    assert "one_liner" not in ReaderFinal.model_fields
+    # 但旧档案的键不报错，且仍可读出（渲染端的只读退路依赖这一点）
+    assert reader.headline == "估值无垫，持有不加码"
+    assert pydantic.__version__ and reader.model_extra.get("one_liner") == "老的读者导语段。"
+
+    legacy_only = ReaderFinal.model_validate({"one_liner": "只有老字段的档案。"})
+    assert legacy_only.headline == ""
 
 
 def test_counter_thesis_draft_tolerates_observed_llm_field_variants():

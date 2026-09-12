@@ -2563,19 +2563,17 @@ class VNextReportGenerator:
             if strongest_dissent else ""
         )
         objection_banner = self._data_verdict_objection_banner(artifacts)
-        # T72 门面错配修复：标题位归 headline，导语段归 one_liner，两者各占其位。
-        # 旧档案无 headline 时完全维持原渲染（h1 取 one_liner），避免历史 run 重排。
+        # T72 门面体例定案（方案 D）：首屏只有「标题 + 判决正文」两层，中间不再夹导语。
+        # 导语（one_liner）已从契约与提示词里删除——它跟判决正文第一段是同一段话的两种长度，
+        # 留着只会让模型每次白写一遍。旧档案的 one_liner 仅作 h1 的只读退路（读文件不花 token）。
         headline = str(reader.get("headline") or "").strip()
-        lead_source = str(reader.get("one_liner") or "").strip()
-        if headline:
-            hero_h1 = headline
-            lead_html = (
-                f'<div class="facade-lead">{self._reasoned_verdict_html(lead_source)}</div>'
-                if lead_source else ""
-            )
-        else:
-            hero_h1 = lead_source or str(final.get("final_stance") or "").strip() or "本轮判断"
-            lead_html = ""
+        legacy_liner = "" if headline else str(reader.get("one_liner") or "").strip()
+        hero_h1 = (
+            headline
+            or legacy_liner
+            or str(final.get("final_stance") or "").strip()
+            or "本轮判断"
+        )
         return f"""
 <section class="sec facade-section" id="facade">
   <div class="facade">
@@ -2590,7 +2588,6 @@ class VNextReportGenerator:
         {publish_note if not blocked else ''}
       </div>
       {objection_banner}
-      {lead_html}
       <div class="reasoned-verdict">{self._reasoned_verdict_html(verdict)}</div>
       {f'<p class="section-note verdict-signature">{_escape(verdict_signature)}</p>' if verdict_signature else ''}
       {publish_note if blocked else ''}
@@ -2821,13 +2818,15 @@ class VNextReportGenerator:
 
     def _reader_final(self, final: Dict[str, Any]) -> Dict[str, Any]:
         reader = final.get("reader_final")
-        if isinstance(reader, dict) and any(reader.get(key) for key in ("one_liner", "three_reasons", "action_summary")):
+        if isinstance(reader, dict) and any(reader.get(key) for key in ("headline", "one_liner", "three_reasons", "action_summary")):
             return reader
         reasons = []
         for item in _as_list(final.get("key_support_chains"))[:3]:
             if isinstance(item, dict) and item.get("chain_description"):
                 reasons.append(str(item.get("chain_description")))
         return {
+            # 极旧档案没有 reader_final 时的兜底：headline 留空，让 h1 退到 final_stance。
+            # `one_liner` 只为兼容历史键名保留，不再由契约生成。
             "headline": "",
             "one_liner": final.get("final_stance", ""),
             "three_reasons": reasons,
@@ -3157,7 +3156,7 @@ class VNextReportGenerator:
         checklist = artifacts.get("golden_pit_checklist", {}) if isinstance(artifacts.get("golden_pit_checklist"), dict) else {}
         local_profile = _load_local_decision_profile()
         reader = self._reader_final(final)
-        state = checklist.get("current_state") or final.get("state_diagnosis") or reader.get("one_liner") or final.get("final_stance") or "未记录"
+        state = checklist.get("current_state") or final.get("state_diagnosis") or final.get("final_stance") or "未记录"
         changes = _as_list(checklist.get("changed_since_last_run_summary"))
         change_rows = "".join(f"<li>{_escape(item)}</li>" for item in changes[:4]) or "<li>和上次判断比，暂缓启用。</li>"
 
@@ -3363,7 +3362,7 @@ class VNextReportGenerator:
   <div class="decision-layout">
     <div class="statement">
       <span>读者结论</span>
-      <strong>{_escape(reader.get('one_liner') or final.get('final_stance', 'N/A'))}</strong>
+      <strong>{_escape(reader.get('headline') or reader.get('one_liner') or final.get('final_stance', 'N/A'))}</strong>
       <p>{_escape(surface.get('state_diagnosis', ''))}</p>
       <div class="ref-row">{refs}</div>
     </div>
@@ -6479,7 +6478,7 @@ class VNextReportGenerator:
             return payload.get("revision_summary", "")
         if name == "Final":
             reader = self._reader_final(payload)
-            return reader.get("one_liner") or payload.get("final_stance", "")
+            return reader.get("headline") or reader.get("one_liner") or payload.get("final_stance", "")
         return ""
 
     def _agent_health_section(self, run_path: Path, artifacts: Dict[str, Any]) -> str:
@@ -6718,7 +6717,7 @@ class VNextReportGenerator:
         """Derive a short posture label strictly from governed text; empty when unclear."""
         corpus = " ".join(
             str(value or "")
-            for value in (final.get("final_stance"), reader.get("one_liner"), final.get("payoff_assessment"))
+            for value in (final.get("final_stance"), reader.get("headline"), final.get("payoff_assessment"))
         )
         if ("防守" in corpus or "防御" in corpus) and "等待" in corpus:
             return "防守等待"

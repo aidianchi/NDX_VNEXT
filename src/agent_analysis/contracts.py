@@ -1749,26 +1749,35 @@ def _render_invalidation_tags(items: List["InvalidationItem"]) -> List[str]:
 class ReaderFinal(BaseModel):
     """Reader-facing final answer, separated from internal quality gate notes.
 
-    2026-09-12 T72 门面错配修复：原设计把「标题位」和「摘要位」压在一个字段上——
-    `one_liner` 被要求同时交代状态/价格/赔率/动作并点名五类证据，又被渲染层
-    （`vnext_reporter._brief_facade_section`）当作 `<h1>` 整段排出，实测两家中外模型
-    都写出 121~135 字 / 9 分句、没有主语的怪物大标题。范本（卖方研报/备忘录）的体例是
-    「短判断标题 + 多段导语」，标题里不出现行情点位。
+    2026-09-12 T72 门面体例定案（方案 D）：**读者位只剩标题**，摘要与论证全部由
+    `reasoned_verdict`（判决正文）承担。
 
-    故拆成两个字段、各归其位：
-    - `headline`：标题位，一句可背诵的判断，禁点位数字与免责条款。
-    - `one_liner`：摘要位（首屏导语段），长度交模型判断——沿用 2026-08-31 T69 P0-1
-      对 `reasoned_verdict` 的判决（字数代理"有料"是形状代理语义，不设长度裁判）。
+    沿革（读的人需要知道为什么会变成这样）：
+    1. 最初标题位与摘要位压在一个字段上——`one_liner` 被要求同时交代状态/价格/赔率/动作
+       并点名五类证据，又被渲染层当作 `<h1>` 整段排出，实测两家中外模型都写出
+       121~135 字 / 9 分句、没有主语的怪物大标题。
+    2. 中途一度拆成「`headline` 标题 + `one_liner` 导语」两字段，但判决正文
+       （`reasoned_verdict`，实测 2221 字 / 6 段 = 判断先行 + 理由一二三 + 价格与执行 +
+       结尾回到赔率与最强反对解释）**本身就是完整的读者主文**，导语无论多长都只是在
+       复述它的第一段——两字段**职位重合**，解开长度上限后同义段直接撑成 606 字一段。
+    3. 故删除 `one_liner`：**与其让模型写一遍没人看的段落（每次 run 白烧输出 token，
+       还白占一份注意力），不如让它不存在。** 读者的"开门见山"由 `reasoned_verdict`
+       的第一段（判断先行）承担。
+
+    - `headline`：标题位。必须是**一句完整判断句**（主体 + 谓语 + 方向），≤30 字，
+      不出现行情点位数字、不含免责条款；方向与 `final_stance` 一致。
+    - 旧档案（本次改动前）的 `one_liner` 由 `model_config = {"extra": "allow"}` 容纳，
+      渲染端保留只读退路——**读旧文件不花 token，只有让模型继续生成才是浪费**。
     """
     model_config = {"extra": "allow"}
 
     headline: str = Field(
         "",
-        description="报告标题：一句可背诵的判断，≤30 字，不出现行情点位数字、不含免责条款；方向与 final_stance 一致",
-    )
-    one_liner: str = Field(
-        "",
-        description="首屏导语段：给普通读者的开门见山总结，先说白话结论再上数字；长度以把话说清楚为准，不设上限",
+        description=(
+            "报告标题：一句完整判断句（主体+谓语+方向），≤30 字；"
+            "不出现行情点位数字、不含免责条款、不写「未决/不明」这类元判断；"
+            "方向与 final_stance 一致"
+        ),
     )
     three_reasons: List[str] = Field(default_factory=list, description="三条最重要理由")
     time_horizon_summary: List[TimeHorizonView] = Field(default_factory=list, description="分时间尺度判断")

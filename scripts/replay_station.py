@@ -301,7 +301,6 @@ def main() -> int:
         "reader_field_used": reader_field,
         "reader_headline": (reader.get("headline") if reader else None),
         "reader_headline_chars": (len(str(reader.get("headline") or "")) if reader else None),
-        "reader_one_liner_chars": (len(str(reader.get("one_liner") or "")) if reader else None),
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print()
@@ -314,9 +313,12 @@ def main() -> int:
         print(reader.get("headline") or "（缺 headline —— 该次用的是旧规格）")
         print()
         liner = str(reader.get("one_liner") or "")
-        print(f"门面导语 {reader_field}.one_liner（{len(liner)} 字）：")
-        print(liner or "(空)")
-        print()
+        if liner:
+            print(
+                f"⚠ 该次输出里出现了已废弃的 {reader_field}.one_liner（{len(liner)} 字）——"
+                "说明跑的还是旧规格：重放时漏了 --refresh-instructions。"
+            )
+            print()
         reasons = reader.get("three_reasons") or reader.get("reasons") or []
         for i, r in enumerate(reasons, 1):
             print(f"理由{i}. {r}")

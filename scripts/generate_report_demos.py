@@ -901,7 +901,7 @@ def demo_memo(bundle: Dict[str, Any]) -> str:
     body = nav("买方 Memo") + header(
         bundle,
         "Demo 01 · Buy-side memo",
-        reader.get("one_liner") or final.get("final_stance", ""),
+        reader.get("headline") or final.get("final_stance", ""),
         "目标是让读者一口气读完：先判断，再动作，再证据，再反证。底稿只作为脚注入口出现。",
     )
     body += f"""
@@ -964,7 +964,7 @@ def demo_briefing(bundle: Dict[str, Any]) -> str:
     body += f"""
 <main class="page">
   <section class="section grid-3">
-    <div class="box"><h3>结论</h3><p>{esc(reader.get('one_liner'))}</p></div>
+    <div class="box"><h3>结论</h3><p>{esc(reader.get('headline') or final.get('final_stance', ''))}</p></div>
     <div class="box"><h3>主要矛盾</h3><p>{esc(final.get('principal_contradiction', {}).get('summary'))}</p></div>
     <div class="box"><h3>等待成本</h3><p>{esc(final.get('confirmation_cost'))}</p></div>
   </section>
@@ -1416,7 +1416,7 @@ def demo_memo_chartbook(bundle: Dict[str, Any], mode: str = "demo") -> str:
     body = nav("买方图册 Memo") + header(
         bundle,
         eyebrow,
-        reader.get("one_liner") or final.get("final_stance", ""),
+        reader.get("headline") or final.get("final_stance", ""),
         f"{style_label}：买方 memo 的顺读骨架，图册的直观证据，L1-L5 的可展开审计入口，三者合成一个页面。",
     )
     body += variant_links(mode)

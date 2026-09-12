@@ -73,6 +73,8 @@ def _collect_refs(payload: Any) -> List[str]:
 def _reader_text(final: Dict[str, Any]) -> str:
     reader = final.get("reader_final") if isinstance(final.get("reader_final"), dict) else {}
     parts = [
+        reader.get("headline", ""),
+        # 旧档案只有 one_liner（方案 D 前）；新档案不再生成，但历史 run 仍要被扫到。
         reader.get("one_liner", ""),
         " ".join(str(item) for item in _as_list(reader.get("three_reasons"))),
     ]
@@ -940,7 +942,7 @@ def build_run_review_report(
                     "observe",
                     f"reader_final.headline 有 {len(headline_text)} 字，超过标题位 {HEADLINE_MAX_CHARS} 字上限，已接近一段话而非标题。",
                     ["final_adjudication.json:reader_final.headline"],
-                    recommended_rule_update="标题是一句判断；超长的内容应移入 one_liner 导语段。",
+                    recommended_rule_update="标题是一句判断；超长的内容应移入判决正文（reasoned_verdict）。",
                 )
             )
         point_hits = POINT_LEVEL_RE.findall(headline_text)
@@ -951,7 +953,7 @@ def build_run_review_report(
                     "fail",
                     "reader_final.headline 出现行情点位数字（" + "、".join(point_hits[:3]) + "）：标题应是判断而不是数据。",
                     ["final_adjudication.json:reader_final.headline"],
-                    recommended_rule_update="标题不写点位数字；点位放进 one_liner 或执行字段（启发式识别，仅认整数.小数形态）。",
+                    recommended_rule_update="标题不写点位数字；点位放进判决正文或执行字段（启发式识别，仅认整数.小数形态）。",
                 )
             )
         if not point_hits and len(headline_text) <= HEADLINE_MAX_CHARS:
@@ -964,36 +966,39 @@ def build_run_review_report(
                 )
             )
 
-    if not reader.get("one_liner"):
+    # T72 方案 D：读者主文归判决正文（reasoned_verdict）。导语（one_liner）已从契约删除，
+    # 它与判决正文第一段同义，留着只会让模型每次白写一遍。旧档案仍会被上面的 _reader_text 扫到。
+    if not str(final_adjudication.get("reasoned_verdict") or "").strip():
         findings.append(
             _finding(
                 "expression",
                 "fail",
-                "reader_final.one_liner 为空，读者首屏结论不足。",
-                ["final_adjudication.json:reader_final.one_liner"],
+                "reasoned_verdict（判决正文）为空，读者没有主文可读。",
+                ["final_adjudication.json:reasoned_verdict"],
+                recommended_rule_update="Final 必须输出判决正文：首段判断先行，其后按三条主要理由展开。",
+            )
+        )
+
+    internal_hits = [phrase for phrase in INTERNAL_READER_PHRASES if phrase.lower() in _reader_text(final_adjudication).lower()]
+    if internal_hits:
+        findings.append(
+            _finding(
+                "expression",
+                "fail",
+                "读者结论混入内部审批话术：" + ", ".join(internal_hits),
+                ["final_adjudication.json:reader_final"],
+                recommended_rule_update="reader_final 只写读者行动语言，内部质检留在 quality_gate/adjudicator_notes。",
             )
         )
     else:
-        internal_hits = [phrase for phrase in INTERNAL_READER_PHRASES if phrase.lower() in _reader_text(final_adjudication).lower()]
-        if internal_hits:
-            findings.append(
-                _finding(
-                    "expression",
-                    "fail",
-                    "读者结论混入内部审批话术：" + ", ".join(internal_hits),
-                    ["final_adjudication.json:reader_final"],
-                    recommended_rule_update="reader_final 只写读者行动语言，内部质检留在 quality_gate/adjudicator_notes。",
-                )
+        findings.append(
+            _finding(
+                "expression",
+                "pass",
+                "reader_final 未发现明显内部审批话术。",
+                ["final_adjudication.json:reader_final"],
             )
-        else:
-            findings.append(
-                _finding(
-                    "expression",
-                    "pass",
-                    "reader_final 未发现明显内部审批话术。",
-                    ["final_adjudication.json:reader_final"],
-                )
-            )
+        )
 
     learning_updates = [
         finding.recommended_rule_update
