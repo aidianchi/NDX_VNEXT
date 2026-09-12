@@ -41,7 +41,15 @@ def test_deepseek_service_unchanged():
     assert deepseek["base_url"] == "https://api.deepseek.com"
     assert deepseek["env_key"] == "DEEPSEEK_API_KEY"
     model_keys = [m["key"] for m in deepseek["models"]]
-    assert model_keys == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    # 2026-09-12 老板裁决：Flash 全线升级 DeepSeek V4.1（官方名 deepseek-flash）。
+    # 旧配置名 deepseek-v4-flash 保留为同一条线的兼容别名，既有命令行不失效。
+    assert model_keys == ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"]
+    flash = [m for m in deepseek["models"] if m["key"] == "deepseek-flash"][0]
+    assert flash["model"] == "deepseek-flash"
+    legacy = [m for m in deepseek["models"] if m["key"] == "deepseek-v4-flash"][0]
+    assert legacy["model"] == "deepseek-flash", "旧名必须指向同一条 V4.1 线"
+    # pro 档不动：老板明确保留 V4 Pro。
+    assert [m for m in deepseek["models"] if m["key"] == "deepseek-v4-pro"][0]["model"] == "deepseek-v4-pro"
 
 
 def test_glm_model_registered_in_model_configs():
@@ -53,6 +61,7 @@ def test_glm_model_registered_in_model_configs():
     assert glm["model"] == "glm-5.3-flash"
     assert glm["max_tokens"] == 65536
     # deepseek 条目必须原样共存
+    assert MODEL_CONFIGS["deepseek-flash"]["service"] == "deepseek"
     assert MODEL_CONFIGS["deepseek-v4-flash"]["service"] == "deepseek"
     assert MODEL_CONFIGS["deepseek-v4-pro"]["service"] == "deepseek"
 
@@ -289,4 +298,6 @@ def test_zhipu_client_endpoint_is_plain_no_beta_promotion(monkeypatch):
 def test_dsh_runner_model_lock_untouched():
     from event_research.runner import MODEL
 
-    assert MODEL == "deepseek-v4-flash"
+    # 守卫的语义是"dsh 独立管道锁死 DeepSeek Flash"，不是"必须叫某个旧名字"：
+    # 2026-09-12 Flash 升级 V4.1 后，这里跟随官方名，锁定关系不变。
+    assert MODEL == "deepseek-flash"

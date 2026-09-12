@@ -53,14 +53,14 @@ except ImportError:
 
 
 DEFAULT_MODEL_PRIORITY = [
-    "deepseek-v4-flash",
+    "deepseek-flash",
     "deepseek-v4-pro",
 ]
 
 # 全链供应商预设：一套名单就是一个供应商的完整启动名单，回退链只在名单内运转，
 # 绝不跨供应商混挂（选了 zhipu 就不存在回落 deepseek 的暗道）。
 # 边界：dsh 二档调查员走独立的 deepseek_harness 管道（event_research/runner.py 锁死
-# deepseek-v4-flash），不受此开关影响——全链 GLM 选项不含它。
+# deepseek-flash），不受此开关影响——全链 GLM 选项不含它。
 DRIVER_PROVIDER_MODEL_PRIORITIES = {
     "deepseek": DEFAULT_MODEL_PRIORITY,
     "zhipu": ["glm-5.3-flash"],

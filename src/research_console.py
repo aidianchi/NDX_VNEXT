@@ -257,14 +257,14 @@ class ResearchConsoleGenerator:
         <section>
           <h2>模型选择</h2>
           <div class="stacked-options" role="radiogroup" aria-label="模型选择">
-            <label><input type="radio" name="modelMode" value="deepseek-v4-flash,deepseek-v4-pro" checked> flash 优先（认知阶段仍走 pro）</label>
-            <label><input type="radio" name="modelMode" value="all_flash"> 全部 Flash（所有 Agent 走 Flash）</label>
+            <label><input type="radio" name="modelMode" value="deepseek-flash,deepseek-v4-pro" checked> flash 优先（V4.1 Flash；认知阶段仍走 pro）</label>
+            <label><input type="radio" name="modelMode" value="all_flash"> 全部 Flash（所有 Agent 走 V4.1 Flash）</label>
             <label><input type="radio" name="modelMode" value="deepseek-v4-pro"> pro only</label>
             <label><input type="radio" name="modelMode" value="glm_flash"> 全链 GLM（智谱 Flash；除 dsh 巡逻仍走 DeepSeek，失败不回落 DeepSeek）</label>
             <label><input type="radio" name="modelMode" value="glm_flash_coding"> 全链 GLM·编码套餐线（同上，走套餐接入地址与计费）</label>
             <label><input type="radio" name="modelMode" value="custom"> 自定义顺序</label>
           </div>
-          <label class="text-field">自定义模型顺序 <input id="customModels" type="text" value="deepseek-v4-flash,deepseek-v4-pro"></label>
+          <label class="text-field">自定义模型顺序 <input id="customModels" type="text" value="deepseek-flash,deepseek-v4-pro"></label>
         </section>
 
         <section>
@@ -299,7 +299,7 @@ class ResearchConsoleGenerator:
 
         <section class="developer-section">
           <h2>开发者命令</h2>
-          <pre id="runCommandPreview">python3 src/console_run_all.py --models deepseek-v4-flash,deepseek-v4-pro --workbench-modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity --skip-legacy-report --enable-news</pre>
+          <pre id="runCommandPreview">python3 src/console_run_all.py --models deepseek-flash,deepseek-v4-pro --workbench-modules price_technical,volatility_credit,rates_valuation,breadth_concentration,liquidity --skip-legacy-report --enable-news</pre>
           <pre id="jobStatusPreview">尚无任务。</pre>
         </section>
       </div>
@@ -735,7 +735,7 @@ applyManualPayloadToForm(initialManualPayload);
 function currentModels() {
   const selected = document.querySelector('input[name="modelMode"]:checked');
   if (selected && selected.value === 'all_flash') {
-    return 'deepseek-v4-flash';
+    return 'deepseek-flash';
   }
   if (selected && selected.value === 'glm_flash') {
     return 'glm-5.3-flash';
@@ -744,9 +744,9 @@ function currentModels() {
     return 'glm-5.3-flash-coding';
   }
   if (selected && selected.value === 'custom') {
-    return document.getElementById('customModels').value.trim() || 'deepseek-v4-flash,deepseek-v4-pro';
+    return document.getElementById('customModels').value.trim() || 'deepseek-flash,deepseek-v4-pro';
   }
-  return selected ? selected.value : 'deepseek-v4-flash,deepseek-v4-pro';
+  return selected ? selected.value : 'deepseek-flash,deepseek-v4-pro';
 }
 
 function currentModelModeFlag() {

@@ -114,9 +114,15 @@
       "docs_url": "https://api-docs.deepseek.com/zh-cn/",
       "models": [
         {
+          "key": "deepseek-flash",
+          "name": "DeepSeek V4.1 Flash",
+          "model": "deepseek-flash",
+          "max_tokens": 65536
+        },
+        {
           "key": "deepseek-v4-flash",
-          "name": "DeepSeek V4 Flash",
-          "model": "deepseek-v4-flash",
+          "name": "DeepSeek V4.1 Flash (旧配置名，同一条线)",
+          "model": "deepseek-flash",
           "max_tokens": 65536
         },
         {

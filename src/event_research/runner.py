@@ -45,7 +45,7 @@ PROFILE_DIR = PACKAGE_DIR / "dsh_profile"
 PERSONA_PATH = PACKAGE_DIR / "persona.md"
 RUNS_ROOT = Path("output/event_research/runs")
 
-MODEL = "deepseek-v4-flash"  # 锁 flash（日常真实跑只挂 flash 的口径）
+MODEL = "deepseek-flash"  # 锁 flash（日常真实跑只挂 flash 的口径）
 
 _JSON_BLOCK_RE = re.compile(r"```json\s*(.*?)```", re.DOTALL)
 

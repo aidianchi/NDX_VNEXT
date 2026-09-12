@@ -80,11 +80,18 @@ _FALLBACK_MODEL_CONFIGS = {
         "model": "deepseek-reasoner",
         "max_tokens": 64000,
     },
-    "deepseek-v4-flash": {
-        "name": "DeepSeek V4 Flash",
+    "deepseek-flash": {
+        "name": "DeepSeek V4.1 Flash",
         "client": "openai_compatible",
         "service": "deepseek",
-        "model": "deepseek-v4-flash",
+        "model": "deepseek-flash",
+        "max_tokens": 65536,
+    },
+    "deepseek-v4-flash": {
+        "name": "DeepSeek V4.1 Flash (旧配置名，同一条线)",
+        "client": "openai_compatible",
+        "service": "deepseek",
+        "model": "deepseek-flash",
         "max_tokens": 65536,
     },
     "deepseek-v4-pro": {

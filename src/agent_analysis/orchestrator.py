@@ -1502,18 +1502,18 @@ class VNextOrchestrator:
                             "thesis": ["deepseek-v4-pro", "deepseek-v4-flash"],
                             "reviser": ["deepseek-v4-pro", "deepseek-v4-flash"],
                             "final": ["deepseek-v4-pro", "deepseek-v4-flash"],
-                            "event_card_interpreter": ["deepseek-v4-flash", "deepseek-v4-pro"],
-                            "event_section_summary": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                            "event_card_interpreter": ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"],
+                            "event_section_summary": ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"],
                         }
                     },
                     "all_flash": {
                         "stage_preferences": {
-                            "counter_thesis": ["deepseek-v4-flash", "deepseek-v4-pro"],
-                            "thesis": ["deepseek-v4-flash", "deepseek-v4-pro"],
-                            "reviser": ["deepseek-v4-flash", "deepseek-v4-pro"],
-                            "final": ["deepseek-v4-flash", "deepseek-v4-pro"],
-                            "event_card_interpreter": ["deepseek-v4-flash", "deepseek-v4-pro"],
-                            "event_section_summary": ["deepseek-v4-flash", "deepseek-v4-pro"],
+                            "counter_thesis": ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"],
+                            "thesis": ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"],
+                            "reviser": ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"],
+                            "final": ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"],
+                            "event_card_interpreter": ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"],
+                            "event_section_summary": ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"],
                         }
                     },
                 },

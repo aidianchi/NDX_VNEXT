@@ -8,6 +8,41 @@
 
 ## 2026-09-12
 
+### T72 换模型三站冻结实验：病根定位为门面字段过载；Flash 全线升级 V4.1
+
+- **背景**：老板判定门面盲读作废（原话"全是垃圾"），指出问题**不是黑话而是句法崩塌**——无主语、无逻辑、
+  连最基本语法都不成立；并怀疑 GLM 5.3 Flash 是"不说人话的模型"，指定"**只跑最后的裁决站、不要跑全量**，
+  用 DeepSeek 4.1 Flash 跑门面"以低成本识别模型差别。
+- **做法（新增 `scripts/replay_station.py`）**：`_run_stage` 已把每站完整 prompt 落档在
+  `<run>/prompt_audit/<station>/attempt_N.prompt.txt`。脚本取 `attempt_1`（全量 payload）的 User 段，
+  **逐字校验落档 System 与当前代码一致后**喂给目标模型。单站一次调用（终审 76806 输入 tokens / 106 秒），
+  比全链 25 站便宜一个数量级，且两侧输入逐字相同——这才是真正的单站冻结 A/B。
+- **三站结果**（同输入，只换模型；GLM 5.3 Flash → DeepSeek V4.1 Flash）：
+  - **L1**：GLM `local_conclusion` 199 字/8 分句/均句长 25 字；DeepSeek 327 字/16 分句/均句长 **20 字**
+    （DS 用"第一/第二/第三约束"显式分层，GLM 是一整句并列粘连）。
+  - **thesis**：两者门面草稿**均为 78 字，都可读**。DS 三条理由呈稳定「短结论+冒号+展开」结构
+    （"约束是真的但不新：…"）。
+  - **final_adjudicator**：门面 GLM **135 字/9 分句** vs DS **121 字/9 分句**；三条理由 374 vs 290 字；
+    两者均通过 `FinalAdjudication` 契约校验、27 字段无缺。
+- **判读**：① 模型差异真实但**非决定性**——**门面分句数两模型完全相同（9）**，说明长度由字段要求决定，
+  不是模型自由选择；② **责任链在终审站**：上游交出 78 字可读句，终审把它加料成 121–135 字；
+  ③ **结构病根 = `one_liner` 三重过载**：契约叫"一句话结论"（`contracts.py:1753`）+ 提示词要求它
+  "概括状态、价格、赔率和动作"四要素（`final_adjudicator.md:221`）+ 赔率规则要求它"点名五类、列出反对方"，
+  且与已存在的 `time_horizon_summary`/`action_summary`/`invalidation_items` 三字段**内容重复**；
+  ④ 渲染端 `vnext_reporter.py:2572` 把整句直接塞进 `<h1>`，不作切分。
+- **附带发现（独立线索）**：strict 路径（opt-in，默认关闭）对 DeepSeek 不可用——未清洗 schema 报 400
+  （`format: date-time` 不被支持），改用系统 `sanitize_json_schema_for_strict_tool_calling` 后通过，
+  但引擎警告"未返回 tool_calls，退回 content"，退回的正文含**未转义 ASCII 双引号**致 JSON 非法；
+  公平协议 `json_object` 版一次解析成功。建议单独立项。
+- **配置变更（老板 2026-09-12 指令"把 Flash 全部都改成 V4.1"）**：服务端实测**只认**
+  `deepseek-flash` 与 `deepseek-v4-pro`（`deepseek-v4.1-flash` 报 400；`deepseek-v4-flash` 是路由到
+  `deepseek-flash` 的别名）。故以 `deepseek-flash` 为**主名**、旧名保留为**同线兼容别名**（既有命令行不失效）；
+  Pro 档不动。改动：`config/api_config.local.json`、`config/api_config.example.json`、`src/api_config.py`、
+  `src/config.py`、`src/main.py`、`config/stage_model_routing.json`（功能字段 18 处，**notes 里的历史裁决一字未动**）、
+  `src/research_console.py`（控制台选项 + 命令预览）、`src/event_research/runner.py`。
+  同步 2 个守护测试。全量 **1572 passed / 0 failed**。
+- **未做（等老板裁）**：门面字段瘦身、`final_stance` 200 字上限复核、扩测（本文只覆盖 3 站、每组合 1 次采样）。
+
 ### T72 B 侧 run 收工：黑话残留 153→33；暴露时点闸门与赔率徽章两处真问题
 
 - **做法**：新增 `--news-ledger-seed` 参数（`src/main.py` + `src/console_run_all.py`），把基准 run 的
