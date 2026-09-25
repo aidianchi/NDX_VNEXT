@@ -265,13 +265,22 @@ def test_synthesis_packet_carries_bridge_v2_typed_map(tmp_path: Path):
 
 
 def test_bridge_prompt_requests_v2_typed_map(tmp_path: Path):
+    # 2026-09-22 内联纪律文本退役手术：bridge 不再前置内联 bridge_contract，
+    # 与其余站同走标准装配路径（cross_layer_bridge.md + Runtime Input + 字段规格
+    # + Response Rules）。九个字段名由 BridgeMemo 契约生成的字段规格继续供给，
+    # confirming_indicators/falsifiers 住在说明书里——断言对象从"_compose_bridge_prompt
+    # 的输出"迁移为标准路径的完整装配结果。
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
         output_dir=str(tmp_path),
         llm_engine=object(),
     )
 
-    prompt = orchestrator._compose_bridge_prompt("body")
+    prompt = orchestrator._compose_prompt(
+        "bridge",
+        BridgeMemo,
+        {"context_brief": {}, "candidate_cross_layer_links": [], "layer_cards": []},
+    )
 
     assert "typed_conflicts" in prompt
     assert "resonance_chains" in prompt
@@ -491,18 +500,23 @@ def test_bridge_normalize_dedupes_transmission_path_ids_and_fills_implication(tm
     assert orchestrator._validate_bridge_memo_v2(memo) == []
 
 
-def test_bridge_prompt_anchors_event_refs_must_stay_empty(tmp_path: Path):
+def test_bridge_prompt_anchors_event_isolation(tmp_path: Path):
+    # C6 宪法隔离口径：Bridge 不消费事件。2026-09-22 退役手术后，事件纪律的载体变为：
+    # 说明书陈述义务（cross_layer_bridge.md"事件材料在系统里走另一条通道、永不进入
+    # 数据分析层"）+ payload 装配承担机械事实（空 event 字段剥离）+ validator 守
+    # 存在性。旧的内联逐字句（"BridgeMemo.event_refs 由系统装配为空列表 []，无需输出"）
+    # 已随 bridge_contract 整段删除，断言锚点同步迁移到装配结果里的新表述。
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
         output_dir=str(tmp_path),
         llm_engine=object(),
     )
 
-    prompt = orchestrator._compose_bridge_prompt("body")
+    prompt = orchestrator._compose_prompt(
+        "bridge",
+        BridgeMemo,
+        {"context_brief": {}, "candidate_cross_layer_links": [], "layer_cards": []},
+    )
 
-    # C6 三明治口径：Bridge 不消费事件，提示词必须锚定 event_refs 恒空并禁止自引事件 ID。
-    # 2026-08-31 T69 P2b：吓阻措辞（"会被校验器打回"）删除，义务表述保留——
-    # 存在性检查由 _validate_bridge_memo_v2 守，提示词只陈述义务。
-    assert "BridgeMemo.event_refs 由系统装配为空列表 []，无需输出" in prompt
-    assert "不得自行引入事件 ID" in prompt
+    assert "永不进入数据分析层" in prompt
     assert "会被校验器打回" not in prompt

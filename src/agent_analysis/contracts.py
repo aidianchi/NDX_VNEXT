@@ -1557,7 +1557,7 @@ class KeySupportChain(BaseModel):
     这就像律师的"证据链条"。
     比如 "L3 广度健康 → L5 趋势可持续" 是一条支撑链。
     """
-    chain_description: str = Field(..., description="链条描述")
+    chain_description: str = Field(..., description="支撑链正文：读者只看这段文字、不看其他材料，应能从证据一步不猜地走到结论；走不通就是没写完")
     evidence_refs: List[str] = Field(
         ...,
         description="证据引用，如 ['L3.breadth_expansion', 'L5.trend_strength']"
@@ -1578,8 +1578,8 @@ class TimeHorizonView(BaseModel):
     model_config = {"extra": "allow"}
 
     horizon: str = Field(..., description="时间尺度，如 same_day_or_days / one_to_three_months / six_to_twelve_months")
-    view: str = Field(..., description="该时间尺度下的判断")
-    action_implication: str = Field("", description="该时间尺度对应的行动含义")
+    view: str = Field(..., description="该时间尺度下的判断：完整句写成，读者只看这句就懂方向与依据，速记式短语不合格")
+    action_implication: str = Field("", description="该时间尺度对应的行动含义：谁该做什么、什么条件下做，读者看完能照做")
     evidence_refs: List[str] = Field(default_factory=list, description="支撑该时间尺度判断的证据")
     invalidation_conditions: List[str] = Field(default_factory=list, description="会推翻该时间尺度判断的条件")
 
@@ -1589,8 +1589,8 @@ class PortfolioAction(BaseModel):
     model_config = {"extra": "allow"}
 
     bucket: str = Field(..., description="动作桶，如 core_position / tactical_position / waiting_cash")
-    action: str = Field(..., description="建议动作或等待方式")
-    rationale: str = Field("", description="为什么这样行动")
+    action: str = Field(..., description="建议动作或等待方式：谁、往哪动、什么条件，读者看完能照做")
+    rationale: str = Field("", description="为什么这样行动：一句完整的因果句，不停在口号")
     conditions: List[str] = Field(default_factory=list, description="执行或升级/降级条件")
     evidence_refs: List[str] = Field(default_factory=list, description="支撑该动作的证据")
 
@@ -1779,7 +1779,7 @@ class ReaderFinal(BaseModel):
             "方向与 final_stance 一致"
         ),
     )
-    three_reasons: List[str] = Field(default_factory=list, description="三条最重要理由")
+    three_reasons: List[str] = Field(default_factory=list, description="三条最重要理由：每条都是完整判断句，证据与它的反面都写在句内")
     time_horizon_summary: List[TimeHorizonView] = Field(default_factory=list, description="分时间尺度判断")
     action_summary: List[PortfolioAction] = Field(default_factory=list, description="核心仓/战术仓/等待者动作")
     invalidation_summary: List[str] = Field(default_factory=list, description="最重要失效条件")
@@ -2266,7 +2266,7 @@ class FinalAdjudication(BaseModel):
     # 评估，不要和其余"无下游依据"的字段一起放宽。
     final_stance: str = Field(
         ...,
-        description="对 NDX 的最终立场",
+        description="对 NDX 的最终立场：完整判断句，姿态与方向一眼可读，不写元判断",
         max_length=200
     )
 
@@ -2278,7 +2278,7 @@ class FinalAdjudication(BaseModel):
 
     reasoned_verdict: str = Field(
         "",
-        description="给读者看的总分总判决正文",
+        description="给读者看的判决正文：按说明书「判决正文」一节的验收标准与语言禁令写",
     )
 
     # 置信度

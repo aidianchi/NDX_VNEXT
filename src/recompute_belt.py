@@ -1306,6 +1306,7 @@ def check_cross_indicator_ratios(data_json: Dict[str, Any], handled: Set[str]) -
 
 DEVIATION_PCT_FUNCTION_IDS: Tuple[str, ...] = (
     "get_10y2y_spread_bp",
+    "get_10y3m_spread_bp",
     "get_10y_treasury",
     "get_10y_real_rate",
     "get_10y_breakeven",

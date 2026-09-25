@@ -81,4 +81,9 @@ def test_canon_model_hints_do_not_say_fadian():
 def test_bridge_event_discipline_header_is_plain():
     orch_src = (SRC_DIR / "agent_analysis" / "orchestrator.py").read_text(encoding="utf-8")
     assert "事件纪律（三明治口径" not in orch_src, "段标题黑话「三明治口径」被模型原样回抄，改为直述宪法隔离"
-    assert "事件纪律（新闻事件按宪法不进数据分析层" in orch_src, "替换标题必须落位"
+    # 2026-09-22 内联纪律文本退役手术：内联 bridge_contract（含"事件纪律（新闻事件按
+    # 宪法不进数据分析层"替换标题）整段删除，事件纪律的唯一说明书住所在
+    # cross_layer_bridge.md——替换文案的落位断言同步迁移到说明书，黑话不得回潮。
+    bridge_md = (PROMPT_DIR / "cross_layer_bridge.md").read_text(encoding="utf-8")
+    assert "三明治口径" not in bridge_md, "说明书不得出现已治理黑话「三明治口径」"
+    assert "永不进入数据分析层" in bridge_md, "事件宪法隔离的直述文案必须在说明书落位"

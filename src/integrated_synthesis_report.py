@@ -1577,8 +1577,10 @@ def write_integrated_synthesis_report(
     summary_path = Path(event_layer_summary_path) if event_layer_summary_path else run_path / "event_layer_summary.json"
     mechanism_path = Path(event_mechanism_report_path) if event_mechanism_report_path else run_path / "event_mechanism_report.json"
     interpretation_cards_path = Path(event_interpretation_cards_path) if event_interpretation_cards_path else run_path / "event_interpretation_cards.json"
-    # 08-26 重构：IA 不再读本 run 的巡逻 artifact（出题官在 IA 之后才出题、巡逻更晚），
-    # 改读跨 run 累积的研究成果架（output/event_research/research_shelf.json）。
+    # 08-26 重构：IA 不读本 run 的巡逻 artifact 文件，改读跨 run 累积的研究成果架
+    # （output/event_research/research_shelf.json）。出题与巡逻排在 IA 之前（main.py
+    # 先 run_sync_gap_patrol、后调用本函数），巡逻成果在 IA 组装前已写入架上，
+    # 因此这里读到的研究架包含本次 run 刚巡逻的新成果。
     patrols_path = (
         Path(event_research_patrols_path)
         if event_research_patrols_path

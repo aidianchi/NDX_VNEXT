@@ -14,10 +14,12 @@ from agent_analysis.vnext_reporter import (
     REF_DIGEST_JS,
     REF_DIGEST_FIELDS,
     VNextReportGenerator,
+    _boundary_status_sentence,
     _clean_reader_prose,
     _display_label,
     _drawer_reading_parts,
     _glossary_term,
+    _invalidation_trigger_sentence,
     _label,
     _load_local_decision_profile,
     _render_invalidation_item,
@@ -71,13 +73,17 @@ def test_r2_brief_spine_and_layers_template_are_declared():
     from agent_analysis.vnext_reporter import TEMPLATE_DESCRIPTIONS, TEMPLATE_ORDER
 
     assert TEMPLATE_ORDER["brief"] == list(BRIEF_SECTION_ORDER)
+    # 2026-09-23 四层重排（老板拍板）：risks 从第六位移到第四位——阅读顺序变为
+    # 本期判断 → 主要理由（正方/反方/风险边界）→ 证据与推理全链 → 审计区。
+    # 原锚点：world 第三、risks 第六（改判条件区）；新锚点：risks 第四（风险边界区），
+    # 改判条件本体上提 facade 第一屏，不再占独立区块。
     assert BRIEF_SECTION_ORDER == (
         "facade",
         "thesis",
         "stress",
+        "risks",
         "world",
         "brief_integrated",
-        "risks",
         "brief_layers",
         "brief_audit",
     )
@@ -645,10 +651,16 @@ def test_risks_section_uses_plain_language_labels():
             },
         }
     )
-    assert "临界观察" in html
+    # 原意图（2026-09-23 前）：边界区标题用人话"临界观察"、风险清单用"不能忽视的风险"，
+    # 机器字段名（"边界状态"/"必须保留"）不上脸。
+    # 新锚点（2026-09-23 四层重排·残句完整句化）："临界观察"词组串退役，边界状态改成
+    # "状态徽章 + 完整句"（"估值压缩边界当前处于需关注状态。"）；人话与负向断言不变。
+    assert "各风险边界的当前状态" in html
+    assert "估值压缩边界当前处于需关注状态。" in html
     assert "不能忽视的风险" in html
     assert "边界状态" not in html
     assert "必须保留" not in html
+    assert "临界观察" not in html
 
 
 def test_vnext_reporter_news_section_shows_event_data_links():
@@ -1702,6 +1714,12 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     )
     _write_json(run_dir / "schema_guard_report.json", {"passed": True})
     _write_json(run_dir / "data_integrity_report.json", {"publish_status": "publishable", "blocking_reasons": []})
+    # 2026-09-23 四层重排：黄金坑清单（含"和上次判断比，什么变了"折叠）已移入审计区，
+    # 产物缺失时该折叠不渲染，因此 fixture 补一份最小清单保住原断言意图。
+    _write_json(
+        run_dir / "golden_pit_checklist.json",
+        {"entries": [], "changed_since_last_run_summary": ["占位变化"]},
+    )
 
     reporter = VNextReportGenerator(reports_dir=str(tmp_path / "reports"))
     report_path = reporter.run(run_dir)
@@ -1712,11 +1730,24 @@ def test_vnext_reporter_generates_native_ui(tmp_path: Path):
     assert "主论证" in html
     assert "压力测试" in html
     assert "事实对照" in html
-    assert "如果发生这些事，我就改判断" in html
+    # 2026-09-23 四层重排：改判条件本体上提第一屏（facade 改判条件卡，每条装配成
+    # "若……。"触发条件句），05 风险区不再重复渲染；原断言"如果发生这些事，我就改判断"
+    # （旧 05 区 flip-list 标题）随之退役，以下三个锚点继承其意图。
+    assert "风险边界与压力情景" in html
+    assert 'id="invalidation"' in html
+    assert "若信用继续恶化。" in html
     assert "和上次判断比，什么变了" in html
+    # 2026-09-23 老板裁决：姿态行动句/置信度出路句是零信息增量装饰，已从门脸删除；
+    # 以下两条断言转任回归守卫，防止这类固定文案缝句回流。
+    assert "本期姿态为" not in html
+    assert "报告对本期判断的把握" not in html
+    assert "审计与复查" in html
+    assert "本次未产生常设检查报告" in html
     assert "分层证据" in html
     assert "完整底稿 artifact" in html
-    spine_ids = [html.index(f'id="{section_id}"') for section_id in ("facade", "thesis", "stress", "world", "integrated-adjudication", "risks", "change", "layers", "audit")]
+    # 2026-09-23 四层重排后阅读顺序：本期判断 → 主要理由（正方/反方/风险边界）→
+    # 证据与推理全链（外部世界/综合裁决/五层底稿）→ 审计区（含 change 折叠）。
+    spine_ids = [html.index(f'id="{section_id}"') for section_id in ("facade", "thesis", "stress", "risks", "world", "integrated-adjudication", "layers", "audit", "change")]
     assert spine_ids == sorted(spine_ids)
     assert "这不是低风险环境，但可能是高风险高赔率候选。" in html
     assert "高风险高赔率候选。" in html
@@ -3264,3 +3295,112 @@ def test_t70_cjk_adjacent_status_words_translate():
     assert _clean_reader_prose("短期广度deteriorating") == "短期广度恶化中"
     assert _clean_reader_prose("结构extreme_concentration叠加") == "结构极端集中叠加"
     assert _clean_reader_prose("Market deteriorating rapidly") == "Market deteriorating rapidly"
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-23 四层重排（第一屏强化 / 残句完整句化 / 审计区扩编）聚焦测试
+# ---------------------------------------------------------------------------
+
+
+def test_brief_invalidation_card_prefers_structured_items_and_groups():
+    """第一屏改判条件卡：优先读结构化 invalidation_items，每条装配成"若……。"
+    触发条件句，按 转空/转多/无标签 分组并配引导句；旧字段不参与渲染。"""
+    reporter = VNextReportGenerator()
+    final = {
+        "invalidation_items": [
+            {"direction": "转空", "text": "信用利差突破前期高点"},
+            {"direction": "转多", "text": "实际利率回落且盈利上修"},
+            {"direction": "unknown", "text": "政策路径偏离当前预期"},
+        ],
+        "invalidation_conditions": ["不应被使用的旧字段"],
+    }
+    html = reporter._brief_invalidation_card(final)
+    assert 'id="invalidation"' in html
+    assert "若信用利差突破前期高点。" in html
+    assert "若实际利率回落且盈利上修。" in html
+    assert "若政策路径偏离当前预期。" in html
+    assert "不应被使用的旧字段" not in html
+    assert "以下任一情形兑现时，本期判断随之撤销，姿态向风险一侧调整：" in html
+    assert "以下任一情形兑现时，本期判断随之撤销，姿态向机会一侧调整：" in html
+    # direction 非法枚举值归入无标签（观察）组
+    assert "以下情形出现时，本期判断需要重新审议：" in html
+
+
+def test_brief_invalidation_card_legacy_prefix_fallback_and_empty():
+    """旧档案没有 invalidation_items 时，退回解析 invalidation_conditions 的
+    【转多】【转空】前缀；两者都没有时不渲染卡片。"""
+    reporter = VNextReportGenerator()
+    html = reporter._brief_invalidation_card(
+        {"invalidation_conditions": ["【转空】信用继续恶化", "【转多】利率回落", "无标签情形"]}
+    )
+    assert "若信用继续恶化。" in html
+    assert "若利率回落。" in html
+    assert "若无标签情形。" in html
+    assert "【转空】" not in html and "【转多】" not in html
+    assert reporter._brief_invalidation_card({}) == ""
+
+
+def test_invalidation_trigger_sentence_punctuation():
+    """装配规则：补"若"字头与句号；已有"若"不重复补；句尾旧标点先剥掉。"""
+    assert _invalidation_trigger_sentence("信用继续恶化") == "若信用继续恶化。"
+    assert _invalidation_trigger_sentence("若利率回落；") == "若利率回落。"
+    assert _invalidation_trigger_sentence("") == ""
+
+
+def test_brief_facade_has_no_stance_or_confidence_filler_sentences():
+    """2026-09-23 老板裁决：姿态行动句与置信度出路句是零信息增量装饰，
+    删除后转任回归守卫——这两类固定文案缝句不得回流门脸。"""
+    reporter = VNextReportGenerator()
+    html = reporter._brief_facade_section(
+        Path("run"),
+        {"final_adjudication": {"stance_label": "偏防守", "confidence": "high"}},
+    )
+    assert "本期姿态为" not in html
+    assert "报告对本期判断的把握" not in html
+
+
+def test_boundary_status_sentence_complete_sentences():
+    """残句完整句化：边界状态渲染为"状态徽章 + 完整句"，未知状态有兜底句式。"""
+    assert _boundary_status_sentence("valuation_compression", "warning") == "估值压缩边界当前处于需关注状态。"
+    assert _boundary_status_sentence("liquidity_shock", "safe") == "流动性冲击边界当前处于可控状态。"
+    assert _boundary_status_sentence("liquidity_shock", "breached") == "流动性冲击边界当前已经突破。"
+    assert _boundary_status_sentence("valuation_compression", "weird") == "估值压缩边界的当前状态为未记录。"
+
+
+def test_brief_golden_pit_block_missing_and_change_fold():
+    """黄金坑清单移入审计区：产物缺失时显式说明且不渲染 change 折叠；
+    有产物时 change 折叠保留原 id（旧深链不失效）。"""
+    reporter = VNextReportGenerator()
+    missing = reporter._brief_golden_pit_block({})
+    assert "本轮未产生黄金坑纪律清单产物" in missing
+    assert "和上次判断比，什么变了" not in missing
+
+    html = reporter._brief_golden_pit_block(
+        {"golden_pit_checklist": {"entries": [], "changed_since_last_run_summary": ["占位变化"]}}
+    )
+    assert "黄金坑纪律清单" in html
+    assert 'id="change"' in html
+    assert "和上次判断比，什么变了" in html
+    assert "占位变化" in html
+
+
+def test_brief_persistent_checks_block_counts_and_missing():
+    """常设检查展示位：产物缺失时显式说明；有产物时计数句 + 逐项明细折叠。"""
+    reporter = VNextReportGenerator()
+    missing = reporter._brief_persistent_checks_block({})
+    assert "本次未产生常设检查报告" in missing
+
+    html = reporter._brief_persistent_checks_block(
+        {
+            "persistent_checks_report": {
+                "checks": [
+                    {"check_id": "C1", "name": "账一项", "passed": True, "detail": "一致", "evidence": "run_summary.json"},
+                    {"check_id": "C2", "name": "账二项", "passed": False, "detail": "计数不符"},
+                ]
+            }
+        }
+    )
+    assert "本次常设检查共 2 项，1 项通过，1 项未通过" in html
+    assert "C1" in html and "账一项" in html
+    assert "C2" in html and "计数不符" in html
+    assert "对账依据" in html

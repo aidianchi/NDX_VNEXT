@@ -37,11 +37,11 @@ def test_governance_prompts_do_not_teach_unsupported_historical_probabilities():
     assert not offenders
 
 
-def test_risk_and_final_prompts_explicitly_ban_fabricated_backtest_statistics():
-    for name in ["risk_sentinel.md", "final_adjudicator.md"]:
-        text = (PROMPT_DIR / name).read_text(encoding="utf-8")
-        assert "不得编造历史胜率、回测收益、样本区间或概率数字" in text
-        assert "除非输入 evidence_refs 明确提供这类统计" in text
+def test_system_constraints_single_source_bans_fabricated_backtest_statistics():
+    """反编造统计纪律已上收单一来源 system_constraints.md（由 llm_engine 注入每次调用）。"""
+    text = (PROMPT_DIR / "system_constraints.md").read_text(encoding="utf-8")
+    assert "不得编造历史胜率、回测收益、样本区间或概率数字" in text
+    assert "除非输入 evidence_refs 明确提供这类统计" in text
 
 
 def test_risk_and_final_prompts_do_not_teach_unsupported_numeric_impact_ranges():
@@ -65,11 +65,11 @@ def test_risk_and_final_prompts_do_not_teach_unsupported_numeric_impact_ranges()
     assert not offenders
 
 
-def test_risk_and_final_prompts_explicitly_ban_unsupported_numeric_impacts():
+def test_system_constraints_single_source_bans_unsupported_numeric_impacts():
+    """反编造定量影响纪律已上收单一来源 system_constraints.md（由 llm_engine 注入每次调用）。"""
     required = "不得编造点位、跌幅、估值倍数、盈利增速阈值或其他定量影响幅度"
-    for name in ["risk_sentinel.md", "final_adjudicator.md"]:
-        text = (PROMPT_DIR / name).read_text(encoding="utf-8")
-        assert required in text
+    text = (PROMPT_DIR / "system_constraints.md").read_text(encoding="utf-8")
+    assert required in text
 
 
 def test_decision_prompts_do_not_teach_reusable_stance_templates():
@@ -255,8 +255,9 @@ def test_t70_final_prompt_verdict_section_follows_style_canon():
     assert "密度由结构承载" in text
     # 构造即忠实：数字从事实卡选用
     assert "fact_card" in text
-    # 硬闸门背书的条款与登记词一个字不能少
-    for keep in ("evidence_index", "三条主要理由", "conflict_refs", "不得编造历史胜率"):
+    # 硬闸门背书的条款与登记词一个字不能少；"不得编造历史胜率"反编造纪律已上收
+    # 单一来源 system_constraints.md，由上方 single_source 测试钉住，不再钉本站。
+    for keep in ("evidence_index", "三条主要理由", "conflict_refs"):
         assert keep in text
 
 

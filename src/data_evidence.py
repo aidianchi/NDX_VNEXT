@@ -35,6 +35,7 @@ REQUIRED_DATA_QUALITY_FIELDS = {
 
 CORE_EVIDENCE_FUNCTIONS = {
     "get_10y2y_spread_bp",
+    "get_10y3m_spread_bp",
     "get_fed_funds_rate",
     "get_fed_funds_rate_path",
     "get_m2_yoy",

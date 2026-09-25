@@ -23,7 +23,13 @@ from expectation_ledger import (  # noqa: E402
 )
 
 
-EXPECTED_DIVERGENCE_RULE = '- `priced_narrative` 必须包含一句明确的**分歧声明**：本判断与市场当前定价共识的分歧点是什么。若判断与定价方向一致，如实写"本判断与市场定价方向一致，超额观点为零"；无法判断定价状态时写 unclear 并说明缺哪条证据。分歧声明只能引用输入 refs（利率路径、盈利预期、波动溢价、预期-兑现台账），禁止凭空断言"市场认为"。'
+# 2026-09-22 说明书重写：分歧声明纪律保留，逐字块钉住改为锚点断言（字段名
+# priced_narrative 与枚举值 unclear 归代码注入的字段规格，不再由说明书逐字教）。
+EXPECTED_DIVERGENCE_RULE_ANCHORS = (
+    "必须包含一句明确的分歧声明",
+    "本判断与市场定价方向一致，超额观点为零",
+    "凭空断言",
+)
 
 
 def _write_vintage(root: Path, day: str, values: dict[str, float]) -> None:
@@ -144,7 +150,9 @@ def test_coverage_shortfalls_and_supporting_only_are_explicit(tmp_path: Path):
 
 def test_final_adjudicator_requires_explicit_pricing_divergence_statement():
     prompt_path = Path(__file__).resolve().parents[1] / "src" / "agent_analysis" / "prompts" / "final_adjudicator.md"
-    assert EXPECTED_DIVERGENCE_RULE in prompt_path.read_text(encoding="utf-8")
+    text = prompt_path.read_text(encoding="utf-8")
+    for anchor in EXPECTED_DIVERGENCE_RULE_ANCHORS:
+        assert anchor in text, f"final_adjudicator.md 缺分歧声明纪律锚点：{anchor}"
 
 
 def test_reporter_renders_all_three_supporting_books_and_escapes_content(tmp_path: Path):

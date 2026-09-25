@@ -291,13 +291,20 @@ def test_object_clear_false_when_layers_only_have_no_data_sentinels(tmp_path: Pa
 
 
 def test_thesis_prompt_mentions_objective_firewall_summary(tmp_path: Path):
+    # 2026-09-22 内联纪律文本退役手术：thesis 不再前置内联 thesis_contract，
+    # 与其余站同走标准装配路径（thesis_builder.md + Runtime Input + 字段规格
+    # + Response Rules）。客观性防火墙消费纪律锚词（objective_firewall_summary /
+    # 指标发言权）已收编进 thesis_builder.md「客观性防火墙的消费纪律」节，
+    # 断言对象迁移为标准路径的完整装配结果。
+    from agent_analysis.contracts import ThesisDraft
+
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
         output_dir=str(tmp_path),
         llm_engine=object(),
     )
 
-    prompt = orchestrator._compose_thesis_prompt("body")
+    prompt = orchestrator._compose_prompt("thesis", ThesisDraft, {"synthesis_packet": {}})
 
     assert "objective_firewall_summary" in prompt
     assert "指标发言权" in prompt

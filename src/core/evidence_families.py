@@ -51,6 +51,11 @@ EVIDENCE_FAMILIES: Dict[str, str] = {
     # so it gets its own family even though both ultimately touch Treasury
     # yields.
     "get_10y2y_spread_bp": "treasury_10y_2y_curve_spread",
+    # FRED likewise publishes T10Y3M (10-year minus 3-month) as its own
+    # series; the 3-month bill leg prices the policy path differently than
+    # the 2-year note leg above, so this is a separate singleton family per
+    # the default-separate principle in the module docstring.
+    "get_10y3m_spread_bp": "treasury_10y_3m_curve_spread",
     # FRED FEDFUNDS -- the already-realized official policy rate.
     "get_fed_funds_rate": "fed_funds_rate_official",
     # Anchored by the work order: CME Fed funds futures implied-rate path is

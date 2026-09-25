@@ -567,6 +567,30 @@ def get_10y2y_spread_bp(end_date: str = None) -> Dict[str, Any]:
     }, series[["date", "value"]])
 
 
+def get_10y3m_spread_bp(end_date: str = None) -> Dict[str, Any]:
+    """获取10年-3个月期美债利差。分层降噪：用 MA20 乖离率替代日度动量。"""
+    series = get_fred_series("T10Y3M", end_date=end_date)
+    if series is None or len(series) < 20:
+        return _fred_unavailable_payload(
+            name="10Y-3M Treasury Spread",
+            series_id="T10Y3M",
+            unit="basis points",
+            minimum_points=20,
+            series=series,
+            calculation="ma20_deviation",
+        )
+    series = series.copy()
+    series['value'] = series['value'] * 100  # Convert to BPS
+    analysis = analyze_series_ma_deviation(series, ma_period=20)
+    stats = calculate_long_term_stats(series[["date", "value"]], analysis["level"])
+    analysis["relativity"] = stats
+    return _attach_recompute_value_series({
+        "name": "10Y-3M Treasury Spread", "series_id": "T10Y3M", "value": analysis,
+        "unit": "basis points", "source_name": "FRED",
+        "notes": "10Y-3M 利差；分层降噪：用距离 MA20 乖离率衡量趋势，替代日度动量。"
+    }, series[["date", "value"]])
+
+
 def get_10y_real_rate(end_date: str = None) -> Dict[str, Any]:
     """获取10年期实际利率。分层降噪：L1宏观层使用MA20乖离率替代日度动量。"""
     series = get_fred_series("DFII10", end_date=end_date)

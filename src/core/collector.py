@@ -149,6 +149,7 @@ class DataCollector:
             # 核心问题：经济增长、通胀和货币政策的客观背景是什么？
             1: [
                 "get_10y2y_spread_bp",
+                "get_10y3m_spread_bp",
                 "get_fed_funds_rate",
                 "get_fed_funds_rate_path",
                 "get_m2_yoy",                 # 传统货币存量（M2 YoY）

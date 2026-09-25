@@ -224,23 +224,17 @@ def _basename(path: str) -> str:
 # --------------------------------------------------------------------------
 
 def _extract_example_function_ids(prompt_text: str) -> List[str]:
-    """提取 prompt 正文中'正确示例/输出示例'点名的指标 function_id。
+    """提取 prompt 正文中示例点名的指标 function_id。
 
-    覆盖两种形态：
-    1. Few-shot 段头 `### Example: <function_id>`；
-    2. `### 结构示例` 段内 `"function_id": "..."` 与 `covered_function_ids` 数组。
+    2026-09-22 内联纪律文本退役手术后，只剩一种示例来源：few-shot 段头
+    `### Example: <function_id>`（few_shot.py 按层选择，fallback 清单可能点名
+    当前数据里不存在的指标——正是 B4 要守的风险）。原先的第二种来源（编排器
+    内联 v2_contract 的 `### 结构示例` JSON 模板段）已随该模板整体退役，
+    对应提取分支同批删除；检查意图（示例点名指标必须本层存在）不变。
     """
     ids: List[str] = []
     for m in re.finditer(r"^###\s*Example:\s*([A-Za-z0-9_]+)", prompt_text, re.MULTILINE):
         ids.append(m.group(1))
-
-    block = re.search(r"###\s*结构示例\s*\n(.*?)(?=\n#\s|\Z)", prompt_text, re.DOTALL)
-    if block:
-        section = block.group(1)
-        ids.extend(re.findall(r'"function_id"\s*:\s*"([A-Za-z0-9_]+)"', section))
-        cov = re.search(r'"covered_function_ids"\s*:\s*\[(.*?)\]', section, re.DOTALL)
-        if cov:
-            ids.extend(re.findall(r'"([A-Za-z0-9_]+)"', cov.group(1)))
     return ids
 
 
@@ -991,7 +985,10 @@ def _check_pc22(run_dir: Path) -> Dict[str, Any]:
         checked += 1
         text = _read_text(prompt_path)
         try:
-            section = text.split("### 当前层指标清单\n", 1)[1].split("\n\n### 结构示例", 1)[0]
+            # 2026-09-22 退役手术：清单段之后不再是"### 结构示例"（已删），而是说明书
+            # 正文。json.dumps(indent=2) 本身不含空行，所以清单 JSON 结束于标题后的
+            # 第一个空行——改按第一个 "\n\n" 切段。
+            section = text.split("### 当前层指标清单\n", 1)[1].split("\n\n", 1)[0]
         except IndexError:
             violations.append(f"{layer}: 无法切出指标清单段")
             continue

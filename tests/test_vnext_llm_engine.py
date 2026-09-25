@@ -23,8 +23,8 @@ def test_system_constraints_loaded_from_file():
     assert "JSON" in constraints
 
 
-def test_system_constraints_contains_five_rules():
-    """SYSTEM_CONSTRAINTS must contain all 5 anti-fabrication rules."""
+def test_system_constraints_contains_core_rules():
+    """SYSTEM_CONSTRAINTS must contain the core rules of the 12-clause shared discipline."""
     from agent_analysis.llm_engine import LLMEngine
     constraints = LLMEngine._load_system_constraints()
     assert "历史胜率" in constraints or "回测收益" in constraints

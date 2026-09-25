@@ -44,8 +44,10 @@ from .runner import RUNS_ROOT
 ARTIFACT_NAME = "event_research_patrols.json"
 
 # 研究成果架：跨 run 累积的巡逻成果（IA 从架子上取近期成果，带时点过滤）。
-# 巡逻是"当下"的活，成果架让下一次 run 的裁决能用上——同一 run 的 IA 来不及用
-# （出题官必须看过 IA 残局才出题，这是 08-26 重构定下的顺序）。
+# 巡逻是"当下"的活；08-26 重构把出题与巡逻排在综合裁决之前（main.py 先
+# run_sync_gap_patrol、后 write_integrated_synthesis_report），本模块在巡逻收尾时
+# 就把成果写入架上（见 run_sync_gap_patrol 尾部的 update_research_shelf 调用），
+# 所以同一 run 的 IA 读架时已经能读到本次新巡逻的成果。
 RESEARCH_SHELF_PATH = Path("output/event_research/research_shelf.json")
 _SHELF_MAX_ENTRIES = 20
 

@@ -186,12 +186,13 @@ def test_stance_direction_check_understands_common_negations():
     assert "与判决正文方向冲突" in final2.quality_gate.notes
 
 
-def test_prompt_requires_stance_label_enum_and_direction_consistency():
+def test_prompt_requires_stance_direction_consistency_with_spec_enum():
+    """2026-09-22 说明书重写：姿态枚举值改由代码从契约生成字段规格注入（机械字段不出
+    答卷），说明书只保留方向一致性义务。枚举本体由本文件前面的枚举定义测试钉住，
+    规格注入由 test_governance_input.py 的字段规格测试钉住。"""
     prompt = (
         Path(__file__).resolve().parents[1]
         / "src" / "agent_analysis" / "prompts" / "final_adjudicator.md"
     ).read_text(encoding="utf-8")
-    assert "stance_label" in prompt
-    for value in STANCE_LABEL_ENUM:
-        assert value in prompt
-    assert "与 `final_stance` 的方向一致" in prompt
+    assert "从输出字段规格给定的枚举里选" in prompt
+    assert "与最终立场方向一致" in prompt

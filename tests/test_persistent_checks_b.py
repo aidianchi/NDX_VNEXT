@@ -117,12 +117,12 @@ def test_pc11_example_ids_in_layer_pass(tmp_path: Path) -> None:
     _add_all_layers_minimal(tmp_path)
     payload = _layer_payload(raw_data={"get_aaa": _metric("get_aaa", "AAA")})
     _add_layer(tmp_path, "L1", payload)
+    # 2026-09-22 退役手术：内联"### 结构示例"模板已删，示例来源只剩 few-shot 的
+    # `### Example:` 段头，PC-11 锚点同步迁移。
     _add_prompt(
         tmp_path,
         "L1",
-        "### Example: get_aaa\nINPUT: {\"function_id\": \"get_aaa\"}\n\n"
-        "### 结构示例\n{\n  \"indicator_analyses\": [\n    {\"function_id\": \"get_aaa\"}\n  ],\n"
-        "  \"quality_self_check\": {\"covered_function_ids\": [\"get_aaa\"]}\n}\n",
+        "### Example: get_aaa\nINPUT: {\"function_id\": \"get_aaa\"}\n",
     )
     result = _find(run_checks_b(tmp_path), "PC-11")
     assert result["passed"] is True
@@ -135,8 +135,7 @@ def test_pc11_example_id_from_other_layer_fails(tmp_path: Path) -> None:
     _add_prompt(
         tmp_path,
         "L1",
-        "### 结构示例\n{\n  \"indicator_analyses\": [\n    {\"function_id\": \"get_bbb\"}\n  ],\n"
-        "  \"quality_self_check\": {\"covered_function_ids\": [\"get_bbb\"]}\n}\n",
+        "### Example: get_bbb\nINPUT: {\"function_id\": \"get_bbb\"}\n",
     )
     result = _find(run_checks_b(tmp_path), "PC-11")
     assert result["passed"] is False
@@ -637,16 +636,18 @@ def test_pc21_event_output_contract_leak_fails(tmp_path: Path) -> None:
 
 def _layer_prompt_with_manifest(run_dir: Path, layer: str, manifest_json: str) -> None:
     _add_all_layers_minimal(run_dir)
+    # 2026-09-22 退役手术：真实层站 prompt 里"### 结构示例"已不存在，清单段之后
+    # 直接是说明书正文；PC-22 改按标题后第一个空行切出清单 JSON。
     for each in ["L1", "L2", "L3", "L4", "L5"]:
         _add_prompt(
             run_dir,
             each,
-            "### 当前层指标清单\n[]\n\n### 结构示例\n{\n}\n",
+            "### 当前层指标清单\n[]\n\n# 层站说明书正文\n",
         )
     _add_prompt(
         run_dir,
         layer,
-        f"### 当前层指标清单\n{manifest_json}\n\n### 结构示例\n{{\n}}\n",
+        f"### 当前层指标清单\n{manifest_json}\n\n# 层站说明书正文\n",
     )
 
 

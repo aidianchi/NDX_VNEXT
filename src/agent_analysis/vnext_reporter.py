@@ -309,13 +309,17 @@ TEMPLATE_DESCRIPTIONS = {
     },
 }
 
+# brief 阅读顺序（2026-09-22 老板拍板的四层重排）：本期判断（facade）→ 主要理由
+# （正方 thesis + 反方 stress + 风险边界 risks）→ 证据与推理全链（world +
+# brief_integrated + brief_layers）→ 审计区（brief_audit）。改判条件本体上提第一屏，
+# risks 区只留风险边界与压力情景；黄金坑清单与常设检查落进审计区。
 BRIEF_SECTION_ORDER = (
     "facade",
     "thesis",
     "stress",
+    "risks",
     "world",
     "brief_integrated",
-    "risks",
     "brief_layers",
     "brief_audit",
 )
@@ -1278,6 +1282,62 @@ _DISCIPLINE_STATUS_TEXT: Dict[str, str] = {
 }
 
 
+# 2026-09-23 老板裁决删除：徽章旁曾有两张代码装配的固定文案表（姿态行动句
+# "本期姿态为偏防守：…" 与置信度出路句 "报告对本期判断的把握为中等；…"），
+# 老板判定它们是零信息增量装饰。行动含义由判决正文与改判条件卡承担，徽章只亮档位。
+
+
+def _invalidation_trigger_sentence(body: Any) -> str:
+    """把一条失效条件正文装配成"若……。"触发条件句（2026-09-23 四层重排）。
+
+    正文本身是 AI 写的完整条件句（常带"——影响"从句），代码只补"若"字头与句号，
+    不在句中缝机器标签。
+    """
+    text = str(body or "").strip().rstrip("。；;．.")
+    if not text:
+        return ""
+    if not text.startswith("若"):
+        text = "若" + text
+    return text + "。"
+
+
+# 边界状态的完整句谓语（残句完整句化 2026-09-23）：原"边界名 · 状态词"词组串退役。
+_BOUNDARY_STATE_PREDICATES: Dict[str, str] = {
+    "safe": "当前处于可控状态",
+    "warning": "当前处于需关注状态",
+    "breached": "当前已经突破",
+    "low": "当前处于低水平",
+    "medium": "当前处于中等水平",
+    "high": "当前处于高水平",
+}
+
+
+def _boundary_status_sentence(name: Any, status: Any) -> str:
+    """把一条边界状态装配成完整句，例如"估值压缩边界当前处于需关注状态"。"""
+    boundary_label = _label(name, "boundary")
+    predicate = _BOUNDARY_STATE_PREDICATES.get(str(status or ""))
+    if predicate:
+        return f"{boundary_label}边界{predicate}。"
+    # 未知状态值不原样缝进散文（机器字段值零缝进散文），只报"未记录"。
+    severity_label = LABELS.get("severity", {}).get(str(status or ""), "")
+    return f"{boundary_label}边界的当前状态为{severity_label or '未记录'}。"
+
+
+# 价格计入程度的完整从句（残句完整句化 2026-09-23）：原 reflected_state 枚举标签
+# 裸挂句尾，现统一带主语"价格"。
+_PRICE_REFLECTION_CLAUSES: Dict[str, str] = {
+    "largely_reflected": "价格已大体反映",
+    "partially_reflected": "价格已部分反映",
+    "not_reflected": "价格尚未反映",
+    "unclear": "价格计入程度不明朗",
+}
+
+
+def _price_reflection_clause(value: Any) -> str:
+    raw = str(value or "").strip()
+    return _PRICE_REFLECTION_CLAUSES.get(raw, f"价格计入状态为{_display_label(raw) or '未记录'}")
+
+
 def _discipline_status_view(side: Any, status: Any) -> Dict[str, str]:
     """把 (discipline_side, current_status) 映射成 {tone, text, side_label, side_class}。
 
@@ -1950,6 +2010,7 @@ class VNextReportGenerator:
             "cross_layer_questions.json",
             "event_mechanism_cards.json",
             "integrated_synthesis_report.json",
+            "persistent_checks_report.json",
             "run_summary.json",
             "source_snapshot.json",
         ]
@@ -2062,6 +2123,9 @@ class VNextReportGenerator:
             "bridges": bridges,
             "run_summary": _load_json(run_path / "run_summary.json", {}),
             "source_snapshot": _load_json(run_path / "source_snapshot.json", {}),
+            # 2026-09-23 四层重排：28 项常设检查的落盘报告此前没有代码读者，
+            # 审计区展示位是它的第一个消费者。
+            "persistent_checks_report": _load_json(run_path / "persistent_checks_report.json", {}),
         }
 
     def _render(
@@ -2478,7 +2542,7 @@ class VNextReportGenerator:
             "brief_integrated": lambda: self._integrated_adjudication_block(
                 artifacts,
                 section_id="integrated-adjudication",
-                section_kicker="04 · 综合裁决",
+                section_kicker="05 · 综合裁决" if template == "brief" else "第三层 · 综合裁决",
             ),
             "brief_layers": lambda: self._brief_layers_section(artifacts),
             "brief_audit": lambda: self._brief_audit_line(run_path, artifacts, audit_index_path),
@@ -2488,8 +2552,11 @@ class VNextReportGenerator:
             "news": lambda: self._news_section(artifacts),
             "risks": lambda: self._risks_section(
                 artifacts,
-                section_kicker="05 · 改判条件" if template == "brief" else "04 · 风险边界",
-                include_change_fold=(template == "brief"),
+                section_kicker="03 · 风险边界" if template == "brief" else "04 · 风险边界",
+                section_title="风险边界与压力情景" if template == "brief" else "如果发生这些事，我就改判断",
+                include_invalidation=(template != "brief"),
+                # brief 的"和上次判断比，什么变了"随黄金坑清单一起归入审计区（07）。
+                include_change_fold=False,
             ),
             "conflicts": lambda: self._conflicts_section(artifacts),
             "layers": lambda: self._layers_section(artifacts),
@@ -2574,6 +2641,8 @@ class VNextReportGenerator:
             or str(final.get("final_stance") or "").strip()
             or "本轮判断"
         )
+        # 改判条件卡上提第一屏（蓝图 1.2 塔尖规格）：05 区不再重复渲染。
+        invalidation_card = self._brief_invalidation_card(final)
         return f"""
 <section class="sec facade-section" id="facade">
   <div class="facade">
@@ -2592,14 +2661,64 @@ class VNextReportGenerator:
       {f'<p class="section-note verdict-signature">{_escape(verdict_signature)}</p>' if verdict_signature else ''}
       {publish_note if blocked else ''}
       {dissent_html}
+      {invalidation_card}
       <nav class="jumplinks" aria-label="判断书内跳转">
-        ↓ <a href="#thesis">正方主论证</a><a href="#stress">反方压力测试</a><a href="#world">外部世界对照</a><a href="#integrated-adjudication">综合裁决</a><a href="#risks">改判条件</a><a href="#layers">五层底稿</a>
+        ↓ <a href="#thesis">正方主论证</a><a href="#stress">反方压力测试</a><a href="#risks">风险边界</a><a href="#world">外部世界对照</a><a href="#integrated-adjudication">综合裁决</a><a href="#layers">五层底稿</a><a href="#audit">审计区</a>
       </nav>
     </div>
     {f'<aside class="sec-aside">{key_cards}</aside>' if key_cards else ''}
   </div>
   </div>
 </section>
+"""
+
+    def _brief_invalidation_card(self, final: Dict[str, Any]) -> str:
+        """第一屏改判条件卡：每条写成"若……。"触发条件句，按改判方向分组。
+
+        优先读结构化字段 invalidation_items（direction 枚举 + text 正文，代码装配
+        的【转多】【转空】前缀的正本）；旧档案没有该字段时退回解析
+        invalidation_conditions 字符串里的【转多】【转空】前缀。
+        """
+        items: List[Tuple[str, str]] = []
+        for item in _as_list(final.get("invalidation_items")):
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            direction = str(item.get("direction") or "").strip()
+            if text:
+                items.append((direction if direction in {"转多", "转空"} else "", text))
+        if not items:
+            for raw in _as_list(final.get("invalidation_conditions")):
+                direction, body = _split_invalidation_item(raw)
+                if str(body).strip():
+                    items.append((direction, str(body).strip()))
+        if not items:
+            return ""
+        groups = (
+            ("转空", "bear", "以下任一情形兑现时，本期判断随之撤销，姿态向风险一侧调整："),
+            ("转多", "bull", "以下任一情形兑现时，本期判断随之撤销，姿态向机会一侧调整："),
+            ("", "watch", "以下情形出现时，本期判断需要重新审议："),
+        )
+        group_blocks = []
+        for direction, tone, lead in groups:
+            rows = [body for item_direction, body in items if item_direction == direction]
+            if not rows:
+                continue
+            chip = direction or "观察"
+            row_html = "".join(
+                f'<div class="flip"><span class="dir {tone}">{_escape(chip)}</span>'
+                f'<span>{_escape(_invalidation_trigger_sentence(body))}</span></div>'
+                for body in rows
+            )
+            group_blocks.append(
+                f'<p class="section-note">{_escape(lead)}</p><div class="flip-list">{row_html}</div>'
+            )
+        return f"""
+<div class="risk-board facade-invalidation" id="invalidation">
+  <h3>{_glossary_term('改判条件', unique_id='brief-facade-invalidation')}</h3>
+  <p class="section-note">本期判断事先写下的改判触发器：任一情形兑现，本期判断即按标注方向改判，不等待下一期。</p>
+  {''.join(group_blocks)}
+</div>
 """
 
     def _data_verdict_objection_banner(self, artifacts: Dict[str, Any]) -> str:
@@ -2665,8 +2784,9 @@ class VNextReportGenerator:
         for item in _as_list(surface.get("price_reflection_map"))[:6]:
             if not isinstance(item, dict):
                 continue
+            # 残句完整句化（2026-09-23）：计入程度枚举不再裸挂句尾，改带主语的完整从句。
             price_rows.append(f"""
-<p><b>{_escape(_display_label(item.get('category') or item.get('target') or '定价'))}：</b>{self._inline_ref_html(item.get('rationale') or '')} <span class="reading">{_escape(_display_label(item.get('reflected_state') or 'unclear'))}</span>{self._brief_inline_refs(item.get('evidence_refs', []))}</p>""")
+<p><b>{_escape(_display_label(item.get('category') or item.get('target') or '定价'))}：</b>{self._inline_ref_html(item.get('rationale') or '')} <span class="reading">（系统评估：{_escape(_price_reflection_clause(item.get('reflected_state') or 'unclear'))}）</span>{self._brief_inline_refs(item.get('evidence_refs', []))}</p>""")
         horizon_rows = []
         for item in _as_list(surface.get("time_horizon_views"))[:3]:
             if not isinstance(item, dict):
@@ -2717,34 +2837,39 @@ class VNextReportGenerator:
         if not isinstance(ledger, dict) or not ledger:
             return ""
 
-        status_labels = {
+        # 状态词在句子里当谓语用（残句完整句化 2026-09-23）：每行必须是完整句，
+        # 不再拼"状态；共同样本 N；平均变化 X"词组串。
+        status_predicates = {
             "available": "已有可比样本",
             "insufficient_coverage": "样本不足",
-            "accumulating": "对照样本积累中",
+            "accumulating": "对照样本仍在积累中",
             "unavailable": "暂不可用",
-            "generation_failed_non_blocking": "生成失败（不阻断主流程）",
+            "generation_failed_non_blocking": "本次生成失败（不阻断主流程）",
         }
 
-        def status(value: Any) -> str:
-            raw = str(value or "未记录")
-            return status_labels.get(raw, raw)
+        def predicate(value: Any) -> str:
+            raw = str(value or "")
+            return status_predicates.get(raw, f"状态为{raw}" if raw else "状态未记录")
 
-        def number(value: Any, suffix: str = "") -> str:
+        def number_clause(label: str, value: Any, suffix: str = "") -> str:
             parsed = _safe_number(value)
-            return f"{parsed:.2f}{suffix}" if parsed is not None else "未形成"
+            if parsed is None:
+                return f"{label}未形成"
+            return f"{label}为{parsed:.2f}{suffix}"
 
         earnings = ledger.get("earnings_expectations", {}) if isinstance(ledger.get("earnings_expectations"), dict) else {}
         window_rows = []
         for window in _as_list(earnings.get("windows")):
             if not isinstance(window, dict):
                 continue
+            note = str(window.get("note") or "").strip()
             window_rows.append(
-                "<li><b>{days} 日</b>：{window_status}；共同样本 {count}；平均变化 {change}。{note}</li>".format(
+                "<li>{days} 日对照窗口{predicate}：对照双方共同覆盖 {count} 个标的，{change}。{note}</li>".format(
                     days=_escape(window.get("window_days") or "?"),
-                    window_status=_escape(status(window.get("status"))),
+                    predicate=_escape(predicate(window.get("status"))),
                     count=_escape(window.get("intersection_ticker_count", 0)),
-                    change=_escape(number(window.get("average_change_pct"), "%")),
-                    note=self._inline_ref_html(window.get("note") or ""),
+                    change=_escape(number_clause("窗口内盈利预期平均变化", window.get("average_change_pct"), "%")),
+                    note=self._inline_ref_html(note) if note else "",
                 )
             )
         earnings_detail = "".join(window_rows) or "<li>尚未形成 30/90 日可比窗口。</li>"
@@ -2759,16 +2884,16 @@ class VNextReportGenerator:
         overall_status = ledger.get("status")
         overall_note = ""
         if overall_status:
-            overall_note = f'<p class="section-note">台账状态：{_escape(status(overall_status))}。</p>'
+            overall_note = f'<p class="section-note">本台账当前{_escape(predicate(overall_status))}。</p>'
         return f"""
 <div class="audit-boundaries expectation-ledger" id="expectation-vs-realized">
   <h3>预期与兑现</h3>
-  <p>这是辅助对照账，只帮助检查市场预期后来兑现了多少；权威级别为 <b>{_escape(_display_label(authority))}</b>，不能充当 L1-L5 核心证据。</p>
+  <p>这是辅助对照账，只帮助检查市场预期后来兑现了多少；这份台账的证据权威级别为 <b>{_escape(_display_label(authority))}</b>，不能充当 L1-L5 核心证据。</p>
   {overall_note}
   <div class="audit-grid">
-    <div><b>盈利预期</b><p>{_escape(status(earnings.get('status')))}；当前快照 {_escape(earnings.get('current_snapshot_date') or '未形成')}；覆盖 {_escape(earnings.get('current_ticker_count', 0))} 个标的。</p><ul>{earnings_detail}</ul></div>
-    <div><b>利率路径</b><p>{_escape(status(rate.get('status')))}；当前路径 {path_points} 个点；历史兑现对照 {comparisons} 条。</p><p>{self._inline_ref_html(rate.get('note') or '')}</p></div>
-    <div><b>波动溢价</b><p>{_escape(status(volatility.get('status')))}；有效窗口 {_escape(volatility.get('sample_count', 0))} 个；近期溢价 {number(volatility.get('recent_premium_pct_points'), ' 个百分点')}；近期分位 {number(volatility.get('recent_percentile'), '%')}。</p><p>{self._inline_ref_html(volatility.get('note') or '')}</p></div>
+    <div><b>盈利预期</b><p>盈利预期对照{_escape(predicate(earnings.get('status')))}；当前快照日期为 {_escape(earnings.get('current_snapshot_date') or '未形成')}，覆盖 {_escape(earnings.get('current_ticker_count', 0))} 个标的。</p><ul>{earnings_detail}</ul></div>
+    <div><b>利率路径</b><p>利率路径对照{_escape(predicate(rate.get('status')))}；当前路径包含 {path_points} 个预测点，历史兑现对照共 {comparisons} 条。</p><p>{self._inline_ref_html(rate.get('note') or '')}</p></div>
+    <div><b>波动溢价</b><p>波动溢价对照{_escape(predicate(volatility.get('status')))}；有效窗口 {_escape(volatility.get('sample_count', 0))} 个，{_escape(number_clause('近期溢价', volatility.get('recent_premium_pct_points'), ' 个百分点'))}，{_escape(number_clause('近期分位', volatility.get('recent_percentile'), '%'))}。</p><p>{self._inline_ref_html(volatility.get('note') or '')}</p></div>
   </div>
 </div>
 """
@@ -2778,7 +2903,7 @@ class VNextReportGenerator:
         return self._event_layer_summary_section(
             artifacts,
             section_id="world",
-            section_kicker="03 · 外部世界",
+            section_kicker="04 · 外部世界",
             section_title="事实对照",
             section_class="panel sec",
             include_integrated=False,
@@ -2806,11 +2931,105 @@ class VNextReportGenerator:
             _artifact_link("Prompt Inspector", inspector),
             f'<a href="{_escape(layers_path)}">完整底稿 artifact</a>' if layers_path else "<span>完整底稿 artifact 未生成</span>",
         ]
+        # 2026-09-23 四层重排（老板拍板）：审计区 = 审计入口 + 黄金坑清单 +
+        # 常设检查展示位（28 项落盘对账此前没有任何代码读者，这里给它展示位）。
+        golden_pit_block = self._brief_golden_pit_block(artifacts)
+        persistent_block = self._brief_persistent_checks_block(artifacts)
         return f"""
 <section class="panel sec audit-line" id="audit">
-  <div class="sec-head"><span class="tag sans">07 · 审计</span><h2>审计入口</h2></div>
+  <div class="sec-head"><span class="tag sans">07 · 审计区</span><h2>审计与复查</h2></div>
   <div class="section-note">{' · '.join(links)}</div>
+  {golden_pit_block}
+  {persistent_block}
 </section>
+"""
+
+    def _brief_golden_pit_block(self, artifacts: Dict[str, Any]) -> str:
+        """黄金坑纪律清单（自 05 区移入审计区）：当前状态、条件差距、逐条状态。"""
+        checklist = artifacts.get("golden_pit_checklist", {})
+        if not isinstance(checklist, dict) or not checklist:
+            return (
+                '<div class="audit-boundaries golden-pit-audit"><h3>黄金坑纪律清单</h3>'
+                "<p>本轮未产生黄金坑纪律清单产物。</p></div>"
+            )
+        summary = self._golden_pit_summary(checklist)
+        changes = [str(item) for item in _as_list(checklist.get("changed_since_last_run_summary")) if str(item).strip()]
+        change_rows = "".join(f"<li>{_escape(item)}</li>" for item in changes[:6]) or "<li>本轮未记录显著变化，或上次 run 不可比。</li>"
+        # id="change" 从 05 区原样迁来，旧深链不失效。
+        change_fold = (
+            '<details class="fold" id="change"><summary>和上次判断比，什么变了</summary>'
+            f'<div class="fbody"><ul class="risk-list">{change_rows}</ul></div></details>'
+        )
+        entries = [item for item in _as_list(checklist.get("entries")) if isinstance(item, dict)][:8]
+        entry_rows = ""
+        for item in entries:
+            view = _discipline_status_view(item.get("discipline_side"), item.get("current_status"))
+            side_chip = (
+                f'<span class="pill watch">{_escape(view["side_label"])}</span>'
+                if view["side_label"]
+                else ""
+            )
+            falsifiers = [
+                str(value) for value in _as_list(item.get("falsification_conditions")) if str(value).strip()
+            ][:2]
+            falsifier_html = (
+                f"<small><b>反证/失效：</b>{_escape('；'.join(_sentence(value, 88) for value in falsifiers))}</small>"
+                if falsifiers
+                else ""
+            )
+            entry_rows += f"""
+      <li>
+        <span class="pill {view['tone']}">{_escape(view['text'])}</span>{side_chip}
+        <p>{_escape(_sentence(item.get('condition'), 140))}</p>
+        {falsifier_html}
+      </li>"""
+        entries_html = (
+            f'<details class="fold"><summary>逐条纪律条件（{len(entries)} 条）</summary>'
+            f'<div class="fbody"><ul class="risk-list">{entry_rows}</ul></div></details>'
+            if entry_rows
+            else "<p>本轮清单没有逐条纪律条件记录。</p>"
+        )
+        return f"""
+<div class="audit-boundaries golden-pit-audit">
+  <h3>黄金坑纪律清单</h3>
+  <p class="section-note">这份清单记录本期判断距离买入/卖出纪律还差哪些条件；条目状态由代码按纪律账本的机械字段装配，未经模型改写。</p>
+  <ul class="risk-list">
+    <li>{_escape(summary['distance'])}</li>
+  </ul>
+  {entries_html}
+  {change_fold}
+</div>
+"""
+
+    def _brief_persistent_checks_block(self, artifacts: Dict[str, Any]) -> str:
+        """常设检查展示位：28 项落盘对账的通过/未通过计数一览 + 明细折叠。
+
+        产物缺失时显示"本次未产生常设检查报告"，不报错（老 run 目录没有该产物）。
+        """
+        report = artifacts.get("persistent_checks_report", {})
+        checks = [item for item in _as_list(report.get("checks") if isinstance(report, dict) else []) if isinstance(item, dict)]
+        if not checks:
+            return (
+                '<div class="audit-boundaries persistent-checks"><h3>常设检查</h3>'
+                "<p>本次未产生常设检查报告。</p></div>"
+            )
+        passed_count = sum(1 for item in checks if item.get("passed"))
+        failed_count = len(checks) - passed_count
+        detail_rows = ""
+        for item in checks:
+            ok = bool(item.get("passed"))
+            pill = '<span class="pill good">通过</span>' if ok else '<span class="pill bad">未通过</span>'
+            name = " ".join(part for part in (str(item.get("check_id") or ""), str(item.get("name") or "")) if part)
+            detail = str(item.get("detail") or "").strip()
+            evidence = str(item.get("evidence") or "").strip()
+            detail_rows += f"""
+      <li>{pill}<b>{_escape(name)}</b>{f'：{_escape(detail)}' if detail else ''}{f'<br><small>对账依据：{_escape(evidence)}</small>' if evidence else ''}</li>"""
+        return f"""
+<div class="audit-boundaries persistent-checks">
+  <h3>常设检查</h3>
+  <p>本次常设检查共 {len(checks)} 项，{passed_count} 项通过，{failed_count} 项未通过。常设检查是落盘产物之间的身份与计数对账，只核对账目、不裁决内容；未通过项提示需要人工复核的账目差异。</p>
+  <details class="fold"><summary>逐项明细（{len(checks)} 条）</summary><div class="fbody"><ul class="risk-list">{detail_rows}</ul></div></details>
+</div>
 """
 
     def _template_intro(self, template: str) -> str:
@@ -3048,9 +3267,9 @@ class VNextReportGenerator:
         if not_ready:
             first = not_ready[0]
             status = "证据不足" if first.get("current_status") == "insufficient_evidence" else "未满足"
-            distance = f"{len(not_ready)} 项仍未满足或证据不足；优先看：{status} - {_sentence(first.get('condition'), 72)}"
+            distance = f"仍有 {len(not_ready)} 项纪律条件未满足或证据不足；当前最优先的一项（{status}）：{_sentence(first.get('condition'), 72)}"
         else:
-            distance = f"{met_count} 项条件均已满足；仍需复核反证和发布闸门。"
+            distance = f"{met_count} 项纪律条件均已满足；仍需复核反证和发布闸门。"
         return {"change": _sentence(change, 110), "distance": _sentence(distance, 120)}
 
     _STANCE_PARAGRAPHS = {
@@ -4741,7 +4960,9 @@ class VNextReportGenerator:
         self,
         artifacts: Dict[str, Any],
         section_kicker: str = "04 · 风险边界",
+        section_title: str = "如果发生这些事，我就改判断",
         *,
+        include_invalidation: bool = True,
         include_change_fold: bool = False,
     ) -> str:
         final = artifacts.get("final_adjudication", {}) or {}
@@ -4756,15 +4977,19 @@ class VNextReportGenerator:
                 f'<div class="fbody"><ul class="risk-list">{change_rows}</ul></div></details>'
             )
         boundary = risk.get("boundary_status", {}) if isinstance(risk.get("boundary_status"), dict) else {}
-        invalidations = _as_list(final.get("invalidation_conditions"))
+        # 2026-09-23 四层重排：brief 把改判条件本体上提第一屏（_brief_invalidation_card），
+        # 本节不再重复渲染；其余四个模板保持旧行为（include_invalidation=True）。
         flip_rows = []
-        for index, item in enumerate(invalidations, 1):
-            direction, body = _split_invalidation_item(item)
-            tone = "bull" if direction == "转多" else "bear" if direction == "转空" else "watch"
-            flip_rows.append(f"""
+        if include_invalidation:
+            for item in _as_list(final.get("invalidation_conditions")):
+                direction, body = _split_invalidation_item(item)
+                tone = "bull" if direction == "转多" else "bear" if direction == "转空" else "watch"
+                flip_rows.append(f"""
 <div class="flip"><span class="dir {tone}">{_escape(direction or '观察')}</span><span>{_escape(body)}</span></div>""")
-        boundary_pills = "".join(
-            f'<span class="pill {_severity_class(status)}">{_escape(_label(name, "boundary"))} · {_escape(_label(status, "severity"))}</span>'
+        # 残句完整句化（2026-09-23）：原"估值压缩 · 需关注"词组串改成"状态徽章 + 完整句"。
+        boundary_rows = "".join(
+            f'<li><span class="pill {_severity_class(status)}">{_escape(_label(status, "severity"))}</span> '
+            f'{_escape(_boundary_status_sentence(name, status))}</li>'
             for name, status in boundary.items()
         )
         failures = []
@@ -4792,12 +5017,21 @@ class VNextReportGenerator:
         if "改判条件" in section_kicker:
             prefix, suffix = section_kicker.split("改判条件", 1)
             kicker_html = f"{_escape(prefix)}{_glossary_term('改判条件', unique_id='brief-risks')}{_escape(suffix)}"
+        if include_invalidation:
+            section_note = "改判条件的唯一正本；其他章节只链接到这里，避免同一句话反复放大。"
+            flip_block = f'<div class="flip-list">{"".join(flip_rows) or "<p>暂无结构化改判条件。</p>"}</div>'
+        else:
+            section_note = (
+                '本期判断的改判条件已列入<a href="#invalidation">第一屏本期判断区</a>；'
+                "本节只保留风险边界的当前状态、不能忽视的风险与压力情景推演。"
+            )
+            flip_block = ""
         return f"""
 <section class="panel sec" id="risks">
-  <div class="sec-head"><span class="tag sans">{kicker_html}</span><h2>如果发生这些事，我就改判断</h2></div>
-  <p class="section-note">改判条件的唯一正本；其他章节只链接到这里，避免同一句话反复放大。</p>
-  <div class="flip-list">{''.join(flip_rows) or '<p>暂无结构化改判条件。</p>'}</div>
-  {f'<div class="risk-board"><h3>临界观察</h3><div class="boundary-pills">{boundary_pills}</div></div>' if boundary_pills else ''}
+  <div class="sec-head"><span class="tag sans">{kicker_html}</span><h2>{_escape(section_title)}</h2></div>
+  <p class="section-note">{section_note}</p>
+  {flip_block}
+  {f'<div class="risk-board"><h3>各风险边界的当前状态</h3><ul class="risk-list">{boundary_rows}</ul></div>' if boundary_rows else ''}
   <div class="risk-board risk-list">
     <h3>不能忽视的风险</h3>
     <ul>{must or '<li>无</li>'}</ul>

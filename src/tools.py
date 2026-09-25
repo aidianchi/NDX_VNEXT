@@ -35,6 +35,7 @@ TOOLS_REGISTRY = {
     "get_vxn_vix_ratio": get_vxn_vix_ratio,
     "get_vix_term_structure": get_vix_term_structure,
     "get_10y2y_spread_bp": get_10y2y_spread_bp,
+    "get_10y3m_spread_bp": get_10y3m_spread_bp,
     "get_hy_oas_bp": get_hy_oas_bp,
     "get_ig_oas_bp": get_ig_oas_bp,
     "get_hy_quality_spread_bp": get_hy_quality_spread_bp,

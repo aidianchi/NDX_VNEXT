@@ -56,16 +56,19 @@ from agent_analysis.packet_builder import AnalysisPacketBuilder
 
 
 @pytest.fixture(autouse=True)
-def _register_mini_stage_inline_prompt():
-    # 本文件多个测试使用合成 stage "mini"；生产代码现在要求 prompt 缺失时显式
-    # 报错，所以测试必须自己声明这个 stage 的 inline prompt，不能依赖静默兜底。
-    for synthetic_stage in ("mini", "test"):
-        orchestrator_module.INLINE_PROMPTS[synthetic_stage] = "测试用合成 stage prompt：请返回严格合法的 JSON。"
-    try:
-        yield
-    finally:
-        for synthetic_stage in ("mini", "test"):
-            orchestrator_module.INLINE_PROMPTS.pop(synthetic_stage, None)
+def _register_mini_stage_inline_prompt(monkeypatch):
+    # 本文件多个测试使用合成 stage "mini"/"test"。INLINE_PROMPTS 一句话兜底已退役
+    # （任何站缺说明书文件一律 RuntimeError），所以测试侧用 monkeypatch 给这两个
+    # 合成 stage 供一份说明书；真实 stage 仍走文件加载路径，行为不变。
+    original_load_prompt = VNextOrchestrator._load_prompt
+    synthetic_prompt = "测试用合成 stage prompt：请返回严格合法的 JSON。"
+
+    def _load_prompt_with_synthetic(self, stage_key: str) -> str:
+        if stage_key in ("mini", "test"):
+            return synthetic_prompt
+        return original_load_prompt(self, stage_key)
+
+    monkeypatch.setattr(VNextOrchestrator, "_load_prompt", _load_prompt_with_synthetic)
 
 
 class FakeLLMEngine:
@@ -924,6 +927,104 @@ def test_slim_evidence_index_for_prompt_keeps_aggregates_and_only_compresses_lis
     assert "note" in constituents
 
 
+def test_slim_evidence_index_for_prompt_projects_menu_view(tmp_path: Path):
+    """2026-09-24 卡二首考红项修复（老板拍板③）：正反两站 evidence_index 投影为
+    证据菜单——每条只留编号+指标+读数+状态+权限+一句叙事；审计信封字段整批不进
+    prompt（完整明细留在落盘 synthesis_packet.json / evidence_registry.json）。"""
+    orchestrator = VNextOrchestrator(
+        available_models=["fake"],
+        output_dir=str(tmp_path),
+        llm_engine=FakeLLMEngine({}),
+    )
+    payload = {
+        "synthesis_packet": {
+            "evidence_index": {
+                "L1.get_10y2y_spread_bp": {
+                    "layer": "L1",
+                    "function_id": "get_10y2y_spread_bp",
+                    "metric": "10Y-2Y Spread",
+                    "current_reading": "+25.0bp，低于 20 日均线。",
+                    "normalized_state": "正斜率、斜率收窄",
+                    "narrative": "一句叙事。",
+                    "permission_type": "fact",
+                    "source_tier": "official",
+                    "confidence": "medium",
+                    "mixed_field_authority": False,
+                    # 以下全是审计信封：必须整批从 prompt 视图消失
+                    "reasoning_process": "审计推理。",
+                    "first_principles_chain": ["第一性链。"],
+                    "cross_layer_implications": ["请 L5 核对。"],
+                    "risk_flags": ["curve_re_flattening"],
+                    "canonical_question": "期限结构是否暗示增长压力？",
+                    "misread_guards": ["变陡不一定利好。"],
+                    "cross_validation_targets": ["get_10y_treasury"],
+                    "falsifiers": ["信用未恶化。"],
+                    "core_vs_tactical_boundary": "宏观框架指标。",
+                },
+                "L1.get_fed_funds_rate_path#cuts_priced_bps": {
+                    "layer": "L1",
+                    "function_id": "get_fed_funds_rate_path",
+                    "metric": "Fed Funds Path",
+                    "parent_evidence_ref": "L1.get_fed_funds_rate_path",
+                    "field_name": "cuts_priced_bps",
+                    "field_value": -93,
+                    "field_authority": {
+                        "source": "third_party_unofficial",
+                        "usage": "supporting_only",
+                        "authority": "derived_curve_summary",
+                        "reason": "由首个合格月推导。",
+                        "reference_sources": [],
+                    },
+                    "permission_type": "composite",
+                    "source_tier": "third_party_unofficial",
+                    "canonical_question": "定价怎样的路径？",
+                    "misread_guards": ["市场定价不是承诺。"],
+                },
+                # core_facts 兜底条目：本身就是菜单尺寸，原样放行
+                "L3.nvidia_pe": {
+                    "layer": "L3",
+                    "metric": "NVDA PE",
+                    "value": 38.5,
+                    "historical_percentile": 72.0,
+                    "trend": "rising",
+                    "magnitude": "moderate",
+                },
+            }
+        }
+    }
+
+    sanitized = orchestrator._slim_evidence_index_for_prompt(payload, "synthesis_packet")
+    index = sanitized["synthesis_packet"]["evidence_index"]
+
+    # ref key 集合逐字不变（两站引用合法性校验只认 key）
+    assert set(index.keys()) == {
+        "L1.get_10y2y_spread_bp",
+        "L1.get_fed_funds_rate_path#cuts_priced_bps",
+        "L3.nvidia_pe",
+    }
+
+    parent = index["L1.get_10y2y_spread_bp"]
+    for kept in ("metric", "current_reading", "normalized_state", "narrative", "permission_type", "source_tier", "confidence"):
+        assert kept in parent, f"菜单字段 {kept} 必须保留"
+    for dropped in (
+        "reasoning_process", "first_principles_chain", "cross_layer_implications",
+        "risk_flags", "canonical_question", "misread_guards",
+        "cross_validation_targets", "falsifiers", "core_vs_tactical_boundary",
+    ):
+        assert dropped not in parent, f"审计信封字段 {dropped} 不得进辩论双站 prompt"
+
+    sub = index["L1.get_fed_funds_rate_path#cuts_priced_bps"]
+    assert sub["field_value"] == -93, "子条目读数原样保留"
+    assert sub["field_authority"] == {"usage": "supporting_only"}, "权限档只留 usage，来源/理由留审计档案"
+    assert "misread_guards" not in sub and "canonical_question" not in sub
+
+    fallback = index["L3.nvidia_pe"]
+    assert fallback["value"] == 38.5 and fallback["historical_percentile"] == 72.0, "兜底条目原样放行"
+
+    serialized = json.dumps(sanitized, ensure_ascii=False)
+    assert "审计推理" not in serialized and "第一性链" not in serialized
+
+
 def test_run_thesis_end_to_end_prompt_file_omits_oversized_constituent_rows(tmp_path: Path):
     """端到端：经过真实 _run_stage / _compose_prompt 落到磁盘的 prompt 文本里，
     没进样本的逐票明细行必须真的消失，而不是只在单元测试里裁过一次。"""
@@ -1074,8 +1175,7 @@ def test_load_prompt_never_uses_nested_legacy_copy(tmp_path: Path):
         llm_engine=FakeLLMEngine({}),
     )
 
-    # l4_analyst has no INLINE_PROMPTS fallback, so a missing direct file must raise loudly
-    # instead of silently reading the nested legacy copy or a generic placeholder string.
+    # 兜底机制已整体退役：缺直接文件必须当场炸，不得静默读嵌套旧副本或通用占位串。
     with pytest.raises(RuntimeError, match="l4_analyst"):
         orchestrator._load_prompt("l4_analyst")
 
@@ -1096,7 +1196,10 @@ def test_load_prompt_uses_only_direct_file_in_configured_prompt_dir(tmp_path: Pa
     assert orchestrator._load_prompt("l4_analyst") == "CURRENT_DIRECT_L4_PROMPT"
 
 
-def test_load_prompt_falls_back_to_inline_prompt_when_file_missing(tmp_path: Path):
+def test_load_prompt_raises_for_every_registered_stage_when_file_missing(tmp_path: Path):
+    # INLINE_PROMPTS 一句话兜底已退役：原先有兜底的 7 个站（bridge/thesis/counter_thesis/
+    # critic/risk/reviser/final）与从无兜底的站同一待遇——缺文件一律 RuntimeError，
+    # 不再静默降级为一句话合约。本测试把"缺文件即炸"扩展到 PROMPT_FILES 登记的全部站。
     prompts_dir = tmp_path / "prompt_root"
     prompts_dir.mkdir(parents=True)
     orchestrator = VNextOrchestrator(
@@ -1106,12 +1209,13 @@ def test_load_prompt_falls_back_to_inline_prompt_when_file_missing(tmp_path: Pat
         llm_engine=FakeLLMEngine({}),
     )
 
-    # "bridge" has both a PROMPT_FILES entry and an INLINE_PROMPTS entry; when the
-    # file is missing it should still fall back to the inline prompt instead of raising.
-    assert orchestrator._load_prompt("bridge") == "你负责显式识别跨层支撑关系、冲突关系与关键不确定性。只返回合法 JSON。"
+    assert orchestrator_module.PROMPT_FILES, "PROMPT_FILES 不应为空"
+    for stage_key in orchestrator_module.PROMPT_FILES:
+        with pytest.raises(RuntimeError, match=stage_key):
+            orchestrator._load_prompt(stage_key)
 
 
-def test_load_prompt_raises_for_unknown_stage_without_inline_fallback(tmp_path: Path):
+def test_load_prompt_raises_for_unknown_stage(tmp_path: Path):
     prompts_dir = tmp_path / "prompt_root"
     prompts_dir.mkdir(parents=True)
     orchestrator = VNextOrchestrator(
@@ -1176,7 +1280,9 @@ def test_l4_prompt_drops_audit_bookkeeping_without_dropping_metric_body(tmp_path
         },
     )
 
-    manifest_text = prompt.split("### 当前层指标清单\n", 1)[1].split("\n\n### 结构示例", 1)[0]
+    # 2026-09-22 退役手术：清单段之后不再是"### 结构示例"（已删），改按第一个空行切段
+    # （json.dumps(indent=2) 不含空行，清单 JSON 结束于标题后的第一个 "\n\n"）。
+    manifest_text = prompt.split("### 当前层指标清单\n", 1)[1].split("\n\n", 1)[0]
     runtime_input = prompt.split("## Runtime Input\n", 1)[1]
 
     assert "selected_source" not in prompt
@@ -1189,6 +1295,7 @@ def test_l4_prompt_drops_audit_bookkeeping_without_dropping_metric_body(tmp_path
     assert '"row": 0' not in manifest_text
     assert '"PE_TTM": 36.6' in runtime_input
     assert '"EarningsYield": 2.73' in runtime_input
+    # 数值单位纪律已收编进层站说明书（l4_analyst.md 数值单位纪律节），装配结果仍含锚词。
     assert "单位未标注" in prompt
 
 
@@ -4708,18 +4815,21 @@ def test_thesis_resume_rejects_legacy_checkpoint_without_candidate_responses(tmp
     assert diagnostics["stages"]["thesis"]["status"] == "ok"
 
 
-def test_thesis_builder_prompt_keeps_work_order_r7_block_exact():
+def test_thesis_builder_prompt_keeps_work_order_r7_trigger_set():
     """R7 工单（WORK_LOG.md:435）在 2026-07-27 T28 扩大了触发集合：从"仅 candidate"
     扩到"非 downgraded"（含 leading / kept_unresolved），因为受控调查触发降级后会把
     全部假说统一改判为 kept_unresolved，旧触发集合下 candidate 集合归零、合约整体
-    空转。这里锁的是扩大后的新措辞，防止再次漂移回旧的"仅 candidate"表述。"""
+    空转。这里锁的是扩大后的触发集合纪律，防止再次漂移回旧的"仅 candidate"表述。
+    2026-09-22 说明书重写：逐字块钉住改为锚点断言，纪律本身不变。"""
     prompt = Path(orchestrator_module.__file__).with_name("prompts").joinpath("thesis_builder.md").read_text(encoding="utf-8")
-    required_block = (
-        "## 对竞争假说的强制回应\n"
-        "`synthesis_packet.competing_hypotheses` 里除 `status` 为 `downgraded`（已被裁决出局）之外的每一个假说——`candidate`、`leading`、`kept_unresolved`、`split`——你都必须在 `hypothesis_responses` 里逐一回应，三选一：接受并修正判断（accept_and_revise）、部分吸收（absorb_partially）、驳回（reject）。`leading` 通常是你主论点所依据的主线假说，也要求显式回应，写清楚为什么接受，不能因为它是自己的主线就默认略过。`kept_unresolved` 表示这条假说还没有被单一路径裁决出胜负、分歧尚未解决，合格回应可以是 absorb_partially（承认分歧未解决，并写明还缺哪条证据），不强求给出确定的 accept_and_revise 或 reject——诚实保留未解决的争议，比强行下结论更符合纪律。驳回（reject）无论对方是什么状态，都必须引用具体的反证 evidence_ref，不许用\"证据不足\"四个字一笔带过——证据不足时的诚实选项是 absorb_partially 并写明缺哪条证据。你的主论点如果无法回应某个假说最强的那条证据，就不许假装没看见它。"
+    anchors = (
+        "凡状态不是 downgraded（已被裁决出局）的假说",
+        "不能因为它是自己的主线就默认略过",
+        "四个字一笔带过",
+        "不许假装没看见它",
     )
-
-    assert prompt.count(required_block) == 1
+    for anchor in anchors:
+        assert anchor in prompt, f"thesis_builder.md 缺 R7 触发集合锚点：{anchor}"
 
 
 def test_reviser_final_evidence_refs_outside_index_trigger_retry(tmp_path: Path):
@@ -5387,30 +5497,34 @@ def test_critic_revision_direction_has_no_length_cap(tmp_path: Path):
 
 def test_layer_prompt_documents_local_conclusion_as_required_field(tmp_path: Path):
     """真实事故复现（run 20260725_232410）：`LayerCard.local_conclusion` 是必填字段
-    （无默认值，`max_length=500`），但五层共享的 `_compose_layer_prompt` 契约段此前
-    只在"layer_synthesis 不能只重复 local_conclusion"这一句里提到它的名字，从未指示
-    模型必须输出这个字段——L4 站点当天就因为 `local_conclusion Field required` 被
-    打回重试一次。
+    （无默认值，`max_length=500`），但模型面向的提示词此前从未指示必须输出它——
+    L4 站点当天就因为 `local_conclusion Field required` 被打回重试一次。
 
-    这是与 reviser/counter_thesis/critic 同型的 Class A 规格漂移，区别在于它的"说明书"
-    不是一个静态 prompt 文件，而是 `_compose_layer_prompt` 动态拼接的共享契约文本——
-    所以不适合塞进 `STAGE_CONTRACT_PROMPT_REQUIREMENTS`（那套机制假设每个 stage 对应
-    一个静态文件），改用直接调用 `_compose_layer_prompt` 断言拼接结果的方式验证。
+    2026-09-22 内联纪律文本退役手术后，字段存在性与必填语义由 `_compose_prompt`
+    从契约自动生成的《输出字段规格》承担（规格逐字段渲染"必填/可选"），500 字符
+    上限由 contracts.py 的 `MaxLen(max_length=500)` 锁定——规格漂移这个类别在
+    结构上已不可能复发。本测试钉住新现实：装配结果（说明书 + Runtime Input +
+    字段规格）里 `local_conclusion` 以必填身份出现，且契约侧的 500 上限仍在。
     """
     orchestrator = VNextOrchestrator(
         available_models=["fake"],
         output_dir=str(tmp_path),
         llm_engine=FakeLLMEngine({}),
     )
-    prompt = orchestrator._compose_layer_prompt(
+    prompt = orchestrator._compose_prompt(
         "l4_analyst",
-        "占位 prompt 正文。",
+        LayerCard,
         {"layer": "L4", "layer_raw_data": {}},
     )
 
-    assert "local_conclusion" in prompt
-    assert "500" in prompt
-    assert "必填" in prompt
+    field_spec = prompt.split("## 输出字段规格", 1)[1]
+    assert "`local_conclusion`（必填）" in field_spec
+
+    from pydantic.fields import FieldInfo
+
+    field: FieldInfo = LayerCard.model_fields["local_conclusion"]
+    assert field.is_required()
+    assert any(getattr(meta, "max_length", None) == 500 for meta in field.metadata)
 
 
 def test_annotate_percentile_scales_declares_0_1_and_0_100(tmp_path: Path):
@@ -9594,6 +9708,32 @@ def test_risk_boundary_conflict_matrix_check_tolerates_nested_notes():
         {"conflict_matrix_check": {"C": True}}
     )["conflict_matrix_check"] == {"C": True}
     assert orchestrator_module._normalize_risk_boundary_payload({"other": 1}) == {"other": 1}
+
+
+def test_risk_boundary_status_tolerates_status_assessment_objects():
+    """run 20260924_214035 实测：模型把 boundary_status 每条边界写成
+    {"status": "warning", "assessment": "<评估散文>"}，Literal 枚举判死、risk 两次
+    尝试同错致 run 中止。归一化取状态子键，散文不进结构化字段。"""
+    parsed = orchestrator_module._normalize_risk_boundary_payload(
+        {
+            "boundary_status": {
+                "valuation_compression": {"status": "warning", "assessment": "压力具备、未兑现。"},
+                "earnings_shortfall": {"status": "safe", "assessment": "证据有缺口。"},
+                "trend_break": "safe",
+            }
+        }
+    )
+    assert parsed["boundary_status"] == {
+        "valuation_compression": "warning",
+        "earnings_shortfall": "safe",
+        "trend_break": "safe",
+    }
+    RiskBoundaryReport.model_validate(parsed)  # 归一化结果过得了合约
+
+    # 枚举直通、无 status 子键的dict不猜
+    assert orchestrator_module._normalize_risk_boundary_payload(
+        {"boundary_status": {"trend_break": "breached"}}
+    )["boundary_status"] == {"trend_break": "breached"}
 
 
 # ---------------------------------------------------------------------------

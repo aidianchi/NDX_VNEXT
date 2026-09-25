@@ -153,6 +153,36 @@ def test_prompt_audit_archives_existing_attempt_files(tmp_path: Path):
     assert "上一轮失败的原始响应" in archived[0].read_text(encoding="utf-8"), "被覆盖的失败留档必须可回查"
 
 
+def test_new_generation_archives_prior_attempt_files_wholesale(tmp_path: Path):
+    """run 20260924_214035 实测：断点续跑时新一代只用 1 次尝试，上一代遗留的
+    attempt_2 留在原处，PC-02 按最大 attempt 号取件而把残留当本代产出（误报
+    critic 缺 5 条引用）。开跑新一代必须把上一代产出件整代归档。"""
+    orch = _orchestrator(tmp_path)
+    stage_dir = orch._prompt_audit_stage_dir("critic")
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    for name in (
+        "attempt_1.prompt.txt", "attempt_1.payload.json",
+        "attempt_2.prompt.txt", "attempt_2.payload.json", "attempt_2.response.raw.txt",
+        "output.validated.json", "meta.json",
+    ):
+        (stage_dir / name).write_text("上一代留档 " + name, encoding="utf-8")
+
+    orch.llm_engine = _fake_engine([], ['{"a": 1}'])
+    orch._run_stage(
+        stage_key="critic",
+        stage_name="critic",
+        model_cls=_Tiny,
+        payload={"governance_input": {"x": 1}},
+    )
+
+    live = {path.name for path in stage_dir.iterdir() if path.is_file()}
+    assert "attempt_2.payload.json" not in live, "上一代高号 attempt 不得留在原位"
+    assert "attempt_1.prompt.txt" in live, "本代产出正常写出"
+    archived_names = {path.name for path in (stage_dir / "archived").iterdir()}
+    assert any(name.endswith("_attempt_2.payload.json") for name in archived_names), "上一代留档必须可回查"
+    assert any(name.endswith("_meta.json") for name in archived_names)
+
+
 # ── #9 仅标题事件不给 mainline 席位 ──
 
 

@@ -957,9 +957,12 @@ def test_governance_input_reviser_final_drop_noise_fields_and_slim_key_evidence(
         consumer="final",
     )
 
-    # critic 默认行为：synthesis_guidance / evidence_registry_summary 保留；
+    # synthesis_guidance 已整体退役（2026-09-22 内联纪律文本退役手术：10 条纪律收编进
+    # thesis_builder.md 与共享纪律）——即使上游 SynthesisPacket 残留旧内容（本用例故意
+    # 填入一条），governance 包对全部消费方一律置空，退役纪律文本不得漏回治理站。
+    # critic 默认行为：evidence_registry_summary 保留；
     # pricing_expectation_ledger 按配餐单 v0 对四个治理站一律不给（台账留磁盘审计）。
-    assert gov_critic.synthesis_guidance == ["只能整合，不得重做指标分析。"]
+    assert gov_critic.synthesis_guidance == []
     assert gov_critic.evidence_registry_summary["passport_count"] == 3
     assert gov_critic.pricing_expectation_ledger == {}
 
@@ -981,7 +984,8 @@ def test_governance_input_reviser_final_drop_noise_fields_and_slim_key_evidence(
     # critic 证据瘦身与 reviser/final 同管道（体检 #1-②，2026-09-05 老板批准施工；
     # run t70_glm_check_20260902 实测 critic/risk 证据包比 thesis 菜单还肥）：
     # ref key 集合不动、聚合字段逐字节不变、超长明细压成 _prompt_summary。
-    # 去噪音字段（synthesis_guidance / evidence_registry_summary 清空）仍仅 reviser/final。
+    # 去噪音字段（evidence_registry_summary 清空）仍仅 reviser/final；
+    # synthesis_guidance 已整体退役，全部消费方一律置空（见上方断言）。
     assert set(gov_critic.key_evidence_refs.keys()) == {"L1.long_ref"}
     critic_field_value = gov_critic.key_evidence_refs["L1.long_ref"]["field_value"]
     assert critic_field_value["value"] == {"aggregate": 1.5, "coverage": "full"}
@@ -1058,10 +1062,10 @@ def test_governance_prompts_ban_fabricated_subfield_refs():
         # refs 纪律段的"逐字"吓阻已删（T69 P2b）；存在性义务保留。
         assert "逐字来自" not in text and "逐字存在" not in text, f"{name} 仍残留 refs 逐字吓阻修辞"
 
-    # 确认 risk 和 final 仍明确禁止编造统计
-    for name in ["risk_sentinel.md", "final_adjudicator.md"]:
-        text = (prompt_dir / name).read_text(encoding="utf-8")
-        assert "不得编造历史胜率、回测收益、样本区间或概率数字" in text, f"{name} missing ban on fabricated statistics"
+    # 反编造统计纪律已上收单一来源 system_constraints.md（由 llm_engine 注入每次调用），
+    # 不再钉 risk_sentinel / final_adjudicator 单站说明书。
+    text = (prompt_dir / "system_constraints.md").read_text(encoding="utf-8")
+    assert "不得编造历史胜率、回测收益、样本区间或概率数字" in text, "system_constraints.md missing ban on fabricated statistics"
 
 
 def test_prompts_no_longer_carry_dead_format_clauses_t69_p2a():

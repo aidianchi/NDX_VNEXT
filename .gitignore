@@ -75,3 +75,11 @@ Thumbs.db
 
 # WorkBuddy 工作区记忆与工具数据：2026-08-06 用户裁定不纳入版本控制
 .workbuddy/
+
+# ZCode 工具本机数据（plans 等）：每台机器不同，不属于项目资产
+.zcode/
+
+# 第三方版权原件（券商研报扫描件、他人信件 PDF）：本仓库为公开仓库，不入库。
+# 语料用途由同目录下的提取稿（.md/.txt）承担，提取稿正常入库。
+research_fundamental/L2_language/corpus/raw/*.pdf
+investigation_reports/20260902_研报语言第一性/exemplars/*.pdf

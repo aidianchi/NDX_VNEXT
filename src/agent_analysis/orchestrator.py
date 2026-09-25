@@ -334,17 +334,6 @@ EVENT_FINANCIAL_LINKS = [
     "technical_flow",
 ]
 
-INLINE_PROMPTS = {
-    "bridge": "你负责显式识别跨层支撑关系、冲突关系与关键不确定性。只返回合法 JSON。",
-    "thesis": "你负责把 synthesis_packet 整合成状态、价格、赔率、动作和失效条件，并保留未解决冲突。只返回合法 JSON。",
-    "counter_thesis": "你负责在 Thesis 之前提出独立反方假说，只读取允许输入并返回合法 JSON。",
-    "critic": "你负责攻击 ThesisDraft 的逻辑弱点、证据跳跃和过度谨慎导致的错过赔率风险。只返回合法 JSON。",
-    "risk": "你负责保留下行风险、踏空风险、确认成本、失效条件与必须保留的风险提示。只返回合法 JSON。",
-    "reviser": "你负责吸收 critique/risk/schema 反馈后修订 thesis，保留决策语义和冲突，不能自动改得更保守。只返回合法 JSON。",
-    "final": "你负责分离内部 quality_gate 与 reader_final，给出状态、价格、赔率、动作和失效条件。只返回合法 JSON。",
-}
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -532,16 +521,28 @@ def _normalize_risk_boundary_payload(parsed: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(parsed, dict):
         return parsed
     checks = parsed.get("conflict_matrix_check")
-    if not isinstance(checks, dict):
-        return parsed
-    normalized: Dict[str, Any] = {}
-    for key, value in checks.items():
-        if isinstance(value, dict):
-            for inner_key, inner_value in value.items():
-                normalized[str(inner_key)] = _risk_loose_bool(inner_value)
-        else:
-            normalized[str(key)] = _risk_loose_bool(value)
-    parsed["conflict_matrix_check"] = normalized
+    if isinstance(checks, dict):
+        normalized: Dict[str, Any] = {}
+        for key, value in checks.items():
+            if isinstance(value, dict):
+                for inner_key, inner_value in value.items():
+                    normalized[str(inner_key)] = _risk_loose_bool(inner_value)
+            else:
+                normalized[str(key)] = _risk_loose_bool(value)
+        parsed["conflict_matrix_check"] = normalized
+    boundary = parsed.get("boundary_status")
+    if isinstance(boundary, dict):
+        # 同一形状病的第二个字段（真实事故 run 20260924_214035：模型把每条边界写成
+        # {"status": "warning", "assessment": "<一段评估散文>"}，契约只要状态枚举本身，
+        # risk 站两次尝试同错、run 中止）。状态子键原样取出；评估散文不进结构化字段，
+        # 模型原文逐字留在 prompt_audit raw 供审计。
+        normalized_boundary: Dict[str, Any] = {}
+        for key, value in boundary.items():
+            if isinstance(value, dict) and "status" in value:
+                normalized_boundary[str(key)] = value["status"]
+            else:
+                normalized_boundary[str(key)] = value
+        parsed["boundary_status"] = normalized_boundary
     return parsed
 
 
@@ -2434,12 +2435,13 @@ class VNextOrchestrator:
                 if attempt == 2
                 else ""
             )
+            # 2026-09-22 内联纪律文本退役手术：原此处内联的"材料编号纪律（合约会逐项
+            # 校验）……[M#] 编号……"一段删除——[M#] 引用义务已收编进
+            # controlled_investigator.md（"指回材料"节），校验仍由本函数下面的合约
+            # 校验承担；重试指令机制原样保留。
             prompt = (
                 f"{base_prompt}\n\n调查问题：\n{message.question}"
                 f"\n\n允许材料（只能依据以下内容）：\n{materials_text}"
-                "\n\n材料编号纪律（合约会逐项校验）：finding、claims_supported、claims_challenged、"
-                "cannot_establish 和 counter_evidence_refs 的每一项都必须原样写出至少一个可用的"
-                " [M#] 编号；counter_evidence_refs 如需同时保留材料内的证据 ID，写成“[M#] 证据ID”。"
                 f"{retry_instruction}"
             )
             audit_prefix = f"{investigation_id}.attempt_{attempt}"
@@ -5466,18 +5468,10 @@ class VNextOrchestrator:
             objective_firewall_summary=objective_firewall,
             evidence_index=evidence_index,
             event_index=packet.event_refs,
-            synthesis_guidance=[
-                "必须消费 objective_firewall_summary：若 object_clear、authority_clear、cross_layer_verified 任一为 false，主结论必须降置信度并保留警示。",
-                "Thesis 只能整合 synthesis_packet，不得重新分析原始指标。",
-                "必须保留 high_severity_conflicts，不能为了叙事流畅而抹平分歧。",
-                "必须显式消费 principal_contradictions / Bridge principal_contradiction：先判断当前主要矛盾，再判断价格是否已经反映风险，最后才给动作。",
-                "必须显式消费 competing_hypotheses / hypothesis_competition_summary：正式综合前至少比较主线解释和反方解释；若证据不足，必须降级或保留争议。",
-                "必须尊重 evidence_registry_summary：数据、事件、调查、假说和最终 claim 使用同一种 evidence id；弱权限证据不能越权支撑强结论。",
-                "mixed_field_authority=true 的函数级父 evidence ref 只能表示混合容器；具体字段结论必须使用 evidence_index 中的 #FieldName 子 ref。",
-                "Thesis / Final 的重要自然语言结论会进入 final_claim_ledger；缺证据、缺反证、缺失效条件或证据权限不足时必须降级。",
-                "所有 key_support_chains 的 evidence_refs 必须来自 evidence_index 或 bridge_summaries。",
-                "event_refs 与 evidence_refs 分离：事件只能写成解释/触发/观察背景，不能用来证明估值、广度、利率或趋势结论。",
-            ],
+            # 2026-09-22 内联纪律文本退役手术：synthesis_guidance 的 10 条纪律全部已
+            # 收编进 thesis_builder.md 或共享纪律单源（system_constraints.md），不再
+            # 随包装配——契约字段保留默认空列表（contracts.py 不动），governance 侧
+            # 同步不再向任何消费方携带（见 _build_governance_input_packet）。
         )
 
     def _build_objective_firewall_summary(
@@ -5643,11 +5637,13 @@ class VNextOrchestrator:
         - Known data gaps (especially L3 breadth)
 
         consumer="critic"：证据索引瘦身与 reviser/final 同管道（体检 #1-②，2026-09-05）；
-        去噪音字段（synthesis_guidance 等清空）仍仅 reviser/final。
+        去噪音字段（evidence_registry_summary 清空）仍仅 reviser/final。
         consumer="reviser"/"final" = 基础同 critic（含 counter 原文与反证引用），
-        但去噪音：synthesis_guidance/pricing_expectation_ledger/
-        evidence_registry_summary 清空，key_evidence_refs 的 field_value 超长明细
-        递归压成 _prompt_summary。
+        但去噪音：pricing_expectation_ledger/evidence_registry_summary 清空，
+        key_evidence_refs 的 field_value 超长明细递归压成 _prompt_summary。
+        synthesis_guidance 已整体退役（2026-09-22：10 条纪律收编进 thesis_builder.md
+        与共享纪律），不再向任何消费方携带——即使上游 SynthesisPacket 残留旧内容，
+        本包也一律置空，绝不让退役纪律文本漏回治理站提示词。
         终审口径（2026-08-16 老板重裁）：final 只收修订稿 + revision_summary；
         原稿不进终审输入，只落盘供审计——thesis_original 已从本包移除。
         consumer="risk" = 论证盲分料版：thesis_* 字段在构造时清空，并在序列化进
@@ -5900,10 +5896,8 @@ class VNextOrchestrator:
             # 08-15 已批：reviser/final 去噪音字段 + 证据索引瘦身。ref key 集合不动，
             # 只压 field_value 里 >8 条且 >800 字符的超长明细列表。
             evidence_registry_summary_packet: Dict[str, Any] = {}
-            synthesis_guidance_packet: List[str] = []
         else:
             evidence_registry_summary_packet = dict(getattr(synthesis_packet, "evidence_registry_summary", {}) or {})
-            synthesis_guidance_packet = list(synthesis_packet.synthesis_guidance) if synthesis_packet.synthesis_guidance else []
 
         return GovernanceInputPacket(
             thesis_main=thesis.main_thesis or "",
@@ -5944,7 +5938,7 @@ class VNextOrchestrator:
             pricing_expectation_ledger=pricing_expectation_ledger,
             known_data_gaps=list(dict.fromkeys(known_data_gaps)),  # 去重
             unresolved_questions=list(dict.fromkeys(unresolved_questions)),  # 去重
-            synthesis_guidance=synthesis_guidance_packet,
+            synthesis_guidance=[],  # 字段已退役（2026-09-22），一律置空、不随包携带
             critique_overall=critique_overall,
             critique_cross_layer_issues=list(critique_cross_layer),
             revision_summary=revision_summary,
@@ -6086,10 +6080,10 @@ class VNextOrchestrator:
                 f"只完成 {layer} 的本层分析：先基于本层数据生成指标级推理，"
                 "再输出本层综合、层内冲突和需要 Bridge 后续验证的问题。"
             ),
-            special_attention=[
-                "可以使用静态五层职责边界来路由验证问题，但不要读取或推断其他层当前状态。",
-                "不得因为最终报告需要完整结论而提前吸收其他层叙事。",
-            ],
+            # 2026-09-22 内联纪律文本退役手术：原 special_attention 的两条隔离提醒
+            # （不读/不推断其他层当前状态、不提前吸收其他层叙事）已收编进五份层站
+            # 说明书的"你收到什么、你看不到什么"节，payload 只留事实，不再搭载纪律。
+            special_attention=[],
         )
 
     def _build_layer_data_summary(self, packet: AnalysisPacket, layer: str) -> str:
@@ -6207,6 +6201,11 @@ class VNextOrchestrator:
         with self._diagnostics_lock:
             self.stage_diagnostics["stages"][stage_name] = stage_record
         self._save_stage_diagnostics()
+        # 跨代审计卫生（run 20260924_214035 实测）：归档只在"同名文件被覆写"时触发，
+        # 新一代比上一代少用几次尝试时，上一代的高号 attempt 文件会留在原处——而常设
+        # 检查（PC-02 等）按最大 attempt 号取"最新"，会把上一代残留当成本代产出
+        # （PC-02 因此误报 critic 缺 5 条引用）。开跑新一代前把上一代整代归档。
+        self._archive_prior_generation_audit_files(stage_name)
         for attempt in range(1, self.max_node_retries + 1):
             stage_record["attempts"] = attempt
             active_prompt = prompt
@@ -6491,6 +6490,19 @@ class VNextOrchestrator:
         archive_dir.mkdir(parents=True, exist_ok=True)
         stamp = _utc_now().strftime("%Y%m%dT%H%M%S%fZ")
         target.rename(archive_dir / f"{stamp}_{filename}")
+
+    def _archive_prior_generation_audit_files(self, stage_name: str) -> None:
+        """开跑新一代尝试前，把该站目录里上一代的产出件整代归档（原因见 _run_stage 调用点）。
+
+        同一代内部的 attempt_1/attempt_2 重试轨迹不受影响——它们在本调用之后才逐件写出。"""
+        stage_dir = self._prompt_audit_stage_dir(stage_name)
+        if not stage_dir.is_dir():
+            return
+        for path in sorted(stage_dir.iterdir()):
+            if not path.is_file():
+                continue
+            if path.name.startswith("attempt_") or path.name in {"output.validated.json", "meta.json"}:
+                self._archive_existing_audit_file(stage_dir, path.name)
 
     def _save_prompt_audit_text(self, stage_name: str, filename: str, text: str) -> None:
         stage_dir = self._prompt_audit_stage_dir(stage_name)
@@ -7619,12 +7631,12 @@ class VNextOrchestrator:
     ) -> str:
         prompt_payload = self._sanitize_prompt_payload(stage_key, payload)
         prompt_body = self._load_prompt(stage_key)
+        # 2026-09-22 内联纪律文本退役手术：bridge/thesis 不再前置内联合约段，
+        # 与其余站同走标准路径（说明书 + Runtime Input + 字段规格 + Response Rules）；
+        # 原内联纪律已收编进 cross_layer_bridge.md / thesis_builder.md，字段逐条要求
+        # 由下面的字段规格承担，事件字段的机械事实由 payload 装配承担。
         if stage_key.startswith("l") and stage_key.endswith("_analyst"):
             prompt_body = self._compose_layer_prompt(stage_key, prompt_body, prompt_payload)
-        elif stage_key == "bridge":
-            prompt_body = self._compose_bridge_prompt(prompt_body, prompt_payload)
-        elif stage_key == "thesis":
-            prompt_body = self._compose_thesis_prompt(prompt_body, prompt_payload)
         fields = list(getattr(model_cls, "model_fields", {}).keys())
         schema_hint = ", ".join(fields) if fields else model_cls.__name__
         # T58/O15：thesis/reviser 的 Conflict.conflict_id 是代码装配字段，不得出现在
@@ -7923,15 +7935,48 @@ class VNextOrchestrator:
         }
         return sanitized
 
-    def _slim_evidence_index_for_prompt(self, payload: Dict[str, Any], synthesis_key: str) -> Dict[str, Any]:
-        """Compress audit-only nested detail out of evidence_index before it reaches
-        the Thesis / Counter-Thesis prompt text.
+    # 证据菜单视图保留字段（2026-09-24 卡二首考红项修复，老板拍板③修）：
+    # 正反两站的 evidence_index 从"全量审计信封"投影为菜单条目——每条只留
+    # 编号（ref key 不动）+ 指标 + 读数 + 状态 + 权限 + 一句叙事；
+    # reasoning_process / first_principles_chain / cross_validation_targets /
+    # misread_guards / falsifiers 等审计字段不进 prompt，完整明细继续留在落盘的
+    # synthesis_packet.json / evidence_registry.json 供审计与独立重算。
+    # 说明书本来就把它叫作"证据菜单"（thesis_builder.md「## 输入」），本投影让
+    # 代码形态与说明书措辞一致。首考实算：反方站 34.6 万→16.9 万字、正方站
+    # 31.8 万→14.2 万字（research_fundamental/acceptance/卡二_首考核对_20260924.md）。
+    _EVIDENCE_MENU_PARENT_FIELDS = (
+        "layer",
+        "function_id",
+        "metric",
+        "current_reading",
+        "normalized_state",
+        "narrative",
+        "permission_type",
+        "source_tier",
+        "confidence",
+        "mixed_field_authority",
+    )
+    _EVIDENCE_MENU_SUB_FIELDS = (
+        "layer",
+        "function_id",
+        "metric",
+        "parent_evidence_ref",
+        "field_name",
+        "field_value",
+        "field_authority",
+        "permission_type",
+        "source_tier",
+    )
 
-        不删除、不重命名任何 evidence_ref key —— 两站的引用合法性校验完全依赖
-        key 是否存在，与 value 内容无关。只压缩每条记录 field_value 里超长的
-        逐票/逐日审计明细（如全成分明细、raw_series 历史序列），聚合字段
-        （value/coverage/windows/...）原样保留。完整明细继续留在持久化的
-        synthesis_packet.json / evidence_registry.json 中。
+    def _slim_evidence_index_for_prompt(self, payload: Dict[str, Any], synthesis_key: str) -> Dict[str, Any]:
+        """把 evidence_index 投影成"证据菜单"视图后再进 Thesis / Counter-Thesis prompt。
+
+        两道手术叠加：①每条 entry 按父/子形态只保留菜单字段（上方常量名单），审计
+        信封字段整批不进 prompt；②子条目 field_value 里超长的逐票/逐日明细仍走
+        _slim_long_list_for_prompt 压成 count+sample。不删除、不重命名任何
+        evidence_ref key —— 两站的引用合法性校验完全依赖 key 是否存在，与 value
+        内容无关。完整明细继续留在持久化的 synthesis_packet.json /
+        evidence_registry.json 中。
         """
         sanitized = dict(payload)
         synthesis = sanitized.get(synthesis_key)
@@ -7942,12 +7987,26 @@ class VNextOrchestrator:
             return sanitized
         slim_index: Dict[str, Any] = {}
         for ref, entry in evidence_index.items():
-            if not isinstance(entry, dict) or "field_value" not in entry:
+            if not isinstance(entry, dict):
                 slim_index[ref] = entry
                 continue
-            entry_copy = dict(entry)
-            entry_copy["field_value"] = self._slim_long_list_for_prompt(entry_copy["field_value"])
-            slim_index[ref] = entry_copy
+            if "field_value" in entry or "parent_evidence_ref" in entry:
+                menu_entry = {k: entry[k] for k in self._EVIDENCE_MENU_SUB_FIELDS if k in entry}
+                authority = menu_entry.get("field_authority")
+                if isinstance(authority, dict):
+                    # 权限档只留 usage（可不可以当主证据用）；来源/理由/参考来源是
+                    # 审计信封，留在落盘件。
+                    menu_entry["field_authority"] = {"usage": authority.get("usage")}
+                if "field_value" in menu_entry:
+                    menu_entry["field_value"] = self._slim_long_list_for_prompt(menu_entry["field_value"])
+                slim_index[ref] = menu_entry
+                continue
+            if "narrative" in entry or "current_reading" in entry:
+                slim_index[ref] = {k: entry[k] for k in self._EVIDENCE_MENU_PARENT_FIELDS if k in entry}
+                continue
+            # core_facts 兜底条目（layer/metric/value/percentile/trend/magnitude）
+            # 本身就是菜单尺寸，原样放行。
+            slim_index[ref] = entry
         slim_synthesis = dict(synthesis)
         slim_synthesis["evidence_index"] = slim_index
         sanitized[synthesis_key] = slim_synthesis
@@ -8054,150 +8113,21 @@ class VNextOrchestrator:
         layer_raw_data = payload.get("layer_raw_data", {})
         layer_raw_data = self._filter_layer_raw_data_for_prompt(layer, layer_raw_data)
         expected_indicators = self._layer_indicator_manifest(layer_raw_data)
-        # B4 修复：结构示例必须用本层真实存在的指标，不得把 L1 的 get_10y_real_rate
-        # 当通用示例塞给所有层。用清单第一项动态渲染；本层无指标时示例留空。
-        first_indicator = expected_indicators[0] if expected_indicators else {}
-        example_function_id = str(first_indicator.get("function_id") or "").strip()
-        example_metric = str(first_indicator.get("metric_name") or example_function_id)
-        example_ref = f"{layer}.{example_function_id}" if example_function_id else ""
         canon_prompt = build_layer_canon_prompt(layer=layer, layer_raw_data=layer_raw_data)
         few_shot = build_layer_few_shot_prompt(layer=layer, layer_raw_data=layer_raw_data)
-        v2_contract = (
-            "## vNext v2 Context-Bounded Professional Layer Contract\n"
-            "你在一个隔离的本层上下文中工作：角色是专业认知视角，边界就是信息隔离边界。"
-            "先用本层专家视角完成指标级研究，再把结果压缩为可审计、可展示、可被 Bridge 消费的结构化产物。\n\n"
-            "### 静态五层本体（只用于路由，不代表当前状态）\n"
-            "- L1: 宏观流动性、利率、实际利率、期限结构、货币供应、净流动性和增长预期代理。\n"
-            "- L2: 风险偏好、信用利差、波动率、情绪、仓位和拥挤度。\n"
-            "- L3: 指数内部结构、广度、集中度、等权/市值权重差异和领导力质量。\n"
-            "- L4: 估值、盈利收益率、简式收益差距、Damodaran 美国 implied ERP 参考基准、安全边际和估值压缩风险。\n"
-            "- L5: 价格趋势、动量、波动、成交量、支撑阻力和趋势失效触发。\n"
-            "- Bridge: 读取各层结构化产物，验证跨层印证、冲突和传导机制。\n"
-            "以上只是职责边界和接口协议，不是其他层的当前数据、状态或结论。"
-            "你可以据此决定把验证问题路由给哪一层，但不得据此推断其他层现在是 bullish、bearish、expensive、healthy 或 uptrend。\n\n"
-            "### 必须新增并认真填写的字段\n"
-            "- local_conclusion: 必填字段，最多500字符，本层最核心的一句结论（例如"
-            "\"估值处于历史高位但盈利韧性提供部分支撑\"）；缺失会被结构校验直接拒绝，"
-            "不允许省略或留空。\n"
-            "- indicator_analyses: 对每一个 analysis_required=true 的指标输出一条原生分析。\n"
-            "- indicator_analyses[].function_id 必须等于输入 function_id。\n"
-            "- indicator_analyses[].metric 必须优先等于输入 metric_name。\n"
-            "- indicator_analyses[].evidence_refs 必须是字符串数组，例如 [\"L2.get_vix\"]，不得输出对象/dict。\n"
-            "- 若一个 payload 的 MetricAuthority 含不同 usage，它是 mixed-field payload；引用其中任何字段时必须写成 L4.function_id#FieldName。父级 L4.function_id 只能表示混合容器，不能支撑强字段结论。\n"
-            "- indicator_analyses[].narrative 是可进入最终报告的典范化解读。\n"
-            "- indicator_analyses[].reasoning_process 必须展示从当前数值、分位/趋势到局部判断的因果推理。\n"
-            "- indicator_analyses[].first_principles_chain 用列表写出机制链，例如 利率上升 -> 折现率上升 -> 成长股估值受压。\n"
-            "- layer_synthesis 必须由 indicator_analyses 归纳，不能只重复 local_conclusion，并应适合该层独立 UI 展示。\n"
-            "- internal_conflict_analysis 必须讨论本层内部指标之间是互相印证、互相背离，还是只是噪声，以及哪个更重要，也应适合展开阅读。\n"
-            "- quality_self_check 必须开放说明覆盖情况、弱推理点和置信度边界。\n\n"
-            "### 隔离纪律\n"
-            "- 允许知道其他层负责什么；禁止假设其他层当前看到了什么、判断了什么。\n"
-            "- 跨层内容只能写成待 Bridge 验证的问题，不能写成已经成立的跨层结论。\n"
-            "- 不得为了形成完整市场故事而提前综合其他层。\n"
-            "- 不得给出最终买卖建议。\n\n"
-            "### 数值单位纪律\n"
-            "- 引用金额/规模数值时必须带上 payload 中的 unit 单位；payload 无单位标注时不得猜测单位，只能写明“单位未标注”。\n\n"
+        # 2026-09-22 内联纪律文本退役手术：原 v2_contract 的五块纪律文本（静态五层本体、
+        # 必须新增并认真填写的字段、隔离纪律、数值单位纪律、结构示例）整体删除——纪律
+        # 已住进五份层站说明书与共享纪律单源，字段形状由输出字段规格注入承担
+        # （local_conclusion 必填与 500 上限由 contracts.py 契约锁定），结构示例整段
+        # JSON 模板（含"利率上升 -> 折现率上升"箭头链毒例）一并退役。
+        # 这里只保留代码才能装配的动态材料：当前层指标清单。标题逐字被
+        # persistent_checks_b.py 的 PC-22 按 "### 当前层指标清单\n" 切分，一字不能动。
+        indicator_manifest = (
             "### 当前层指标清单\n"
-            f"{json.dumps(expected_indicators, ensure_ascii=False, indent=2, default=str)}\n\n"
-            "### 结构示例\n"
-            "{\n"
-            '  "indicator_analyses": [\n'
-            "    {\n"
-            f'      "function_id": {json.dumps(example_function_id)},\n'
-            f'      "metric": {json.dumps(example_metric)},\n'
-            '      "current_reading": "该指标当前水平（引用 payload 实际数值）",\n'
-            '      "normalized_state": "neutral",\n'
-            '      "narrative": "用一句话说清这个数说明了什么：先说结论，再把数值和它的历史位置嵌进因果里。",\n'
-            '      "reasoning_process": "先看水平，再看趋势和分位，最后落到本层职责内的判断。",\n'
-            '      "first_principles_chain": ["数据事实", "本层机制", "本层判断"],\n'
-            f'      "evidence_refs": {json.dumps([example_ref] if example_ref else [])},\n'
-            '      "cross_layer_implications": ["只写待 Bridge 验证的问题，不写跨层结论"],\n'
-            '      "risk_flags": ["本层风险标签"],\n'
-            '      "confidence": "medium"\n'
-            "    }\n"
-            "  ],\n"
-            '  "quality_self_check": {\n'
-            '    "coverage_complete": true,\n'
-            f'    "covered_function_ids": {json.dumps([example_function_id] if example_function_id else [])},\n'
-            '    "missing_or_weak_indicators": [],\n'
-            '    "weak_reasoning_points": [],\n'
-            '    "unresolved_internal_tensions": [],\n'
-            '    "confidence_limitations": ["具体限制以本层指标清单与 payload 为准"]\n'
-            "  }\n"
-            "}\n"
+            f"{json.dumps(expected_indicators, ensure_ascii=False, indent=2, default=str)}"
         )
-        parts = [part for part in [canon_prompt, few_shot, v2_contract, prompt_body] if part]
+        parts = [part for part in [canon_prompt, few_shot, indicator_manifest, prompt_body] if part]
         return "\n\n".join(parts)
-
-    def _compose_bridge_prompt(self, prompt_body: str, payload: Optional[Dict[str, Any]] = None) -> str:
-        bridge_contract = (
-            "## vNext v2 Bridge Contract\n"
-            "Bridge 的职责不是重新解释单个指标，而是读取各 LayerCard 的 indicator_analyses、layer_synthesis、"
-            "internal_conflict_analysis 和 cross_layer_hooks，识别跨层印证、冲突、传导机制与不确定性。\n\n"
-            "必须优先使用 indicator_analyses[].reasoning_process 中已经完成的专业推理；"
-            "如果要提出冲突，必须指出冲突来自哪些层、哪些指标或哪些机制。\n"
-            "输出仍保持 BridgeMemo 结构，但 conflicts 和 cross_layer_claims 需要引用具体 function_id。\n"
-            "cross_layer_claims[].supporting_facts 只能填写 evidence ref 字符串，格式如 "
-            "\"L4.get_ndx_pe_and_earnings_yield\"；不要写中文事实句、数值解释或自然语言，"
-            "这些解释应放在 claim 或 mechanism。若 LayerCard 标出 mixed-field payload，必须沿用其显式 "
-            "#FieldName 子引用；不得退回函数级父 ref。"
-        )
-        bridge_contract += (
-            "\nBridge v2 新增字段必须尽量原生填写：\n"
-            "- typed_conflicts: 结构化冲突地图，包含 conflict_id、conflict_type、severity、confidence、description、mechanism、implication、involved_layers、evidence_refs、falsifiers。\n"
-            "- resonance_chains: 跨层印证链，必须包含 involved_layers、evidence_refs、mechanism、confirming_indicators、falsifiers、implication；没有证据或确认指标时降低 confidence。\n"
-            "- transmission_paths: 跨层传导路径，说明压力或支撑如何从 source_layer 传到 target_layer。\n"
-            "- principal_contradiction: 主要矛盾地图，必须说明 contradiction_id、summary、why_principal、dominant_side、secondary_side、price_reflection、action_implication、conflict_refs、evidence_refs、transformation_signals。\n"
-            "- secondary_contradictions: 次要矛盾列表，说明为什么当前不是主导项，以及它如何约束行动力度、节奏或置信度。\n"
-            "- price_reflection_map: 判断关键风险/叙事是否已经进入价格，可用 not_reflected / partially_reflected / largely_reflected / over_reflected / unclear。\n"
-            "- contradiction_transformation_signals: 会让主次矛盾或矛盾主导方面发生转化的可观察信号。\n"
-            "- unresolved_questions: 仍需 Thesis/Critic/Risk 保留的问题。\n"
-            "旧字段 conflicts 仍要填写，用于兼容；typed_conflicts 是更高优先级的 Bridge v2 产物。\n"
-        )
-        bridge_contract += (
-            "\n## 事件纪律（新闻事件按宪法不进数据分析层，以下字段恒为空）\n"
-            "- 本轮输入不包含任何事件材料；BridgeMemo.event_refs 由系统装配为空列表 []，无需输出。\n"
-            "- 不得自行引入事件 ID，也不得把事件写成 evidence_ref。\n"
-            # 2026-08-31 T69 P2b：删"event: 前缀会被校验器打回"吓阻措辞（存在性检查
-            # 由 _validate_bridge_memo_v2 守，提示词只陈述义务）。
-        )
-        return f"{bridge_contract}\n\n{prompt_body}"
-
-    def _compose_thesis_prompt(self, prompt_body: str, payload: Optional[Dict[str, Any]] = None) -> str:
-        synthesis_payload = payload.get("synthesis_packet") if isinstance(payload, dict) else {}
-        has_event_input = bool(isinstance(synthesis_payload, dict) and synthesis_payload.get("event_index"))
-        thesis_contract = (
-            "## vNext v2 Decision Thesis Contract\n"
-            "你现在只消费 synthesis_packet。不要重新分析原始数据，不要替 L1-L5 补写单指标推理。"
-            "你的职责是把 layer_summaries、bridge_summaries、high_severity_conflicts 与 evidence_index "
-            "整合成主论点、支撑链、保留冲突、依赖前提，以及定价与赔率判断面。\n\n"
-            "key_support_chains[].evidence_refs 应引用 synthesis_packet.evidence_index 的键或 Bridge 摘要。"
-            "若 evidence_index 条目标记 mixed_field_authority=true，函数级父 ref 不能支持强结论；必须改用同一索引内显式的 #FieldName 子 ref。"
-            "retained_conflicts 必须包含 synthesis_packet.high_severity_conflicts 中的所有高严重度冲突。"
-        )
-        thesis_contract += (
-            "\n必须读取 synthesis_packet.objective_firewall_summary，检查投资对象、指标发言权、跨层验证和最强反证。"
-            "如果 objective_firewall_summary 的 object_clear、authority_clear 或 cross_layer_verified 为 false，"
-            "不得给出强结论，必须降低 confidence 并在 dependencies/retained_conflicts 中保留相应边界。"
-        )
-        if has_event_input:
-            thesis_contract += (
-                "如果使用 synthesis_packet.event_index，只能把 event_refs 写成催化剂、背景或观察事项；"
-                "不得让 event_refs 替代 key_support_chains[].evidence_refs。"
-            )
-        thesis_contract += (
-            "\n\nDecision Semantics 必填语义："
-            "state_diagnosis 说明当前市场状态；priced_narrative 说明价格正在定价什么、哪些坏消息已/未反映；"
-            "payoff_assessment 必须区分高风险高赔率、高风险低赔率、低风险低赔率等；"
-            "time_horizon_views 至少覆盖数日、1-3个月、6-12个月；"
-            "portfolio_actions 至少覆盖 core_position、tactical_position、waiting_cash；"
-            "confirmation_cost 必须说明等待确认降低什么风险、可能错过什么；"
-            "invalidation_conditions 必须是可观察条件；reader_conclusion 面向普通读者，不能写内部审批话术。"
-            "principal_contradiction 必须来自 synthesis_packet.principal_contradictions 或 bridge_summaries[].principal_contradiction，并说明 why_principal、price_reflection、action_implication；"
-            "secondary_contradictions 和 price_reflection_map 必须保留关键次要矛盾和定价判断。"
-            "不要把“风险存在”自动等同于“赔率不利”，也不要把“估值改善”自动等同于可以买。"
-        )
-        return f"{thesis_contract}\n\n{prompt_body}"
 
     def _filter_layer_raw_data_for_prompt(self, layer: str, layer_raw_data: Any) -> Any:
         """Drop cross-layer indicators and prompt-only audit bookkeeping."""
@@ -8385,11 +8315,12 @@ class VNextOrchestrator:
                 return prompt_path.read_text(encoding="utf-8")
         else:
             prompt_path = self.prompts_dir / f"{stage_key}.md"
-        if stage_key in INLINE_PROMPTS:
-            return INLINE_PROMPTS[stage_key]
+        # INLINE_PROMPTS 一句话兜底已退役（2026-09-22 内联纪律文本退役手术）：
+        # 19 份说明书全部在岗后，缺文件不再静默降级为一句话合约——那种降级比当场炸掉
+        # 更难发现。任何站缺文件一律 RuntimeError。
         raise RuntimeError(
-            f"未找到 stage `{stage_key}` 的 prompt 文件（期望路径：{prompt_path}），"
-            "且 INLINE_PROMPTS 没有对应兜底条目。绝不静默返回通用占位 prompt。"
+            f"未找到 stage `{stage_key}` 的 prompt 文件（期望路径：{prompt_path}）。"
+            "绝不静默返回通用占位 prompt。"
         )
 
     def _normalize_historical_percentile(self, value: Any) -> tuple[Optional[float], Optional[str]]:

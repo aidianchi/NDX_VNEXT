@@ -99,21 +99,23 @@ def test_all_empty_long_term_fields_normalize_to_none():
     assert final.long_term_assessment is None
 
 
-def test_prompt_contains_fable_long_term_block_verbatim():
+def test_prompt_contains_long_term_assessment_discipline():
+    """2026-09-22 说明书重写：长期资产评估纪律保留，逐字块钉住改为锚点断言
+    （字段名归代码注入的字段规格，说明书不再抄字段表）。"""
     prompt = (
         Path(__file__).resolve().parents[1]
         / "src" / "agent_analysis" / "prompts" / "final_adjudicator.md"
     ).read_text(encoding="utf-8")
-    expected = '''## 长期资产评估（3-5 年以上，独立于周期姿态）
-
-- `long_term_assessment` 与 `time_horizon_views` 回答不同的问题：后者是周期判断（最长 6-12 个月），前者回答"这笔资产本身值不值得长期持有"。二者不得互相推导：周期姿态谨慎不自动等于长期不值得持有，反之亦然。
-- `object_quality`：判断对象的结构性质（集中度、成分质量、盈利能力），只用输入 refs。
-- `earnings_compounding`：盈利与自由现金流的复利证据（资本开支转化、回购执行、盈利预期方向），只用输入 refs。
-- `valuation_implied_return`：当前估值分位隐含的长期回报边界；只许引用输入的估值分位与收益率差 refs，禁止给出具体年化收益数字，除非输入 refs 明确提供。
-- `permanent_loss_hypotheses`：会造成永久性资本损失（而非波动）的假说清单，每条注明当前证据状态（有支持／无证据／被反驳）。
-- 核心仓（core_position）的任何加减动作建议，必须注明"须经个人投资政策书与再平衡带确认"；系统不得代替政策书给出具体金额或比例。
-- 不确定就写不确定；输入证据不足以支撑某字段时写明缺什么，不许硬编。'''
-    assert expected in prompt
+    anchors = (
+        "长期资产评估",
+        "这笔资产本身值不值得长期持有",
+        "不得互相推导",
+        "永久性资本损失",
+        "须经个人投资政策书与再平衡带确认",
+        "系统不得代替政策书给出具体金额或比例",
+    )
+    for anchor in anchors:
+        assert anchor in prompt, f"final_adjudicator.md 缺长期资产评估纪律锚点：{anchor}"
 
 
 def test_reporter_renders_long_term_section_and_core_policy_guard(tmp_path: Path):

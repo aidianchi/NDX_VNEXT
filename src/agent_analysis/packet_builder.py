@@ -64,6 +64,7 @@ LAYER_NAMES = {
 LAYER_FUNCTIONS = {
     "L1": {
         "get_10y2y_spread_bp",
+        "get_10y3m_spread_bp",
         "get_fed_funds_rate",
         "get_fed_funds_rate_path",
         "get_m2_yoy",
